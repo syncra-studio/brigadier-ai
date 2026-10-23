@@ -9,6 +9,11 @@ target_dir=$(cargo metadata --locked --format-version 1 --no-deps |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 # `run.sh decisions …` runs S22b's decision-survival block; anything else, the recall battery.
 script=battery.py
+if [ "${1:-}" = p2 ] || [ "${1:-}" = p3 ]; then
+  variant="$1"
+  shift
+  exec python3 tools/continuity-battery/budgets.py --daemon "$target_dir/debug/brigadierd" --variant "$variant" "$@"
+fi
 if [ "${1:-}" = decisions ]; then
   script=decisions.py
   shift

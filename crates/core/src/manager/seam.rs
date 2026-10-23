@@ -44,8 +44,8 @@ const LATEST_TOOL_BYTES: usize = 4_000;
 /// The rest of the ledger's budget, after its open items, rules and decisions (which are never
 /// cut), ≈8k tokens.
 const LEDGER_BYTES: usize = 32_000;
-/// The user's own messages' budget, ≈8k tokens; the first and the latest go whole regardless.
-const USER_BYTES: usize = 32_000;
+/// The user's own messages' budget, ≈20k tokens; the first and the latest go whole regardless.
+const USER_BYTES: usize = 80_000;
 
 /// What the seam runs with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +150,9 @@ pub(crate) enum Phase {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SeamEnd {
     pub predecessor: Option<String>,
+    /// The predecessor's last reported hot context (D49), retained across recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hot_tokens: Option<i64>,
     /// When it was asked for its note; none when it died first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudged_at_ms: Option<i64>,
@@ -167,6 +170,55 @@ pub(crate) struct SeamEnd {
     /// The other CLI its successor starts on, as asked (S38c).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<ProviderKind>,
+}
+
+/// The existing seam record distinguishes a requested move, quota fallback and size seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reason {
+    Size,
+    Request,
+    Quota,
+}
+
+impl SeamEnd {
+    pub(crate) fn reason(&self) -> Reason {
+        if self.moved_to.is_some() {
+            Reason::Request
+        } else if self
+            .death
+            .as_deref()
+            .is_some_and(|why| why.starts_with("usage limit on "))
+        {
+            Reason::Quota
+        } else {
+            Reason::Size
+        }
+    }
+}
+
+/// D49: only non-size seams can expand. Unknown usage or target windows keep S22's tail.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TailBudget {
+    pub reason: Reason,
+    pub hot_tokens: Option<i64>,
+    pub target_window: Option<i64>,
+}
+
+impl TailBudget {
+    fn expanded(&self) -> Option<usize> {
+        if self.reason == Reason::Size {
+            return None;
+        }
+        let hot = usize::try_from(self.hot_tokens.filter(|n| *n > 0)?).ok()?;
+        let window = usize::try_from(self.target_window.filter(|n| *n > 0)?).ok()?;
+        // The bootstrap's existing approximation is four UTF-8 bytes per token.
+        Some(hot.saturating_mul(4).min(window.saturating_mul(2)))
+    }
+
+    fn bytes(&self, sections: usize) -> usize {
+        self.expanded()
+            .map_or(TAIL_BYTES, |cap| cap.saturating_sub(sections))
+    }
 }
 
 /// A completed seam.
@@ -265,6 +317,7 @@ fn death_line(why: &str) -> String {
 pub(crate) struct Boot<'a> {
     /// The seam.
     pub n: u32,
+    pub tail: TailBudget,
     /// How `brigadier brain read` names the session.
     pub key: &'a str,
     pub folder: &'a Path,
@@ -455,7 +508,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
 
     // The latest exchange, in order: its messages whole, its tool items cut.
     let latest = users.last().copied();
-    let mut budget = TAIL_BYTES;
+    let mut budget = boot.tail.bytes(out.len());
+    let expanded = boot.tail.expanded().is_some();
+    let item_bytes = if expanded { budget } else { ITEM_BYTES };
     if let Some(from) = latest {
         let mut exchange = String::new();
         for (at, entry) in boot.entries.iter().enumerate().skip(from) {
@@ -465,10 +520,12 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             }
             let max = if message {
                 usize::MAX
+            } else if expanded {
+                budget
             } else {
                 LATEST_TOOL_BYTES
             };
-            if !message && budget < LATEST_TOOL_BYTES {
+            if !message && budget < if expanded { 1 } else { LATEST_TOOL_BYTES } {
                 continue;
             }
             if let Some(text) = item(at, max) {
@@ -494,7 +551,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         if shown[at] || boot.entries[at].parent.is_some() {
             continue;
         }
-        let Some(text) = item(at, ITEM_BYTES) else {
+        let Some(text) = item(at, item_bytes) else {
             continue;
         };
         if text.len() > budget {

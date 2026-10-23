@@ -27,8 +27,8 @@ use brigadier_providers::{Origin, ProviderKind, TurnInput};
 use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
-    Boot, Phase, Seam, SeamEnd, SeamFile, bootstrap, handoff_line, note_path, nudge, read_seam,
-    start_path, write_seam,
+    Boot, Phase, Seam, SeamEnd, SeamFile, TailBudget, bootstrap, handoff_line, note_path, nudge,
+    read_seam, start_path, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -386,9 +386,20 @@ impl SessionManager {
                 .as_ref()
                 .map(|cli| cli.session.native_id()),
         };
+        let hot_tokens =
+            conv.state
+                .lock()
+                .await
+                .context
+                .map(|(used, _)| used)
+                .or(match file.phase {
+                    Phase::Nudged { tokens, .. } if tokens > 0 => Some(tokens),
+                    _ => None,
+                });
         file.phase = Phase::Closed {
             end: SeamEnd {
                 predecessor,
+                hot_tokens,
                 nudged_at_ms,
                 closed_at_ms: now_ms(),
                 death,
@@ -720,6 +731,7 @@ impl SessionManager {
     ) -> Option<Successor> {
         let mut file = self.read_seam_of(&conv.id).await;
         let end = SeamEnd {
+            hot_tokens: None,
             predecessor: read_lineage(&self.session_dir(&conv.id).record())
                 .last()
                 .map(|session| session.session_id.clone())
@@ -778,6 +790,11 @@ impl SessionManager {
         let key = id.short().to_owned();
         let blobs = self.core.store().blobs().root().to_path_buf();
         let (n, death) = (successor.n, successor.end.death.clone());
+        let tail = TailBudget {
+            reason: successor.end.reason(),
+            hot_tokens: successor.end.hot_tokens,
+            target_window: cli.session.context_window(),
+        };
         let own = cli.session.native_id();
         crate::manager::blocking(move || {
             let record = dir.record();
@@ -808,6 +825,7 @@ impl SessionManager {
             let start = start_path(&record, n);
             let text = bootstrap(&Boot {
                 n,
+                tail,
                 key: &key,
                 folder: dir.root(),
                 ledger_path: &ledger_at,
@@ -893,7 +911,9 @@ impl SessionManager {
             // Its successor starts at once, unless the user stopped the turn that ended it.
             Phase::Closed { end } => conv.state.lock().await.seam.carry_on = !end.stopped,
             Phase::Nudged {
-                at_ms, predecessor, ..
+                at_ms,
+                predecessor,
+                tokens,
             } => {
                 let written = note_path(&record, file.generation).is_file();
                 let moved_to = match file.moving.take() {
@@ -902,6 +922,7 @@ impl SessionManager {
                 };
                 file.phase = Phase::Closed {
                     end: SeamEnd {
+                        hot_tokens: (tokens > 0).then_some(tokens),
                         predecessor,
                         nudged_at_ms: Some(at_ms),
                         closed_at_ms: now_ms(),

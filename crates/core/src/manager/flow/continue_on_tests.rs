@@ -392,3 +392,107 @@ async fn from_the_app_an_idle_session_moves_now_and_one_at_its_limit_without_a_n
     assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
     flow.stop().await;
 }
+
+/// A detail in an assistant's old turn is outside the size tail, but fits the requested move.
+#[tokio::test]
+async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
+    let turns = Turns::default();
+    let script: Script = {
+        let turns = turns.clone();
+        Arc::new(move |turn: Turn| {
+            let turns = turns.clone();
+            Box::pin(async move {
+                turns.lock().unwrap().push((
+                    turn.provider,
+                    turn.native_id.clone(),
+                    turn.input.clone(),
+                ));
+                if turn.provider == ProviderKind::Codex {
+                    return Reply::text("On Codex.");
+                }
+                if turn.input.starts_with(NUDGE_MARK) {
+                    std::fs::write(note_of(&turn.input), "Next: wait.").unwrap();
+                    return Reply::text("Handed off.");
+                }
+                let detail = if turn.input == "first batch" {
+                    "SECRET-ASSISTANT-DETAIL"
+                } else {
+                    "batch"
+                };
+                Reply {
+                    text: format!("{detail} {}", "x".repeat(4_000)),
+                    context_tokens: Some(90_000),
+                    ..Reply::default()
+                }
+            })
+        })
+    };
+    let flow = Flow::start("d49-request-tail", options(), script).await;
+    for n in 0..24 {
+        flow.say(if n == 0 { "first batch" } else { "next batch" })
+            .await;
+        flow.settled().await;
+    }
+    flow.manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, false)
+        .await
+        .unwrap();
+    flow.until("expanded hand-off on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let turns = turns.lock().unwrap().clone();
+    let input = &turns
+        .iter()
+        .find(|(provider, ..)| *provider == ProviderKind::Codex)
+        .unwrap()
+        .2;
+    assert!(input.contains("SECRET-ASSISTANT-DETAIL"));
+    let record = flow.manager.session_dir(&flow.conversation).record();
+    let file = read_seam(&record);
+    assert_eq!(file.seams[0].end.hot_tokens, Some(90_000));
+    let lineage = crate::manager::session_dir::read_lineage(&record);
+    let files: Vec<_> = lineage
+        .iter()
+        .filter(|s| s.provider == ProviderKind::Claude)
+        .filter_map(|s| {
+            Some((
+                s.provider,
+                brigadier_providers::session_file::locate(
+                    s.provider,
+                    std::path::Path::new(s.file.as_ref()?),
+                ),
+            ))
+        })
+        .collect();
+    let entries = crate::manager::records::transcript(&files);
+    let size = crate::manager::seam::bootstrap(&crate::manager::seam::Boot {
+        n: 1,
+        tail: crate::manager::seam::TailBudget {
+            reason: crate::manager::seam::Reason::Size,
+            hot_tokens: Some(90_000),
+            target_window: Some(1_000_000),
+        },
+        key: "test",
+        folder: &record,
+        ledger_path: &record.join("ledger.md"),
+        ledger: None,
+        archive_path: &record.join("ledger-archive.md"),
+        archive: None,
+        lineage: &[],
+        note_path: &record.join("handoff/1.md"),
+        note: Some("Next: wait."),
+        start_path: &record.join("handoff/1-start.md"),
+        death: None,
+        entries: &entries,
+        blobs: flow.core.store().blobs().root(),
+    });
+    assert!(!size.contains("SECRET-ASSISTANT-DETAIL"));
+    assert!(size.contains("brigadier brain read test"));
+    flow.stop().await;
+}

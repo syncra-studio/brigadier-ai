@@ -198,3 +198,33 @@ Summary calls and every fresh session are included in per-role cache/list-price 
 Nightly aggregates compare seam versus Zed on T1–T6, each decision item's application
 and recall, each recall item, overall recall/task success, and reported/list-price dollars. Missing data
 is unavailable; decision comparisons with fewer than three transitions are unqualified.
+
+## D49 budget variants (P2 / P3)
+
+Run `tools/continuity-battery/run.sh p2 --report /absolute/report.md` or `run.sh p3 --report /absolute/report.md`.
+Both use Claude Sonnet at low effort by default. P2 also requires an existing signed-in Codex CLI;
+its target model defaults to `gpt-6.1-sol`, low effort, subject to the user's model rules (D25).
+The variants run once each in the Claude seam job, **short profile only** (D49, D53); they add no
+long-profile or plain-arm runs. The workflow installs the second CLI only with existing secrets.
+Missing credentials are reported; no sign-in is attempted.
+
+P2 plants five random tool-only details in the predecessor's last 40k tokens, grows the reported
+context to 60–100k, then requests Claude → Codex through the existing `continueOn` IPC. The first
+probe asks for those details without lookups; qualification checks the actual tool events, ledger,
+notes and measured context. The bar is ≥4/5 recalled. The same T1–T6 decision block follows,
+reporting all ten recalled items and the nine applicable unprompted checks (the false worker claim
+has no application check). A run outside the context band or with leaked details is unqualified.
+
+P3 gives a random receipt rule only in an older user message, followed by >32 KB but <80 KB of
+new user text and intervening tool reads. After three forced size seams, ten new receipt objects
+must apply it (bar ≥9/10). The ledger and notes must not carry the rule, and all three bootstrap
+user sections must. Added user content is bounded to ≤12k estimated tokens per seam.
+
+The offline legacy-budget comparison reports retained details/user rules from the same inputs,
+with the old 60 KB tail / 32 KB user budget. It measures retention, not a second model's behavior.
+Per-role list-price dollars include all observed successor input; a separate first-successor row
+prices the native uncached input/cache write. Extra bootstrap tokens and dollars are explicitly
+labelled UTF-8/4 estimates at the native model's input (Codex) or short-write (Claude) rate.
+No incremental causal dollar saving/cost is claimed without a matched live baseline. These bars
+are reports only and never create regression issues or gate work. `--evidence` keeps private raw
+inputs outside git; report JSON retains numeric scores and economics only.

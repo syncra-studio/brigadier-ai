@@ -57,10 +57,12 @@ jobs:
         if: steps.credentials.outputs.live == 'true'
         env:
           PROVIDER: ${{ matrix.provider }}
+          ARM: ${{ matrix.arm }}
         run: |
           if [ "$PROVIDER" = claude ]; then
             npm install -g @anthropic-ai/claude-code
-          else
+          fi
+          if [ "$PROVIDER" = codex ] || { [ "$ARM" = seam ] && [ -n "$CODEX_AUTH_JSON" ]; }; then
             npm install -g @openai/codex
             python3 - <<'PY'
           import os

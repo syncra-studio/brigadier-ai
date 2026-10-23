@@ -1044,6 +1044,10 @@ fn input_text(input: &TurnInput) -> String {
 }
 
 impl ProviderSession for FakeSession {
+    fn context_window(&self) -> Option<i64> {
+        Some(1_000_000)
+    }
+
     fn native_id(&self) -> String {
         self.native_id.clone()
     }

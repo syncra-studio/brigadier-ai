@@ -898,6 +898,7 @@ impl Provider for Codex {
                 thread,
                 model,
                 notices,
+                context_window,
             } = match started {
                 Ok(started) => started,
                 Err(err) => {
@@ -909,6 +910,7 @@ impl Provider for Codex {
             *lock(&shared.thread) = Some(thread.id.clone());
             let session = Arc::new(CodexSession {
                 thread_id: thread.id.clone(),
+                context_window,
                 ephemeral: thread.ephemeral,
                 compacts: version_at_least(&thread.cli_version, COMPACT_SINCE),
                 rpc,
@@ -1071,6 +1073,7 @@ impl Provider for Codex {
 
 /// A started thread, its model, and warnings for the user.
 struct Opened {
+    context_window: Option<i64>,
     thread: p::Thread,
     model: String,
     notices: Vec<String>,
@@ -1191,6 +1194,7 @@ async fn open_thread(
     } else {
         trusted_projects(rpc, cwd).await?
     };
+    let context_window = config.get("model_context_window").and_then(Value::as_i64);
     let start = start_params(spec, cwd, config);
     let (thread, model) = match opening(spec, start) {
         Opening::Start(params) => {
@@ -1247,6 +1251,7 @@ async fn open_thread(
         }
     }
     Ok(Opened {
+        context_window,
         thread,
         model,
         notices,
@@ -2050,6 +2055,7 @@ struct McpRelist {
 }
 
 pub struct CodexSession {
+    context_window: Option<i64>,
     thread_id: String,
     /// Never saved ([`SessionSpec::ephemeral`]): there is nothing to archive.
     ephemeral: bool,
@@ -2149,6 +2155,10 @@ impl CodexSession {
 }
 
 impl ProviderSession for CodexSession {
+    fn context_window(&self) -> Option<i64> {
+        self.context_window
+    }
+
     fn native_id(&self) -> String {
         self.thread_id.clone()
     }

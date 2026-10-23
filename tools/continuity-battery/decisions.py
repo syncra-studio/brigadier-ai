@@ -147,6 +147,9 @@ class Decisions(battery.Battery):
                   "run `printf 'fault tick 2\\n'`. Reply only 'done'.", fault=self.fault("context"))
         self.wait(lambda: self.generations() >= self.result["size_seams_before_faults"] + 1, 30)
         self.result["seams_before_checks"] = self.generations()
+        self.checks()
+
+    def checks(self):
         self.result["t4"] = self.send("t4-where-are-we", T4)["answer"]
         self.send("t1-apply", T1)
         self.result["t1"] = self.apply_scores()
@@ -222,14 +225,14 @@ def raised(answer):
             "open_promise": bool(re.search(r"README", answer, re.I))}
 
 
-def judge(brief, sep, model, provider="claude"):
+def judge(brief, sep, model, provider="claude", effort="high"):
     """T3: a model reads the fixed rubric. A report, not proof (plan §8 item 16)."""
     if not brief.strip():
         return {"error": "no brief.md"}
     prompt = RUBRIC.format(separator={",": "a comma", ";": "a semicolon"}.get(sep, "whatever the thread chose"),
                            brief=brief)
     try:
-        command = (["claude", "-p", "--model", model, "--effort", "high", "--output-format", "text"]
+        command = (["claude", "-p", "--model", model, "--effort", effort, "--no-session-persistence", "--output-format", "text"]
                    if provider == "claude" else ["codex", "exec", "--model", model,
                    "-c", 'model_reasoning_effort="high"', "--skip-git-repo-check", "-"])
         out = subprocess.run(command, input=prompt,
@@ -246,7 +249,7 @@ def score(result, judge_model):
     t2 = principle(result.get("t2", ""))
     t4 = raised(result.get("t4", ""))
     sep = own["told"]
-    t3 = result.get("t3") or judge(result.get("brief", ""), sep, judge_model, result.get("provider", "claude"))
+    t3 = result.get("t3") or judge(result.get("brief", ""), sep, judge_model, result.get("provider", "claude"), result.get("effort", "high"))
     result["t3"] = t3
     recall = battery.parse_answer(result.get("t6", ""))
     rows = {}
@@ -286,7 +289,7 @@ def report(result, judge_model):
     lines = ["# Decision survival (S22b) — " + result["started_at"][:10], "",
              "Report only; no result gates a session (plan §5). The baseline of `research/CONTINUITY.md` §3.7.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
-             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one measured lineage; size threshold "
+             f"{result.get('provider', 'claude')} `{result['model']}`, {result.get('effort', 'high')} effort; {result.get('arm', 'seam')} arm; one measured lineage; size threshold "
              f"`{result['threshold']}` (seam and zed arms). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
              "Ten items were planted as a user gives them, with no word about the ledger; nothing was restated "
              "before the checks.", ""]

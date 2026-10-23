@@ -167,7 +167,7 @@ class Battery:
         self.ipc.call({"method": "setFolderTrust", "id": self.project, "path": None, "trusted": True})
         setup = {"type": "session", "repo": str(self.repo),
                  "environment": {"type": "localCheckout", "branch": "main", "createFrom": None},
-                 "permission": "full", "orchestrator": {"provider": self.args.provider, "model": self.args.model, "effort": "high"},
+                 "permission": "full", "orchestrator": {"provider": self.args.provider, "model": self.args.model, "effort": getattr(self.args, "effort", "high")},
                  "planMode": False}
         self.conversation = self.ipc.call({"method": "createConversation", "kind": "session",
                                            "projectId": self.project, "title": "Continuity baseline", "setup": setup})["conversation"]["id"]
@@ -489,7 +489,8 @@ def write_report(result, text, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     public = {k: result[k] for k in ("source", "started_at", "provider", "model", "arm", "threshold",
-                                    "roles", "economics", "list_price_usd", "status", "reason", "zed_compactions", "zed_commit") if k in result}
+                                    "roles", "economics", "list_price_usd", "status", "reason", "zed_compactions", "zed_commit",
+                                    "variant", "budget_scores", "first_successor_write", "extra_bootstrap_estimate") if k in result}
     path.with_suffix(".json").write_text(json.dumps(public, indent=2) + "\n")
 
 

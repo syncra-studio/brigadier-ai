@@ -1187,7 +1187,7 @@ who decided them, lost their defining sentence in a summary, or waited with no m
     and refuses nothing; the thread reads the list and decides.
   - **Bootstrap order** (replaces S22's list): the map; open items, rules and decisions, verbatim and whole,
     never cut for budget; the rest of the ledger, newest first, within the budget, with the read command for
-    what it left out; the note; **every user message of the lineage, verbatim**, within about 8k tokens (the
+    what it left out; the note; **every user message of the lineage, verbatim**, within about 20k tokens / 80 KB (D49, amended 10-24; the
     first and the latest always; the read command for the rest); then L2's latest exchange and tail. The user's
     own messages catch a rule the thread never wrote down: a 2026 compaction study kept over 90% of user
     constraints by reading only the user's turns (CONTINUITY §2).
@@ -1643,6 +1643,7 @@ below is proposed unless tagged.
   w108); it rebases on it.
 
 **S38c. "Continue on <other CLI>" on request (D46).** Opus. (as landed)
+D49 amendment (10-24, S22b/S38c, extends D46/D23; D25 applies): request/quota seams carry the predecessor's hot context up to about half the target's known window after the whole S22b sections; unknown windows keep the tail, size seams keep ≈15k tokens, and omitted spans keep their reads.
 (user, 2026-10-23 23:46, D46: "i guess sure, why not", to: should a session move to the other CLI when you ask,
 the same seam, divider and hand-off note as the quota fallback, or only when quota runs out?)
 **Take, don't rebuild:** S38 2b's seam (`seam_to_agent`), S22's nudge and S22b's bootstrap, D25's model pick

@@ -170,6 +170,11 @@ pub trait ProviderSession: Send + Sync {
     /// The CLI's own id for the session (Claude session id, Codex thread id).
     fn native_id(&self) -> String;
 
+    /// The selected model's window, when startup read it from the CLI's own catalog.
+    fn context_window(&self) -> Option<i64> {
+        None
+    }
+
     /// Starts a turn with the user's message.
     fn send(&self, input: TurnInput) -> BoxFuture<'_, Result<()>>;
 

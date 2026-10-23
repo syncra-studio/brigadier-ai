@@ -67,6 +67,9 @@ def metrics(result):
     return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
             "compactions": result.get("compactions"), "zed_compactions": result.get("zed_compactions"),
             "checks": decision_checks(result),
+            "budget_scores": result.get("budget_scores"),
+            "first_successor_write": result.get("first_successor_write"),
+            "extra_bootstrap_estimate": result.get("extra_bootstrap_estimate"),
             "seams": result.get("seams_before_checks", result.get("size_seams_before_faults", 0)),
             "contexts_before_checks": result.get("seams_before_checks"),
             "recall": (sum(row.get("verdict") == "pass" for row in result["items"].values()) / len(result["items"]))
@@ -93,10 +96,12 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
         report.update(status="skipped", reason="needs the user: secrets")
     else:
         # Same scripts in every arm. Short stays bounded; long crosses 400k of inert input.
-        for block, profile, fillers, ballast in (("recall", "short", 9, 1200),
-                                                 ("recall", "long", 90, 3500),
-                                                 ("decisions", "long", 90, 3500)):
-            for arm in ([selected_arm] if selected_arm else ARMS):
+        profiles = [("recall", "short", 9, 1200), ("recall", "long", 90, 3500),
+                    ("decisions", "long", 90, 3500)]
+        if provider == "claude" and selected_arm in (None, "seam"):
+            profiles += [("p2", "short", 18, 0), ("p3", "short", 16, 0)]
+        for block, profile, fillers, ballast in profiles:
+            for arm in (["seam"] if block in ("p2", "p3") else [selected_arm] if selected_arm else ARMS):
                 if arm == "zed" and not zed_long and (block, profile) != ("recall", "short"):
                     report["arms"].append({"block": block, "profile": profile, "arm": arm,
                                             "status": "skipped",
@@ -113,6 +118,11 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
                                "--timeout", "6000", "--turn-timeout", "240",
                                "--scratch-prefix", f"continuity-nightly-{name}",
                                "--report", str(output / f"{name}.md"), "--evidence", str(evidence)]
+                    if block in ("p2", "p3"):
+                        command = [sys.executable, str(ROOT / "tools/continuity-battery/budgets.py"),
+                                   "--variant", block, "--daemon", daemon, "--max-fillers", str(fillers),
+                                   "--scratch-prefix", f"continuity-nightly-d49-{block}",
+                                   "--report", str(output / f"{name}.md"), "--evidence", str(evidence)]
                     row = {"block": block, "profile": profile, "arm": arm}
                     try:
                         with subprocess.Popen(command, cwd=ROOT) as proc:
@@ -127,9 +137,12 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
                                     proc.wait()
                         result = json.loads(evidence.read_text())
                         row.update(status="skipped" if result.get("status") == "skipped" else
-                                   "complete" if proc.returncode == 0 and not any(e.startswith(("capture:", "score:")) for e in result.get("errors", [])) else "incomplete",
+                                   "complete" if proc.returncode == 0 and not any(e.startswith(("capture:", "score:", "capture/score:")) for e in result.get("errors", [])) else "incomplete",
                                    reason=result.get("reason"),
                                    errors=result.get("errors", []), model=result.get("model"), **metrics(result))
+                        if row["status"] == "complete" and block in ("p2", "p3") and row.get("budget_scores") is None:
+                            row["status"] = "incomplete"
+                            row["errors"].append("budget variant not scored")
                         if row["status"] == "complete" and block == "decisions" and any(row.get(k) is None for k in ("applied", "contradictions", "unmarked_additions", "open_items")):
                             row["status"] = "incomplete"
                             row["errors"].append("decision rubric not completely scored")
@@ -145,7 +158,7 @@ def regressions(summary, previous=None):
     found = []
     for provider in summary["providers"]:
         for row in provider["arms"]:
-            if row["status"] != "complete":
+            if row["status"] != "complete" or row["block"] in ("p2", "p3"):
                 continue
             label = f"{provider['provider']} {row['block']} {row['profile']} {row['arm']}"
             if provider["provider"] == "claude" and row["arm"] == "seam" and (row.get("compactions") or 0) > 0:
@@ -179,7 +192,7 @@ def regressions(summary, previous=None):
             for row in p["arms"]:
                 prior = old.get((p["provider"], row["block"], row["profile"], row["arm"]), {})
                 for key in ("recall", "applied"):
-                    if row.get("status") == "complete" and row.get(key) is not None and prior.get(key) is not None and row[key] < prior[key]:
+                    if row["block"] not in ("p2", "p3") and row.get("status") == "complete" and row.get(key) is not None and prior.get(key) is not None and row[key] < prior[key]:
                         found.append(f"{p['provider']} {row['block']} {row['profile']} {row['arm']}: {key} below baseline")
     return found
 
@@ -246,6 +259,10 @@ def markdown(summary):
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
             lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
         for row in provider["arms"]:
+            if row.get("budget_scores") is not None:
+                lines += ["", f"D49 {row['block']}/{row['profile']}: `{json.dumps(row['budget_scores'], sort_keys=True)}`; "
+                          f"first successor input/write `{json.dumps(row.get('first_successor_write'))}`; "
+                          f"extra bootstrap estimate `{json.dumps(row.get('extra_bootstrap_estimate'))}`.", ""]
             if row.get("reason"):
                 lines += ["", f"{row['block']}/{row['profile']} {row['arm']}: " + row["reason"], ""]
         lines += ["", "Price-weighted ratios: " + ", ".join(f"{r['block']}/{r['profile']} {r.get('price_weighted_ratio', 'unavailable')}" for r in provider["arms"] if r["arm"] == "seam"), ""]

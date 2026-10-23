@@ -41,8 +41,27 @@ fn transcript(exchanges: usize, answer: &str) -> Vec<FileEntry> {
 }
 
 fn boot<'a>(entries: &'a [FileEntry], note: Option<&'a str>, death: Option<&'a str>) -> String {
+    boot_tail(
+        entries,
+        note,
+        death,
+        TailBudget {
+            reason: Reason::Size,
+            hot_tokens: None,
+            target_window: None,
+        },
+    )
+}
+
+fn boot_tail(
+    entries: &[FileEntry],
+    note: Option<&str>,
+    death: Option<&str>,
+    tail: TailBudget,
+) -> String {
     bootstrap(&Boot {
         n: 2,
+        tail,
         key: "abcd1234",
         folder: Path::new("/s/abcd1234"),
         ledger_path: Path::new("/s/abcd1234/record/ledger.md"),
@@ -184,6 +203,11 @@ fn a_ledger_over_budget_carries_every_open_item_rule_and_decision_whole() {
     let entries = transcript(3, "short");
     let text = bootstrap(&Boot {
         n: 2,
+        tail: TailBudget {
+            reason: Reason::Size,
+            hot_tokens: None,
+            target_window: None,
+        },
         key: "abcd1234",
         folder: &dir,
         ledger_path: &ledger_path,
@@ -290,7 +314,8 @@ fn the_users_messages_come_within_their_budget_the_first_and_latest_always() {
     assert_eq!(positions[0], 0);
     assert_eq!(*positions.last().unwrap(), 598);
     assert!(positions.contains(&591), "the mid-turn message");
-    assert!(said.len() <= 32_000 + 1_000, "{}", said.len());
+    assert!(said.len() > 32_000 + 1_000);
+    assert!(said.len() <= 80_000 + 1_000, "{}", said.len());
     assert!(!said.contains(CARRY_ON));
     let left = said
         .lines()
@@ -386,6 +411,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
     std::fs::create_dir_all(record.join("handoff")).unwrap();
     std::fs::write(note_path(record, 1), "note").unwrap();
     let end = |death: Option<&str>| SeamEnd {
+        hot_tokens: None,
         predecessor: Some("p".into()),
         nudged_at_ms: Some(1),
         closed_at_ms: 2,
@@ -454,6 +480,7 @@ fn a_successor_given_only_shown_messages_draws_no_bubble_again() {
     let seam = |n: u32, messages: &[&str], shown: &[&str]| Seam {
         n,
         end: SeamEnd {
+            hot_tokens: None,
             predecessor: Some("p".into()),
             nudged_at_ms: None,
             closed_at_ms: 2,
@@ -549,4 +576,74 @@ fn the_nudge_is_never_quoted_nor_left_out() {
         !shown(&text).contains(&6) && spans(&text).is_empty(),
         "{text}"
     );
+}
+
+#[test]
+fn d49_tail_budget_uses_reason_hot_context_and_target_cap() {
+    for reason in [Reason::Size, Reason::Request, Reason::Quota] {
+        let budget = |hot_tokens, target_window| TailBudget {
+            reason,
+            hot_tokens,
+            target_window,
+        };
+        assert_eq!(budget(Some(90_000), None).bytes(10_000), TAIL_BYTES);
+        assert_eq!(budget(None, Some(200_000)).bytes(10_000), TAIL_BYTES);
+        assert_eq!(budget(Some(90_000), Some(0)).bytes(10_000), TAIL_BYTES);
+        if reason == Reason::Size {
+            assert_eq!(
+                budget(Some(90_000), Some(200_000)).bytes(10_000),
+                TAIL_BYTES
+            );
+        } else {
+            assert_eq!(budget(Some(90_000), Some(200_000)).bytes(10_000), 350_000);
+            assert_eq!(budget(Some(90_000), Some(100_000)).bytes(10_000), 190_000);
+            assert_eq!(budget(Some(90_000), Some(100_000)).bytes(250_000), 0);
+        }
+    }
+}
+
+#[test]
+fn expanded_tail_keeps_the_sections_first_and_whole_and_omissions_readable() {
+    let entries = transcript(80, &"x".repeat(4_000));
+    let size = boot(&entries, Some("whole note"), None);
+    for reason in [Reason::Request, Reason::Quota] {
+        let text = boot_tail(
+            &entries,
+            Some("whole note"),
+            None,
+            TailBudget {
+                reason,
+                hot_tokens: Some(90_000),
+                target_window: Some(200_000),
+            },
+        );
+        let earlier = "## Earlier, newest first";
+        assert_eq!(size.split(earlier).next(), text.split(earlier).next());
+        assert!(shown(&text).len() > shown(&size).len());
+        for at in 0..entries.len() {
+            assert!(
+                shown(&text).contains(&at)
+                    || spans(&text).iter().any(|(a, b)| (*a..=*b).contains(&at))
+            );
+        }
+        assert!(text.len() <= 400_000 + 2_000);
+    }
+}
+
+#[test]
+fn existing_seam_records_choose_request_quota_or_size_and_missing_usage_is_safe() {
+    let old = serde_json::json!({"predecessor": "p", "closedAtMs": 1});
+    let end: SeamEnd = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(end.reason(), Reason::Size);
+    assert_eq!(end.hot_tokens, None);
+    let mut request = old.clone();
+    request["movedTo"] = serde_json::json!("codex");
+    request["hotTokens"] = serde_json::json!(90_000);
+    let end: SeamEnd = serde_json::from_value(request).unwrap();
+    assert_eq!(end.reason(), Reason::Request);
+    assert_eq!(end.hot_tokens, Some(90_000));
+    let mut quota = old;
+    quota["death"] = serde_json::json!("usage limit on Claude Code · continued on Codex");
+    let end: SeamEnd = serde_json::from_value(quota).unwrap();
+    assert_eq!(end.reason(), Reason::Quota);
 }
