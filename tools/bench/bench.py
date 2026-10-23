@@ -73,7 +73,15 @@ def cleanup_native(path, scratch):
             pass
 
 
-def plain(repo, provider, prompt, model, args, scratch):
+def keep(paths, dest):
+    """Copies the native transcripts to `dest` (--keep-transcripts) before cleanup removes them."""
+    if dest:
+        dest.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            shutil.copyfile(path, dest / Path(path).name)
+
+
+def plain(repo, provider, prompt, model, args, scratch, kept=None):
     sid = str(uuid.uuid4())
     command = (["claude", "-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages",
                 "--dangerously-skip-permissions", "--effort", args.effort, "--session-id", sid]
@@ -107,18 +115,20 @@ def plain(repo, provider, prompt, model, args, scratch):
                     worker_usage=None, process_exit=proc.returncode), repo
     finally:
         stop(proc)
+        keep(native_files(provider, sid), kept)
         for path in native_files(provider, sid):
             cleanup_native(path, scratch)
 
 
 class Daemon:
-    def __init__(self, args, root):
-        self.args, self.root = args, root
+    def __init__(self, args, root, kept=None):
+        self.args, self.root, self.keep_to = args, root, kept
         self.data = root / "data"
         self.proc = None
         self.ipc = ipc_module.Ipc(str(self.data))
         self.conv = self.project = None
         self.kept = {}
+        self.natives = set()
         self.after = 0
         self.data.mkdir()
         self.saved = root / "native"
@@ -168,13 +178,16 @@ class Daemon:
                     artifact = e["artifact"]
                     provider = {"claudeSession": "claude", "codexThread": "codex"}.get(artifact.get("type"))
                     if provider:
-                        sid = artifact.get("sessionId") or artifact.get("threadId")
-                        for path in native_files(provider, sid):
-                            self.save_native(provider, path)
+                        # Recorded when the session starts, often before its CLI writes the file.
+                        self.natives.add((provider, artifact.get("sessionId") or artifact.get("threadId")))
                 if e.get("type") == "workerEvent":
                     event = e.get("event") or {}
                     if event.get("type") == "sessionStarted" and event.get("file"):
                         self.save_native(self.provider, event["file"])
+            for provider, sid in list(self.natives):
+                for path in native_files(provider, sid):
+                    self.save_native(provider, path)
+                    self.natives.discard((provider, sid))
             if len(events) < 500:
                 break
 
@@ -258,6 +271,7 @@ class Daemon:
         meter = {"input": sum(r["input"] for r in rows), "cache_read": sum(r["cached_input"] for r in rows),
                  "cache_write": sum(r["cache_write"] for r in rows), "output": sum(r["output"] for r in rows)}
         metrics.update(wall_s=wall, first_output_s=first, worktree_s=worktree_s,
+                       parent_transcripts=[self.kept[f][1].name for f in parent_files],
                        worker_usage=worker_usage, worker_turns=len(workers), daemon_usage=meter,
                        delegated=(len({r["task_id"] for r in workers}) == 1) if arm == "W" else None,
                        request_state=next(r["state"]["type"] for r in view["requests"] if r["id"] == request))
@@ -280,6 +294,7 @@ class Daemon:
             errors.append(str(error))
         finally:
             stop(self.proc)
+            keep([saved for _, saved in self.kept.values()], self.keep_to)
             for original in self.kept:
                 cleanup_native(original, self.root)
         if errors:
@@ -329,6 +344,7 @@ def run_main():
     p.add_argument("--effort", choices=["low", "medium", "high"], default="low")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--scratch-prefix", default="brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-", help="Unique run/worker prefix for /tmp scratch")
+    p.add_argument("--keep-transcripts", type=Path, default=None, help="Copy each run's native transcripts to DIR/<arm>-<task>-<run>/")
     p.add_argument("--skip", action="store_true", help="Write explicit skipped rows without calling a CLI or daemon")
     args = p.parse_args()
     arms, tasks = args.arms.split(","), args.tasks.split(",")
@@ -358,6 +374,7 @@ def run_main():
                     scratch = Path(tmp).resolve()
                     repo = scratch / "repo"
                     daemon = None
+                    kept = args.keep_transcripts and args.keep_transcripts.resolve() / f"{arm}-{task}-{run}"
                     try:
                         fixture(repo, task)
                         prompt = TASKS[task] + " Run node --test test/*.test.js. Do not push or publish."
@@ -367,9 +384,9 @@ def run_main():
                         else:
                             prompt += " Do the work yourself without workers or subagents. Do not commit."
                         if arm in ("A", "B"):
-                            result, checkout = plain(repo, provider, prompt, model, args, scratch)
+                            result, checkout = plain(repo, provider, prompt, model, args, scratch, kept)
                         else:
-                            daemon = Daemon(args, scratch)
+                            daemon = Daemon(args, scratch, kept)
                             result, checkout = daemon.run(repo, arm, provider, model, prompt)
                         row.update(result, grade=grade(checkout, task), status="complete")
                         if arm == "W" and not row["delegated"]:

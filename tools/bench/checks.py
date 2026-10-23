@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +12,8 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bench import cleanup_native
+import bench
+from bench import Daemon, cleanup_native, keep
 from metrics import parse
 from tasks import TASKS, fixture, grade
 from nightly import collect, issue, regressions
@@ -53,7 +55,8 @@ class Accounting(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
             root = Path(tmp)
             projects = root / "projects"
-            own = projects / ("-tmp-" + root.name + "-repo")
+            # The CLI's slug turns every non-alphanumeric character into "-", "_" included.
+            own = projects / re.sub(r"[^A-Za-z0-9]", "-", f"/tmp/{root.name}/repo")
             (own / "memory").mkdir(parents=True)
             transcript = own / "explicit-session.jsonl"
             transcript.write_text("{}")
@@ -65,6 +68,25 @@ class Accounting(unittest.TestCase):
             cleanup_native(transcript, root)
             self.assertFalse(own.exists())
             self.assertTrue(keep.exists())
+
+    def test_a_worker_transcript_written_after_its_start_is_kept(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            (root / "run").mkdir()
+            daemon = Daemon(None, root / "run", root / "kept")
+            started = [{"seq": 1, "event": {"type": "cleanupRecorded", "artifact": {"type": "claudeSession", "sessionId": "w"}}}]
+            replies = iter([started, [], []])
+            daemon.call = lambda method, **_: {"events": next(replies)}
+            transcript = root / "w.jsonl"
+            with patch.object(bench, "native_files", lambda _p, _s: [transcript] if transcript.exists() else []):
+                daemon.events()
+                self.assertFalse(daemon.kept)
+                # Its CLI writes the file after the session started; a later poll keeps it.
+                transcript.write_text("{}")
+                daemon.events()
+            self.assertIn(str(transcript), daemon.kept)
+            keep([saved for _, saved in daemon.kept.values()], daemon.keep_to)
+            self.assertTrue((root / "kept" / "claude-w.jsonl").is_file())
 
 
 class Graders(unittest.TestCase):

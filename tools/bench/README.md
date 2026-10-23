@@ -20,6 +20,8 @@ Requires Python 3.9+, Node, git and existing CLI logins. No fixture download or 
 needed. The default is all five tasks, two runs, all arms; each invocation writes `report.md`
 and `report.json` to `bench-report/` (choose an output outside your checkout to keep it clean).
 `--timeout` bounds each model run (600 seconds by default). A live smoke costs real quota.
+`--keep-transcripts DIR` copies each run's native transcripts (parent and workers, full context)
+to `DIR/<arm>-<task>-<run>/` before cleanup, for reading what a run saw; keep DIR private.
 
 | Arm | Runs |
 |---|---|
