@@ -80,7 +80,7 @@ const conversation = {
         type: "session", repo: "/tmp/research-answer-fixture", environment: { type: "local" }, permission: "full", planMode: false,
         workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null },
       }
-    : { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } },
+    : { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" },
 } as unknown as Conversation;
 
 const messages: Message[] = [

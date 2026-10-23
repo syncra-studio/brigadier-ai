@@ -93,7 +93,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   };
   // A session draft's pill: Ask in a folder the user doesn't trust.
   const draftUntrusted = !conversation && resolved.kind === "session" && resolved.repoPath !== null && folderTrust(resolved.project, resolved.repoPath) === false;
-  const permissionLevel = conversation ? sessionPermission : resolved.kind === "session" ? (draftUntrusted ? "ask" : resolved.permission) : null;
+  const permissionLevel = conversation ? sessionPermission : draftUntrusted ? "ask" : resolved.permission;
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -176,17 +176,15 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                 {conversation ? (
                   <ConversationPermissionPicker conversation={conversation} open={permissionOpen} onOpenChange={setPermissionOpen} />
                 ) : (
-                  resolved.kind === "session" && (
-                    <PermissionPicker
-                      value={resolved.permission}
-                      untrusted={draftUntrusted}
-                      open={permissionOpen}
-                      onOpenChange={setPermissionOpen}
-                      onChange={(permission) =>
-                        updateDraft(resolved.project?.id ?? null, { permission })
-                      }
-                    />
-                  )
+                  <PermissionPicker
+                    value={resolved.permission}
+                    untrusted={draftUntrusted}
+                    open={permissionOpen}
+                    onOpenChange={setPermissionOpen}
+                    onChange={(permission) =>
+                      updateDraft(resolved.project?.id ?? null, { permission })
+                    }
+                  />
                 )}
                 <PlanChip />
                 <NewSessionChip />

@@ -14,4 +14,8 @@ repo: string, environment: EnvironmentRequest, permission: PermissionLevel, orch
 /**
  * Start in plan mode (see [`Setup::Session`]).
  */
-planMode: boolean, } | { "type": "chat", model: ModelChoice, };
+planMode: boolean, } | { "type": "chat", model: ModelChoice, 
+/**
+ * The composer's level, mapped to the Chat's CLI as a session's is (S28).
+ */
+permission: PermissionLevel, };

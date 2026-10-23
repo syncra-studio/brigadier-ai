@@ -50,7 +50,7 @@ function conversation(id: string, kind: "chat" | "session", title: string): Conv
     quotaWait: null,
     setup:
       kind === "chat"
-        ? { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } }
+        ? { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" }
         : {
             type: "session",
             repo: "/tmp/thread-scroll-fixture",

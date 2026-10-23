@@ -107,9 +107,14 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         );
         // A Chat starts with the same file, then its own lines, none of which says it runs no
         // workers (G20).
-        let chat_spec = of(&specs, ToolSet::Chat);
-        let chat_prompt = chat_spec.append_system_prompt.as_deref().unwrap();
         let chat_folder = flow.manager.session_dir(&chat);
+        let chat_spec = specs
+            .iter()
+            .find(|(_, spec)| spec.cwd == chat_folder.work())
+            .expect("the Chat started")
+            .1
+            .clone();
+        let chat_prompt = chat_spec.append_system_prompt.as_deref().unwrap();
         assert!(
             chat_prompt.starts_with(&format!(
                 "{}\n\n",

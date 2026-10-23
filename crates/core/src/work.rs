@@ -991,9 +991,15 @@ pub struct Task {
 pub struct PlainWorker {
     /// Its CLI's permission mode: its session's unless `--permission` said (Q8).
     pub permission: crate::model::PermissionLevel,
-    /// It works in its session's checkout (`--local`), not a worktree of its own.
+    /// It works in its session's checkout (`--local`; a Chat's worker: `repo`'s), not a
+    /// worktree of its own.
     #[serde(default)]
     pub local: bool,
+    /// A Chat's worker: the repository it works in (`--repo`, S28). A Chat's worker without
+    /// one works in a folder of its own, with no git; a session's works in the session's
+    /// repository.
+    #[serde(default)]
+    pub repo: Option<String>,
     /// The branch its worktree starts from and merges back into (G21); none with `--local`.
     #[serde(default)]
     pub base: Option<String>,

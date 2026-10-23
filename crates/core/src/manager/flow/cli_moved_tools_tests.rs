@@ -1,21 +1,23 @@
 //! STRIP-DOWN-PLAN S16c: the thread's, a Chat's and a side chat's last MCP tools, behind
 //! `brigadier` as the caller's own calls of them. The thread searches the Brain, its transcript
 //! and the code index, saves reports, offers feedback and asks for approval; a Chat saves
-//! reports; a side chat reads and changes only its tab's page or file. Each
-//! is refused to a caller that didn't have it.
+//! reports, and what its CLI asks is the user's card, as a session's is (S28); a side chat reads
+//! and changes only its tab's page or file. Each is refused to a caller that didn't have it.
 
 use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::{CliRequest, GRANT_ENV, Tool};
 use serde_json::{Value, json};
 
-use super::chat_thread_tests::{answered, new_chat};
+use super::chat_thread_tests::{answered, new_chat_at};
 use super::cli_tests::{Answers, brigadier, id_of, start, tool, wait_for};
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::RequestState;
-use crate::model::{ConversationId, TabTarget};
+use crate::model::{ConversationId, PermissionLevel, TabTarget};
 use crate::pages::{PageContent, Pages};
 use crate::tools::Role;
+use crate::work::CardState;
+use brigadier_providers::ApprovalDecision;
 
 fn keep(answers: &Answers, name: &str, value: Value) {
     answers.lock().unwrap().insert(name.into(), value);
@@ -176,7 +178,7 @@ async fn the_threads_moved_tools_run_behind_brigadier_and_its_workers_are_refuse
     flow.stop().await;
 }
 
-/// What Brigadier answers a Chat's CLI asking to run `command` (Codex's shell asks about every
+/// The answer a Chat's CLI gets to asking to run `command` (Codex's shell asks about every
 /// command not on its own safe list).
 async fn asked(turn: &Turn, command: &str) -> Value {
     serde_json::to_value(
@@ -186,8 +188,9 @@ async fn asked(turn: &Turn, command: &str) -> Value {
     .unwrap()
 }
 
-/// A Chat reads the app and saves reports through `brigadier`, the one command its shell runs
-/// (S16c); the thread's tools aren't its.
+/// A Chat reads the app and saves reports through `brigadier` (S16c); the thread's tools
+/// aren't its. Its shell is its CLI's own, at its level: what the CLI asks is the user's card,
+/// never Brigadier's answer (S28).
 #[tokio::test]
 async fn a_chat_saves_reports_behind_brigadier() {
     let answers = Answers::default();
@@ -213,19 +216,8 @@ async fn a_chat_saves_reports_behind_brigadier() {
                 ] {
                     keep(&answers, name, brigadier(&turn, request).await);
                 }
-                for (name, command) in [
-                    (
-                        "ask brigadier",
-                        "/bin/zsh -lc 'brigadier report save --title Printers Bambu A1.'",
-                    ),
-                    ("ask other", "/bin/zsh -lc 'curl https://example.com'"),
-                    (
-                        "ask chained",
-                        "/bin/zsh -lc 'brigadier app state; rm -rf x'",
-                    ),
-                ] {
-                    keep(&answers, name, asked(&turn, command).await);
-                }
+                let curl = asked(&turn, "/bin/zsh -lc 'curl https://example.com'").await;
+                keep(&answers, "ask curl", curl);
                 Reply::text("Noted.")
             })
         })
@@ -233,8 +225,27 @@ async fn a_chat_saves_reports_behind_brigadier() {
     let flow = Flow::start("cli-moved-chat", Options::default(), script).await;
     flow.manager
         .set_pages(Arc::new(Pages::open(flow.repo.with_file_name("pages"))));
-    let chat = new_chat(&flow).await;
+    let chat = new_chat_at(&flow, PermissionLevel::Ask).await;
     flow.say_to(&chat, "Which printer should I buy?").await;
+    // Its CLI's question waits on the user's card; Brigadier answers nothing itself.
+    let board = flow
+        .until_in(&chat, "the Chat's permission card", |board| {
+            board
+                .approvals
+                .values()
+                .any(|card| card.state == CardState::Pending)
+        })
+        .await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.state == CardState::Pending)
+        .unwrap();
+    assert!(format!("{:?}", card.subject).contains("curl"), "{card:#?}");
+    flow.manager
+        .answer_card(chat.clone(), card.id.clone(), ApprovalDecision::Allow)
+        .await
+        .unwrap();
     answered(&flow, &chat).await;
     let answers = answers.lock().unwrap().clone();
     assert!(
@@ -251,18 +262,16 @@ async fn a_chat_saves_reports_behind_brigadier() {
         "{:#}",
         answers["app"]
     );
-    // Its shell runs `brigadier` and nothing else.
-    assert_eq!(answers["ask brigadier"], json!({"type": "allow"}));
-    for name in ["ask other", "ask chained"] {
-        assert_eq!(answers[name]["type"], "deny", "{name}: {:#}", answers[name]);
-    }
-    // It starts read-only, with what `brigadier` needs to know who calls.
+    assert_eq!(answers["ask curl"], json!({"type": "allow"}));
+    // It starts at its level as a thread, in its folder, with what `brigadier` needs to know
+    // who calls.
     let specs = flow.specs();
     let (_, spec) = specs
         .iter()
-        .find(|(_, spec)| spec.tools == brigadier_providers::ToolSet::Chat)
+        .find(|(_, spec)| spec.cwd == flow.manager.session_dir(&chat).work())
         .expect("the Chat started");
-    assert_eq!(spec.access, brigadier_providers::Access::ReadOnly);
+    assert_eq!(spec.access, brigadier_providers::Access::Ask);
+    assert_eq!(spec.tools, brigadier_providers::ToolSet::Thread);
     for name in [brigadier_cli::protocol::SESSION_ENV, GRANT_ENV, "PATH"] {
         assert!(spec.env.iter().any(|(key, _)| key == name), "{name}");
     }

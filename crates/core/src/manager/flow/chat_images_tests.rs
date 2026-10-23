@@ -63,6 +63,7 @@ async fn codex_chat(flow: &Flow) -> ConversationId {
                     fast: None,
                     account: None,
                 },
+                permission: Default::default(),
             }),
         )
         .await
@@ -153,20 +154,12 @@ async fn a_codex_chat_makes_an_image_shown_kept_and_removed_like_a_threads() {
     let source = flow
         .specs()
         .into_iter()
-        .find(|(provider, spec)| *provider == ProviderKind::Codex && spec.tools == ToolSet::Chat)
+        .find(|(provider, spec)| {
+            *provider == ProviderKind::Codex && spec.cwd == flow.manager.session_dir(&chat).work()
+        })
         .map(|(_, spec)| spec.cwd.join("generated_images/ig_1.png"))
-        .expect("the Chat runs on Codex with a Chat's tools");
+        .expect("the Chat runs on Codex in its own folder");
     let kept = image_is_shown(&flow, &chat, &source).await;
-    // No other session runs with a Chat's tools: one-shot jobs keep theirs.
-    for (_, spec) in flow.specs() {
-        if matches!(spec.tools, ToolSet::Chat | ToolSet::TabChat) {
-            assert_eq!(
-                spec.cwd,
-                flow.manager.session_dir(&chat).work(),
-                "{spec:#?}"
-            );
-        }
-    }
     images_go_with(&flow, &chat, &kept).await;
     flow.stop().await;
 }

@@ -134,7 +134,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   if (noModel) {
     problem = "No model is available. Turn one on in Providers.";
   } else if (kind === "chat") {
-    target = { kind: "chat", setup: { type: "chat", model } };
+    target = { kind: "chat", setup: { type: "chat", model, permission } };
   } else if (!project || !repoPath) {
     problem = "This project has no repository yet. Add one in its settings.";
   } else {

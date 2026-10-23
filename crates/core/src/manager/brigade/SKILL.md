@@ -12,14 +12,14 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 | Command | Use |
 |---|---|
 | `brigadier models` | Before each start: which provider, model and effort fits, what's left on each account, the user's rules. |
-| `brigadier start "<brief>" --title T [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
+| `brigadier start "<brief>" --title T [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
 | `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Workers send you nothing on their own: this is how you hear from them. |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
 | `brigadier ask "<question>" [--option O]…` | Ask the user on a card. Recommended option first. |
 
-`brigadier start` needs a project: a Chat without one can't start workers; do the job yourself there. A worker can't start workers of its own either.
+In a Chat, a worker works in the repository `--repo <path>` names (a worktree of it, or its checkout with `--local`), or without `--repo` in a folder of its own with no git. A worker can't start workers of its own.
 
 ## Fan out or not
 

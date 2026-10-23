@@ -1203,10 +1203,11 @@ pub enum ToolSet {
     None,
     /// Web search and fetch only (a research one-shot).
     Web,
-    /// A Chat's: as [`Self::Web`], and Codex keeps its image generation (Q24), with a shell
-    /// for `brigadier` (S16c): Claude's runs that and nothing else, Codex's runs in its
-    /// read-only sandbox with network on, for the daemon's socket.
-    Chat,
+    /// A side chat's: as [`Self::Web`], and Codex keeps its image generation (Q24), with a
+    /// shell for `brigadier` (S16c): Claude's runs that and nothing else, Codex's runs in its
+    /// read-only sandbox with network on, for the daemon's socket. A Chat is a
+    /// [`Self::Thread`] (S28).
+    SideChat,
     /// A one-shot reviewer's: reading files and running the read-only git commands that show
     /// a change, and nothing else (Claude; Codex runs its reviews through `codex exec review`).
     Review,
@@ -1220,10 +1221,10 @@ pub enum ToolSet {
 }
 
 impl ToolSet {
-    /// A thread or a worker: it runs with the user's own CLI setup (their settings, hooks,
+    /// A thread (a session's or a Chat's) or a worker: it runs with the user's own CLI setup (their settings, hooks,
     /// plugins, skills, MCP servers and instructions; Claude also the project's, through
     /// [`SessionSpec::project`]), Brigadier's own rules on top. Every other role (reviewers,
-    /// Chats, one-shot runs, control connections) keeps a sealed setup.
+    /// side chats, one-shot runs, control connections) keeps a sealed setup.
     #[must_use]
     pub fn user_setup(self) -> bool {
         matches!(self, Self::Thread | Self::Lean)

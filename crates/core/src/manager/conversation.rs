@@ -1887,7 +1887,7 @@ impl SessionManager {
             None => {
                 let provider = match (&conversation.setup, fallback) {
                     (_, Some(fallback)) => fallback.provider,
-                    (Some(Setup::Chat { model }), None) => model.provider,
+                    (Some(Setup::Chat { model, .. }), None) => model.provider,
                     (Some(Setup::Session { orchestrator, .. }), None) => orchestrator.provider,
                     (None, None) => {
                         return Err(Error::Invalid(
@@ -2488,10 +2488,13 @@ impl SessionManager {
         let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
         self.prepare_owned_dir(&owner, &dir).await?;
-        let tmp = if conv.kind == ConversationKind::Session {
-            Some(self.thread_temp(&conv.id).await?)
-        } else {
+        // A side chat (of a session, or of a tab) is its session's helper, with a limited shell
+        // (S16c); a session and a Chat have their CLI's own (S28).
+        let side = conversation.side_of.is_some();
+        let tmp = if side {
             None
+        } else {
+            Some(self.thread_temp(&conv.id).await?)
         };
 
         // A stand-in while the chosen model is at its limit (the saved choice is untouched).
@@ -2537,7 +2540,7 @@ impl SessionManager {
                 }
                 (choice, prompt)
             }
-            (Some(Setup::Chat { model }), ConversationKind::Chat)
+            (Some(Setup::Chat { model, .. }), ConversationKind::Chat)
                 if let (Some(tab), Some(session)) =
                     (&conversation.tab_chat, &conversation.side_of) =>
             {
@@ -2564,9 +2567,13 @@ impl SessionManager {
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
-                    Some(Setup::Chat { model }) => model.clone(),
+                    Some(Setup::Chat { model, .. }) => model.clone(),
                     _ => self.default_chat_choice(),
                 };
+                // Its level, as a session's (S28); a side chat's shell stays limited.
+                if !side {
+                    launch = Some(self.thread_launch(&conv.id, true).await?);
+                }
                 let grant = self.grants.issue(
                     &owner,
                     Role::Chat {
@@ -2575,7 +2582,7 @@ impl SessionManager {
                 );
                 grant_values.push(grant.clone());
                 cli_env = self.cli_env(&conv.id.0, &grant);
-                (fallback.unwrap_or(model), prompts::chat())
+                (fallback.unwrap_or(model), prompts::chat(side))
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {
                 return Err(Error::Invalid(
@@ -2633,7 +2640,7 @@ impl SessionManager {
             },
             // Resumed on the next message, rebirth or restart.
             ephemeral: false,
-            // A Chat searches the web and runs `brigadier`, read-only.
+            // A side chat searches the web and runs `brigadier`, read-only.
             access: launch
                 .as_ref()
                 .map_or(Access::ReadOnly, |launch| launch.access),
@@ -2645,9 +2652,11 @@ impl SessionManager {
             mcp_servers: Vec::new(),
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
-                // A tab chat reads its session's files. A Chat makes images (Q24).
+                // A tab chat reads its session's files.
                 ConversationKind::Chat if tab_checkout.is_some() => ToolSet::TabChat,
-                ConversationKind::Chat => ToolSet::Chat,
+                ConversationKind::Chat if side => ToolSet::SideChat,
+                // A Chat acts as a session (S28): the same tools and the user's own setup.
+                ConversationKind::Chat => ToolSet::Thread,
             },
             skill_plugins: Vec::new(),
             // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
@@ -2656,20 +2665,18 @@ impl SessionManager {
                 None => self.brigade_plugin().into_iter().collect(),
             },
             // What the user switched off of its agent's own setup (`integrations`).
-            switched_off: match conv.kind {
-                ConversationKind::Session => {
+            switched_off: match side {
+                false => {
                     self.thread_switched_off(&conv.id, choice.provider, &cwd)
                         .await
                 }
-                ConversationKind::Chat => Default::default(),
+                true => Default::default(),
             },
             // A tab chat reads its session's checkout, never its own to clean up. A thread writes
             // its ledger in its folder's `record/`, outside its workspace (S17).
             add_dirs: match &tab_checkout {
                 Some(checkout) => vec![checkout.clone()],
-                None if conv.kind == ConversationKind::Session => {
-                    vec![self.session_dir(&conv.id).record()]
-                }
+                None if !side => vec![self.session_dir(&conv.id).record()],
                 None => Vec::new(),
             },
             // A thread runs with the project's own setup (its hooks, MCP servers, skills) when
@@ -3789,14 +3796,15 @@ impl SessionManager {
                     crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
                 }
             }
+            // A session's and a Chat's requests follow their permission level, as a worker's do
+            // (S28): what the CLI asks is the user's card.
             ProviderEvent::ApprovalRequested { request }
-                if conv.kind == ConversationKind::Session =>
+                if conv.kind == ConversationKind::Session || cli.launch.is_some() =>
             {
-                // The thread's requests follow the permission level, as a worker's do.
                 self.route_thread_approval(conv, cli, request.clone()).await;
             }
             ProviderEvent::ApprovalRequested { request } => {
-                // A Chat searches the web, and its shell runs `brigadier` and nothing else.
+                // A side chat searches the web, and its shell runs `brigadier` and nothing else.
                 let brigadier = request.kind == brigadier_providers::ApprovalKind::Command
                     && request
                         .command
@@ -3808,8 +3816,8 @@ impl SessionManager {
                     ApprovalDecision::Allow
                 } else {
                     ApprovalDecision::Deny {
-                        message: "Declined by Brigadier: a Chat only searches the web and runs \
-                                  `brigadier` commands, one at a time."
+                        message: "Declined by Brigadier: a side chat only searches the web and \
+                                  runs `brigadier` commands, one at a time."
                             .into(),
                     }
                 };
@@ -4772,10 +4780,11 @@ impl SessionManager {
         }
         let mut setup = conversation.setup.clone().unwrap_or_else(|| Setup::Chat {
             model: running.clone(),
+            permission: Default::default(),
         });
         match &mut setup {
             Setup::Session { orchestrator, .. } => orchestrator.account = named,
-            Setup::Chat { model } => model.account = named,
+            Setup::Chat { model, .. } => model.account = named,
         }
         self.core.set_setup(id.clone(), setup).await.map(drop)
     }
@@ -5805,7 +5814,7 @@ fn start_cause(fresh: bool, resumed: bool, restart: Option<WriteCause>, cold: bo
 fn setup_choice(conversation: &crate::model::Conversation) -> Option<ModelChoice> {
     match &conversation.setup {
         Some(Setup::Session { orchestrator, .. }) => Some(orchestrator.clone()),
-        Some(Setup::Chat { model }) => Some(model.clone()),
+        Some(Setup::Chat { model, .. }) => Some(model.clone()),
         None => None,
     }
 }

@@ -16,8 +16,9 @@
 //! The permission mode is the session's level, passed straight through ([`permission_mode`]):
 //! Ask runs in `default`, Accept edits in `acceptEdits`, Full access in `bypassPermissions`.
 //! Brigadier adds no sandbox and no rules of its own. A read-only session (`dontAsk`) never
-//! asks: what its allow rules don't cover is denied. A Chat and a side chat always run so, and
-//! their shell's one allow rule is `brigadier` (a side chat's also the read-only git commands).
+//! asks: what its allow rules don't cover is denied. A side chat and a tab chat always run so,
+//! and their shell's one allow rule is `brigadier` (a tab chat's also the read-only git
+//! commands). A Chat runs as a thread does, at its own level (STRIP-DOWN-PLAN S28).
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Claude setup: their
 //! settings, and in a folder the user trusts the project's and their local ones too
@@ -91,9 +92,9 @@ const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
 /// everything else is denied, and nothing prompts.
 const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
-/// A Chat's built-in tools ([`ToolSet::Chat`]): research's, and a shell for `brigadier`.
+/// A side chat's built-in tools ([`ToolSet::SideChat`]): research's, and a shell for `brigadier`.
 const CHAT_TOOLS: &str = "WebSearch,WebFetch,Bash";
-/// The only command a Chat or a side chat runs (`--allowedTools`, under `dontAsk`): `brigadier`
+/// The only command a side chat or a tab chat runs (`--allowedTools`, under `dontAsk`): `brigadier`
 /// (STRIP-DOWN-PLAN S16c). Claude Code still runs its own read-only commands (`ls`, `cat`) on
 /// files in the session's folders unasked, as its Read tool would (checked on 2.1.309).
 const BRIGADIER_ALLOWED: &str = "Bash(brigadier:*)";
@@ -367,9 +368,9 @@ impl Claude {
                 args.push("--tools".into());
                 args.push("WebSearch,WebFetch".into());
             }
-            // Claude generates no images: a Chat's tools are research's, and its shell runs
+            // Claude generates no images: a side chat's tools are research's, and its shell runs
             // only `brigadier`.
-            ToolSet::Chat => {
+            ToolSet::SideChat => {
                 args.push("--tools".into());
                 args.push(CHAT_TOOLS.into());
                 args.push("--allowedTools".into());
@@ -396,7 +397,7 @@ impl Claude {
                 .expect("settings object")
                 .remove("hooks");
         }
-        // A Chat or a raw session loads no user settings, so it is given the user's own memory
+        // A side chat or a raw session loads no user settings, so it is given the user's own memory
         // setting, as set.
         if !user_setup
             && !memory_off(spec)
@@ -631,8 +632,8 @@ fn main_checkout(git_file: &Path) -> Option<PathBuf> {
 
 /// Claude's permission mode for a session (see the module docs).
 fn permission_mode(spec: &SessionSpec) -> &'static str {
-    // A Chat's or side chat's shell runs `brigadier` and nothing else, whatever its level.
-    if matches!(spec.tools, ToolSet::Chat | ToolSet::TabChat) {
+    // A side chat's or tab chat's shell runs `brigadier` and nothing else, whatever its level.
+    if matches!(spec.tools, ToolSet::SideChat | ToolSet::TabChat) {
         return "dontAsk";
     }
     match spec.access {
@@ -668,7 +669,10 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
             .iter()
             .map(|name| format!("Skill({name})")),
     );
-    if matches!(spec.tools, ToolSet::Web | ToolSet::Chat | ToolSet::Thread) {
+    if matches!(
+        spec.tools,
+        ToolSet::Web | ToolSet::SideChat | ToolSet::Thread
+    ) {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
     }
     let mut permissions = json!({});
@@ -772,7 +776,7 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
 fn memory_off(spec: &SessionSpec) -> bool {
     match spec.tools {
         ToolSet::Default | ToolSet::Lean | ToolSet::Thread => spec.lean_worker,
-        ToolSet::Chat => false,
+        ToolSet::SideChat => false,
         ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat => true,
     }
 }
@@ -2666,7 +2670,7 @@ for line in sys.stdin:
         let native_id = "00000000-0000-4000-8000-000000000000";
         for tools in [
             ToolSet::Thread,
-            ToolSet::Chat,
+            ToolSet::SideChat,
             ToolSet::TabChat,
             ToolSet::Lean,
         ] {
@@ -2710,15 +2714,15 @@ for line in sys.stdin:
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
-    /// S16c: a Chat's and a side chat's shell runs `brigadier` and nothing else (a side chat's
+    /// S16c: a side chat's and a tab chat's shell runs `brigadier` and nothing else (a tab chat's
     /// also the read-only git commands), never asking, whatever level they are given.
     #[test]
-    fn a_chat_and_a_side_chat_run_only_brigadier_in_their_shell() {
+    fn a_side_chat_and_a_tab_chat_run_only_brigadier_in_their_shell() {
         let cwd = Temp::new();
         let native_id = "00000000-0000-4000-8000-000000000000";
         for (tools, built_in, allowed) in [
             (
-                ToolSet::Chat,
+                ToolSet::SideChat,
                 "WebSearch,WebFetch,Bash",
                 "Bash(brigadier:*)",
             ),
@@ -3057,7 +3061,7 @@ for line in sys.stdin:
                     "{tools:?} loads the user's settings and is given none ({user:?})"
                 );
             }
-            for tools in [ToolSet::Chat, ToolSet::Default] {
+            for tools in [ToolSet::SideChat, ToolSet::Default] {
                 assert_eq!(
                     memory(tools, false).0,
                     user.map(|on| json!(on)),
@@ -3094,7 +3098,7 @@ for line in sys.stdin:
         for tools in [
             ToolSet::Thread,
             ToolSet::Lean,
-            ToolSet::Chat,
+            ToolSet::SideChat,
             ToolSet::TabChat,
         ] {
             let session = SessionSpec {
@@ -3190,11 +3194,11 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn a_chat_runs_with_researchs_tools_and_a_tab_chat_with_a_reviewers() {
+    fn a_side_chat_runs_with_researchs_tools_and_a_tab_chat_with_a_reviewers() {
         let cwd = Temp::new();
         let cwd = cwd.path();
         for (chat, like) in [
-            (ToolSet::Chat, ToolSet::Web),
+            (ToolSet::SideChat, ToolSet::Web),
             (ToolSet::TabChat, ToolSet::Review),
         ] {
             let of = |tools| {

@@ -61,7 +61,7 @@ async fn another_model_of_the_same_provider_is_no_reset() {
     };
     match &mut setup {
         Setup::Session { orchestrator, .. } => orchestrator.model = Some(other.into()),
-        Setup::Chat { model } => model.model = Some(other.into()),
+        Setup::Chat { model, .. } => model.model = Some(other.into()),
     }
     flow.manager
         .set_setup(flow.conversation.clone(), setup)

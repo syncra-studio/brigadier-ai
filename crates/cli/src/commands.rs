@@ -158,9 +158,10 @@ pub const COMMANDS: &[Command] = &[
         name: "start",
         summary: "Start a worker of this session.",
         details: "The worker is a plain CLI session in this session's project, on its own \
-                  branch in a new worktree by default. It shows only inside this session, \
-                  never in the sidebar. Prints its id; `brigadier wait` hears when its turn \
-                  ends.",
+                  branch in a new worktree by default. A Chat's worker works in the repository \
+                  `--repo` names, or in a folder of its own with no git. It shows only inside \
+                  this session, never in the sidebar. Prints its id; `brigadier wait` hears \
+                  when its turn ends.",
         args: &[
             flag(
                 "title",
@@ -183,7 +184,15 @@ pub const COMMANDS: &[Command] = &[
                 "worktree",
                 "Work in a new worktree of its own (the default).",
             ),
-            switch("local", "Work in this session's checkout."),
+            switch(
+                "local",
+                "Work in this session's checkout (a Chat's: the --repo checkout).",
+            ),
+            flag(
+                "repo",
+                "PATH",
+                "A Chat's worker: the repository it works in. Without it, a folder of its own.",
+            ),
             flag(
                 "base",
                 "BRANCH",

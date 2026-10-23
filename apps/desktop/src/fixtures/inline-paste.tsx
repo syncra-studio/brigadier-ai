@@ -54,7 +54,7 @@ mockIPC(async (command, payload) => {
 });
 // A quiet finished chat makes screenshots about the paste, without synthetic phase work.
 useApp.setState((state) => ({
-  conversations: Object.fromEntries(Object.entries(state.conversations).map(([id, conversation]) => [id, { ...conversation, kind: "chat", setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } }, title: "Inline image paste" }])),
+  conversations: Object.fromEntries(Object.entries(state.conversations).map(([id, conversation]) => [id, { ...conversation, kind: "chat", setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" }, title: "Inline image paste" }])),
   threads: Object.fromEntries(Object.entries(state.threads).map(([id, thread]) => [id, { ...thread, items: [] }])),
   summaryShown: {},
 }));

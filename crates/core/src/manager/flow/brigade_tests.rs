@@ -49,9 +49,10 @@ async fn every_session_and_chat_on_both_clis_starts_with_the_skill() {
         assert_eq!(installed(&thread.1), SKILL, "{provider:?}");
         // Brigadier's other skills stay for workers only.
         assert!(thread.1.skill_plugins.is_empty());
+        let chat_dir = flow.manager.session_dir(&chat).work();
         let chat = specs
             .iter()
-            .find(|(_, spec)| spec.tools == ToolSet::Chat)
+            .find(|(_, spec)| spec.cwd == chat_dir)
             .expect("the Chat started");
         assert_eq!(installed(&chat.1), SKILL);
         // The instructions point at it; how workers run is its to say.

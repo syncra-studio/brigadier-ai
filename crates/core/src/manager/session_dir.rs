@@ -111,7 +111,7 @@ pub(crate) fn standing_env(root: &Path) -> Vec<(String, String)> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceRecord {
-    /// `localCheckout` or `newWorktree`.
+    /// `localCheckout` or `newWorktree`; `folder` for a Chat's worker with no repository (S28).
     pub environment: &'static str,
     /// The branch the session works on.
     pub branch: String,

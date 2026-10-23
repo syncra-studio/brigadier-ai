@@ -564,7 +564,7 @@ impl SessionManager {
                 let (branch, checkout, base) = session_place(&conversation);
                 let choice = match &conversation.setup {
                     Some(Setup::Session { orchestrator, .. }) => Some(orchestrator.clone()),
-                    Some(Setup::Chat { model }) => Some(model.clone()),
+                    Some(Setup::Chat { model, .. }) => Some(model.clone()),
                     None => None,
                 };
                 let diffs = self.cli_worker_changes(&conversation.id).await;

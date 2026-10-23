@@ -378,6 +378,7 @@ async fn two_chats_on_two_accounts_run_at_the_same_time() {
                         fast: None,
                         account: Some(account.into()),
                     },
+                    permission: Default::default(),
                 }),
             )
             .await
@@ -861,6 +862,7 @@ async fn chat_on(flow: &Flow, provider: ProviderKind, account: Option<&str>) -> 
                     fast: None,
                     account: account.map(Into::into),
                 },
+                permission: Default::default(),
             }),
         )
         .await
@@ -1450,7 +1452,7 @@ async fn a_stop_during_a_hand_over_ends_the_request_and_nothing_goes_on_its_own(
     let conv = flow.manager.conv(&chat).unwrap();
     super::eventually_async("the hand-over to end", || async {
         let moved = match flow.core.conversation(&chat).unwrap().setup {
-            Some(Setup::Chat { model }) => model.account.as_deref() == Some("acct-b"),
+            Some(Setup::Chat { model, .. }) => model.account.as_deref() == Some("acct-b"),
             _ => false,
         };
         moved && !conv.is_busy().await && idle(&flow, &chat).await

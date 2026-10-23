@@ -16,4 +16,4 @@ workersSeeUncommitted: boolean | null,
  * Plan mode: the orchestrator plans and changes nothing until the user approves a
  * plan, whatever the permission level. Approving one turns it off.
  */
-planMode: boolean, } | { "type": "chat", model: ModelChoice, };
+planMode: boolean, } | { "type": "chat", model: ModelChoice, permission: PermissionLevel, };

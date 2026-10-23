@@ -31,7 +31,7 @@ if (which === "never") {
 let conversation = {
   id, kind: "chat", projectId: null, title: "A chat", pinnedAtMs: null, createdAtMs: start,
   updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
-  setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } },
+  setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" },
 } as unknown as Conversation;
 // The `plan` case's is a session in Plan mode.
 if (which === "plan") {

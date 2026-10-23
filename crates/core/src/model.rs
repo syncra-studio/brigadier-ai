@@ -352,6 +352,9 @@ pub enum SetupRequest {
     },
     Chat {
         model: ModelChoice,
+        /// The composer's level, mapped to the Chat's CLI as a session's is (S28).
+        #[serde(default)]
+        permission: PermissionLevel,
     },
 }
 
@@ -385,8 +388,12 @@ pub enum Setup {
         #[serde(default)]
         plan_mode: bool,
     },
+    /// A session without a project (S28): its CLI has its own shell at its permission level,
+    /// in its session folder, and it may start workers.
     Chat {
         model: ModelChoice,
+        #[serde(default)]
+        permission: PermissionLevel,
     },
 }
 
@@ -423,7 +430,7 @@ impl Setup {
                 workers_see_uncommitted: None,
                 plan_mode,
             },
-            SetupRequest::Chat { model } => Self::Chat { model },
+            SetupRequest::Chat { model, permission } => Self::Chat { model, permission },
         }
     }
 
@@ -431,7 +438,7 @@ impl Setup {
     pub fn choice(&self) -> &ModelChoice {
         match self {
             Self::Session { orchestrator, .. } => orchestrator,
-            Self::Chat { model } => model,
+            Self::Chat { model, .. } => model,
         }
     }
 }

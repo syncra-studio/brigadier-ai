@@ -273,6 +273,20 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                     "--base is for a worktree; --local works on this session's branch".into(),
                 ));
             }
+            // Sent as an absolute path: the daemon doesn't know the caller's folder.
+            let repo = match args
+                .flag("repo")
+                .map(str::trim)
+                .filter(|repo| !repo.is_empty())
+            {
+                Some(repo) => Some(
+                    std::path::absolute(repo)
+                        .map_err(|err| error(format!("--repo {repo}: {err}")))?
+                        .display()
+                        .to_string(),
+                ),
+                None => None,
+            };
             let skills = args.all("skill");
             if !skills.is_empty() && !args.switch("lean") {
                 return Err(error(
@@ -298,6 +312,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 model: given("model"),
                 effort: given("effort"),
                 local: args.switch("local"),
+                repo,
                 base: given("base"),
                 permission: args.flag("permission").map(|mode| match mode {
                     "ask" => Permission::Ask,
@@ -737,6 +752,7 @@ mod tests {
                 model: Some("m".into()),
                 effort: None,
                 local: false,
+                repo: None,
                 base: None,
                 permission: None,
                 lean: true,
@@ -758,8 +774,21 @@ mod tests {
             panic!("not a start");
         };
         assert!(start.local);
+        assert_eq!(start.repo, None);
         assert_eq!(start.permission, Some(Permission::FullAccess));
         assert_eq!(start.title.as_deref(), Some("T"));
+        let CliRequest::Start(start) = run(&["start", "--repo", "/src/app", "go"]).0 else {
+            panic!("not a start");
+        };
+        assert_eq!(start.repo.as_deref(), Some("/src/app"));
+        let CliRequest::Start(start) = run(&["start", "--repo", "app", "go"]).0 else {
+            panic!("not a start");
+        };
+        let repo = start.repo.unwrap();
+        assert!(
+            std::path::Path::new(&repo).is_absolute() && repo.ends_with("app"),
+            "{repo}"
+        );
         assert_eq!(
             run(&["send", "ab12", "keep", "going"]).0,
             CliRequest::Send {

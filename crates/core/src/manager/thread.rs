@@ -31,9 +31,7 @@ use brigadier_providers::{
 use super::conversation::{Cli, ConvLive};
 use super::workers::thread_temp_owner;
 use super::{SessionManager, blocking, git_error};
-use crate::model::{
-    ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
-};
+use crate::model::{ConversationId, DomainEvent, Environment, PermissionLevel, Setup};
 use crate::{Error, Result};
 
 /// Where the thread works: a checkout of the session's repository.
@@ -170,10 +168,8 @@ impl SessionManager {
     /// The thread's CLI was started for another workspace or permission level than the
     /// session has now: close it while nothing runs, so the next turn resumes the same
     /// native session with the new ones (and a note saying so).
+    /// A Chat's CLI starts again for its new level too (S28); a side chat has no level.
     pub(crate) async fn retire_moved_thread(&self, conv: &Arc<ConvLive>) {
-        if conv.kind != ConversationKind::Session {
-            return;
-        }
         let Some(cli) = conv.idle_cli().await else {
             return;
         };

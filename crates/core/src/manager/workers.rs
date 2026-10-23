@@ -54,7 +54,8 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// What a task's workspace is made of, once prepared.
 #[derive(Debug, Clone)]
 pub(crate) struct Workspace {
-    pub repo: PathBuf,
+    /// None for a Chat's worker in a folder of its own (S28).
+    pub repo: Option<PathBuf>,
     /// The task's worktree, if it has one.
     pub worktree: Option<PathBuf>,
     pub branch: Option<String>,
@@ -219,7 +220,9 @@ impl SessionManager {
             return PermissionLevel::Ask;
         }
         match self.core.conversation(id).map(|c| c.setup) {
-            Ok(Some(Setup::Session { permission, .. })) => permission,
+            Ok(Some(Setup::Session { permission, .. } | Setup::Chat { permission, .. })) => {
+                permission
+            }
             _ => PermissionLevel::default(),
         }
     }
@@ -356,8 +359,16 @@ impl SessionManager {
         self.admit()?;
         let fence = self.enter(conversation_id)?;
         let conversation = self.core.conversation(conversation_id)?;
-        if !matches!(conversation.setup, Some(Setup::Session { .. })) {
-            return Err(Error::Invalid("workers belong to a session".into()));
+        // A session's or a Chat's (S28); a side chat is its session's helper.
+        let owns_workers = match conversation.setup {
+            Some(Setup::Session { .. }) => true,
+            Some(Setup::Chat { .. }) => conversation.side_of.is_none(),
+            None => false,
+        };
+        if !owns_workers {
+            return Err(Error::Invalid(
+                "workers belong to a session or a Chat".into(),
+            ));
         }
         let now = now_ms();
         let route = Route {
@@ -534,7 +545,7 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
         let conversation = self.core.conversation(&conversation_id)?;
         let workspace = Workspace {
-            repo: self.tasks_repo(&conversation)?,
+            repo: self.tasks_repo(&conversation, task)?,
             worktree: recorded.worktree.map(PathBuf::from),
             branch: recorded.branch,
             base: recorded.base.map(Oid),
@@ -568,12 +579,12 @@ impl SessionManager {
             }
             _ => false,
         };
-        let mut secret_values = match (&workspace.worktree, &origin) {
-            (Some(worktree), Origin::New) if !shared_checkout => {
-                secrets::copy_secrets(self, &owner, &workspace.repo, worktree, &secret_files)
-                    .await?
+        let mut secret_values = match (&workspace.repo, &workspace.worktree, &origin) {
+            (None, ..) => Vec::new(),
+            (Some(repo), Some(worktree), Origin::New) if !shared_checkout => {
+                secrets::copy_secrets(self, &owner, repo, worktree, &secret_files).await?
             }
-            _ => secrets::values(&self.git, &workspace.repo, &secret_files).await,
+            (Some(repo), ..) => secrets::values(&self.git, repo, &secret_files).await,
         };
         let provider = task.route.choice.provider;
         // It starts in its worktree, as a CLI started there would.
@@ -905,18 +916,25 @@ impl SessionManager {
         }
     }
 
-    /// The repository a worker of `conversation` works on: its session's.
-    fn tasks_repo(&self, conversation: &Conversation) -> Result<PathBuf> {
+    /// The repository `task` of `conversation` works on: its session's, or the one a Chat's
+    /// worker was started in (`--repo`); none for a Chat's worker in a folder of its own (S28).
+    fn tasks_repo(&self, conversation: &Conversation, task: &Task) -> Result<Option<PathBuf>> {
+        if let Some(repo) = task.plain.as_ref().and_then(|plain| plain.repo.as_ref()) {
+            return Ok(Some(PathBuf::from(repo)));
+        }
         match &conversation.setup {
-            Some(Setup::Session { repo, .. }) => Ok(PathBuf::from(repo)),
-            _ => Err(Error::Invalid("workers belong to a session".into())),
+            Some(Setup::Session { repo, .. }) => Ok(Some(PathBuf::from(repo))),
+            Some(Setup::Chat { .. }) => Ok(None),
+            None => Err(Error::Invalid(
+                "workers belong to a session or a Chat".into(),
+            )),
         }
     }
 
     /// Creates the task's scratch folder and worktree, recorded in the ledger first.
     async fn prepare_workspace(&self, owner: &str, task: &Task) -> Result<Workspace> {
         let conversation = self.core.conversation(&task.conversation_id)?;
-        let repo = self.tasks_repo(&conversation)?;
+        let repo = self.tasks_repo(&conversation, task)?;
         let scratch = self
             .session_dir(&task.conversation_id)
             .worker(task)

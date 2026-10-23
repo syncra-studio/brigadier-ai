@@ -530,6 +530,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         model: None,
         effort: None,
         local: false,
+        repo: None,
         base: None,
         permission: None,
         lean: false,

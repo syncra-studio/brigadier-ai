@@ -218,6 +218,7 @@ impl Turn {
             model: None,
             effort: None,
             local: false,
+            repo: None,
             base: None,
             permission: None,
             lean: false,
@@ -2202,6 +2203,8 @@ mod chat_attachments_tests;
 mod chat_images_tests;
 #[cfg(unix)]
 mod chat_thread_tests;
+#[cfg(unix)]
+mod chat_workers_tests;
 #[cfg(unix)]
 mod cli_moved_tools_tests;
 #[cfg(unix)]

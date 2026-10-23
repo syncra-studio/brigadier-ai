@@ -63,7 +63,7 @@ function conversation(id: string, title: string, kind: "chat" | "session"): Conv
     id, kind, projectId: null, title, pinnedAtMs: null, createdAtMs: begun, updatedAtMs: begun, lifecycle: "active",
     forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
     setup: kind === "chat"
-      ? { type: "chat", model: { provider: "codex", model: null, effort: null, fast: false } }
+      ? { type: "chat", model: { provider: "codex", model: null, effort: null, fast: false }, permission: "acceptEdits" }
       : {
           type: "session", repo: "/tmp/work-blocks-fixture", environment: { type: "local" }, permission: "full", planMode: false,
           workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null },

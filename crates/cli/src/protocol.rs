@@ -152,8 +152,13 @@ pub struct StartRequest {
     /// Absent: the CLI's own default.
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// Works in the calling session's checkout rather than a worktree of its own.
+    /// Works in the calling session's checkout (a Chat's: `repo`'s) rather than a worktree of
+    /// its own.
     pub local: bool,
+    /// A Chat's worker: the repository it works in, an absolute path. Absent in a Chat: a
+    /// folder of its own, with no git. A session's workers work in its own repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Absent: the calling session's current branch.
     pub base: Option<String>,
     /// Absent: the calling session's level.

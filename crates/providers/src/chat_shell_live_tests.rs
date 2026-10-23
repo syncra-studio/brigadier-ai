@@ -1,9 +1,13 @@
-//! Live (STRIP-DOWN-PLAN S16c): a Chat's shell runs `brigadier` and nothing else, started with
-//! the arguments and config each adapter builds for a Chat. A stand-in `brigadier`, first on
-//! `PATH` as the real one is, talks to a Unix socket the test listens on, as the real one talks
-//! to the daemon's; the test answers Codex's approval requests as Brigadier answers a Chat's
-//! ([`crate::policy::runs_only_brigadier`]):
-//! `BRIGADIER_LIVE_CHAT_SHELL=1 cargo test -p brigadier-providers --lib -- --ignored live_chat_shell --nocapture`
+//! Live, both CLIs:
+//! - STRIP-DOWN-PLAN S16c: a side chat's shell runs `brigadier` and nothing else, started with
+//!   the arguments and config each adapter builds for a side chat; the test answers Codex's
+//!   approval requests as Brigadier answers a side chat's ([`crate::policy::runs_only_brigadier`]).
+//! - S28: a Chat's shell is its CLI's own, at its level, as a session's: at Ask, its CLI asks
+//!   about the network, and the user's card (here the test) answers.
+//!
+//! A stand-in `brigadier`, first on `PATH` as the real one is, talks to a Unix socket the test
+//! listens on, as the real one talks to the daemon's:
+//! `BRIGADIER_LIVE_CHAT_SHELL=1 cargo test -p brigadier-providers --lib -- --ignored live_ --nocapture`
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
@@ -108,7 +112,17 @@ impl Fake {
         ]
     }
 
+    /// A side chat's session.
     fn spec(&self, model: &str, effort: &str) -> SessionSpec {
+        self.spec_of(model, effort, ToolSet::SideChat, Access::ReadOnly)
+    }
+
+    /// A Chat's session at Ask, as a session's thread at Ask (S28).
+    fn chat_spec(&self, model: &str, effort: &str) -> SessionSpec {
+        self.spec_of(model, effort, ToolSet::Thread, Access::Ask)
+    }
+
+    fn spec_of(&self, model: &str, effort: &str, tools: ToolSet, access: Access) -> SessionSpec {
         SessionSpec {
             cwd: self.root.join("chat"),
             model: Some(model.into()),
@@ -116,10 +130,10 @@ impl Fake {
             fast: false,
             origin: Origin::New,
             ephemeral: true,
-            access: Access::ReadOnly,
+            access,
             append_system_prompt: None,
             mcp_servers: Vec::new(),
-            tools: ToolSet::Chat,
+            tools,
             skill_plugins: Vec::new(),
             installed_skills: Vec::new(),
             switched_off: Default::default(),
@@ -158,14 +172,27 @@ struct Seen {
     log: Vec<String>,
 }
 
-/// Runs the prompt in `provider`'s Chat and answers its approvals as Brigadier does.
-async fn run(provider: &dyn Provider, spec: SessionSpec) -> Seen {
+/// How the test answers an approval request: as Brigadier answers a side chat's, or as the user
+/// answers a Chat's card (allowing it).
+#[derive(Clone, Copy)]
+enum Answering {
+    SideChat,
+    User,
+}
+
+/// Runs `prompt` in `provider`'s session and answers its approvals.
+async fn run(
+    provider: &dyn Provider,
+    spec: SessionSpec,
+    prompt: &str,
+    answering: Answering,
+) -> Seen {
     let kept = Arc::new(Kept(Mutex::default()));
     let Started {
         session,
         mut events,
     } = provider.start(spec, kept.clone()).await.expect("started");
-    session.send(TurnInput::text(PROMPT)).await.unwrap();
+    session.send(TurnInput::text(prompt)).await.unwrap();
     let mut seen = Seen::default();
     let turn = async {
         while let Some(event) = events.recv().await {
@@ -175,14 +202,19 @@ async fn run(provider: &dyn Provider, spec: SessionSpec) -> Seen {
                 | ProviderEvent::CommandOutputDelta { .. } => continue,
                 ProviderEvent::ApprovalRequested { request } => {
                     let command = request.command.clone().unwrap_or_default();
-                    let allowed = request.kind == ApprovalKind::Command
-                        && crate::policy::runs_only_brigadier(&command);
+                    let allowed = match answering {
+                        Answering::User => true,
+                        Answering::SideChat => {
+                            request.kind == ApprovalKind::Command
+                                && crate::policy::runs_only_brigadier(&command)
+                        }
+                    };
                     let decision = if allowed {
                         ApprovalDecision::Allow
                     } else {
                         ApprovalDecision::Deny {
-                            message: "Declined by Brigadier: a Chat only searches the web and \
-                                      runs `brigadier` commands, one at a time."
+                            message: "Declined by Brigadier: a side chat only searches the web \
+                                      and runs `brigadier` commands, one at a time."
                                 .into(),
                         }
                     };
@@ -245,11 +277,11 @@ fn platform(fake: &Fake) -> Arc<dyn brigadier_sandbox::Platform> {
 }
 
 /// Claude: `brigadier` runs, the here-document too; `ls /` and `curl` are refused unasked. Claude
-/// Code's own read-only commands run in the Chat's folder even so (`ls`, `cat notes.txt`, checked
-/// on 2.1.309): reported, not asserted.
+/// Code's own read-only commands run in the side chat's folder even so (`ls`, `cat notes.txt`,
+/// checked on 2.1.309): reported, not asserted.
 #[tokio::test]
 #[ignore = "runs the real Claude CLI"]
-async fn live_chat_shell_claude_runs_only_brigadier() {
+async fn live_side_chat_shell_claude_runs_only_brigadier() {
     if std::env::var_os("BRIGADIER_LIVE_CHAT_SHELL").is_none() {
         return;
     }
@@ -257,7 +289,13 @@ async fn live_chat_shell_claude_runs_only_brigadier() {
     let platform = platform(&fake);
     let env = Arc::new(CliEnv::capture(&platform));
     let claude = crate::claude::Claude::new(platform, env);
-    let seen = run(&claude, fake.spec("sonnet", "low")).await;
+    let seen = run(
+        &claude,
+        fake.spec("sonnet", "low"),
+        PROMPT,
+        Answering::SideChat,
+    )
+    .await;
     report("claude", &fake, &seen);
     let calls = fake.calls.lock().unwrap().clone();
     assert!(calls.iter().any(|call| call.starts_with("app state")));
@@ -267,7 +305,7 @@ async fn live_chat_shell_claude_runs_only_brigadier() {
             .any(|call| call.contains("hello from the probe")),
         "the here-document's text reached the socket: {calls:?}"
     );
-    assert!(seen.approvals.is_empty(), "a Chat never asks");
+    assert!(seen.approvals.is_empty(), "a side chat never asks");
     for (command, _, output) in &seen.commands {
         for ran in ["Applications", "HTTP/"] {
             assert!(!output.contains(ran), "{command} ran: {output}");
@@ -279,7 +317,7 @@ async fn live_chat_shell_claude_runs_only_brigadier() {
 /// sandbox; Codex asks about the others too, and Brigadier declines them.
 #[tokio::test]
 #[ignore = "runs the real Codex CLI"]
-async fn live_chat_shell_codex_runs_only_brigadier() {
+async fn live_side_chat_shell_codex_runs_only_brigadier() {
     if std::env::var_os("BRIGADIER_LIVE_CHAT_SHELL").is_none() {
         return;
     }
@@ -287,7 +325,13 @@ async fn live_chat_shell_codex_runs_only_brigadier() {
     let platform = platform(&fake);
     let env = Arc::new(CliEnv::capture(&platform));
     let codex = crate::codex::Codex::new(platform, env);
-    let seen = run(&codex, fake.spec("gpt-6-luna", "low")).await;
+    let seen = run(
+        &codex,
+        fake.spec("gpt-6-luna", "low"),
+        PROMPT,
+        Answering::SideChat,
+    )
+    .await;
     report("codex", &fake, &seen);
     let calls = fake.calls.lock().unwrap().clone();
     assert!(calls.iter().any(|call| call.starts_with("app state")));
@@ -302,4 +346,74 @@ async fn live_chat_shell_codex_runs_only_brigadier() {
             assert!(!output.contains(ran), "{command} ran: {output}");
         }
     }
+}
+
+/// The prompt for a Chat: a read in its own folder, `brigadier`, and the network.
+const CHAT_PROMPT: &str = "This is a test of your shell. Make exactly these three shell calls, \
+    one call each, in order, then quote what each returned: \
+    1) `cat notes.txt` \
+    2) `brigadier app state` \
+    3) `curl -sI https://example.com`";
+
+/// What a Chat at Ask did on `provider`: its CLI asked about the network, the user's answer
+/// let it run, and its other commands ran in its folder.
+fn assert_ran_at_ask(name: &str, fake: &Fake, seen: &Seen) {
+    report(name, fake, seen);
+    assert!(
+        seen.approvals
+            .iter()
+            .any(|(command, allowed)| command.contains("curl") && *allowed),
+        "the CLI asked about curl, and the user allowed it"
+    );
+    let calls = fake.calls.lock().unwrap().clone();
+    assert!(calls.iter().any(|call| call.starts_with("app state")));
+    assert!(
+        seen.commands
+            .iter()
+            .any(|(command, _, output)| command.contains("notes.txt")
+                && output.contains("PELICAN-42")),
+        "it read its own folder"
+    );
+}
+
+/// S28, Claude: a Chat at Ask asks, as a session at Ask does; nothing answers but the user.
+#[tokio::test]
+#[ignore = "runs the real Claude CLI"]
+async fn live_chat_shell_claude_asks_at_its_level() {
+    if std::env::var_os("BRIGADIER_LIVE_CHAT_SHELL").is_none() {
+        return;
+    }
+    let fake = Fake::new("claude-chat");
+    let platform = platform(&fake);
+    let env = Arc::new(CliEnv::capture(&platform));
+    let claude = crate::claude::Claude::new(platform, env);
+    let seen = run(
+        &claude,
+        fake.chat_spec("sonnet", "low"),
+        CHAT_PROMPT,
+        Answering::User,
+    )
+    .await;
+    assert_ran_at_ask("claude chat", &fake, &seen);
+}
+
+/// S28, Codex: the same, in the `workspace-write` sandbox with `untrusted` approvals.
+#[tokio::test]
+#[ignore = "runs the real Codex CLI"]
+async fn live_chat_shell_codex_asks_at_its_level() {
+    if std::env::var_os("BRIGADIER_LIVE_CHAT_SHELL").is_none() {
+        return;
+    }
+    let fake = Fake::new("codex-chat");
+    let platform = platform(&fake);
+    let env = Arc::new(CliEnv::capture(&platform));
+    let codex = crate::codex::Codex::new(platform, env);
+    let seen = run(
+        &codex,
+        fake.chat_spec("gpt-6-luna", "low"),
+        CHAT_PROMPT,
+        Answering::User,
+    )
+    .await;
+    assert_ran_at_ask("codex chat", &fake, &seen);
 }

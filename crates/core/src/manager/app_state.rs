@@ -148,7 +148,7 @@ impl SessionManager {
             Some(Setup::Session { orchestrator, .. }) => {
                 (Some(orchestrator.clone()), Some(self.permission(id)))
             }
-            Some(Setup::Chat { model }) => (Some(model.clone()), None),
+            Some(Setup::Chat { model, .. }) => (Some(model.clone()), None),
             None => (None, None),
         };
         let standing_in = conversation

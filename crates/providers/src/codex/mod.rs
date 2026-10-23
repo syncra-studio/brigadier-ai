@@ -9,8 +9,9 @@
 //! - Accept edits: `on-request` in the `workspace-write` sandbox: commands run inside the
 //!   sandbox without asking; Codex asks to leave it.
 //! - Full access: `never` with `danger-full-access`: Codex never asks.
-//! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A Chat's and a
-//!   side chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]).
+//! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A side chat's
+//!   and a tab chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]). A Chat runs
+//!   as a thread does, at its own level (STRIP-DOWN-PLAN S28).
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Codex setup: their
 //! config, `AGENTS.md`, plugins, hooks and MCP servers, beside Brigadier's. Threads keep the
@@ -85,12 +86,12 @@ const RESTRICTED_FEATURES: &[&str] = &[
     "unified_exec",
 ];
 
-/// The same for a Chat ([`ToolSet::Chat`], [`ToolSet::TabChat`]), which keeps Codex's own image
-/// generation (its images show in the Chat as a thread's do) and its shell, for `brigadier`
+/// The same for a side chat ([`ToolSet::SideChat`], [`ToolSet::TabChat`]), which keeps Codex's own
+/// image generation (its images show in it as a thread's do) and its shell, for `brigadier`
 /// (STRIP-DOWN-PLAN S16c). Codex's exec policy can't hold a shell to one program: its rules
 /// match literal command prefixes only (no catch-all), a command no rule matches is left to
 /// Codex's own judgement of safe reads, and rules load only from `.rules` files in a Codex home
-/// or a trusted project. So a Chat's commands run in the read-only sandbox, and Brigadier
+/// or a trusted project. So a side chat's commands run in the read-only sandbox, and Brigadier
 /// declines every one Codex asks about but `brigadier` (`policy::runs_only_brigadier`); on
 /// 0.163.0 Codex asked about every command, `ls` and `cat` too (checked live). An approved command
 /// the model asked to run outside the sandbox runs unsandboxed, so that answer is the guard; the
@@ -385,7 +386,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         // (STRIP-DOWN-PLAN S3).
         ToolSet::Default | ToolSet::Lean | ToolSet::Thread => (&[], false),
         ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
-        ToolSet::Chat | ToolSet::TabChat => (CHAT_FEATURES, true),
+        ToolSet::SideChat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup { &[] } else { USER_SETUP_FEATURES };
@@ -1357,7 +1358,7 @@ fn web_search(tools: ToolSet) -> Option<&'static str> {
     match tools {
         ToolSet::Default | ToolSet::Lean => None,
         ToolSet::None | ToolSet::Review | ToolSet::TabChat => Some("disabled"),
-        ToolSet::Web | ToolSet::Chat | ToolSet::Thread => Some("live"),
+        ToolSet::Web | ToolSet::SideChat | ToolSet::Thread => Some("live"),
     }
 }
 
@@ -1671,7 +1672,7 @@ fn thread_sandbox(access: Access) -> Option<p::SandboxMode> {
 /// `writable_roots`, with the network) below Full access, none at Full access. The `brigadier`
 /// CLI reaches the daemon over a Unix socket; Codex's sandbox allows that only with network on
 /// (its `unix_sockets` allow-list needs network on too), so Ask and Accept edits keep network on,
-/// and so does a Chat's or side chat's read-only sandbox (`tools`).
+/// and so does a side chat's or tab chat's read-only sandbox (`tools`).
 fn sandbox_policy(access: Access, tools: ToolSet, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
     match access {
         Access::Ask | Access::AcceptEdits => p::SandboxPolicy::WorkspaceWrite {
@@ -1684,7 +1685,7 @@ fn sandbox_policy(access: Access, tools: ToolSet, writable_roots: &[PathBuf]) ->
                 .collect(),
         },
         Access::ReadOnly => p::SandboxPolicy::ReadOnly {
-            network_access: matches!(tools, ToolSet::Chat | ToolSet::TabChat),
+            network_access: matches!(tools, ToolSet::SideChat | ToolSet::TabChat),
         },
         Access::Full => p::SandboxPolicy::DangerFullAccess,
     }
@@ -2035,7 +2036,7 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
-    /// Its tools: a Chat's read-only sandbox keeps network on ([`sandbox_policy`]).
+    /// Its tools: a side chat's read-only sandbox keeps network on ([`sandbox_policy`]).
     tools: ToolSet,
     /// What its workspace sandbox writes besides its working directory.
     writable_roots: Vec<PathBuf>,
@@ -2620,7 +2621,7 @@ mod tests {
                 "/s/abc/record/ledger.md".to_owned(),
             ),
         ];
-        for tools in [ToolSet::Thread, ToolSet::Lean, ToolSet::Chat] {
+        for tools in [ToolSet::Thread, ToolSet::Lean, ToolSet::SideChat] {
             for origin in [
                 Origin::New,
                 Origin::Resume {
@@ -2747,7 +2748,7 @@ mod tests {
             ToolSet::Default,
             ToolSet::None,
             ToolSet::Web,
-            ToolSet::Chat,
+            ToolSet::SideChat,
             ToolSet::Review,
             ToolSet::TabChat,
         ]
@@ -2764,7 +2765,7 @@ mod tests {
         assert!(review.iter().any(|arg| arg == NO_SKILLS_CATALOG));
     }
 
-    /// A Chat and a tab chat generate images (Q24) and have a shell, for `brigadier` (S16c), and
+    /// A side chat and a tab chat generate images (Q24) and have a shell, for `brigadier` (S16c), and
     /// are otherwise locked down as before: no viewing of local files, sub-agents, goals or
     /// sleep tool, the web as it was. Every one-shot role (a handoff note, a git job or
     /// escalation, research, a review) still goes without image generation or a shell.
@@ -2777,7 +2778,7 @@ mod tests {
                 .collect()
         };
         for (tools, locked_like, web) in [
-            (ToolSet::Chat, ToolSet::Web, Some("live")),
+            (ToolSet::SideChat, ToolSet::Web, Some("live")),
             (ToolSet::TabChat, ToolSet::Review, Some("disabled")),
         ] {
             let args = app_server_args(Some(&spec(tools, None)));
@@ -2811,12 +2812,12 @@ mod tests {
         }
     }
 
-    /// S16c: a Chat's and a side chat's commands run in Codex's read-only sandbox with network
+    /// S16c: a side chat's and a tab chat's commands run in Codex's read-only sandbox with network
     /// on, so `brigadier` reaches the daemon's socket; Codex asks about every command not on
     /// its own safe list (`untrusted`). A reviewer's read-only sandbox stays offline.
     #[test]
-    fn a_chats_shell_runs_read_only_with_network_for_brigadiers_socket() {
-        for tools in [ToolSet::Chat, ToolSet::TabChat] {
+    fn a_side_chats_shell_runs_read_only_with_network_for_brigadiers_socket() {
+        for tools in [ToolSet::SideChat, ToolSet::TabChat] {
             let mut chat = spec(tools, None);
             chat.access = Access::ReadOnly;
             let off = disabled_features(&app_server_args(Some(&chat)));
@@ -3102,7 +3103,7 @@ mod tests {
             ToolSet::Thread,
             ToolSet::Lean,
             ToolSet::Default,
-            ToolSet::Chat,
+            ToolSet::SideChat,
         ] {
             let args = app_server_args(Some(&spec(tools, None)));
             assert!(about_memory(&args).is_empty(), "{tools:?}: {args:?}");

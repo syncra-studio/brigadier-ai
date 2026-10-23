@@ -668,7 +668,7 @@ impl SessionManager {
     ) -> Result<Conversation> {
         let orchestrator = match &setup {
             Some(SetupRequest::Session { orchestrator, .. }) => Some(orchestrator),
-            Some(SetupRequest::Chat { model }) => Some(model),
+            Some(SetupRequest::Chat { model, .. }) => Some(model),
             None => None,
         };
         if let Some(choice) = orchestrator {

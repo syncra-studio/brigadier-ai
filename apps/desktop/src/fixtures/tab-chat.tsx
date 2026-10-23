@@ -80,7 +80,7 @@ mockIPC((command, payload) => {
     case "openTabChat": return { method: request.method, conversation: {
       ...conversation, id: request.chatId, kind: "chat", title: "Chat", sideOf: request.conversationId,
       tabChat: { tabId: request.tabId, target: request.target },
-      setup: { type: "chat", model: { provider: "claude", model: "opus", effort: "high" } },
+      setup: { type: "chat", model: { provider: "claude", model: "opus", effort: "high" }, permission: "acceptEdits" },
     } };
     case "getConversation": return { method: request.method, view: view(request.id) };
     default: return { method: request.method };

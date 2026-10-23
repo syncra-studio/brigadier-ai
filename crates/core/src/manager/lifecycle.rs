@@ -1412,6 +1412,33 @@ impl SessionManager {
             })
             .await?;
         }
+        // A Chat's workers branched in the repositories they were started in (S28).
+        if delete_branches && matches!(conversation.setup, Some(Setup::Chat { .. })) {
+            for task in &tasks {
+                let (Some(repo), Some(branch)) = (
+                    task.plain.as_ref().and_then(|plain| plain.repo.clone()),
+                    task.workspace.as_ref().and_then(|w| w.branch.clone()),
+                ) else {
+                    continue;
+                };
+                if !Path::new(&repo).exists() {
+                    continue;
+                }
+                let (git, repo) = (self.git.clone(), PathBuf::from(repo));
+                self.forget_branch(&repo, &branch);
+                let _lane = self.closing.lane.lock().await;
+                blocking(move || {
+                    let repo = git.open(&repo).map_err(git_error)?;
+                    if repo.branch_tip(&branch).map_err(git_error)?.is_some()
+                        && let Err(err) = repo.delete_branch(&branch, true)
+                    {
+                        tracing::warn!(branch, error = %err, "could not delete a branch");
+                    }
+                    Ok(())
+                })
+                .await?;
+            }
+        }
         if !delete_branches && record_kept {
             self.record_left_branches(super::project_removal::branch_records(
                 &self.runtime.ledger().branch_ownership(),

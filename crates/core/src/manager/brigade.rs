@@ -120,6 +120,8 @@ mod tests {
         ] {
             assert!(SKILL.contains(command), "{command}");
         }
-        assert!(SKILL.contains("needs a project"));
+        // A Chat runs workers too (S28).
+        assert!(!SKILL.contains("needs a project"));
+        assert!(SKILL.contains("--repo"));
     }
 }

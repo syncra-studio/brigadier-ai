@@ -3,9 +3,11 @@
 //! default. Brigadier starts it, passes it messages, tells its session what its CLI did, and
 //! closes it; it routes, briefs, checks and lands nothing for it.
 //!
-//! - It belongs to the session that started it (G19): it shows in that session's Workers row,
-//!   rail and worker cards, never in the sidebar, and only that session may message, wait on
-//!   or close it.
+//! - It belongs to the session or Chat that started it (G19, S28): it shows in that session's
+//!   Workers row, rail and worker cards, never in the sidebar, and only that session may
+//!   message, wait on or close it.
+//! - A Chat's worker works in the repository `--repo` names (a worktree of it, or its checkout
+//!   with `--local`), or without one in a folder of its own with no git.
 //! - Its worktree starts from the session's current branch unless `--base` names another
 //!   (G21), recorded in its folder's `record/workspace.json` and as the branch's
 //!   `gh-merge-base`. It merges back with plain git, as the session decides.
@@ -168,16 +170,48 @@ impl SessionManager {
             return Ok(refused("refused: a worker can't start workers of its own"));
         }
         let conversation = self.core.conversation(&caller.conversation_id)?;
-        let Some(Setup::Session { orchestrator, .. }) = &conversation.setup else {
-            return Ok(refused(
-                "refused: only a session with a project starts workers; a Chat has no repository",
-            ));
+        // A session's workers work in its repository; a Chat's in the one `--repo` names, or
+        // in a folder of their own (S28).
+        let (own, place) = match &conversation.setup {
+            Some(Setup::Session { orchestrator, .. }) => {
+                if start.repo.is_some() {
+                    return Ok(refused(
+                        "refused: --repo is for a Chat's worker; a session's workers work in \
+                         its own repository",
+                    ));
+                }
+                (orchestrator, None)
+            }
+            Some(Setup::Chat { model, .. }) if conversation.side_of.is_none() => {
+                let place = match &start.repo {
+                    Some(repo) => match self.chat_repo(repo).await {
+                        Ok(top) => Some(top),
+                        Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
+                    },
+                    None if start.local => {
+                        return Ok(refused(
+                            "refused: --local works in a repository's checkout; give --repo",
+                        ));
+                    }
+                    None if start.base.is_some() => {
+                        return Ok(refused("refused: --base needs a repository; give --repo"));
+                    }
+                    None => None,
+                };
+                (model, place)
+            }
+            _ => {
+                return Ok(refused(
+                    "refused: a side chat starts no workers; its session does",
+                ));
+            }
         };
         let provider = match start.agent {
             Some(cli::Agent::Claude) => ProviderKind::Claude,
             Some(cli::Agent::Codex) => ProviderKind::Codex,
-            None => orchestrator.provider,
+            None => own.provider,
         };
+        let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
         if let Some(rule) =
             self.model_refusal(provider, start.model.as_deref(), start.effort.as_deref())?
         {
@@ -188,9 +222,12 @@ impl SessionManager {
             Some(permission) => permission_level(permission),
             None => self.permission(&caller.conversation_id),
         };
-        let base = match start.local {
-            true => None,
-            false => match self.plain_base(&conversation, start.base.as_deref()).await {
+        let base = match (start.local, chat, &place) {
+            (true, ..) | (false, true, None) => None,
+            (false, ..) => match self
+                .plain_base(&conversation, place.as_deref(), start.base.as_deref())
+                .await
+            {
                 Ok(base) => Some(base),
                 Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
             },
@@ -206,6 +243,7 @@ impl SessionManager {
         let plain = PlainWorker {
             permission,
             local: start.local,
+            repo: place,
             base: base.clone(),
             lean: start.lean,
             skills: start.skills,
@@ -229,16 +267,38 @@ impl SessionManager {
         }))
     }
 
-    /// The branch a worker's worktree starts from: `given`, or the branch `conversation`'s
-    /// checkout has out now (G21). Refused when there is no such branch.
+    /// The top folder of the repository `path` is in, for a Chat's worker (`--repo`).
+    async fn chat_repo(&self, path: &str) -> std::result::Result<String, String> {
+        let (git, path) = (self.git.clone(), path.to_owned());
+        blocking(move || {
+            let repo = git.open(std::path::Path::new(&path)).map_err(|_| {
+                Error::NotFound(format!(
+                    "--repo {path}: not the top folder of a git repository"
+                ))
+            })?;
+            Ok(repo.root().display().to_string())
+        })
+        .await
+        .map_err(|err| match err {
+            Error::NotFound(message) => message,
+            other => other.to_string(),
+        })
+    }
+
+    /// The branch a worker's worktree starts from: `given`, or the branch the checkout has out
+    /// now (G21): `conversation`'s, or a Chat's `repo`. Refused when there is no such branch.
     async fn plain_base(
         &self,
         conversation: &Conversation,
+        repo: Option<&str>,
         given: Option<&str>,
     ) -> std::result::Result<String, String> {
-        let checkout = self
-            .checkout_dir(&conversation.id)
-            .map_err(|err| err.to_string())?;
+        let checkout = match repo {
+            Some(repo) => repo.to_owned(),
+            None => self
+                .checkout_dir(&conversation.id)
+                .map_err(|err| err.to_string())?,
+        };
         let recorded = match &conversation.setup {
             Some(Setup::Session {
                 environment:
@@ -258,9 +318,7 @@ impl SessionManager {
                     Some(branch) => branch,
                     None => {
                         return Err(Error::Invalid(
-                            "this session's checkout has no branch out (a detached HEAD): \
-                             give --base"
-                                .into(),
+                            "the checkout has no branch out (a detached HEAD): give --base".into(),
                         ));
                     }
                 },
@@ -268,7 +326,7 @@ impl SessionManager {
             match repo.branch_tip(&branch).map_err(git_error)? {
                 Some(_) => Ok(branch),
                 None => Err(Error::NotFound(format!(
-                    "no branch {branch:?} in this project"
+                    "no branch {branch:?} in this repository"
                 ))),
             }
         })
@@ -280,18 +338,37 @@ impl SessionManager {
     }
 
     /// A plain worker's workspace: a new worktree on its own branch from its base, or its
-    /// session's own checkout with `--local`.
+    /// session's own checkout with `--local` (a Chat's worker: `--repo`'s checkout), or with no
+    /// repository a folder of its own (S28).
     pub(super) async fn plain_workspace(
         &self,
         owner: &str,
         task: &Task,
         plain: &PlainWorker,
         conversation: &Conversation,
-        repo: PathBuf,
+        repo: Option<PathBuf>,
         scratch: PathBuf,
     ) -> Result<Workspace> {
+        let worker_dir = self
+            .session_dir(&task.conversation_id)
+            .worker(task)
+            .join("work");
+        let Some(repo) = repo else {
+            self.prepare_owned_dir(owner, &worker_dir).await?;
+            return Ok(Workspace {
+                repo: None,
+                worktree: Some(worker_dir),
+                branch: None,
+                base: None,
+                on_snapshot: false,
+                target: None,
+                scratch,
+                warmed: Vec::new(),
+                merge: None,
+            });
+        };
         let empty = |worktree: Option<PathBuf>| Workspace {
-            repo: repo.clone(),
+            repo: Some(repo.clone()),
             worktree,
             branch: None,
             base: None,
@@ -302,7 +379,10 @@ impl SessionManager {
             merge: None,
         };
         let Some(base) = plain.base.clone().filter(|_| !plain.local) else {
-            let checkout = PathBuf::from(self.checkout_dir(&conversation.id)?);
+            let checkout = match &plain.repo {
+                Some(repo) => PathBuf::from(repo),
+                None => PathBuf::from(self.checkout_dir(&conversation.id)?),
+            };
             return Ok(empty(Some(checkout)));
         };
         let (git, repo_path, branch) = (self.git.clone(), repo.clone(), base.clone());
@@ -320,10 +400,7 @@ impl SessionManager {
             task.number,
             &task.title,
         );
-        let worktree = self
-            .session_dir(&task.conversation_id)
-            .worker(task)
-            .join("work");
+        let worktree = worker_dir;
         let warmed = self
             .make_worktree(
                 owner,
@@ -363,24 +440,47 @@ impl SessionManager {
         let Some(plain) = &task.plain else {
             return;
         };
-        let record = match (&task.workspace, plain.local) {
-            (Some(workspace), false) => WorkspaceRecord {
+        let setup = self
+            .core
+            .conversation(&task.conversation_id)
+            .ok()
+            .and_then(|c| c.setup);
+        let record = match (&task.workspace, plain.local, &setup) {
+            // A Chat's worker without a repository (S28).
+            (_, _, Some(Setup::Chat { .. })) if plain.repo.is_none() => WorkspaceRecord {
+                environment: "folder",
+                branch: String::new(),
+                base: None,
+            },
+            (Some(workspace), false, _) => WorkspaceRecord {
                 environment: "newWorktree",
                 branch: workspace.branch.clone().unwrap_or_default(),
                 base: plain.base.clone(),
             },
             _ => {
-                let branch = match self
-                    .core
-                    .conversation(&task.conversation_id)
-                    .map(|c| c.setup)
-                {
-                    Ok(Some(Setup::Session {
-                        environment:
-                            Environment::LocalCheckout { branch }
-                            | Environment::NewWorktree { branch, .. },
-                        ..
-                    })) => branch,
+                let branch = match (&setup, &plain.repo) {
+                    (_, Some(repo)) => {
+                        let (git, repo) = (self.git.clone(), PathBuf::from(repo));
+                        blocking(move || {
+                            Ok(git
+                                .open(&repo)
+                                .ok()
+                                .and_then(|repo| repo.current_branch().ok().flatten()))
+                        })
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                    }
+                    (
+                        Some(Setup::Session {
+                            environment:
+                                Environment::LocalCheckout { branch }
+                                | Environment::NewWorktree { branch, .. },
+                            ..
+                        }),
+                        None,
+                    ) => branch.clone(),
                     _ => String::new(),
                 };
                 WorkspaceRecord {

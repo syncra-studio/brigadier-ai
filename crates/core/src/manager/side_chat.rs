@@ -85,7 +85,7 @@ impl SessionManager {
         }
         let model = match conversation.setup {
             Some(Setup::Session { orchestrator, .. }) => orchestrator,
-            Some(Setup::Chat { model }) => model,
+            Some(Setup::Chat { model, .. }) => model,
             None => {
                 return Err(Error::Invalid(
                     "the conversation has no model yet; send it a message first".into(),
@@ -98,7 +98,11 @@ impl SessionManager {
                 ConversationKind::Chat,
                 None,
                 Some(SIDE_CHAT_TITLE.into()),
-                Some(Setup::Chat { model }),
+                // A side chat's shell stays limited whatever its level (S16c).
+                Some(Setup::Chat {
+                    model,
+                    permission: Default::default(),
+                }),
                 Origin {
                     forked_from: None,
                     side_of: Some(parent.clone()),
@@ -177,6 +181,7 @@ impl SessionManager {
                 Some(TAB_CHAT_TITLE.into()),
                 Some(Setup::Chat {
                     model: orchestrator.clone(),
+                    permission: Default::default(),
                 }),
                 Origin {
                     forked_from: None,

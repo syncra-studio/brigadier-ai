@@ -365,7 +365,7 @@ export function ConversationModelPicker({
               conversation.id,
               setup?.type === "session"
                 ? { ...setup, orchestrator: choice }
-                : { type: "chat", model: choice },
+                : { type: "chat", model: choice, permission: setup?.permission ?? "acceptEdits" },
             ),
           )
         }
@@ -374,11 +374,17 @@ export function ConversationModelPicker({
   );
 }
 
-/** The level a started session's permission pill shows (Ask in a folder the user doesn't trust); null if it has none. */
+/** Whether a started conversation has a permission level: a session, or a Chat (S28); a side chat's shell is limited. */
+function hasPermission(conversation: Conversation): boolean {
+  const setup = conversation.setup;
+  return setup?.type === "session" || (setup?.type === "chat" && conversation.sideOf === null && !conversation.tabChat);
+}
+
+/** The level a started session's or Chat's permission pill shows (Ask in a folder the user doesn't trust); null if it has none. */
 export function useShownPermission(conversation: Conversation | null): PermissionLevel | null {
   const setup = conversation?.setup;
   const untrusted = useUntrusted(conversation?.projectId ?? null, setup?.type === "session" ? setup.repo : null);
-  if (setup?.type !== "session") return null;
+  if (!conversation || !setup || !hasPermission(conversation)) return null;
   return untrusted ? "ask" : setup.permission;
 }
 
@@ -389,17 +395,17 @@ export function useUntrusted(projectId: string | null, repo: string | null): boo
   );
 }
 
-/** Changes a started session's permission level: the composer's picker, and a suggested setting's card. */
+/** Changes a started session's or Chat's permission level: the composer's picker, and a suggested setting's card. */
 export async function setSessionPermission(
   conversation: Conversation,
   permission: PermissionLevel,
 ): Promise<void> {
   const setup = conversation.setup;
-  if (setup?.type !== "session") return;
+  if (!setup || !hasPermission(conversation)) return;
   await updateSetup(conversation.id, { ...setup, permission });
 }
 
-/** Permission level of a started session. */
+/** Permission level of a started session or Chat. */
 export function ConversationPermissionPicker({ conversation, open, onOpenChange }: {
   conversation: Conversation;
   open?: boolean;
@@ -411,7 +417,7 @@ export function ConversationPermissionPicker({ conversation, open, onOpenChange 
     conversation.projectId,
     setup?.type === "session" ? setup.repo : null,
   );
-  if (setup?.type !== "session") return null;
+  if (!setup || !hasPermission(conversation)) return null;
   return (
     <>
       <PermissionPicker
