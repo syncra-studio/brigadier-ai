@@ -510,7 +510,6 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     let latest = users.last().copied();
     let mut budget = boot.tail.bytes(out.len());
     let expanded = boot.tail.expanded().is_some();
-    let item_bytes = if expanded { budget } else { ITEM_BYTES };
     if let Some(from) = latest {
         let mut exchange = String::new();
         for (at, entry) in boot.entries.iter().enumerate().skip(from) {
@@ -551,9 +550,16 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         if shown[at] || boot.entries[at].parent.is_some() {
             continue;
         }
-        let Some(text) = item(at, item_bytes) else {
+        let Some(mut text) = item(at, if expanded { budget } else { ITEM_BYTES }) else {
             continue;
         };
+        // An expanded tail cuts the item to what is left, its header and cut line included.
+        if expanded && text.len() > budget {
+            let over = text.len() - budget;
+            if let Some(cut) = item(at, budget.saturating_sub(over)) {
+                text = cut;
+            }
+        }
         if text.len() > budget {
             break;
         }

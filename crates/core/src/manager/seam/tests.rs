@@ -647,3 +647,24 @@ fn existing_seam_records_choose_request_quota_or_size_and_missing_usage_is_safe(
     let end: SeamEnd = serde_json::from_value(quota).unwrap();
     assert_eq!(end.reason(), Reason::Quota);
 }
+
+#[test]
+fn an_expanded_tail_cuts_an_earlier_item_too_big_for_it_and_keeps_it() {
+    let mut entries = transcript(4, "short");
+    // Before the latest exchange: an answer larger than the whole expanded tail.
+    let at = entries.len() - 3;
+    entries[at] = message("big", Role::Assistant, &"y".repeat(500_000));
+    let text = boot_tail(
+        &entries,
+        None,
+        None,
+        TailBudget {
+            reason: Reason::Request,
+            hot_tokens: Some(90_000),
+            target_window: Some(200_000),
+        },
+    );
+    assert!(shown(&text).contains(&at), "the big item, cut");
+    assert!(text.contains("[cut at "), "its cut line");
+    assert!(text.len() <= 360_000 + 2_000, "{}", text.len());
+}
