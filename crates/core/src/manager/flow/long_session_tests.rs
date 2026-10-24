@@ -205,6 +205,45 @@ fn claude_thread(inputs: Inputs) -> Script {
     })
 }
 
+#[tokio::test]
+async fn seam_repaired_keeps_size_seams_and_adds_only_p3_text() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let inputs: Inputs = Arc::default();
+        let options = options(provider);
+        let behavior = options.behavior.clone();
+        let mut flow = Flow::start("seam-repaired", options, claude_thread(inputs.clone())).await;
+        let mode = LongSessions::parse("seam-repaired").expect("test-only mode");
+        assert!(mode.size_seams);
+        assert!(!mode.restore && !mode.instructions && !mode.checkpoint);
+        switch(&mut flow, Some(mode));
+        flow.say("Start.").await;
+        flow.settled().await;
+        flow.say("Grow.").await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while read_seam(&flow.manager.session_dir(&flow.conversation).record()).generation < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("size seam still starts its successor");
+        flow.settled().await;
+        let seen = inputs.lock().unwrap().clone();
+        assert!(
+            seen.iter()
+                .any(|(_, input)| input.contains(crate::manager::seam::LONG_NOTE))
+        );
+        assert!(seen.iter().any(|(_, input)| input.contains("Before you say something is unknown, look it up")));
+        assert!(
+            flow.specs()
+                .iter()
+                .all(|(_, spec)| spec.native_compaction.is_none())
+        );
+        assert!(behavior.compactions.lock().unwrap().is_empty());
+        assert_eq!(breaches(&flow).await, 0);
+        flow.stop().await;
+    }
+}
+
 /// Runs a Claude session in `arm` through a turn past the point and one after it: what each
 /// compaction was told to keep.
 async fn claude_compactions(arm: &str) -> Vec<Option<String>> {

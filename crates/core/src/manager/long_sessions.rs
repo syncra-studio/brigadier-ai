@@ -16,8 +16,9 @@
 //! - **checkpoint**: a replaceable checkpoint record with exact pointers at compactions Brigadier
 //!   triggers (run2-D9, borrowed from Codex's switched-off mode, which stays off).
 //!
-//! Size seams go; the fresh-session seam stays for moves to another CLI (D46), quota fallback to
-//! another provider (D23, D25) and as the rare fallback when compaction fails (run2-D10).
+//! The test-only `seam-repaired` mode keeps size seams and adds only P3 hand-off text.
+//! In the native modes, size seams go; the fresh-session seam stays for moves to another CLI
+//! (D46), quota fallback to another provider (D23, D25) and as the rare fallback when compaction fails (run2-D10).
 
 pub(crate) mod checkpoint;
 pub(crate) mod restore;
@@ -40,6 +41,8 @@ pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
 /// What a session does at long contexts with the switch on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct LongSessions {
+    /// Test-only P3 comparison: retain size seams, with the repaired hand-off text.
+    pub size_seams: bool,
     /// The decisions go back whole after each compaction (run2-D8).
     pub restore: bool,
     /// Claude's `/compact` says what its summary must keep (run2-D7).
@@ -52,6 +55,12 @@ impl LongSessions {
     /// The mode named `value`, one of the battery's candidate arms. `native` and `restore-only`
     /// are the same: the first is the Codex arm's name (P1), the second the Claude ablation's (P2).
     pub(crate) fn parse(value: &str) -> Option<Self> {
+        if value.trim() == "seam-repaired" {
+            return Some(Self {
+                size_seams: true,
+                ..Self::default()
+            });
+        }
         let (restore, instructions, checkpoint) = match value.trim() {
             "native-bare" => (false, false, false),
             "native" | "restore-only" => (true, false, false),
@@ -65,6 +74,7 @@ impl LongSessions {
             restore,
             instructions,
             checkpoint,
+            ..Self::default()
         })
     }
 
@@ -88,7 +98,8 @@ impl SessionManager {
         provider: ProviderKind,
     ) -> Option<LongSessions> {
         let mode = self.seam_config().long?;
-        (conv.kind == ConversationKind::Session
+        (!mode.size_seams
+            && conv.kind == ConversationKind::Session
             && matches!(provider, ProviderKind::Claude | ProviderKind::Codex))
         .then_some(mode)
     }
@@ -252,6 +263,7 @@ mod tests {
                 restore,
                 instructions,
                 checkpoint,
+                ..LongSessions::default()
             })
         };
         for (arm, mode) in [

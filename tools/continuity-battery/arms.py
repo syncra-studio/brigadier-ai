@@ -9,20 +9,20 @@ from summary import SummaryBattery
 # Phase B integration point: change this one constant if the build names its switch differently.
 LONG_SESSION_SWITCH = "BRIGADIER_LONG_SESSIONS"
 CANDIDATES = ("native-bare", "native", "native-full", "restore-only", "instructions-only",
-              "native+checkpoint", "native-full+checkpoint")
+              "native+checkpoint", "native-full+checkpoint", "seam-repaired")
 ARMS = ("seam", "plain", "plain@200k", "zed", "summary", *CANDIDATES)
 
 
-def supports_switch(daemon):
+def supports_switch(daemon, capability=LONG_SESSION_SWITCH):
     # Read-only capability preflight. An old build must never silently run a candidate
     # as the default seam. Phase B's binary must contain the environment switch name.
     with Path(daemon).open("rb") as file:
         tail = b""
         while chunk := file.read(1024 * 1024):
             text = tail + chunk
-            if LONG_SESSION_SWITCH.encode() in text:
+            if capability.encode() in text:
                 return True
-            tail = text[-len(LONG_SESSION_SWITCH):]
+            tail = text[-len(capability):]
     return False
 
 
@@ -30,6 +30,8 @@ class CandidateBattery(Battery):
     def setup(self):
         if not supports_switch(self.args.daemon):
             raise SkippedArm(f"build lacks {LONG_SESSION_SWITCH}; candidate {self.args.arm} not run")
+        if self.args.arm == "seam-repaired" and not supports_switch(self.args.daemon, "seam-repaired"):
+            raise SkippedArm("build lacks test-only seam-repaired mode")
         super().setup()
 
     def configure_environment(self, env):
@@ -37,6 +39,8 @@ class CandidateBattery(Battery):
         return env
 
     def generations(self):
+        if self.args.arm == "seam-repaired":
+            return super().generations()
         # Endurance depths for a native candidate count completed native compactions.
         # Rare fallback seams remain separate evidence and cannot inflate that depth.
         from lineages import compactions
