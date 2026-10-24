@@ -430,17 +430,20 @@ pub(crate) fn transcript_stamp(
     record: &Path,
 ) -> Option<(String, Vec<(brigadier_providers::ProviderKind, PathBuf)>)> {
     let mut stamp = file_stamp(&record.join("lineage.json"))?;
+    stamp.push_str(";exact-items-v2");
     let mut files = Vec::new();
     for session in read_lineage(record) {
         let Some(file) = session.file else {
             continue;
         };
         let path = session_file::locate(session.provider, Path::new(&file));
-        stamp.push_str(&format!(
-            ";{}={}",
-            path.display(),
-            file_stamp(&path).unwrap_or_default()
-        ));
+        for (_, source) in items::sources(session.provider, &path) {
+            stamp.push_str(&format!(
+                ";{}={}",
+                source.display(),
+                file_stamp(&source).unwrap_or_default()
+            ));
+        }
         files.push((session.provider, path));
     }
     Some((stamp, files))

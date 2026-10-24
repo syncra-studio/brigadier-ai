@@ -288,3 +288,131 @@ fn saved_output_changes_are_findable_without_a_transcript_change() {
             .is_empty()
     );
 }
+
+#[test]
+fn generated_claude_summary_metadata_and_sidechain_echoes_are_not_user_words() {
+    let fixture = Fixture::new();
+    let file = fixture.root.join("claude.jsonl");
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    for flag in ["isCompactSummary", "isMeta", "isSidechain"] {
+        let mut row = serde_json::json!({"type":"user", "uuid":flag,
+            "message":{"role":"user", "content":"generatedsummaryneedle"}});
+        row[flag] = serde_json::json!(true);
+        text.push_str(&format!("{row}\n"));
+    }
+    std::fs::write(file, text).unwrap();
+    let brain = fixture.brain();
+    sync_session(&brain, &fixture.session).unwrap();
+    assert!(
+        brain
+            .search_records("generatedsummaryneedle", None, 10)
+            .unwrap()
+            .is_empty()
+    );
+    let users = items::read(&fixture.session)
+        .into_iter()
+        .filter(|item| item.role == "user")
+        .collect::<Vec<_>>();
+    assert_eq!(users.len(), 2);
+}
+
+#[test]
+fn registered_claude_subagents_keep_separate_ids_and_refresh_without_parent_changes() {
+    let fixture = Fixture::new();
+    use std::io::Write;
+    writeln!(std::fs::OpenOptions::new().append(true).open(fixture.root.join("claude.jsonl")).unwrap(), "{}",
+        serde_json::json!({"type":"assistant", "uuid":"parent-agent", "message":{"id":"parent-agent-message","role":"assistant",
+            "content":[{"type":"tool_use","id":"agent-call","name":"Agent","input":{"prompt":"check"}}]}})).unwrap();
+    let parent_before = items::read(&fixture.session);
+    let brain = fixture.brain();
+    sync_session(&brain, &fixture.session).unwrap();
+    let children = fixture.root.join("claude/subagents");
+    std::fs::create_dir_all(&children).unwrap();
+    std::fs::write(
+        children.join("agent-child.meta.json"),
+        r#"{"toolUseId":"agent-call"}"#,
+    )
+    .unwrap();
+    let child = children.join("agent-child.jsonl");
+    // Reuse a parent call ID to prove the child namespace keeps both original outputs.
+    let rows = [
+        serde_json::json!({"type":"user","uuid":"brief", "isSidechain":true,
+            "message":{"role":"user","content":"childbriefneedle"}}),
+        serde_json::json!({"type":"assistant","uuid":"child-call","isSidechain":true,
+            "message":{"id":"child-message","role":"assistant","content":[{"type":"tool_use","id":"same-call","name":"Bash","input":{"command":"false"}}]}}),
+        serde_json::json!({"type":"user","uuid":"child-result","isSidechain":true,
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"same-call","content":"childoutputneedle","is_error":true}]}}),
+    ];
+    std::fs::write(
+        &child,
+        rows.iter().map(|v| format!("{v}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let (_, files) = transcript_stamp(&fixture.session.record).unwrap();
+    assert!(
+        transcript(&files)
+            .iter()
+            .filter_map(|entry| entry_text(entry, &fixture.session.blobs))
+            .any(|(_, body, _)| body.contains("childoutputneedle")),
+        "the existing display reader also sees this child output"
+    );
+    sync_session(&brain, &fixture.session).unwrap();
+    let hits = brain
+        .search_records_filtered("childoutputneedle", None, 10, Some("tool"), Some("Bash"))
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    let id = hits[0].item_id.as_ref().unwrap();
+    assert!(
+        read_items(&fixture.session, &args(id))
+            .unwrap()
+            .ends_with("childoutputneedle\n")
+    );
+    assert!(
+        brain
+            .search_records("childbriefneedle", None, 10)
+            .unwrap()
+            .is_empty()
+    );
+    let after = items::read(&fixture.session);
+    assert_eq!(
+        after
+            .iter()
+            .map(|i| &i.id)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        after.len()
+    );
+    for old in parent_before {
+        assert!(
+            after
+                .iter()
+                .any(|new| new.id == old.id && new.text == old.text)
+        );
+    }
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(child)
+            .unwrap(),
+        "{}",
+        serde_json::json!({
+            "type":"assistant","uuid":"later-child","isSidechain":true,
+            "message":{"role":"assistant","content":[{"type":"text","text":"childlaterneedle"}]}
+        })
+    )
+    .unwrap();
+    sync_session(&brain, &fixture.session).unwrap();
+    assert_eq!(
+        brain
+            .search_records("childlaterneedle", None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        brain.search_records("childoutputneedle", None, 10).unwrap()[0]
+            .item_id
+            .as_deref(),
+        Some(id.as_str())
+    );
+}

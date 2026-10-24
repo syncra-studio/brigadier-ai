@@ -2,7 +2,7 @@
 //! and results. IDs namespace native IDs by CLI session; records without IDs use content and
 //! occurrence, never a position in the merged lineage. Compaction markers are not items.
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use brigadier_providers::{ProviderEvent, ProviderKind, session_file};
 use serde_json::Value;
@@ -53,12 +53,16 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
             continue;
         };
         let path = session_file::locate(generation.provider, Path::new(&file));
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let lines: Vec<Value> = text
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
+        let lines: Vec<(Option<String>, Value)> = sources(generation.provider, &path)
+            .into_iter()
+            .flat_map(|(scope, path)| {
+                std::fs::read_to_string(path)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str(line).ok())
+                    .map(|value| (scope.clone(), value))
+                    .collect::<Vec<_>>()
+            })
             .collect();
         let display = session_file::read(generation.provider, &path).unwrap_or_default();
         let positions: HashMap<&str, i64> = display
@@ -102,12 +106,24 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
         };
         let canonical_codex = lines
             .iter()
-            .any(|v| string(v, "type") == Some("response_item"));
-        for value in &lines {
+            .any(|(_, v)| string(v, "type") == Some("response_item"));
+        let mut previous_scope = None;
+        for (scope, value) in &lines {
+            if previous_scope != scope.as_deref() {
+                occurrences.clear();
+                previous_scope = scope.as_deref();
+            }
             let at_ms = string(value, "timestamp")
                 .and_then(|at| at.parse::<jiff::Timestamp>().ok())
                 .map(|at| at.as_millisecond());
             if generation.provider == ProviderKind::Claude {
+                if value.get("isMeta").and_then(Value::as_bool) == Some(true)
+                    || value.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+                    || (scope.is_none()
+                        && value.get("isSidechain").and_then(Value::as_bool) == Some(true))
+                {
+                    continue;
+                }
                 let Some(message) = value.get("message") else {
                     continue;
                 };
@@ -119,7 +135,19 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                     .map(str::to_owned)
                     .unwrap_or_else(|| anonymous(value, &mut occurrences));
                 let at = positions.get(native.as_str()).copied();
+                let native = scoped(scope.as_deref(), &native);
                 let blocks = message.get("content").unwrap_or(&Value::Null);
+                if role == "user"
+                    && !blocks.as_array().is_some_and(|blocks| {
+                        blocks
+                            .iter()
+                            .any(|block| string(block, "type") == Some("tool_result"))
+                    })
+                    && (content(blocks).starts_with("[Request interrupted by user")
+                        || (scope.is_some() && value.get("parentUuid").is_none_or(Value::is_null)))
+                {
+                    continue;
+                }
                 if blocks.is_string() {
                     push(
                         native,
@@ -160,9 +188,9 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                                 continue;
                             };
                             let name = string(block, "name").unwrap_or("unknown");
-                            tools.insert(id.into(), name.into());
+                            tools.insert(scoped(scope.as_deref(), id), name.into());
                             push(
-                                id.into(),
+                                scoped(scope.as_deref(), id),
                                 "tool",
                                 Some(name.into()),
                                 "call",
@@ -185,9 +213,9 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                                 .filter(|p| brigadier_providers::is_tool_results_file(p))
                                 .or_else(|| super::kept_blob(&body, &session.blobs));
                             push(
-                                id.into(),
+                                scoped(scope.as_deref(), id),
                                 "tool",
-                                tools.get(id).cloned(),
+                                tools.get(&scoped(scope.as_deref(), id)).cloned(),
                                 "output",
                                 body,
                                 saved,
@@ -385,4 +413,44 @@ fn persisted_path(body: &str) -> Option<String> {
         line.split_once("Full output saved to: ")
             .map(|(_, path)| path.trim().to_owned())
     })
+}
+
+fn scoped(scope: Option<&str>, id: &str) -> String {
+    scope.map_or_else(|| id.to_owned(), |scope| format!("subagent:{scope}\0{id}"))
+}
+
+/// Match the display reader's registered Claude subagents. Include metadata in the stamp
+/// too: a newly attached transcript must become searchable even if the parent did not grow.
+pub(super) fn sources(provider: ProviderKind, path: &Path) -> Vec<(Option<String>, PathBuf)> {
+    let mut sources = vec![(None, path.to_owned())];
+    if provider != ProviderKind::Claude {
+        return sources;
+    }
+    let Ok(dir) = std::fs::read_dir(path.with_extension("").join("subagents")) else {
+        return sources;
+    };
+    let mut files: Vec<_> = dir.flatten().map(|entry| entry.path()).collect();
+    files.sort();
+    for meta in files {
+        let Some(stem) = meta
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".meta.json"))
+        else {
+            continue;
+        };
+        let attached = std::fs::read(&meta)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|value| string(&value, "toolUseId").map(str::to_owned))
+            .is_some_and(|id| !id.is_empty());
+        if !attached {
+            continue;
+        }
+        let file = meta.with_file_name(format!("{stem}.jsonl"));
+        let scope = Some(stem.to_owned());
+        sources.push((scope.clone(), meta));
+        sources.push((scope, file));
+    }
+    sources
 }
