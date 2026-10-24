@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { type PeerName, peerNameOf } from "@/app/conversation/activity/peerWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { MarkdownBlock } from "@/components/conversation";
+import { MarkdownBlock, useKeptState } from "@/components/conversation";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
@@ -26,7 +26,7 @@ export function usePeerName(id: string | undefined): PeerName | null {
  */
 export const FoldedMarkdown: FC<{ text: string; className?: string }> = ({ text, className }) => {
   const ref = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useKeptState(`more:${text.length}`, false);
   const [clipped, setClipped] = useState(false);
   useLayoutEffect(() => {
     const element = ref.current;

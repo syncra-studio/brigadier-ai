@@ -1,4 +1,4 @@
-import { type ReactNode, useContext, useState } from "react";
+import { type ReactNode, useContext } from "react";
 
 import { Diffs } from "@/app/conversation/activity/Diffs";
 import { Output } from "@/app/conversation/activity/Output";
@@ -8,7 +8,7 @@ import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { EDITS, SHELLS } from "@/app/conversation/activity/toolSets";
 import { type ActionItem, editHunks, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { CopyButton } from "@/components/shared";
-import { ToolBox, ErrorState, MarkdownBlock, searchResults, WebSearch, type TranscriptItem } from "@/components/conversation";
+import { ToolBox, ErrorState, MarkdownBlock, searchResults, WebSearch, type TranscriptItem, useKeptState } from "@/components/conversation";
 import { Check } from "@/components/icons";
 import type { ItemStatus } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
@@ -86,7 +86,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   /** What Brigadier did after the command, each on a line under its output: the commit a check made. */
   notes?: string[];
 }) {
-  const [whole, setWhole] = useState(false);
+  const [whole, setWhole] = useKeptState("whole", false);
   // A command still running when the user's Stop ended its thread was stopped.
   const stoppedBy = useContext(StoppedBy);
   stopped ||= status === "inProgress" && stoppedBy !== null;

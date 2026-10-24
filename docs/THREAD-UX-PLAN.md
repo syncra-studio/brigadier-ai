@@ -357,8 +357,15 @@ This plan adds:
 2. **Stop all workers** from the Workers strip (§3.5).
 3. **Open a worker by its name**, from every place it's named (§3.4).
 4. **Show brief** in a worker's thread (§3.6).
-5. **Long-thread fold**: past 30 turns, the oldest turns fold into "N earlier messages". Clicking it shows them.
-   Rendering stays light.
+5. ~~**Long-thread fold**: past 30 turns, the oldest turns fold into "N earlier messages". Clicking it shows them.~~
+   Superseded, proposed (run2-D45/D48): **the thread is virtualized** and nothing folds. Every turn is in the
+   list; only the messages near the view are mounted (a few more each way), plus the newest turn, the message a
+   kept place starts at, and whatever a jump, Find or the focus asks for. The thread's scroller alone moves the
+   view, so following the bottom and keeping one's place work as before. A long session's list holds its newest
+   300 turns (opening with 50): older ones join 150 at a time as the view nears the top, for a jump, a kept place,
+   or all of them while Find has a text (run2-D49; giving assistant-ui only the mounted messages is next, #627). What the user opened inside a message
+   stays open when it scrolls away and back. Accepted limits: text can't be selected or copied across turns that
+   aren't mounted, and Find's count over turns not mounted fills in over a moment, as they're read out of sight.
 6. **Jump to the live line**: the existing scroll-to-bottom button follows the live line while a turn runs.
 
 ## 6. Change list by file

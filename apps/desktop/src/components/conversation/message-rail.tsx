@@ -5,12 +5,12 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type FC,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { flushSync } from "react-dom";
 
 import type { ThreadScroller } from "@/components/conversation/thread-scroll";
 import type { MessageMatches } from "@/ipc/generated";
@@ -21,29 +21,28 @@ import { cn } from "@/lib/utils";
  * ones whose turns are in view. Hovering one grows it and its neighbours and shows the message with the start of
  * its answer; a click scrolls its turn to the top and flashes it, a press-and-drag scrubs along
  * the thread. ⌥↑ and ⌥↓ step through the same messages from the view's top, rail or no rail.
- * Messages folded away ("N earlier messages") are on the rail too; jumping to one unfolds them,
- * and ⌥↑ past the oldest one loaded loads older pages until there is one.
+ * Every message of the thread is on the rail, mounted in the thread or not: jumping to one mounts
+ * it first, and ⌥↑ past the oldest one loaded loads older pages until there is one.
  */
 
-/** A user message the rail marks: its row's id, its text and the start of the answer after it. */
-export type RailEntry = { id: string; text: string; answer: string };
+/** A user message the rail marks: its row's id and its text. */
+export type RailEntry = { id: string; text: string };
 
 /**
- * The thread's history above what it shows, as the conversation tells it: the turns folded away
- * and how to show them, and the older pages still in the database and how to load one.
+ * The thread's history, as the conversation tells it: the message it is asked to show, and the
+ * older pages still in the database and how to load one.
  */
 export type ThreadHistory = {
-  /** How many turns are folded away. */
-  hidden: number;
-  /** The user messages folded away, oldest first. */
-  folded: readonly RailEntry[];
-  unfold: () => void;
+  /** The message the thread is asked to show (a jump's): mounted wherever the view is. */
+  showing: string | null;
   /** Older messages wait in the database. */
   hasMore: boolean;
   /** The last page asked for failed to load. */
   failed: boolean;
   /** Loads the next older page; rejects when it fails. */
   loadOlder: () => Promise<void>;
+  /** Holds every turn of the thread, for Find to search them all (null: all are held). */
+  holdAll?: (() => void) | null;
   /** The oldest message loaded, by `seq`: older ones wait in the database. */
   oldest: number | null;
   /** Where a text is, case aside, in the older messages of the branch shown; null with none. */
@@ -101,11 +100,32 @@ function plain(text: string): string {
     .slice(0, 400);
 }
 
-/** The shown user messages, as one string (it changes only when they do, not while an answer streams). */
-const shownUsers = (s: AssistantState): string =>
-  JSON.stringify(
-    s.thread.messages.filter((message) => message.role === "user").map((message) => [message.id, plain(textOf(message)).slice(0, 200)]),
-  );
+/** Each user message's rail entry, made once per message. */
+const entryOf = new WeakMap<object, RailEntry>();
+
+/**
+ * The thread's user messages as rail entries: the same array until they change, not while an
+ * answer streams, and each message's made once, so a long thread costs little per update.
+ */
+function useUserEntries(): readonly RailEntry[] {
+  const last = useRef<readonly RailEntry[]>([]);
+  return useAuiState((s) => {
+    const next: RailEntry[] = [];
+    for (const message of s.thread.messages) {
+      if (message.role !== "user") continue;
+      let entry = entryOf.get(message);
+      if (!entry) {
+        entry = { id: message.id, text: plain(textOf(message)).slice(0, 200) };
+        entryOf.set(message, entry);
+      }
+      next.push(entry);
+    }
+    const before = last.current;
+    if (before.length === next.length && before.every((entry, index) => entry.id === next[index]?.id && entry.text === next[index]?.text)) return before;
+    last.current = next;
+    return next;
+  });
+}
 
 /** The start of the answer after user message `id` in the shown thread. */
 function answerAfter(s: AssistantState, id: string): string {
@@ -121,7 +141,7 @@ function answerAfter(s: AssistantState, id: string): string {
 }
 
 function userRows(viewport: HTMLElement): HTMLElement[] {
-  return [...viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-role="user"][data-message-id]')];
+  return [...viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row] > [data-role="user"][data-message-id]')];
 }
 
 function rowOf(viewport: HTMLElement, id: string): HTMLElement | null {
@@ -194,16 +214,7 @@ function typing(target: EventTarget | null): boolean {
  */
 export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: ThreadScroller }> = ({ viewport, scroller }) => {
   const history = useContext(ThreadHistoryContext);
-  const shownKey = useAuiState(shownUsers);
-  const shown = useMemo(
-    () => (JSON.parse(shownKey) as [string, string][]).map(([id, text]) => ({ id, text })),
-    [shownKey],
-  );
-  const folded = history?.folded;
-  const entries = useMemo(
-    () => [...(folded ?? []).map(({ id, text }) => ({ id, text: plain(text).slice(0, 200) })), ...shown],
-    [folded, shown],
-  );
+  const entries = useUserEntries();
 
   // What the jumps read after they wait: the newest, not what was there when they began.
   const historyRef = useRef(history);
@@ -214,7 +225,7 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
   });
   const jumps = useRef(0);
 
-  /** Scrolls user message `id`'s turn to the top: unfolded first when it is folded away. */
+  /** Scrolls user message `id`'s turn to the top: mounted first when it isn't. */
   const jumpTo = useCallback(
     async (id: string, how: { smooth: boolean; flash: boolean }) => {
       if (!viewport) return;
@@ -223,19 +234,26 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
       scroller.release();
       let row = rowOf(viewport, id);
       if (!row) {
-        const folds = historyRef.current;
-        if (folds?.folded.some((entry) => entry.id === id)) folds.unfold();
-        row = await stillRow(viewport, id, live);
+        // Drawn now, so a scrub lands at once: in its place among what isn't mounted around it.
+        flushSync(() => scroller.mount("jump", id));
+        row = rowOf(viewport, id) ?? (await stillRow(viewport, id, live));
         if (!row || !live()) return;
         scroller.release();
       }
+      // Landed at once, the scroller takes the place as it is now: the rows around it mount after,
+      // at their own heights, and the anchor keeps it where it landed.
+      const land = (to: HTMLElement) => {
+        viewport.scrollTo({ top: landingTop(viewport, to), behavior: "instant" });
+        scroller.scrolled();
+      };
       const smooth = how.smooth && !reducedMotion();
-      viewport.scrollTo({ top: landingTop(viewport, row), behavior: smooth ? "smooth" : "instant" });
+      if (smooth) viewport.scrollTo({ top: landingTop(viewport, row), behavior: "smooth" });
+      else land(row);
       if (!how.flash) return;
       if (smooth) await scrollSettled(viewport, live);
       if (!live()) return;
       // Something above it changed size on the way: it lands where it should all the same.
-      if (Math.abs(landingTop(viewport, row) - viewport.scrollTop) > 1) viewport.scrollTo({ top: landingTop(viewport, row), behavior: "instant" });
+      if (Math.abs(landingTop(viewport, row) - viewport.scrollTop) > 1) land(row);
       flash(row);
     },
     [viewport, scroller],
@@ -246,7 +264,6 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
     const seq = jumps.current;
     const live = () => seq === jumps.current;
     const oldest = entriesRef.current[0]?.id ?? null;
-    historyRef.current?.unfold();
     for (let page = 0; page < HISTORY_PAGES && historyRef.current?.hasMore; page++) {
       try {
         await historyRef.current.loadOlder();
@@ -280,7 +297,7 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
         return;
       }
       const previous = rows.findLast((_, index) => (tops[index] ?? 0) < line - TOLERANCE_PX);
-      const id = previous?.dataset["messageId"] ?? historyRef.current?.folded.at(-1)?.id ?? (historyRef.current?.hasMore ? await olderThanLoaded() : null);
+      const id = previous?.dataset["messageId"] ?? (historyRef.current?.hasMore ? await olderThanLoaded() : null);
       if (id) await jumpTo(id, { smooth: true, flash: true });
     },
     [viewport, jumpTo, olderThanLoaded],
@@ -321,7 +338,7 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
   const inView = useInView(enabled ? viewport : null);
 
   if (!enabled) return null;
-  return <Rail entries={entries} folded={folded ?? []} inView={inView} jumpTo={jumpTo} />;
+  return <Rail entries={entries} inView={inView} jumpTo={jumpTo} />;
 };
 
 /**
@@ -376,10 +393,9 @@ type Hover = { index: number; top: number };
 
 const Rail: FC<{
   entries: readonly { id: string; text: string }[];
-  folded: readonly RailEntry[];
   inView: ReadonlySet<string>;
   jumpTo: (id: string, how: { smooth: boolean; flash: boolean }) => Promise<void>;
-}> = ({ entries, folded, inView, jumpTo }) => {
+}> = ({ entries, inView, jumpTo }) => {
   const navRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const [hover, setHover] = useState<Hover | null>(null);
@@ -470,7 +486,6 @@ const Rail: FC<{
   };
 
   const hovered = hover ? entries[hover.index] : undefined;
-  const foldedEntry = hovered ? folded.find((entry) => entry.id === hovered.id) : undefined;
 
   return (
     <nav
@@ -533,8 +548,7 @@ const Rail: FC<{
         <RailPreview
           id={hovered.id}
           top={hover.top}
-          text={foldedEntry ? plain(foldedEntry.text) : hovered.text}
-          answer={foldedEntry ? plain(foldedEntry.answer) : null}
+          text={hovered.text}
         />
       )}
     </nav>
@@ -542,9 +556,8 @@ const Rail: FC<{
 };
 
 /** Beside the hovered marker: the message on one line, then the start of its answer. */
-const RailPreview: FC<{ id: string; top: number; text: string; answer: string | null }> = ({ id, top, text, answer }) => {
-  const shownAnswer = useAuiState((s) => (answer === null ? answerAfter(s, id) : ""));
-  const reply = answer ?? shownAnswer;
+const RailPreview: FC<{ id: string; top: number; text: string }> = ({ id, top, text }) => {
+  const reply = useAuiState((s) => answerAfter(s, id));
   return (
     <div
       role="tooltip"

@@ -111,6 +111,13 @@
   animation: none;
 }
 
+/* A message of the thread before its newest turn was there already: mounted again as the view
+   scrolls back to it (see thread.tsx), its cards and lines don't play their entrance again (an
+   icon swapped on a click, Copy's check, still does). */
+[data-thread-row][data-settled] .animate-in:not(svg) {
+  animation: none;
+}
+
 /* The thread's scroll element: the browser's own scroll anchoring is off (the thread keeps its
    place itself, see thread-scroll.ts), and focus scrolls keep clear of the floating footer. */
 @utility thread-scroll-padding {

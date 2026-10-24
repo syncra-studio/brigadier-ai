@@ -24,6 +24,9 @@
  *   or kept; shown again, it is put back where it was, or at the bottom if it was there.
  * - A jump to one of the user's messages (the rail beside the thread, ⌥↑ and ⌥↓) is the user's
  *   own move: it stops following (`release`); older history prepended above keeps the anchor.
+ * - Only the messages near the view are mounted (see `thread.tsx`): a message mounting above the
+ *   view at its measured height is one more change above the anchor. Code going to a message that
+ *   may not be mounted asks for it first (`mount`), and finds it in place once it is.
  */
 
 /** Within this of the bottom the thread is at its bottom: it follows, and comes back there. */
@@ -91,6 +94,15 @@ type Saved = {
 };
 const saved = new Map<string, Saved>();
 
+/**
+ * Where conversation `key` was left, while it is away: whether at its bottom, and the message
+ * at the view's top then. The thread mounts that message first, to put it back in its place.
+ */
+export function keptPlace(key: string | null): { bottom: boolean; anchor: string | null } | null {
+  const kept = key === null ? undefined : saved.get(key);
+  return kept ? { bottom: kept.bottom, anchor: kept.anchor?.id ?? null } : null;
+}
+
 /** Each thread's scroller, by its view: for code that moves the view on the user's behalf. */
 const scrollers = new WeakMap<object, ThreadScroller>();
 
@@ -102,6 +114,16 @@ const scrollers = new WeakMap<object, ThreadScroller>();
 export function jumpInThread(target: Element | null | undefined): void {
   const viewport = target?.closest("[data-slot=aui_thread-viewport]");
   if (viewport) scrollers.get(viewport)?.release();
+}
+
+/**
+ * Code going to message `id` in a thread (a jump, a match, a reveal) asks for it to be mounted
+ * first, as `purpose`: it is, wherever the view is, until another of that purpose is asked for
+ * (null: none). It shows in its place once React has drawn it.
+ */
+export function mountInThread(target: Element | null | undefined, purpose: string, id: string | null): void {
+  const viewport = target?.closest("[data-slot=aui_thread-viewport]") ?? target;
+  if (viewport) scrollers.get(viewport)?.mount(purpose, id);
 }
 
 /**
@@ -209,6 +231,7 @@ export class ThreadScroller {
   /** The view was hidden, and its showing again isn't handled yet. */
   private hidden = false;
   private readonly listeners = new Set<() => void>();
+  private mounter: ((purpose: string, id: string | null) => void) | null = null;
 
   get following(): boolean {
     return this.follow;
@@ -227,6 +250,16 @@ export class ThreadScroller {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  /** The message list mounts what is asked for with `mount` (null: nothing does). */
+  setMounter(mounter: ((purpose: string, id: string | null) => void) | null): void {
+    this.mounter = mounter;
+  }
+
+  /** Message `id` is mounted as `purpose`, wherever the view is, until another of that purpose. */
+  mount = (purpose: string, id: string | null): void => {
+    this.mounter?.(purpose, id);
   };
 
   /** Shows conversation `key` (null: nothing kept) in `layout`, until the returned call. */

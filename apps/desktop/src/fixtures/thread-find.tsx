@@ -1,16 +1,18 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: Find in the chat
  * (ThreadFind.tsx) in the app's own conversation view, on a synthetic chat of 60 turns. Opening
- * it brings the newest 40 (the older 10 of them folded behind "N earlier messages"); the oldest
- * 20 stay in the database. Requests are answered here and never reach a daemon. The words found:
+ * it brings the newest 40, of which the thread mounts only those near the view; the oldest 20 stay
+ * in the database. Requests are answered here and never reach a daemon. The words found:
  * - "solitary" once, "needle" in seven answers, "tick" seven times in every loaded answer (280);
- * - "zephyr" only in a folded turn, "quokka" only in a turn never loaded, "narwhal" nowhere;
+ * - "zephyr" only in turn 23, far above the view, "quokka" only in a turn never loaded, "narwhal" nowhere;
  * - "marmalade" at the end of a long message of the user's, clipped behind "Show more".
  * With `?drive=folds`, turns 51 and 53 did work, folded away: "wombat" only in turn 51's.
  * With `?drive=groups`, turn 51 did three steps, one group: "ocelot" only in its third.
  * With `?drive=code`, answer 49 holds a 30-line code block, folded: "pangolin" only on its line 25.
  * With `?drive=older`, the older pages load, five turns a page: "kiwi" in turn 18 (a page not
  * loaded) and turn 46; "quokka" in turn 4, the oldest page. The engine's search is answered here.
+ * With `?drive=far`, 200 turns, all loaded: "lynx" three times in turn 4, once in turns 101 and
+ * 191, each followed by its own tag (lynx-a to lynx-e), all far from the turns the thread mounts.
  *
  * `?drive=1` runs the checks the find test reads and writes them to `<pre id="thread-find-result">`;
  * `window.threadFind` holds the steps for a browser probe.
@@ -25,6 +27,7 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { mountInThread } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, MessageMatch, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
@@ -47,14 +50,18 @@ const CODE = new URLSearchParams(location.search).get("drive") === "code";
 const CAPPED = new URLSearchParams(location.search).get("drive") === "older-capped";
 const OLDER = CAPPED || new URLSearchParams(location.search).get("drive") === "older";
 const OLDER_PAGE = 10;
+/** `?drive=far`: a long thread, its matches in messages far from those mounted. */
+const FAR = new URLSearchParams(location.search).get("drive") === "far";
+/** Turn (from 0) holding each "lynx", by its tag. */
+const LYNX: readonly (readonly [number, string])[] = [[3, "a"], [3, "b"], [3, "c"], [100, "d"], [190, "e"]];
 type Work = readonly (readonly [string, string])[];
 const WORK_TURNS: ReadonlyMap<number, Work> = GROUPS
   ? new Map([[50, [["Read", "/repo/src/alpha.ts"], ["Read", "/repo/src/beta.ts"], ["Grep", "ocelot"]]]])
   : new Map([[50, [["Grep", "wombat"]]], [52, [["Read", "/repo/src/badger.ts"]]]]);
 if (LATE_EDITOR) document.documentElement.dataset["splash"] = "";
-const TURNS = SHORT ? 1 : 60;
+const TURNS = SHORT ? 1 : FAR ? 200 : 60;
 /** Turns the first load brings. */
-const FIRST_TURNS = 40;
+const FIRST_TURNS = FAR ? TURNS : 40;
 const NEEDLE_TURNS = new Set([31, 35, 40, 44, 50, 55, 58]);
 const LONG_TURN = 57;
 const start = Date.now() - 86_400_000;
@@ -80,7 +87,8 @@ function answerText(turn: number): string {
   const words = [`Answer ${turn + 1}. The clock goes tick tick tick tick tick tick tick all day.`];
   if (NEEDLE_TURNS.has(turn)) words.push("A needle in this answer.");
   if (turn === 45) words.push("A solitary word.");
-  if (turn === 22) words.push("A zephyr in a folded turn.");
+  if (turn === 22) words.push("A zephyr far above the view.");
+  for (const [at, tag] of LYNX) if (FAR && at === turn) words.push(`A lynx-${tag} here.`);
   if (turn === 3) words.push("A quokka in a page never loaded.");
   if (turn === 17 || turn === 45) words.push("A kiwi here.");
   if (CODE && turn === 48) words.push("```text\n" + Array.from({ length: 30 }, (_, index) => (index === 24 ? "a pangolin" : `row ${index + 1}`)).join("\n") + "\n```");
@@ -266,7 +274,8 @@ async function settle(ms: number): Promise<void> {
   for (let frames = 0; performance.now() < deadline; ) {
     await frame();
     const now = layoutNow();
-    if (pending > 0 || $('[data-slot="reply-loading"]') || animating() || now !== last) {
+    // Find drawing messages out of sight to count their matches is not done either.
+    if (pending > 0 || $('[data-slot="reply-loading"]') || $('[data-slot="thread-find-index"]') || animating() || now !== last) {
       stillSince = performance.now();
       frames = 0;
     } else if (++frames >= 3 && performance.now() - stillSince >= 200) return;
@@ -282,6 +291,31 @@ async function until(check: () => boolean): Promise<boolean> {
     await frame();
   }
   return true;
+}
+
+/** The rows the thread mounts, by message id. */
+const mountedRows = () => [...viewport().querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row]')];
+
+/**
+ * Scrolls the thread, as the user would, until turn `turn`'s answer starts 120px under the view's
+ * top: it is mounted on the way, as the rail's jump mounts it.
+ */
+async function scrollToTurn(turn: number): Promise<void> {
+  // A turn's answer is drawn as its request's block.
+  const id = `request:long-u${turn}`;
+  const row = () => viewport().querySelector<HTMLElement>(`[data-slot="aui_message-group"] > [data-thread-row="${id}"]`);
+  mountInThread(viewport(), "jump", id);
+  await until(() => row() !== null);
+  for (let tries = 0; tries < 4; tries++) {
+    await settle(50);
+    const off = Math.round(row()!.getBoundingClientRect().top - viewport().getBoundingClientRect().top - 120);
+    if (Math.abs(off) <= 1) break;
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: Math.sign(off) }));
+    viewport().scrollTop += off;
+  }
+  // In view now: it stays mounted as any row in view does.
+  mountInThread(viewport(), "jump", null);
+  await settle(100);
 }
 
 /** A key press as the keyboard (or the macOS menu) sends it to `target`. */
@@ -380,7 +414,7 @@ function toggle(): string | null {
 }
 
 /** The turn holding answer `turn + 1`. */
-const blockOf = (turn: number) => [...document.querySelectorAll('[data-role="assistant"]')].find((each) => each.textContent?.includes(`Answer ${turn + 1}.`));
+const blockOf = (turn: number) => [...viewport().querySelectorAll('[data-role="assistant"]')].find((each) => each.textContent?.includes(`Answer ${turn + 1}.`));
 
 /** Turn `turn`'s work fold: "open", "closed" (kept for Find to search), or null while it holds nothing. */
 const foldOf = (turn: number) => blockOf(turn)?.querySelector('[data-slot="request-fold"]')?.getAttribute("data-fold") ?? null;
@@ -398,7 +432,7 @@ const groupRows = (turn: number) => blockOf(turn)?.querySelectorAll('[data-slot=
 const activeTurn = () => Number(/Answer (\d+)\./.exec(activeMatch()?.startContainer.parentElement?.closest('[data-role="assistant"]')?.textContent ?? "")?.[1] ?? Number.NaN);
 
 /** The answers the thread shows: not those folded into a turn's closed work, kept hidden for Find. */
-const shownAnswers = () => [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')].filter((each) => !each.closest('[data-fold="closed"]'));
+const shownAnswers = () => [...viewport().querySelectorAll('[data-slot="aui_assistant-message-content"]')].filter((each) => !each.closest('[data-fold="closed"]'));
 
 /** The `::highlight()` rules on the page: none until marks are shown (they slow every style pass). */
 function highlightRules(): string[] {
@@ -411,7 +445,9 @@ const steps = {
     await select({ type: "conversation", id: "long" });
     await settle(LOAD_MS + 400);
     const rulesBefore = highlightRules();
-    const foldedBefore = $('[data-slot="earlier-turns"]')?.textContent ?? null;
+    const mountedBefore = mountedRows().length;
+    // The user scrolls up to the answer holding the word.
+    await scrollToTurn(45);
     const word = textHolding("solitary")!;
     const range = document.createRange();
     range.setStart(word.node, word.at);
@@ -428,8 +464,7 @@ const steps = {
     return {
       rulesBefore,
       rulesOpen: highlightRules(),
-      foldedBefore,
-      foldedAfter: $('[data-slot="earlier-turns"]') !== null,
+      mountedBefore,
       bar: box ? { top: round(box.top - root.top), right: round(root.right - box.right) } : null,
       maxWidth: bar() ? getComputedStyle(bar()!).maxWidth : null,
       placeholder: input?.placeholder ?? null,
@@ -510,13 +545,16 @@ const steps = {
     const found = await find("narwhal");
     return { ...found, previous: button("previous")?.disabled ?? null, next: button("next")?.disabled ?? null };
   },
-  /** A word only in a turn that was folded away: the bar unfolded them, so it is found. */
+  /** A word only in a turn far above the view, not mounted: it is counted, and typing goes to it. */
   async folded() {
     return find("zephyr");
   },
   /** A word in a long message's clipped tail: going to it opens the message. */
   async clipped() {
+    // The long message, seen clipped, then scrolled far away from.
+    await scrollToTurn(56);
     const before = toggle();
+    await scrollToTurn(40);
     const found = await find("marmalade");
     await until(() => toggle() === "true");
     await settle(100);
@@ -609,6 +647,7 @@ const steps = {
   },
   /** A selection over two lines gives an empty text. */
   async multiline() {
+    await scrollToTurn(49);
     const first = textHolding("Second paragraph of answer 50")!;
     const second = textHolding("Question 51")!;
     const range = document.createRange();
@@ -636,7 +675,8 @@ async function drive(): Promise<void> {
     } else if (mode === "glitches") {
       await steps.opened();
       const host = document.createElement("div");
-      viewport().querySelector('[data-slot="aui_thread-column"]')!.append(host);
+      // Inside the newest row, which is always mounted: Find searches the thread's message rows.
+      [...viewport().querySelectorAll('[data-slot="aui_message-group"] > [data-thread-row]')].at(-1)!.append(host);
       const changed: UserRequest = {
         id: "find-files", conversationId: "long", preview: "Files", state: { type: "done" },
         startedAtMs: start, endedAtMs: start + 1, steeredInto: null, steeredAfter: null,
@@ -691,6 +731,7 @@ async function drive(): Promise<void> {
       // A word only in a folded code block's hidden lines: those lines mount for Find, and it counts the word (#569).
       await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
+      await scrollToTurn(48);
       const block = () => viewport().querySelector('[data-slot="code-block"]');
       result["before"] = { lines: block()?.querySelectorAll("[data-line]").length ?? null, shown: block()?.textContent?.includes("pangolin") ?? null };
       press(document.body, "KeyF", { meta: true });
@@ -705,7 +746,10 @@ async function drive(): Promise<void> {
       // A word only in a closed work fold: counted, its fold left closed while typing; Enter opens it and goes there.
       await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
+      await scrollToTurn(50);
       result["before"] = { wombat: headerOf(50), badger: headerOf(52), mounted: foldOf(50) };
+      // Scrolled on, turn 51's fold out of sight above, turn 53's in view.
+      await scrollToTurn(53);
       press(document.body, "KeyF", { meta: true });
       await until(() => bar() !== null);
       const typed = await find("wombat");
@@ -732,9 +776,12 @@ async function drive(): Promise<void> {
       // A word only in a closed group inside opened work: counted, the group left closed while typing; Enter opens it and goes there.
       await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
+      await scrollToTurn(50);
       blockOf(50)!.querySelector<HTMLButtonElement>('button[data-slot="request-work-header"]')!.click();
       await settle(100);
       result["before"] = { work: headerOf(50), group: groupOf(50), rows: groupRows(50) };
+      // Scrolled on, the group out of sight above.
+      await scrollToTurn(53);
       press(document.body, "KeyF", { meta: true });
       await until(() => bar() !== null);
       const typed = await find("ocelot");
@@ -804,12 +851,46 @@ async function drive(): Promise<void> {
       await until(() => activeMatch()?.toString() === "quokka");
       await settle(100);
       result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), place: activePlace(), loads };
+    } else if (FAR) {
+      // Matches only in messages far from those the thread mounts: counted as Find draws them out of
+      // sight, and each step mounts its message and goes to that very match of it, centred.
+      await select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      result["mounted"] = { rows: mountedRows().length, of: stored.length };
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      typeQuery("lynx");
+      await until(() => label() !== null);
+      await until(() => label()?.endsWith("/ 5 results") === true && activePlace() !== null);
+      await settle(100);
+      /** The match gone to: the count, its tag, its turn (from 1) and its place in the view. */
+      const landed = () => {
+        const range = activeMatch();
+        const tag = range?.endContainer instanceof Text ? range.endContainer.data.slice(range.endOffset, range.endOffset + 2) : null;
+        return { label: label(), tag, turn: activeTurn(), place: activePlace() };
+      };
+      result["counted"] = landed();
+      const go = async (shift: boolean) => {
+        const before = label();
+        press(field()!, "Enter", { shift });
+        await until(() => label() !== before);
+        await until(() => activePlace()?.inView === true);
+        await settle(100);
+        return landed();
+      };
+      const forward = [];
+      for (let index = 0; index < 5; index++) forward.push(await go(false));
+      result["forward"] = forward;
+      const back = [];
+      for (let index = 0; index < 5; index++) back.push(await go(true));
+      result["back"] = back;
     } else if (LATE_EDITOR) {
       // ⌘F while the plain field stands in for the editor; the editor then loads and mounts.
       await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       const editable = () => $(COMPOSER_EDITABLE);
       result["standIn"] = editable() === null && $('textarea[aria-label="Message input"]') !== null;
+      await scrollToTurn(45);
       const word = textHolding("solitary")!;
       const range = document.createRange();
       range.setStart(word.node, word.at);

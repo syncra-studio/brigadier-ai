@@ -21,7 +21,7 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     error?: string;
     opened: {
       rail: boolean; gutter: number; left: number | null; centreOff: number | null; listMax: string | null; windowHeight: number; listScrolls: boolean | null; faded: boolean | null;
-      marker: number[] | null; line: number[] | null; markers: string[]; folded: string | null; current: string[]; inView: string[];
+      marker: number[] | null; line: number[] | null; markers: string[]; mounted: number; current: string[]; inView: string[];
       lines: (string | null)[];
     };
     hover: { lines: number[]; previewText: string[]; previewWidth: number | null; previewRightOfRail: number | null; afterLeave: { preview: boolean; line: number } };
@@ -29,21 +29,21 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     clickAndKeys: { clicked: Landing; down: Landing; up: Landing; composerMoved: number; current: string[]; inView: string[] };
     scrub: { offset: number | null; flashed: boolean };
     narrow: { narrow: { rail: boolean; gutter: number }; wide: boolean };
-    intoFolded: Landing & { first: string; at: number; target: string; folded: boolean; markers: number };
+    intoUnmounted: { target: string; mountedBefore: boolean; clicked: Landing; up: Landing; markers: number };
     longAnswer: { messagesShown: number; current: string[]; inView: string[] };
     short: { rail: boolean; rows: number };
   };
   assert.equal(seen.error, undefined);
 
-  // 40 turns loaded (10 folded behind "10 earlier messages"): a marker for each user message,
-  // oldest first, folded ones too, on a rail 16px from the view's start, centred on it.
+  // 40 turns loaded, only those near the view mounted: a marker for each user message, oldest
+  // first, mounted or not, on a rail 16px from the view's start, centred on it.
   const { opened } = seen;
   assert.equal(opened.rail, true);
   assert.ok(opened.gutter >= 48, `room beside the column: ${opened.gutter}`);
   near(opened.left, 16, "rail from the view's start");
   near(opened.centreOff, 0, "rail off the view's centre");
   assert.deepEqual(opened.markers, Array.from({ length: 40 }, (_, index) => `long-u${40 + index}`));
-  assert.equal(opened.folded, "10 earlier messages");
+  assert.ok(opened.mounted > 0 && opened.mounted < 40, `user messages mounted: ${opened.mounted}`);
   assert.deepEqual(opened.marker, [36, 10]);
   assert.deepEqual(opened.line, [6, 2]);
   // The list stops at 70% of the window or 40rem, whichever is less (40rem in a 976px window, 70%
@@ -90,12 +90,12 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
   assert.ok(seen.narrow.narrow.gutter < 48);
   assert.equal(seen.narrow.wide, true);
 
-  // ⌥↑ from the oldest turn shown opens the folded ones and lands on the one before it.
-  const { intoFolded } = seen;
-  assert.deepEqual([intoFolded.first, intoFolded.at, intoFolded.target], ["long-u50", 10, "long-u49"]);
-  landsAtTop(intoFolded, "⌥↑ into the folded turns");
-  assert.equal(intoFolded.folded, false);
-  assert.equal(intoFolded.markers, 40);
+  // A click on a marker far above the turns mounted mounts its row and lands it; ⌥↑ steps on.
+  const { intoUnmounted } = seen;
+  assert.deepEqual([intoUnmounted.target, intoUnmounted.mountedBefore], ["long-u43", false]);
+  landsAtTop(intoUnmounted.clicked, "click to a row not mounted");
+  landsAtTop(intoUnmounted.up, "⌥↑ from it");
+  assert.equal(intoUnmounted.markers, 40);
 
   // Only a long answer in view, its message scrolled away above: that message is the current one.
   assert.deepEqual(seen.longAnswer, { messagesShown: 0, current: ["long-tall-u"], inView: ["long-tall-u"] });

@@ -1,11 +1,13 @@
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { startTransition, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { ThreadHistoryContext, type ThreadOverlayProps } from "@/components/conversation";
+import type { BlockMeta } from "@/app/conversation/RequestBlock";
+import { ThreadHistoryContext, ThreadMessageView, type ThreadOverlayProps, unstable_useThreadMessageIds, useAui, useThreadKey, keptChanges, rowKeyOf } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
 import { ChevronLeft, ChevronRight, Search, X } from "@/components/icons";
 import type { MessageMatch } from "@/ipc/generated";
 import { startSearching } from "@/lib/findSearching";
 import { showHighlight } from "@/lib/highlightRules";
+import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
 
@@ -16,12 +18,14 @@ import { PLAIN_FIELD } from "@/lib/plainTyping";
  * CSS Custom Highlight API, so the thread's DOM is never touched. Enter, ⌘G and › go to the next
  * one, ⇧Enter, ⇧⌘G and ‹ the one before, Esc closes.
  *
- * What it searches is what is mounted: turns folded behind "N earlier messages" are unfolded for
- * it, and a turn's closed work and the closed work groups in it keep their rows, hidden, while the
- * bar has a text (`useFindSearching`): going to a match there opens the work or the group, typing
- * never does. Pages still in the database are searched by the engine (`searchOlder`), which counts
- * their matches ahead of the thread's own; going to one loads the pages down to it. Diffs draw in
- * their own shadow tree and are not searched.
+ * It searches what the thread shows: a turn's closed work and the closed work groups in it keep
+ * their rows, hidden, while the bar has a text (`useFindSearching`): going to a match there opens
+ * the work or the group, typing never does. The thread mounts only the messages near the view
+ * (see `thread.tsx`): the others are drawn out of sight a few at a time while the bar has a text,
+ * and the text they show kept (`FindIndex`), so their matches count in their places; going to one
+ * mounts its message and finds it there again. Pages still in the database are searched by the
+ * engine (`searchOlder`), which counts their matches ahead of the thread's own; going to one loads
+ * the pages down to it. Diffs draw in their own shadow tree and are not searched.
  */
 
 /** Counting stops here: "250+ results". */
@@ -102,7 +106,16 @@ function unseen(element: Element): boolean {
   return getComputedStyle(element).display !== "contents";
 }
 
-export type FindResult = { ranges: Range[]; more: boolean };
+/** A match in a message the thread hasn't mounted: its message, and which of its matches it is. */
+export type Away = { row: string; nth: number };
+/** A match: in the thread's DOM, or in a message not mounted. */
+export type Hit = Range | Away;
+
+export function isRange(hit: Hit | undefined): hit is Range {
+  return typeof Range !== "undefined" && hit instanceof Range;
+}
+
+export type FindResult = { ranges: Hit[]; more: boolean };
 
 const NONE: FindResult = { ranges: [], more: false };
 
@@ -140,9 +153,8 @@ function olderAt(found: Found, index: number): MessageMatch | null {
   return null;
 }
 
-/** The matches of `query` in the text `root` shows, top to bottom, the newest `MAX_RESULTS` of them. */
-export function findIn(root: Element, query: string): FindResult {
-  if (query === "") return NONE;
+/** The text `root` shows, as Find reads it, with the text nodes it is made of and where each starts. */
+function textIn(root: Element): { text: string; nodes: Text[]; starts: number[] } {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => {
       if (node instanceof Text) return node.data === "" ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_ACCEPT;
@@ -163,6 +175,21 @@ export function findIn(root: Element, query: string): FindResult {
     nodes.push(node);
     text += node.data;
   }
+  return { text, nodes, starts };
+}
+
+/** What message `row` (drawn out of sight) shows, lower case, for its matches to be counted. */
+export function shownText(row: Element): string {
+  return lower(textIn(row).text);
+}
+
+/**
+ * The matches of `query` in the text `root` shows, top to bottom, the newest `MAX_RESULTS` of them,
+ * and that text, lower case, as `shownText` reads it.
+ */
+export function findIn(root: Element, query: string): { ranges: Range[]; more: boolean; text: string } {
+  if (query === "") return { ranges: [], more: false, text: "" };
+  const { text, nodes, starts } = textIn(root);
   const haystack = lower(text);
   const needle = lower(query);
   /** The text node holding character `at` of the whole text, and the offset in it. */
@@ -195,7 +222,49 @@ export function findIn(root: Element, query: string): FindResult {
     range.setEnd(end[0], end[1] + 1);
     ranges.push(range);
   }
-  return { ranges, more: count > MAX_RESULTS };
+  return { ranges, more: count > MAX_RESULTS, text: haystack };
+}
+
+/**
+ * The matches of `query` in the thread, oldest first, the newest `MAX_RESULTS` of them: in the
+ * messages `group` mounts, in its DOM; in the others, in what they showed when drawn out of sight
+ * (`texts`, by message id). `ids`: the thread's messages, in order. What each mounted message
+ * shows goes to `read`, kept for when it isn't mounted any more.
+ */
+export function findInThread(group: Element, ids: readonly string[], texts: ReadonlyMap<string, string>, query: string, read?: Map<string, string>): FindResult {
+  if (query === "") return NONE;
+  const mounted = new Map<string, Element>();
+  for (const row of group.querySelectorAll<HTMLElement>(":scope > [data-thread-row]")) mounted.set(row.dataset["threadRow"] ?? "", row);
+  const needle = lower(query);
+  // The newest first, until the limit: older messages aren't searched once it is passed.
+  const newest: Hit[][] = [];
+  let count = 0;
+  let more = false;
+  for (let index = ids.length - 1; index >= 0 && !more; index--) {
+    const id = ids[index] ?? "";
+    const row = mounted.get(id);
+    let hits: Hit[] = [];
+    if (row) {
+      const found = findIn(row, query);
+      hits = found.ranges;
+      more = found.more;
+      read?.set(id, found.text);
+    } else {
+      const text = texts.get(id) ?? "";
+      for (let at = text.indexOf(needle), nth = 0; at >= 0; at = text.indexOf(needle, at + needle.length), nth++) hits.push({ row: id, nth });
+    }
+    count += hits.length;
+    if (count > MAX_RESULTS) more = true;
+    newest.push(hits);
+  }
+  const all = newest.toReversed().flat();
+  return { ranges: all.slice(Math.max(0, all.length - MAX_RESULTS)), more };
+}
+
+/** The message of the thread holding `hit`. */
+function rowOf(hit: Hit): string | null {
+  if (!isRange(hit)) return hit.row;
+  return hit.startContainer.parentElement?.closest<HTMLElement>("[data-thread-row]")?.dataset["threadRow"] ?? null;
 }
 
 function reducedMotion(): boolean {
@@ -249,7 +318,9 @@ function paintRanges(range: Range): Range[] {
  * next selectable text instead, so the thread's text is selectable while it holds marks. Text in a
  * button never is: the button holding the match gone to gets a ring.
  */
-function paint(viewport: HTMLElement, ranges: readonly Range[], active: Range | null): void {
+function paint(viewport: HTMLElement, hits: readonly Hit[], hit: Hit | null): void {
+  const ranges = hits.filter(isRange);
+  const active = isRange(hit ?? undefined) ? (hit as Range) : null;
   const highlights = registry();
   if (!highlights) return;
   viewport.setAttribute(FINDING, "");
@@ -311,6 +382,12 @@ const ELSEWHERE = '[data-slot="terminal-pane"], [data-pane="browser"], [data-slo
 export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const mac = useApp((s) => s.info?.platform === "macos");
   const history = useContext(ThreadHistoryContext);
+  const aui = useAui();
+  const threadKey = useThreadKey();
+  const ids = unstable_useThreadMessageIds();
+  const idsRef = useRef(ids);
+  /** What each message not mounted showed when drawn out of sight, and what it was drawn from. */
+  const texts = useRef(new Map<string, Indexed>());
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<Found>(NOTHING);
@@ -321,8 +398,6 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const bar = useRef<HTMLDivElement>(null);
   /** What had the keyboard before the bar took it, given back on closing. */
   const before = useRef<Element | null>(null);
-  /** Stepping back past the oldest match unfolded the earlier turns: the match before this one is next. */
-  const backFrom = useRef<Range | null>(null);
   const reveals = useRef(0);
   const expanded = useRef(new Set<Element>());
   const toggling = useRef(false);
@@ -335,11 +410,19 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   // What the listeners and reruns read: the newest, not what was there when they were made.
   const state = useRef({ open, query, result, active, history });
   const rerun = useRef<() => void>(() => {});
+  /** Keeps what messages showed, by id, with what they were drawn from (see `freshIndex`). */
+  const keepTexts = useRef<(read: ReadonlyMap<string, string>) => void>(() => {});
   /** The search again, the match gone to kept: what a step reads after it opened or loaded something. */
   const research = useRef<() => Found>(() => NOTHING);
   useLayoutEffect(() => {
     state.current = { open, query, result, active, history };
+    idsRef.current = ids;
   });
+  /** Match `index` is the one gone to: what `state` reads at once, as the result it belongs to is. */
+  const choose = useCallback((index: number) => {
+    state.current.active = index;
+    setActive(index);
+  }, []);
 
   /** Whether this thread is the one ⌘F finds in now: shown, in front, not a side chat's. */
   const finds = useCallback(
@@ -393,8 +476,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         if (!going()) return;
         const found = research.current();
         const again = found.ranges[index - found.before];
-        if (!again || closedGroup(again)) return;
-        setActive(index);
+        if (!isRange(again) || closedGroup(again)) return;
+        choose(index);
         range = again;
       }
       const more = clippedBy(range);
@@ -431,12 +514,65 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         if (rect.left < sides.left || rect.right > sides.right) pre.scrollLeft += rect.left - sides.left - sides.width / 2;
       }
       if (rect.top >= top && rect.bottom <= bottom) return;
-      const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      const target = viewport.scrollTop + rect.top + rect.height / 2 - (top + bottom) / 2;
+      /** Where the view's top goes for the match to sit midway, within what the view can reach. */
+      const aim = () => {
+        const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        const at = range.getBoundingClientRect();
+        return Math.round(Math.max(0, Math.min(max, viewport.scrollTop + at.top + at.height / 2 - (top + bottom) / 2)));
+      };
       // A hidden window holds a smooth scroll still: there it jumps.
-      viewport.scrollTo({ top: Math.round(Math.max(0, Math.min(max, target))), behavior: reducedMotion() || document.hidden ? "instant" : "smooth" });
+      viewport.scrollTo({ top: aim(), behavior: reducedMotion() || document.hidden ? "instant" : "smooth" });
+      // The messages mounting on the way at their own heights move the match, or stop the glide:
+      // once the view rests, it lands where it should all the same.
+      for (let tries = 0; tries < 3; tries++) {
+        let last = viewport.scrollTop;
+        for (let still = 0, frames = 0; still < STILL_FRAMES && frames < 120 && live(); frames++) {
+          await nextFrame();
+          still = viewport.scrollTop === last ? still + 1 : 0;
+          last = viewport.scrollTop;
+        }
+        if (!live() || Math.abs(aim() - viewport.scrollTop) <= 1) return;
+        viewport.scrollTo({ top: aim(), behavior: "instant" });
+        scroller.scrolled();
+      }
     },
-    [viewport, scroller],
+    [viewport, scroller, choose],
+  );
+
+  /**
+   * Goes to `hit`, a match in a message the thread hasn't mounted: the message is mounted, and
+   * once it holds its place its match is found again in what it shows now (the same one of its
+   * matches, or its last if it has fewer now) and gone to.
+   */
+  const bring = useCallback(
+    async (hit: Away, opens: boolean) => {
+      if (!viewport) return;
+      const seq = ++reveals.current;
+      const live = () => seq === reveals.current && viewport.isConnected;
+      scroller.release();
+      scroller.mount("find", hit.row);
+      const selector = `[data-slot="aui_message-group"] > [data-thread-row="${CSS.escape(hit.row)}"]`;
+      let last: number | null = null;
+      let still = 0;
+      for (let frames = 0; frames < 120 && live(); frames++) {
+        await nextFrame();
+        const row = viewport.querySelector(selector);
+        if (!row) continue;
+        const top = row.getBoundingClientRect().top;
+        still = top === last ? still + 1 : 0;
+        last = top;
+        if (still < STILL_FRAMES - 1) continue;
+        const found = research.current();
+        const mine = found.ranges.filter((each): each is Range => isRange(each) && rowOf(each) === hit.row);
+        const range = mine[Math.min(hit.nth, mine.length - 1)];
+        if (!range) return;
+        const at = found.before + found.ranges.indexOf(range);
+        choose(at);
+        void reveal(range, at, opens);
+        return;
+      }
+    },
+    [viewport, scroller, reveal, choose],
   );
 
   /**
@@ -453,7 +589,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       const live = () => seq === reveals.current && viewport.isConnected;
       const all = found.before + found.ranges.length;
       const back = found.before - 1 - index;
-      const anchor = found.ranges[0]?.cloneRange() ?? null;
+      const anchor = found.ranges.find(isRange)?.cloneRange() ?? null;
       const mine = { index, all };
       loading.current = mine;
       const going = () => {
@@ -485,9 +621,10 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         await nextFrame();
         const now = research.current();
         if (now.before + now.ranges.length < all && frames < LAST_FRAME) continue;
+        const shown = now.ranges.filter(isRange);
         const loaded = anchor?.startContainer.isConnected
-          ? now.ranges.filter((range) => range.compareBoundaryPoints(Range.START_TO_START, anchor) < 0)
-          : now.ranges;
+          ? shown.filter((range) => range.compareBoundaryPoints(Range.START_TO_START, anchor) < 0)
+          : shown;
         // Counted further back than the thread shows: the oldest it shows, once the wait is up.
         const range = loaded[loaded.length - 1 - back] ?? (frames === LAST_FRAME ? loaded[0] : undefined);
         if (!range) continue;
@@ -499,46 +636,40 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         loading.current = null;
         state.current.result = now;
         setResult(now);
-        setActive(at);
+        choose(at);
         void reveal(range, at, true);
         return;
       }
       if (loading.current === mine) loading.current = null;
     },
-    [viewport, reveal],
+    [viewport, reveal, choose],
   );
 
   /** Match `index` of `found` is the one gone to; `opens` (a step) goes there: opening, loading what it must. */
   const goTo = useCallback(
     (index: number, found: Found, opens: boolean) => {
-      setActive(index);
+      choose(index);
       if (index < found.before) {
         if (opens) void loadTo(index, found);
         return;
       }
-      const range = found.ranges[index - found.before];
-      if (range) void reveal(range, index, opens);
+      const hit = found.ranges[index - found.before];
+      if (isRange(hit)) void reveal(hit, index, opens);
+      else if (hit) void bring(hit, opens);
     },
-    [reveal, loadTo],
+    [reveal, loadTo, bring, choose],
   );
 
   /** The match after (`1`) or before (`-1`) the one gone to, round from the last to the first. */
   const step = useCallback(
     (by: 1 | -1) => {
-      const { result: found, active: at, history: folds } = state.current;
+      const { result: found, active: at } = state.current;
       const count = found.before + found.ranges.length;
       if (count === 0) return;
-      const oldest = found.ranges[0];
-      if (by < 0 && at <= found.before && folds && folds.hidden > 0 && oldest) {
-        // The earlier turns are searched too: they open, and the match before this one is next.
-        backFrom.current = oldest.cloneRange();
-        folds.unfold();
-        return;
-      }
       // The match typing went to is in a page not loaded, a turn's closed work or a closed group
       // in it: this step goes there first.
       const current = found.ranges[at - found.before];
-      if ((at >= 0 && at < found.before) || (current && (closedFold(current) || closedGroup(current)))) goTo(at, found, true);
+      if ((at >= 0 && at < found.before) || (isRange(current) && (closedFold(current) || closedGroup(current)))) goTo(at, found, true);
       else goTo((at + by + count) % count, found, true);
     },
     [goTo],
@@ -551,8 +682,12 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const run = useCallback(
     (text: string, fresh: boolean): Found => {
       const { result: last, active: at, history: pages } = state.current;
-      const column = viewport?.querySelector('[data-slot="aui_thread-column"]');
-      const found = withOlder(column ? findIn(column, text) : NONE, older.current, text, pages?.oldest ?? null);
+      const group = viewport?.querySelector('[data-slot="aui_message-group"]');
+      const shown = new Map([...texts.current].map(([id, indexed]) => [id, indexed.text]));
+      const read = new Map<string, string>();
+      const found = withOlder(group ? findInThread(group, idsRef.current, shown, text, read) : NONE, older.current, text, pages?.oldest ?? null);
+      // A message scrolled away keeps counting its matches, without being drawn out of sight first.
+      keepTexts.current(read);
       const { ranges, before: ahead } = found;
       const count = ahead + ranges.length;
       if (fresh) {
@@ -567,38 +702,27 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       state.current.result = found;
       setResult(found);
       if (load) {
-        setActive(Math.min(load.index, count - 1));
+        choose(Math.min(load.index, count - 1));
         return found;
       }
       if (count === 0) {
-        setActive(-1);
-        return found;
-      }
-      const back = backFrom.current;
-      if (back) {
-        backFrom.current = null;
-        const earlier = back.startContainer.isConnected
-          ? ranges.findLastIndex((range) => range.compareBoundaryPoints(Range.START_TO_START, back) < 0)
-          : -1;
-        goTo(earlier >= 0 ? ahead + earlier : ahead > 0 ? ahead - 1 : count - 1, found, true);
+        choose(-1);
         return found;
       }
       if (fresh || at < 0) {
-        const line = viewport ? viewport.getBoundingClientRect().top : 0;
-        const first = ranges.findIndex((range) => range.getBoundingClientRect().bottom > line);
-        if (ranges.length > 0) goTo(ahead + Math.max(0, first), found, false);
-        else setActive(ahead - 1);
+        if (ranges.length > 0) goTo(ahead + Math.max(0, firstBelow(viewport, idsRef.current, ranges)), found, false);
+        else choose(ahead - 1);
         return found;
       }
       // The thread changed under the bar: the match gone to stays, where it still is. One in a
       // page not loaded keeps its index: the pages loaded since bring the matches ahead of it.
       const kept = last.ranges[at - last.before];
-      const same = kept ? ranges.findIndex((range) => range.startContainer === kept.startContainer && range.startOffset === kept.startOffset) : -1;
+      const same = kept ? ranges.findIndex((hit) => sameHit(hit, kept)) : -1;
       const index = same >= 0 ? ahead + same : at < last.before ? at : at - last.before + ahead;
-      setActive(Math.max(0, Math.min(index, count - 1)));
+      choose(Math.max(0, Math.min(index, count - 1)));
       return found;
     },
-    [viewport, goTo],
+    [viewport, goTo, choose],
   );
 
   useLayoutEffect(() => {
@@ -608,10 +732,10 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
 
   const close = useCallback(() => {
     reveals.current++;
-    backFrom.current = null;
+    scroller.mount("find", null);
     setOpen(false);
     setResult(NOTHING);
-    setActive(-1);
+    choose(-1);
     unpaint(viewport);
     if (viewport && expanded.current.size > 0) {
       const box = viewport.getBoundingClientRect();
@@ -635,7 +759,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     before.current = null;
     // Where it is, without scrolling the thread there: the reader keeps their place.
     if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
-  }, [viewport]);
+  }, [viewport, scroller, choose]);
 
   // Collapsing may shrink a message above the reader. Keep a surviving message at its old offset,
   // and discard the scroll controller's temporary anchor on the programmatically clicked toggle.
@@ -676,8 +800,6 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       const focused = document.activeElement;
       before.current = focused && !bar.current?.contains(focused) ? focused : null;
       setOpen(true);
-      // The turns folded behind "N earlier messages" are searched too.
-      if (state.current.history && state.current.history.hidden > 0) state.current.history.unfold();
     }
     setFocusAsk((ask) => ask + 1);
   }, [viewport, run]);
@@ -755,10 +877,76 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     if (!hasText) return;
     return startSearching();
   }, [hasText]);
+  // A text in the bar: the thread holds all its turns, for every one to be searched.
+  const holdAll = history?.holdAll ?? null;
+  useEffect(() => {
+    if (hasText) holdAll?.();
+  }, [hasText, holdAll]);
 
   useLayoutEffect(() => {
     if (open && viewport) paint(viewport, result.ranges, result.ranges[active - result.before] ?? null);
   }, [open, viewport, result, active]);
+
+  // The messages not mounted are drawn out of sight while the bar has a text, a few at a time,
+  // nearest the view first, and what they show is kept (anew when what they are drawn from changed).
+  const [batch, setBatch] = useState<readonly string[]>([]);
+  const size = useRef(4);
+  const boardNow = useBoard((s) => (hasText ? s.board : null));
+  useEffect(() => {
+    if (!hasText || batch.length > 0 || !viewport) return;
+    const group = viewport.querySelector('[data-slot="aui_message-group"]');
+    const mounted = new Set([...(group?.querySelectorAll<HTMLElement>(":scope > [data-thread-row]") ?? [])].map((row) => row.dataset["threadRow"]));
+    const messages = aui.thread().getState().messages;
+    const next: string[] = [];
+    // From the newest back: the newest matches are those counted.
+    for (let index = messages.length - 1; index >= 0 && next.length < size.current; index--) {
+      const message = messages[index];
+      if (!message || mounted.has(message.id)) continue;
+      const kept = texts.current.get(message.id);
+      if (!kept || !freshIndex(kept, message, keptChanges(rowKeyOf(threadKey, message.id)), boardNow)) next.push(message.id);
+    }
+    if (next.length === 0) return;
+    // Drawn as React finds time: a message drawn out of sight never holds a frame up.
+    startTransition(() => setBatch(next));
+    // Run again as the thread's messages, or what the thread mounts (a new result), change.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [hasText, batch, viewport, aui, threadKey, ids, boardNow, result]);
+  const rerunSoon = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    keepTexts.current = (read) => {
+      if (read.size === 0) return;
+      const messages = aui.thread().getState().messages;
+      const board = useBoard.getState().board;
+      for (const [id, text] of read) {
+        const message = messages.find((each) => each.id === id);
+        if (message) texts.current.set(id, { text, message, kept: keptChanges(rowKeyOf(threadKey, id)), board: boardRefs(message, board) });
+      }
+    };
+  });
+  const indexed = useCallback(
+    (read: ReadonlyMap<string, string>, ms: number) => {
+      keepTexts.current(read);
+      // About a frame's worth each time.
+      size.current = ms < 6 ? Math.min(32, size.current * 2) : ms > 16 ? Math.max(1, Math.floor(size.current / 2)) : size.current;
+      setBatch([]);
+      rerunSoon.current();
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!open) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    rerunSoon.current = () => {
+      timer ??= setTimeout(() => {
+        timer = null;
+        rerun.current();
+      }, RERUN_MS);
+    };
+    return () => {
+      rerunSoon.current = () => {};
+      if (timer) clearTimeout(timer);
+    };
+  }, [open]);
 
   // Gone with the thread: so are its marks and references to messages it opened.
   useEffect(() => {
@@ -772,6 +960,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   if (!open) return null;
 
   const count = result.before + result.ranges.length;
+  const index = batch.length > 0 && viewport ? <FindIndex ids={batch} width={viewport.querySelector('[data-slot="aui_thread-column"]')?.clientWidth ?? viewport.clientWidth} onRead={indexed} /> : null;
   // Esc closes from the field or a button, and goes no further (the composer's Esc Esc stops a reply).
   const onEscape = (event: ReactKeyboardEvent) => {
     if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
@@ -781,6 +970,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   };
 
   return (
+    <>
+    {index}
     <div
       ref={bar}
       role="search"
@@ -827,6 +1018,83 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       <TooltipIconButton tooltip="Close find" size="icon-xs" data-find="close" onKeyDown={onEscape} onClick={close}>
         <X />
       </TooltipIconButton>
+    </div>
+    </>
+  );
+};
+
+/** What a message not mounted showed when drawn out of sight, and what it was drawn from. */
+type Indexed = { text: string; message: object; kept: number; board: readonly unknown[] };
+
+/** The board's items a message draws from: its cards, and the workers, approvals and questions of its requests. */
+function boardRefs(message: { metadata: { custom: Record<string, unknown> } }, board: ReturnType<typeof useBoard.getState>["board"]): unknown[] {
+  const meta = message.metadata.custom["block"] as BlockMeta | undefined;
+  if (!meta || !board) return [];
+  const named = new Set([...meta.requestIds, ...meta.cards.map((card) => card.id)]);
+  const refs: unknown[] = [];
+  for (const items of [board.approvals, board.questions, board.tasks] as Record<string, { requestId?: string | null } | undefined>[]) {
+    for (const [id, item] of Object.entries(items)) if (named.has(id) || (item?.requestId && named.has(item.requestId))) refs.push(item);
+  }
+  return refs;
+}
+
+/** Whether what a message showed out of sight still holds: drawn from the same message, parts and board items. */
+function freshIndex(kept: Indexed, message: { metadata: { custom: Record<string, unknown> } }, changes: number, board: ReturnType<typeof useBoard.getState>["board"]): boolean {
+  if (kept.message !== message || kept.kept !== changes) return false;
+  const now = boardRefs(message, board);
+  return now.length === kept.board.length && now.every((item, index) => item === kept.board[index]);
+}
+
+/** Whether two matches are the same one: the same place in the DOM, or the same of a message's. */
+function sameHit(a: Hit, b: Hit): boolean {
+  if (isRange(a) && isRange(b)) return a.startContainer === b.startContainer && a.startOffset === b.startOffset;
+  return !isRange(a) && !isRange(b) && a.row === b.row && a.nth === b.nth;
+}
+
+/** The first match from the view's top down: one shown below its top, or in a message after the one there. */
+function firstBelow(viewport: HTMLElement | null, ids: readonly string[], hits: readonly Hit[]): number {
+  if (!viewport) return 0;
+  const line = viewport.getBoundingClientRect().top;
+  const rows = [...viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row]')];
+  const top = rows.find((row) => row.getBoundingClientRect().bottom > line);
+  const topAt = top ? ids.indexOf(top.dataset["threadRow"] ?? "") : -1;
+  const first = hits.findIndex((hit) => {
+    if (isRange(hit)) return hit.getBoundingClientRect().bottom > line;
+    return ids.indexOf(hit.row) > topAt;
+  });
+  return first < 0 ? 0 : first;
+}
+
+/**
+ * Messages the thread hasn't mounted, drawn out of sight as their rows draw them (closed work
+ * keeps its rows while the bar has a text, as in the thread), and read once drawn: `onRead` gets
+ * what each shows and how long the reading took.
+ */
+const FindIndex: FC<{ ids: readonly string[]; width: number; onRead: (texts: ReadonlyMap<string, string>, ms: number) => void }> = ({ ids, width, onRead }) => {
+  const host = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const from = performance.now();
+    const read = new Map<string, string>();
+    for (const row of host.current?.querySelectorAll<HTMLElement>(":scope > [data-find-index-row]") ?? []) {
+      read.set(row.dataset["findIndexRow"] ?? "", shownText(row));
+    }
+    onRead(read, performance.now() - from);
+    // Each batch drawn is read once.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [ids, onRead]);
+  return (
+    <div
+      ref={host}
+      aria-hidden
+      data-slot="thread-find-index"
+      className="pointer-events-none invisible fixed top-0 right-full flex flex-col px-4"
+      style={{ width }}
+    >
+      {ids.map((id) => (
+        <div key={id} data-find-index-row={id}>
+          <ThreadMessageView id={id} />
+        </div>
+      ))}
     </div>
   );
 };

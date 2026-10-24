@@ -82,7 +82,7 @@ async function runQueued() {
 }
 
 async function run() {
-  for (let tries = 0; tries < 80 && !(notice() && document.querySelector('[data-slot="aui_message-group"] > *')); tries += 1) {
+  for (let tries = 0; tries < 80 && !(notice() && document.querySelector('[data-slot="aui_message-group"] > [data-thread-row] > *')); tries += 1) {
     await pause();
   }
   const line = notice();
@@ -96,7 +96,7 @@ async function run() {
     viewport.scrollTop = height;
     await pause(300);
   }
-  const last = [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > *')].at(-1)!;
+  const last = [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row] > *')].at(-1)!;
   const box = line.getBoundingClientRect();
   const style = getComputedStyle(line);
   const composer = document.querySelector<HTMLElement>('[data-slot="composer"] .rounded-composer')!;

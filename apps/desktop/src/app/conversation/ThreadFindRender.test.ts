@@ -20,7 +20,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
     error?: string;
     opened: {
       rulesBefore: string[]; rulesOpen: string[];
-      foldedBefore: string | null; foldedAfter: boolean; bar: { top: number; right: number } | null; maxWidth: string | null;
+      mountedBefore: number; bar: { top: number; right: number } | null; maxWidth: string | null;
       placeholder: string | null; value: string | null; focused: boolean; selected: number[] | null; label: string | null;
       size: number; active: string | null; buttons: (string | null)[]; matchColour: number[]; activeColour: number[];
       selectable: (string | null)[];
@@ -58,9 +58,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   assert.equal(opened.size, 1);
   assert.equal(opened.active, "solitary");
   assert.deepEqual(opened.buttons, ["Previous result", "Next result", "Close find"]);
-  // The turns folded behind "10 earlier messages" opened with the bar.
-  assert.equal(opened.foldedBefore, "10 earlier messages");
-  assert.equal(opened.foldedAfter, false);
+  // The thread mounted only the messages near the view, not the 80 loaded.
+  assert.ok(opened.mountedBefore > 0 && opened.mountedBefore < 40, `mounted: ${opened.mountedBefore}`);
   // Every match a see-through yellow, the one gone to a stronger orange.
   const [mr = 0, mg = 0, mb = 0, ma = 0] = opened.matchColour;
   assert.ok(mr > mb + 80 && mg > mb + 80 && ma > 60 && ma < 140, `yellow: ${opened.matchColour.join(",")}`);
@@ -82,7 +81,8 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // ⌘G and ⇧⌘G step back, on and back.
   const { keys } = seen;
   assert.match(keys.found.label ?? "", /^[1-7] \/ 7 results$/);
-  assert.equal(keys.found.size, 7);
+  // Marked: those in the messages the thread mounts.
+  assert.ok(keys.found.size >= 1 && keys.found.size <= 7, `marked: ${keys.found.size}`);
   assert.equal(keys.found.active, "needle");
   const first = at(keys.found.label);
   assert.deepEqual(keys.enters.map(at), Array.from({ length: 7 }, (_, index) => ((first + index) % 7) + 1));
@@ -105,7 +105,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
 
   // 280 "tick"s loaded: counting stops at 250.
   assert.match(seen.many.label ?? "", /^\d+ \/ 250\+ results$/);
-  assert.equal(seen.many.size, 250);
+  assert.ok(seen.many.size >= 1 && seen.many.size <= 250, `marked: ${seen.many.size}`);
   // A new query changes the marks in place: WebKit repaints only the ranges a set gains or loses.
   assert.equal(seen.many.sameMarks, true);
 
@@ -116,7 +116,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   assert.equal(seen.none.previous, true);
   assert.equal(seen.none.next, true);
 
-  // A word only in a turn that was folded away is found.
+  // A word only in a turn far above the view, not mounted, is found and gone to.
   assert.equal(seen.folded.label, "1 / 1 result");
   assert.equal(seen.folded.active, "zephyr");
   shownCentred(seen.folded.place, "zephyr");
@@ -219,4 +219,35 @@ test("Find counts a match on a folded code block's hidden lines, which mount onl
   assert.deepEqual(seen.before, { lines: 11, shown: false });
   assert.deepEqual(seen.typed, { label: "1 / 1 result", lines: 30, more: "Show more· lines 11–30" });
   assert.deepEqual(seen.closed, { lines: 11 });
+});
+
+type Landed = { label: string | null; tag: string | null; turn: number; place: Place };
+
+test("Find counts matches in messages far from those the thread mounts, and each step lands on that very match", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=far", "thread-find-result", 150000)) as {
+    error?: string; mounted: { rows: number; of: number }; counted: Landed; forward: Landed[]; back: Landed[];
+  };
+  assert.equal(seen.error, undefined);
+  // 200 turns: the thread mounts a few of their 400 messages.
+  assert.equal(seen.mounted.of, 400);
+  assert.ok(seen.mounted.rows > 0 && seen.mounted.rows < 40, `mounted: ${seen.mounted.rows}`);
+  // Match n is "lynx-" and the nth letter, in turn 4 (a, b, c), 101 (d) and 191 (e).
+  const turns = [4, 4, 4, 101, 191];
+  // A match in another message is centred; the next one in the same message, already in view, stays put.
+  let turn: number | null = null;
+  const lands = (landed: Landed, nth: number, label: string) => {
+    assert.equal(landed.label, `${nth} / 5 results`, label);
+    assert.equal(landed.tag, `-${"abcde"[nth - 1]}`, `${label}: the match gone to`);
+    assert.equal(landed.turn, turns[nth - 1], `${label}: its turn`);
+    if (landed.turn !== turn) shownCentred(landed.place, label);
+    else assert.equal(landed.place?.inView, true, `${label}: in view`);
+    turn = landed.turn;
+  };
+  // All five counted, and the one typing went to marked and shown.
+  const first = at(seen.counted.label);
+  lands(seen.counted, first, "typed");
+  // Enter goes on round all five, ⇧Enter back round them, each mounted and gone to.
+  seen.forward.forEach((landed, index) => lands(landed, ((first + index) % 5) + 1, `Enter ${index + 1}`));
+  const last = ((first + 4) % 5) + 1;
+  seen.back.forEach((landed, index) => lands(landed, ((last - 2 - index + 10) % 5) + 1, `⇧Enter ${index + 1}`));
 });

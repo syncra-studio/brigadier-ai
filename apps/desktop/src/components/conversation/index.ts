@@ -47,6 +47,7 @@ export * from "./message-rail";
 export * from "./pasteContent";
 export * from "./rate-menu";
 export * from "./site-icons";
+export * from "./row-memory";
 export * from "./thread-scroll";
 export * from "./thread";
 export * from "./transcript/TranscriptRow";

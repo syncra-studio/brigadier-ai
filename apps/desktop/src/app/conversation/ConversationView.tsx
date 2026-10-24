@@ -1,6 +1,7 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type RailEntry, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext } from "@/components/conversation";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace } from "@/components/conversation";
 import {
   type FC,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -23,7 +24,6 @@ import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
 import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
 import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
-import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/side-panel/SidePanel";
 import { BrigadierGlyph } from "@/components/icons";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
@@ -33,10 +33,13 @@ import {
   type Block,
   type BoardDigest,
   foldTurns,
+  HELD_TURNS,
+  MORE_TURNS,
+  OPEN_TURNS,
   type PeerOf,
   peerOf,
-  SHOWN_TURNS,
   type ThreadNode,
+  turnsFrom,
 } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
@@ -70,6 +73,7 @@ import { Banner } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 import type {
   AttachmentRef,
+  Conversation,
   Mention,
   ModelChoice,
   Rating,
@@ -245,7 +249,7 @@ function useItems(
   canRework: (requestId: string) => boolean,
   ratings: Partial<Record<string, Rating>>,
 ): Item[] {
-  const [cache] = useState(() => new Map<string, { item: Item; sig: string; texts: string[] }>());
+  const [cache] = useState(() => new Map<string, { item: Item; sig: string; texts: string[]; from?: Block }>());
   return useMemo(() => {
     const items: Item[] = [];
     const seen = new Set<string>();
@@ -280,6 +284,11 @@ function useItems(
       const answerId = (block.texts.findLast((text) => !text.update) ?? block.texts.at(-1))?.messageId ?? null;
       const forkId = block.texts.at(-1)?.messageId ?? null;
       const rating = (answerId && ratings[answerId]) || null;
+      // The same block, read the same way: nothing to compare (most of a long thread, per streamed word).
+      if (entry?.item.kind === "block" && entry.from === block && entry.item.parentId === node.parentId && entry.item.rating === rating && entry.item.meta.picked === picked && entry.item.meta.session === session && entry.item.meta.rework === rework) {
+        items.push(entry.item);
+        continue;
+      }
       const sig = signature(block, picked, session, rework, rating);
       const texts = block.texts.map((text) => text.text);
       const changed =
@@ -338,7 +347,9 @@ function useItems(
           texts,
         });
       }
-      items.push((cache.get(node.id) as { item: Item }).item);
+      const kept = cache.get(node.id) as { item: Item; from?: Block };
+      kept.from = block;
+      items.push(kept.item);
     }
     for (const key of cache.keys()) if (!seen.has(key)) cache.delete(key);
     return items;
@@ -367,8 +378,27 @@ function textOf(message: AppendMessage): string {
     .trim();
 }
 
-/** The conversations whose earlier turns the user showed, for the app's run. */
-const unfolded = new Set<string>();
+/**
+ * The row of the thread holding message `messageId` between sessions: a message another session
+ * sent, or a turn that sent one or answers with one.
+ */
+function rowHolding(nodes: readonly ThreadNode[], messageId: string): string | null {
+  for (const node of nodes) {
+    const { block } = node;
+    if (node.kind === "user") {
+      if (block.user?.kind === "peer" && block.user.message.id === messageId) return node.id;
+      continue;
+    }
+    if (
+      block.texts.some((text) => text.anchors?.includes(messageId)) ||
+      block.steers.some((steer) => steer.message.id === messageId) ||
+      block.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(messageId))
+    ) {
+      return node.id;
+    }
+  }
+  return null;
+}
 
 const NO_PENDING: PendingMessage[] = [];
 const EMPTY_VIEW: ThreadView = { entries: [], turns: [] };
@@ -408,6 +438,23 @@ function useMentionTargets(conversationId: string | null): MentionTarget[] {
     return targets;
   }, [flat]);
 }
+
+/* The session's tabs and its summary: drawn again only as the session itself changes, not with the
+   view around them, which draws on every streamed word. */
+const SessionTop = memo(function SessionTop({ conversation, kind, onRename }: { conversation: Conversation; kind: "session" | "chat"; onRename: () => void }) {
+  return (
+    <SessionTabBar conversation={conversation} onRename={onRename}>
+      <ConversationToolbar kind={kind} onContext={() => selectTab(conversation.id, CHAT_TAB)} />
+    </SessionTabBar>
+  );
+});
+
+const SessionSummary = memo(function SessionSummary({ conversation }: { conversation: Conversation | null }) {
+  return (
+    <PinnedSummary conversation={conversation}
+      cards={conversation?.kind === "session" ? <SessionCards conversationId={conversation.id} /> : null} />
+  );
+});
 
 /**
  * A conversation's thread and composer, with its title bar, pinned card and side panel; or,
@@ -485,39 +532,54 @@ export function ConversationView({
         : cliThreadTree(EMPTY_VIEW, "", [], {}, pending, EMPTY_DIGEST, { state: run, error: runError }),
     [cliView, conversationId, thread.items, thread.fullText, digest, pending, run, runError, session],
   );
-  // A long thread shows its newest turns; the older ones wait behind "N earlier messages", until
-  // shown (then for the app's run, so the thread reopens where it was left).
-  const [unfoldedIn, setUnfoldedIn] = useState<string | null>(() =>
-    conversationId !== null && unfolded.has(conversationId) ? conversationId : null,
-  );
-  const folded = useMemo(
-    () => (unfoldedIn === conversationId ? { tree: full, hidden: 0 } : foldTurns(full, SHOWN_TURNS)),
-    [full, unfoldedIn, conversationId],
-  );
+  // The list mounts only what is near the view (see `thread.tsx`), but holds the newest turns
+  // only: older ones join as the view nears the top, as a jump or Find needs them, and when the
+  // place the conversation was left at is among them (`HELD_TURNS`).
+  // It opens with fewer, for the switch to draw in one short task, and holds the rest once drawn.
+  const [heldIn, setHeldIn] = useState<{ id: string | null; turns: number }>({ id: null, turns: OPEN_TURNS });
+  if (heldIn.id !== conversationId && (full.nodes.length > 0 || conversationId === null)) {
+    const anchor = keptPlace(conversationId)?.anchor ?? null;
+    setHeldIn({ id: conversationId, turns: Math.max(OPEN_TURNS, (anchor === null ? null : turnsFrom(full, anchor)) ?? 0) });
+  }
+  const opening = heldIn.id === conversationId && heldIn.turns < HELD_TURNS;
+  useEffect(() => {
+    if (!opening) return;
+    const timer = setTimeout(() => setHeldIn((before) => (before.id === conversationId ? { id: conversationId, turns: Math.max(before.turns, HELD_TURNS) } : before)), 300);
+    return () => clearTimeout(timer);
+  }, [opening, conversationId]);
+  // A jump to a message between sessions here: its row is held and mounted, and it lands once shown.
+  const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
+  const revealRow = useMemo(() => (reveal ? rowHolding(full.nodes, reveal.messageId) : null), [reveal, full.nodes]);
+  const revealTurns = useMemo(() => (revealRow === null ? 0 : (turnsFrom(full, revealRow) ?? 0)), [revealRow, full]);
+  const held = Math.max(heldIn.id === conversationId ? heldIn.turns : OPEN_TURNS, revealTurns);
+  const folded = useMemo(() => foldTurns(full, held), [full, held]);
   const tree = folded.tree;
-  // The folded turns' messages for the message rail, kept as they were while an answer streams.
-  const foldedKey = useMemo(
-    () => (folded.hidden > 0 ? JSON.stringify(foldedEntries(full, folded.tree)) : "[]"),
-    [full, folded],
-  );
   // An older page that failed to load offers Try again, in the conversation it failed in.
   const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
-  // The CLI's thread is read whole: no older pages.
-  const hasMore = false;
+  // The CLI's thread is read whole: what waits is the turns not held yet.
+  const hasMore = folded.hidden > 0;
+  // Find holds them all, `MORE_TURNS` at a time: all at once would hold the window up.
+  const [holdingAllIn, setHoldingAllIn] = useState<string | null>(null);
+  const holdAll = useCallback(() => setHoldingAllIn(conversationId), [conversationId]);
+  const holdMore = holdingAllIn === conversationId && hasMore;
+  useEffect(() => {
+    if (!holdMore) return;
+    const timer = setTimeout(() => setHeldIn((before) => ({ id: conversationId, turns: Math.max(HELD_TURNS, before.id === conversationId ? before.turns : 0) + MORE_TURNS })), 16);
+    return () => clearTimeout(timer);
+  }, [holdMore, held, conversationId]);
   const oldest = thread.items[0]?.seq ?? null;
   const searchOlder = null;
   const earlier = useMemo<ThreadHistory>(
     () => ({
-      hidden: folded.hidden,
-      folded: JSON.parse(foldedKey) as RailEntry[],
-      unfold: () => {
-        if (conversationId !== null) unfolded.add(conversationId);
-        setUnfoldedIn(conversationId);
-      },
+      showing: revealRow,
       hasMore,
       failed: olderFailedIn !== null && olderFailedIn === conversationId,
       loadOlder: async () => {
         if (conversationId === null) return;
+        if (hasMore) {
+          setHeldIn((before) => ({ id: conversationId, turns: Math.max(HELD_TURNS, before.id === conversationId ? before.turns : 0) + MORE_TURNS }));
+          return;
+        }
         setOlderFailedIn(null);
         try {
           await loadEarlier(conversationId);
@@ -526,24 +588,21 @@ export function ConversationView({
           throw cause;
         }
       },
+      holdAll: hasMore ? holdAll : null,
       oldest,
       searchOlder,
     }),
-    [folded.hidden, foldedKey, conversationId, hasMore, olderFailedIn, oldest, searchOlder],
+    [revealRow, conversationId, hasMore, holdAll, olderFailedIn, oldest, searchOlder],
   );
   // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
   const finishedAtMs = lastFinished(conversation) ?? 0;
   useEffect(() => {
     if (!embedded && conversationId) markOpened(conversationId, Math.max(Date.now(), finishedAtMs));
   }, [embedded, conversationId, finishedAtMs]);
-  // A jump to a message between sessions here: the earlier turns unfold, and it lands once shown.
-  const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
-  const showEarlier = earlier.unfold;
   useEffect(() => {
     if (!reveal) return;
-    showEarlier();
     return landReveal(reveal.messageId, reveal.nonce);
-  }, [reveal, showEarlier]);
+  }, [reveal]);
   const setup = conversation?.setup;
   const picked =
     setup?.type === "chat" ? setup.model : setup?.type === "session" ? setup.orchestrator : null;
@@ -593,6 +652,7 @@ export function ConversationView({
     !embedded && !!conversation,
   );
   const [renaming, setRenaming] = useState(false);
+  const rename = useCallback(() => setRenaming(true), []);
 
   // A new scope must not inherit uploads or refs from the previous composer.
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
@@ -887,10 +947,8 @@ export function ConversationView({
                         opening or closing one never moves its controls; the panels open below it. */}
                     <div className="flex h-full min-h-0 min-w-0 flex-col">
                     {tabbed && conversation ? (
-                      <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
-                        <ConversationToolbar kind={conversation.kind === "session" || workspace.enabled ? "session" : "chat"}
-                          onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
-                      </SessionTabBar>
+                      <SessionTop conversation={conversation} onRename={rename}
+                        kind={conversation.kind === "session" || workspace.enabled ? "session" : "chat"} />
                     ) : (
                       !embedded && (
                         <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
@@ -920,8 +978,7 @@ export function ConversationView({
                               className={cn("isolate flex min-h-0 flex-1 flex-col", covered && "behind")}
                             >
                               <SummaryPane summary={summary}>
-                                {summary && <PinnedSummary conversation={conversation}
-                                  cards={conversation?.kind === "session" ? <SessionCards conversationId={conversation.id} /> : null} />}
+                                {summary && <SessionSummary conversation={conversation} />}
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.

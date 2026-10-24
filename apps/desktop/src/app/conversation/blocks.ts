@@ -798,8 +798,28 @@ export type ThreadTree = {
   headId: string | null;
 };
 
-/** Turns a long thread shows before its older ones fold into "N earlier messages" (THREAD-UX-PLAN.md §5). */
-export const SHOWN_TURNS = 30;
+/**
+ * Turns of a long thread its list holds at first: the list mounts only what is near the view, but
+ * assistant-ui keeps every message it holds live, at a cost on each streamed word (run2-D49).
+ * Older turns join `MORE_TURNS` at a time as the view nears the top, or as a jump or Find needs them.
+ */
+export const HELD_TURNS = 300;
+export const MORE_TURNS = 150;
+/** Turns a long thread holds as it opens: the rest up to `HELD_TURNS` join once it has drawn. */
+export const OPEN_TURNS = 50;
+
+/** How many turns on the branch shown start at or before node `id`'s turn and run to the end (null: not on it). */
+export function turnsFrom(tree: ThreadTree, id: string): number | null {
+  const byId = new Map(tree.nodes.map((node) => [node.id, node]));
+  let turns = 0;
+  const seen = new Set<string>();
+  for (let node = tree.headId ? byId.get(tree.headId) : undefined; node && !seen.has(node.id); node = node.parentId ? byId.get(node.parentId) : undefined) {
+    seen.add(node.id);
+    if (node.kind === "user") turns += 1;
+    if (node.id === id) return node.kind === "user" ? turns : turns + 1;
+  }
+  return null;
+}
 
 /**
  * The thread with only its newest `keep` turns on the branch shown, and how many older turns

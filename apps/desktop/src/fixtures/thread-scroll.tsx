@@ -3,8 +3,8 @@
  * scrolling (thread-scroll.ts) in the app's own conversation view, on synthetic conversations.
  * Requests are answered here and never reach a daemon; each conversation's history comes back
  * `LOAD_MS` late, and a long reply's full text later still, like a daemon's.
- * - `long`: a session of 36 turns (the older ones behind "N earlier messages"), each answer a
- *   report with its Details folded, one long user message clipped behind "Show more".
+ * - `long`: a session of 36 turns (only those near the view mounted), each answer a report
+ *   with its Details folded, one long user message clipped behind "Show more".
  * - `other`: a Chat of 8 turns. `working`: a Chat whose one turn still runs, never opened.
  *
  * `?drive=1` runs the checks the scroll tests read and writes them to
@@ -247,7 +247,9 @@ function Page() {
 
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
 const viewport = () => $('[data-slot="aui_thread-viewport"]')!;
-const rows = () => [...$('[data-slot="aui_message-group"]')!.children] as HTMLElement[];
+/** The mounted messages' roots, top to bottom: each row's first child, the gaps left out. */
+const rows = () =>
+  [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row]')].map((row) => row.firstElementChild as HTMLElement);
 const max = () => viewport().scrollHeight - viewport().clientHeight;
 const distance = () => Math.round(max() - viewport().scrollTop);
 const viewTop = () => viewport().getBoundingClientRect().top;
@@ -294,6 +296,20 @@ async function userScroll(top: number): Promise<void> {
   viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: top < viewport().scrollTop ? -1 : 1 }));
   viewport().scrollTop = top;
   await settle(50);
+}
+
+/**
+ * Scrolls down from the top a half view at a time until `find` finds what it looks for in the
+ * mounted rows, and returns it: what is far from the view isn't mounted.
+ */
+async function scrollTo<T>(find: () => T | undefined): Promise<T> {
+  await userScroll(0);
+  for (;;) {
+    const found = find();
+    if (found !== undefined) return found;
+    if (distance() === 0) throw new Error("not found in the thread");
+    await userScroll(Math.min(max(), viewport().scrollTop + Math.round(viewport().clientHeight / 2)));
+  }
 }
 
 async function open(id: string): Promise<void> {
@@ -456,11 +472,14 @@ const steps = {
     const at9 = buttonState();
     return { at8, at9 };
   },
-  /** Mid-scroll, a session switch and back: the same place, with history and long text loading late. */
+  /**
+   * Mid-scroll, a session switch and back: the same place, with history and long text loading
+   * late. The place is the row at the view's top and its offset: the view's scrollTop isn't, as
+   * rows above it never mounted have estimated heights until they are.
+   */
   async switchBack() {
     await userScroll(Math.round(max() / 2));
     await settle(100);
-    const top = viewport().scrollTop;
     const anchor = rows().find((row) => row.getBoundingClientRect().bottom > viewTop())!;
     const id = anchor.dataset["messageId"];
     const offset = round(anchor.getBoundingClientRect().top - viewTop());
@@ -473,30 +492,32 @@ const steps = {
     let loading = false;
     let placeholders = 0;
     const read = () => {
-      if (($('[data-slot="aui_message-group"]')?.children.length ?? 0) > 0) return;
+      if (rows().length > 0) return;
       loading ||= $('[data-slot="aui_thread-history-loading"]')?.textContent === "Loading conversation";
       placeholders += document.querySelectorAll('[data-slot="aui_thread-column"] [data-slot="skeleton"]').length;
     };
     const changes = new MutationObserver(read);
     changes.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
     await select({ type: "conversation", id: "long" });
-    const early: number[] = [];
+    // The row's offset while it loads (null while it isn't shown yet).
+    const offsetNow = () => {
+      const back = rows().find((row) => row.dataset["messageId"] === id);
+      return back ? round(back.getBoundingClientRect().top - viewTop()) : null;
+    };
+    const early: (number | null)[] = [];
     for (let at = 0; at < 12; at++) {
       await wait(100);
-      early.push(Math.round(viewport().scrollTop));
+      early.push(offsetNow());
     }
     // A slower machine loads it later: the last sample is once it has.
     await settle(0);
     changes.disconnect();
-    early.push(Math.round(viewport().scrollTop));
-    const back = rows().find((row) => row.dataset["messageId"] === id);
-    return { top: Math.round(top), restored: Math.round(viewport().scrollTop), offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null, early, loading, placeholders };
+    early.push(offsetNow());
+    return { offset, restoredOffset: offsetNow(), early, loading, placeholders };
   },
-  /** Earlier turns shown, then a switch and back: the same older row at the same place. */
+  /** An old turn scrolled to (mounted as it comes into view), then a switch and back: the same row at the same place. */
   async revealedBack() {
-    $<HTMLButtonElement>('[data-slot="earlier-turns"]')?.click();
-    await settle(200);
-    const older = rows().find((row) => row.dataset["messageId"] === "long-u2")!;
+    const older = await scrollTo(() => rows().find((row) => row.dataset["messageId"] === "long-u2"));
     await userScroll(viewport().scrollTop + older.getBoundingClientRect().top - viewTop() - 40);
     const offset = round(older.getBoundingClientRect().top - viewTop());
     await open("other");
@@ -540,12 +561,12 @@ const steps = {
     await userScroll(viewport().scrollTop + middle.getBoundingClientRect().top - viewTop() - 300);
     const midOpen = await toggleStays(middle);
     const midClose = await toggleStays(middle);
-    const showMore = [...document.querySelectorAll<HTMLButtonElement>("button")].find((element) => element.textContent === "Show more")!;
+    const showMore = await scrollTo(() => [...document.querySelectorAll<HTMLButtonElement>("button")].find((element) => element.textContent === "Show more"));
     await userScroll(viewport().scrollTop + showMore.getBoundingClientRect().top - viewTop() - 300);
     const userOpen = await toggleStays(showMore);
     // At the bottom, following: the bottom stays, what opens shows above the composer.
     await userScroll(max());
-    const last = summaries.at(-1)!;
+    const last = [...document.querySelectorAll<HTMLElement>('[data-slot="report-details"] > summary')].at(-1)!;
     const bottomOpen = await toggleStays(last);
     const gapOpen = lastGap();
     const buttonAfter = buttonState();

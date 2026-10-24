@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { pullRequestKey } from "@/app/conversation/cliFacts";
 import { request, type ResponseOf } from "@/ipc/client";
-import { useThreadView } from "@/state/cliThread";
-import type { FileEntry } from "@/ipc/generated";
+import { useThreadFact } from "@/state/cliThread";
 
 export type PullRequestStatus = Pick<ResponseOf<"getPullRequest">, "pullRequest" | "authRequired">;
-const NO_ENTRIES: readonly FileEntry[] = [];
 const EMPTY: PullRequestStatus = { pullRequest: null };
 
 /** Mounted once per open session tab, including while its context card is hidden. */
 export function usePullRequest(conversationId: string | null): PullRequestStatus {
-  const entries = useThreadView(conversationId)?.entries ?? NO_ENTRIES;
-  const pushed = useMemo(() => pullRequestKey(entries), [entries]);
+  const pushed = useThreadFact(conversationId, pullRequestKey);
   const [found, setFound] = useState<{ id: string; status: PullRequestStatus } | null>(null);
   useEffect(() => {
     if (!conversationId) return;

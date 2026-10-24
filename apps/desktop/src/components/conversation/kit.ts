@@ -8,6 +8,7 @@ export {
   MessagePrimitive,
   TextMessagePartProvider,
   ThreadPrimitive,
+  unstable_useThreadMessageIds,
   useAui,
   useAuiState,
   useExternalStoreRuntime,

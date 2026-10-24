@@ -1,4 +1,4 @@
-import { type FC, Fragment } from "react";
+import { type FC } from "react";
 
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { type Activity, type LeadStep, joinExchanges, thinkingLabel } from "@/app/conversation/activity/group";
@@ -14,6 +14,7 @@ import { StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/c
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { RETRYING, useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
+import { KeptScope } from "@/components/conversation";
 
 /**
  * A turn's activity in order (THREAD-UX-PLAN.md §3.1): its work groups and everything else as it
@@ -87,21 +88,24 @@ export const ActivityItems: FC<{
     <>
       {activity.map((item, index) =>
         item.type === "group" ? (
-          <ActivityGroup
-            key={`group:${item.key}`}
-            items={item.items}
-            live={!!live && index === activity.length - 1}
-            liveLabel={inGroup && index === activity.length - 1 ? line : null}
-            summary={summary}
-            describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
-            renderStep={(step, key) => <Fragment key={key}>{peerStepRow(step, step === going) ?? <LeadStepRow step={shown(step)} />}</Fragment>}
-            reveal={revealing || revealDenied
-              ? (step) => (!!revealing && step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing))
-                || (revealDenied && denied(step))
-              : undefined}
-          />
+          <KeptScope key={`group:${item.key}`} name={`group:${item.key}`}>
+            <ActivityGroup
+              items={item.items}
+              live={!!live && index === activity.length - 1}
+              liveLabel={inGroup && index === activity.length - 1 ? line : null}
+              summary={summary}
+              describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
+              renderStep={(step, key) => <KeptScope key={key} name={`step:${key}`}>{peerStepRow(step, step === going) ?? <LeadStepRow step={shown(step)} />}</KeptScope>}
+              reveal={revealing || revealDenied
+                ? (step) => (!!revealing && step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing))
+                  || (revealDenied && denied(step))
+                : undefined}
+            />
+          </KeptScope>
         ) : (
-          <SequenceEntry key={entryKey(item.entry)} entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
+          <KeptScope key={entryKey(item.entry)} name={`entry:${entryKey(item.entry)}`}>
+            <SequenceEntry entry={item.entry} streaming={streaming(item.entry)} commentary={commentary(item.entry)} />
+          </KeptScope>
         ),
       )}
       {!inGroup && shownLine && (shownLine.thought && thought !== null ? <ThinkingLine text={thought} /> : <StatusLine head={shownLine} />)}

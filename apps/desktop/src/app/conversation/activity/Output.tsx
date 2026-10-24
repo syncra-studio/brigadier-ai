@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useKeptState } from "@/components/conversation";
 
 /** Output this long shows its head and tail, with the lines between folded. */
 const LONG_LINES = 40;
@@ -6,7 +6,7 @@ const SHOWN_LINES = 15;
 
 /** A long output as its first and last lines, "… N lines …" between them, until opened in full. */
 export function Output({ text }: { text: string }) {
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useKeptState(`output:${text.length}`, false);
   const lines = text.split("\n");
   if (all || lines.length <= LONG_LINES) return <>{text}</>;
   const hidden = lines.length - 2 * SHOWN_LINES;

@@ -3,8 +3,7 @@
  * user's messages beside the thread (message-rail.tsx) and ⌥↑ / ⌥↓, in the app's own
  * conversation view on synthetic conversations. Requests are answered here and never reach a
  * daemon.
- * - `long`: a chat of 80 turns. Opening it brings the newest 40 (the older 10 of them folded
- *   behind "N earlier messages").
+ * - `long`: a chat of 80 turns. Opening it brings the newest 40, only those near the view mounted.
  * - `short`: a chat of 3 turns.
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
@@ -144,7 +143,7 @@ const viewport = () => $('[data-slot="aui_thread-viewport"]')!;
 const rail = () => $('nav[aria-label="User messages"]');
 const markers = () => [...document.querySelectorAll<HTMLElement>("[data-rail-marker]")];
 const markerIds = () => markers().map((marker) => marker.dataset["railMarker"] ?? "");
-const userRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-role="user"][data-message-id]')];
+const userRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row] > [data-role="user"][data-message-id]')];
 const row = (id: string) => userRows().find((element) => element.dataset["messageId"] === id) ?? null;
 const round = (value: number) => Math.round(value * 100) / 100;
 /** Where row `id`'s top sits under the view's top. */
@@ -261,7 +260,7 @@ const steps = {
       marker: first ? [round(first.width), round(first.height)] : null,
       line: line ? [round(line.width), round(line.height)] : null,
       markers: markerIds(),
-      folded: $('[data-slot="earlier-turns"]')?.textContent ?? null,
+      mounted: userRows().length,
       current: currentMarkers(),
       inView: turnsInView(),
       // A current marker's line and a resting one's.
@@ -344,14 +343,14 @@ const steps = {
     await settle(200);
     return { narrow, wide: rail() !== null };
   },
-  /** ⌥↑ from the oldest turn shown: the folded turns open and the one before lands. */
-  async intoFolded() {
+  /** A click on a marker far above the turns mounted: its row mounts and lands; ⌥↑ steps on from there. */
+  async intoUnmounted() {
     const ids = markerIds();
-    const first = row(userRows()[0]!.dataset["messageId"]!)!.dataset["messageId"]!;
-    const at = ids.indexOf(first);
-    await clickTo(first);
-    const step = await stepTo("ArrowUp", ids[at - 1]!);
-    return { first, at, target: ids[at - 1], ...step, folded: $('[data-slot="earlier-turns"]') !== null, markers: markers().length };
+    const target = ids[3]!;
+    const mountedBefore = row(target) !== null;
+    const clicked = await clickTo(target);
+    const up = await stepTo("ArrowUp", ids[2]!);
+    return { target, mountedBefore, clicked, up, markers: markers().length };
   },
   /** Three messages: no rail. */
   /** A new turn whose answer is taller than the view, scrolled to its end: its message is the current one. */

@@ -8,19 +8,33 @@ import {
   TextMessagePartProvider,
   type TextMessagePartProps,
   ThreadPrimitive,
+  unstable_useThreadMessageIds,
   useAuiEvent,
   useAuiState,
 } from "@assistant-ui/react";
 import {
+  defaultRangeExtractor,
+  measureElement as measuredSize,
+  observeElementOffset,
+  observeElementRect,
+  type Range as VirtualRange,
+  useVirtualizer,
+} from "@tanstack/react-virtual";
+import {
   createContext,
+  memo,
   Suspense,
+  useCallback,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ComponentType,
   type FC,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -28,8 +42,9 @@ import {
 import { useFileDrops } from "@/app/conversation/fileDrops";
 import { CopyButton } from "@/components/shared/copy-button";
 import { LinkTimeContext } from "@/components/conversation/file-links";
-import { MessageRail } from "@/components/conversation/message-rail";
-import { ThreadScroller } from "@/components/conversation/thread-scroll";
+import { MessageRail, ThreadHistoryContext } from "@/components/conversation/message-rail";
+import { RowScope, rowKeyOf, useKeptState } from "@/components/conversation/row-memory";
+import { keptPlace, ThreadScroller } from "@/components/conversation/thread-scroll";
 import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { TurnBoundary } from "@/components/conversation/turn-boundary";
 import { Button } from "@/components/controls/button";
@@ -112,12 +127,14 @@ const ThreadHistoryLoading: FC = () => (
   </span>
 );
 
-export const Thread: FC<ThreadProps> = ({
+// Drawn again only when its own props or what it reads change: not with the view around it, which
+// draws on every streamed word.
+export const Thread = memo<ThreadProps>(function Thread({
   components,
   autoFocus = true,
   placeholder = "Send a message...",
   scrollKey,
-}) => {
+}) {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
@@ -130,9 +147,16 @@ export const Thread: FC<ThreadProps> = ({
       />
     </ThreadComponentsContext.Provider>
   );
-};
+});
 
 const ThreadScrollContext = createContext<ThreadScroller | null>(null);
+/** The key the thread keeps its place and its messages' parts under (the conversation). */
+const ThreadKeyContext = createContext<string | null>(null);
+
+/** The key the thread around keeps its messages' parts under. */
+export function useThreadKey(): string | null {
+  return useContext(ThreadKeyContext);
+}
 
 /**
  * Wires the scroll element, its column, the message rows, the room after them, the pad under
@@ -143,6 +167,7 @@ function useThreadScroll(
   saveKey: string | null,
 ): {
   viewport: HTMLDivElement | null;
+  group: HTMLDivElement | null;
   setViewport: (element: HTMLDivElement | null) => void;
   setColumn: (element: HTMLDivElement | null) => void;
   setGroup: (element: HTMLDivElement | null) => void;
@@ -166,8 +191,14 @@ function useThreadScroll(
 
   useLayoutEffect(() => {
     if (!viewport || !column || !group || !spacer || !pad || !footer) return;
-    const list = () => [...group.children].filter((child) => child instanceof HTMLElement);
-    let rows = list();
+    // The message roots, in the rows the list mounts (the spacers between them left out); read
+    // live, as a row's message may be drawn afresh in place (edited).
+    const list = () =>
+      [...group.children].flatMap((child) =>
+        child instanceof HTMLElement && child.dataset["threadRow"] !== undefined && child.firstElementChild instanceof HTMLElement
+          ? [child.firstElementChild]
+          : [],
+      );
     // The pad and the scroll padding follow the floating footer's height (see globals.css).
     const footerResized = () =>
       viewport.style.setProperty("--thread-footer-height", `${footer.offsetHeight}px`);
@@ -175,7 +206,7 @@ function useThreadScroll(
     const detach = scroller.attach(
       {
         viewport,
-        rows: () => rows,
+        rows: list,
         content: () => spacer.getBoundingClientRect().bottom - column.getBoundingClientRect().top,
         padding: () => pad.offsetHeight,
         footer: () => footer.offsetHeight,
@@ -204,15 +235,14 @@ function useThreadScroll(
     observe();
     const above = new MutationObserver(observe);
     above.observe(column, { childList: true });
-    const children = new MutationObserver(() => {
-      rows = list();
-      scroller.rowsChanged();
-    });
+    const children = new MutationObserver(() => scroller.rowsChanged());
     children.observe(group, { childList: true });
 
     const listening = new AbortController();
     const options = { passive: true, signal: listening.signal };
-    viewport.addEventListener("scroll", () => scroller.scrolled(), options);
+    // Heard before the message list hears it (a capturing listener on the view runs first): the
+    // rows it mounts for where the view went change what is above, kept from where the view is.
+    viewport.addEventListener("scroll", () => scroller.scrolled(), { ...options, capture: true });
     for (const type of ["wheel", "touchstart", "touchmove", "touchend", "pointerdown", "keydown"]) {
       viewport.addEventListener(type, scroller.input, options);
     }
@@ -257,7 +287,7 @@ function useThreadScroll(
     if (event.messageId) scroller.editSent();
   });
 
-  return { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
+  return { viewport, group, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
 }
 
 /**
@@ -291,7 +321,7 @@ const ThreadRoot: FC<{
 }> = ({ isEmpty, autoFocus, placeholder, scrollKey }) => {
   const { Welcome, BeforeMessages, AboveComposer, Capsule, Composer, Find } = useThreadComponents();
   const [scroller] = useState(() => new ThreadScroller());
-  const { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
+  const { viewport, group, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
     scroller,
     scrollKey,
   );
@@ -312,6 +342,7 @@ const ThreadRoot: FC<{
 
   return (
     <ThreadScrollContext.Provider value={scroller}>
+      <ThreadKeyContext.Provider value={scrollKey}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background @container flex h-full flex-col">
         <ComposerPrimitive.AttachmentDropzone
           ref={setZone}
@@ -348,13 +379,13 @@ const ThreadRoot: FC<{
               </AuiIf>
               {BeforeMessages && <BeforeMessages />}
 
-              <div
-                ref={setGroup}
-                data-slot="aui_message-group"
-                className="flex flex-col gap-y-6 empty:hidden"
-              >
-                <ThreadPrimitive.Messages>{renderMessage}</ThreadPrimitive.Messages>
-              </div>
+              <ThreadMessages
+                setGroup={setGroup}
+                group={group}
+                viewport={viewport}
+                scroller={scroller}
+                scrollKey={scrollKey}
+              />
               {/* Room for the newest turn's answer, made when the user sends. */}
               <div ref={setSpacer} aria-hidden data-slot="aui_thread-spacer" className="shrink-0" />
 
@@ -391,14 +422,251 @@ const ThreadRoot: FC<{
           {!drops.shift && <DropOverlay native={drops.native} />}
         </ComposerPrimitive.AttachmentDropzone>
       </ThreadPrimitive.Root>
+      </ThreadKeyContext.Provider>
     </ThreadScrollContext.Provider>
   );
 };
 
-/* One function for every render: the message list keeps its rows only while its children
-   function stays the same, so a new one each time would draw every message again on each
-   streamed word. */
-const renderMessage = () => <ThreadMessage />;
+/** A message's height before it was ever measured: a user's message and a finished turn's. */
+const ESTIMATE_PX = 160;
+/** Messages mounted beyond the view's ends, each way. */
+const OVERSCAN = 3;
+/** Each conversation's messages' heights as last measured, by id, kept for the app's run. */
+const heightsByKey = new Map<string, Map<string, number>>();
+
+function heightsOf(key: string | null): Map<string, number> {
+  if (key === null) return new Map();
+  let heights = heightsByKey.get(key);
+  if (!heights) {
+    heights = new Map();
+    heightsByKey.set(key, heights);
+  }
+  return heights;
+}
+
+/* One components object for every render: a message's row keeps its message drawn only while it
+   stays the same, so a new one each time would draw every message again on each streamed word. */
+const MESSAGE_COMPONENTS = { Message: () => <ThreadMessage /> };
+
+/** Message `id` of the thread around, drawn as its row draws it: for code reading what it shows. */
+export const ThreadMessageView: FC<{ id: string }> = ({ id }) => {
+  const key = useThreadKey();
+  return (
+    <RowScope rowKey={rowKeyOf(key, id)}>
+      <ThreadPrimitive.Unstable_MessageById messageId={id} components={MESSAGE_COMPONENTS} />
+    </RowScope>
+  );
+};
+
+/**
+ * The messages, as a feed: only those near the view are mounted (with `OVERSCAN` more each way),
+ * the room of those that aren't kept by spacers, so the thread scrolls as if all were there. Also
+ * mounted wherever the view is: the newest turn (its user's message to the end, which the scroller
+ * places, follows and measures), the message the view's kept place starts at, and what code going
+ * to a message asks for (`ThreadScroller.mount`). The scroller alone moves the view: a message
+ * mounting above it at its measured height is a change above the anchor, kept in place there.
+ * While the thread is hidden nothing is measured, and what is mounted stays.
+ */
+const ThreadMessages: FC<{
+  setGroup: (element: HTMLDivElement | null) => void;
+  group: HTMLDivElement | null;
+  viewport: HTMLDivElement | null;
+  scroller: ThreadScroller;
+  scrollKey: string | null;
+}> = ({ setGroup, group, viewport, scroller, scrollKey }) => {
+  const ids = unstable_useThreadMessageIds();
+  // The message the conversation asks to show (a jump between sessions'), mounted where it is.
+  const showing = useContext(ThreadHistoryContext)?.showing ?? null;
+  const running = useAuiState((s) => s.thread.isRunning);
+  const newestTurn = useAuiState((s) => s.thread.messages.findLastIndex((message) => message.role === "user"));
+  const heights = useMemo(() => heightsOf(scrollKey), [scrollKey]);
+  const at = useMemo(() => new Map(ids.map((id, index) => [id, index])), [ids]);
+  // What code asked to be mounted, by purpose; the kept place's message to begin with.
+  const [asked, setAsked] = useState<ReadonlyMap<string, string>>(() => {
+    const kept = keptPlace(scrollKey);
+    return new Map(kept && !kept.bottom && kept.anchor !== null ? [["restore", kept.anchor]] : []);
+  });
+  useLayoutEffect(() => {
+    scroller.setMounter((purpose, id) =>
+      setAsked((before) => {
+        if ((before.get(purpose) ?? null) === id) return before;
+        const next = new Map(before);
+        if (id === null) next.delete(purpose);
+        else next.set(purpose, id);
+        return next;
+      }),
+    );
+    return () => scroller.setMounter(null);
+  }, [scroller]);
+  // Where the list starts in the scrolled content: under the column's padding.
+  const [margin, setMargin] = useState(0);
+  // Read after every draw, as what is above it may change any time; set only when it moved.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (!group || !viewport || viewport.clientHeight === 0) return;
+    const top = Math.round(group.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop);
+    if (top !== margin) setMargin(top);
+  });
+  const hidden = () => (viewport?.clientHeight ?? 0) === 0;
+  const estimate = useCallback((index: number) => heights.get(ids[index] ?? "") ?? ESTIMATE_PX, [heights, ids]);
+  const keyOf = useCallback((index: number) => ids[index] ?? index, [ids]);
+  const pinned = useMemo(() => {
+    const indices = new Set<number>();
+    if (newestTurn >= 0) for (let index = newestTurn; index < ids.length; index++) indices.add(index);
+    for (const id of [...asked.values(), showing]) {
+      const index = id === null ? undefined : at.get(id);
+      if (index !== undefined) indices.add(index);
+    }
+    return indices;
+  }, [newestTurn, ids.length, asked, showing, at]);
+  const last = useRef<number[]>([]);
+  // The app does not use React Compiler, so the virtualizer's unmemoizable API is fine here.
+  // oxlint-disable-next-line react/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: ids.length,
+    getScrollElement: () => viewport,
+    estimateSize: estimate,
+    getItemKey: keyOf,
+    overscan: OVERSCAN,
+    scrollMargin: margin,
+    // It opens where the scroller will put the view: the kept place's message, or the bottom.
+    initialOffset: () => {
+      const restore = asked.get("restore");
+      const until = restore === undefined ? ids.length : (at.get(restore) ?? ids.length);
+      let offset = margin;
+      for (let index = 0; index < until; index++) offset += estimate(index);
+      return restore === undefined ? Math.max(0, offset - (viewport?.clientHeight ?? 0)) : offset;
+    },
+    rangeExtractor: (range: VirtualRange) => {
+      // Hidden, what is mounted stays: the view's size and place read nothing then.
+      if (hidden() && last.current.length > 0) return last.current;
+      const indices = new Set(defaultRangeExtractor(range));
+      for (const index of pinned) if (index < range.count) indices.add(index);
+      last.current = [...indices].toSorted((a, b) => a - b);
+      return last.current;
+    },
+    // Hidden, a row measures nothing: it keeps its height.
+    measureElement: (element, entry, instance) => {
+      const index = instance.indexFromElement(element);
+      const id = ids[index];
+      if (hidden()) return (id !== undefined ? heights.get(id) : undefined) ?? estimate(index);
+      const size = measuredSize(element, entry, instance);
+      if (id !== undefined && size > 0) heights.set(id, size);
+      return size;
+    },
+    observeElementRect: (instance, changed) =>
+      observeElementRect(instance, (rect) => {
+        if (rect.height > 0) changed(rect);
+      }),
+    // The scroller's own moves are heard as they are made, not a frame later with their scroll
+    // event: the rows of where it put the view are drawn before that frame paints.
+    observeElementOffset: (instance, changed) => {
+      const stop = observeElementOffset(instance, (offset, scrolling) => {
+        if (!hidden()) changed(offset, scrolling);
+      });
+      const unsubscribe = scroller.subscribe(() => {
+        if (viewport && !hidden()) changed(viewport.scrollTop, false);
+      });
+      return () => {
+        stop?.();
+        unsubscribe();
+      };
+    },
+  });
+  // The scroller keeps the view in place as heights change: the list never moves it.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+
+  const items = virtualizer.getVirtualItems();
+  const rows: ReactNode[] = [];
+  let end = 0;
+  for (const item of items) {
+    const id = ids[item.index];
+    if (id === undefined) continue;
+    const start = item.start - margin;
+    if (start > end) rows.push(<div key={`gap:${id}`} aria-hidden data-slot="aui_thread-gap" style={{ height: start - end }} />);
+    rows.push(
+      <div
+        key={id}
+        ref={virtualizer.measureElement}
+        data-index={item.index}
+        data-thread-row={id}
+        data-settled={newestTurn >= 0 && item.index < newestTurn ? "" : undefined}
+        role="article"
+        aria-posinset={item.index + 1}
+        aria-setsize={ids.length}
+        tabIndex={-1}
+        className={cn("focus:outline-none", item.index > 0 && "pt-6")}
+      >
+        <RowScope rowKey={rowKeyOf(scrollKey, id)}>
+          <ThreadPrimitive.Unstable_MessageById messageId={id} components={MESSAGE_COMPONENTS} />
+        </RowScope>
+      </div>,
+    );
+    end = item.end - margin;
+  }
+  const total = virtualizer.getTotalSize();
+  if (rows.length > 0 && total > end) rows.push(<div key="gap:end" aria-hidden data-slot="aui_thread-gap" style={{ height: total - end }} />);
+
+  const feedKeys = useFeedKeys(ids, scroller);
+  // The message holding the focus stays mounted while the view scrolls away from it.
+  const focused = (event: ReactFocusEvent<HTMLDivElement>) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-thread-row]") : null;
+    const id = ids[Number(row?.dataset["index"])];
+    if (id !== undefined) scroller.mount("focus", id);
+  };
+  return (
+    // A feed takes its keys itself: Page Down and Page Up move between its articles (WAI-ARIA's feed).
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+    <div
+      ref={setGroup}
+      data-slot="aui_message-group"
+      role="feed"
+      aria-busy={running || undefined}
+      aria-label="Conversation"
+      onKeyDown={feedKeys}
+      onFocus={focused}
+      className="flex flex-col empty:hidden"
+    >
+      {rows}
+    </div>
+  );
+};
+
+/**
+ * The feed's keys: Page Down and Page Up in a message move the focus to the next or the one
+ * before, mounted first when it isn't (the view goes with the focus).
+ */
+function useFeedKeys(ids: readonly string[], scroller: ThreadScroller) {
+  return useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "PageDown" && event.key !== "PageUp") return;
+      if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+      const row = target.closest<HTMLElement>("[data-thread-row]");
+      const index = Number(row?.dataset["index"]);
+      if (!row || Number.isNaN(index)) return;
+      const next = index + (event.key === "PageDown" ? 1 : -1);
+      const id = ids[next];
+      if (id === undefined) return;
+      event.preventDefault();
+      const group = event.currentTarget;
+      scroller.release();
+      scroller.mount("focus", id);
+      const focus = (tries: number) => {
+        const element = group.querySelector<HTMLElement>(`:scope > [data-thread-row][data-index="${next}"]`);
+        if (element) {
+          element.focus({ preventScroll: true });
+          element.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (tries > 0) requestAnimationFrame(() => focus(tries - 1));
+      };
+      requestAnimationFrame(() => focus(30));
+    },
+    [ids, scroller],
+  );
+}
 
 const ThreadMessage: FC = () => {
   const { AssistantMessage } = useThreadComponents();
@@ -589,8 +857,10 @@ const UserMessage: FC = () => {
 const LatestResponse: FC = () => {
   const [none, setNone] = useState(false);
   const focus = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const thread = event.currentTarget.closest(".aui-thread-root") ?? document;
-    const answer = [...thread.querySelectorAll<HTMLElement>("[data-role=assistant]")].at(-1);
+    // The newest turn is always mounted (see `ThreadMessages`); the view alone, as Find's index
+    // draws messages in the thread's root too.
+    const thread = event.currentTarget.closest(".aui-thread-root")?.querySelector("[data-slot=aui_thread-viewport]") ?? document;
+    const answer = [...thread.querySelectorAll<HTMLElement>("[data-thread-row] [data-role=assistant]")].at(-1);
     setNone(!answer);
     answer?.focus();
   };
@@ -636,7 +906,7 @@ export const TimeSeparator: FC<{ atMs: number; className?: string }> = ({ atMs, 
 const UserMessageText: FC = () => {
   const { UserText } = useThreadComponents();
   const ref = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useKeptState("more", false);
   const [clipped, setClipped] = useState(false);
   const hasText = useAuiState((s) =>
     s.message.parts.some((part) => part.type === "text" && part.text !== ""),

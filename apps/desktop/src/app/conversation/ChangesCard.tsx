@@ -20,6 +20,7 @@ import { keepChanges, undoChanges } from "@/state/pendingChanges";
 import { openFileTab, openReviewTab } from "@/state/sessionTabs";
 import { useSettledTabs } from "@/state/tabStates";
 import { toast } from "@/state/toasts";
+import { useKeptState } from "@/components/conversation";
 
 const FIRST_FILES = 3;
 
@@ -44,9 +45,9 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const review: Record<string, FileReview> = Object.assign({}, ...snapshots.map((record) => record?.review ?? {}));
   const working = useBoard((s) => s.board?.run === "running" || s.board?.run === "starting");
   const [busy, setBusy] = useState(false);
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useKeptState("files", false);
   const [preview, setPreview] = useState<{ requestId: string; revert: TurnRevert } | null>(null);
-  const [fold, setFold] = useState<{ reverted: boolean; open: boolean } | null>(null);
+  const [fold, setFold] = useKeptState<{ reverted: boolean; open: boolean } | null>("fold", null);
   const open = fold?.reverted === reverted ? fold.open : !reverted;
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
   const ahead = useSettledTabs((s) => conversationId ? s.byTab[conversationId]?.ahead : undefined);
@@ -117,7 +118,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
       <FoldBody open={open}>
         {files.length > 0 && <ul data-slot="turn-diff-files" className="flex flex-col ps-13">
           {shown.map((file) => <ChangesFileRow key={file.path} file={file} review={review[file.path]} busy={busy} onOpen={() => openDiff(file.path)} onAct={(what) => each(what, [file.path])} />)}
-          {more > 0 && <li className="border-divider border-t pt-2.5 pb-3"><Button variant="link-blue" size="inline" data-slot="turn-diff-more" className="text-label" onClick={() => setAll((now) => !now)}>{all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}{all ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}</Button></li>}
+          {more > 0 && <li className="border-divider border-t pt-2.5 pb-3"><Button variant="link-blue" size="inline" data-slot="turn-diff-more" className="text-label" onClick={() => setAll(!all)}>{all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}{all ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}</Button></li>}
         </ul>}
         {groups.map((group) => {
           const worker = Object.values(workers ?? {}).find((task) => task.workspace?.branch === group.branch);

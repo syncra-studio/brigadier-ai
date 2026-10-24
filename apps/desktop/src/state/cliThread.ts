@@ -246,6 +246,29 @@ export function useThreadView(conversationId: string | null): ThreadView | null 
   return view;
 }
 
+const NO_FILE_ENTRIES: readonly FileEntry[] = [];
+const facts = new WeakMap<(entries: readonly FileEntry[]) => unknown, WeakMap<readonly FileEntry[], unknown>>();
+
+/**
+ * What `fact` reads from conversation `conversationId`'s CLI items, worked out once per change of
+ * them. A component reading a fact this way draws again only when the fact changes, not on every
+ * streamed word: `fact` should give a string or a number.
+ */
+export function useThreadFact<T extends string | number | boolean>(conversationId: string | null, fact: (entries: readonly FileEntry[]) => T): T {
+  return useCliThread((s) => {
+    const entries = (conversationId ? s.views[conversationId]?.entries : undefined) ?? NO_FILE_ENTRIES;
+    let known = facts.get(fact);
+    if (!known) {
+      known = new WeakMap();
+      facts.set(fact, known);
+    }
+    if (known.has(entries)) return known.get(entries) as T;
+    const value = fact(entries);
+    known.set(entries, value);
+    return value;
+  });
+}
+
 /**
  * When a conversation's newest turn started, while it runs; `null` once it ended or until its
  * thread is read. Only a turn's start or end draws its readers again, not each streamed word.

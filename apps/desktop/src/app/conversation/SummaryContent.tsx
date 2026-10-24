@@ -50,17 +50,15 @@ import type {
 } from "@/ipc/generated";
 import { getSessionDiff } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { useCliThread, useSessionMcp, useWorkerRows } from "@/state/cliThread";
+import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
 
-const NO_ENTRIES: readonly FileEntry[] = [];
-
-/** A session's own CLI items, as its thread holds them. */
-function useEntries(conversationId: string): readonly FileEntry[] {
-  return useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
-}
+/* What the summary reads from a session's own CLI items, each a string or a flag (see `useThreadFact`). */
+const pagesOf = (entries: readonly FileEntry[]) => webUse(entries).pages.join("\n");
+const serversOf = (entries: readonly FileEntry[]) => usedMcpServers(entries).join("\n");
+const searchedIn = (entries: readonly FileEntry[]) => webUse(entries).searches.length > 0;
 
 /**
  * A worktree session's +N −N against its base, a Local checkout's uncommitted changes, read
@@ -75,8 +73,7 @@ function useSessionDiff(
     const all = s.views[conversationId]?.turns ?? [];
     return `${all.length}:${all.at(-1)?.end ?? ""}`;
   });
-  const entries = useEntries(conversationId);
-  const git = useMemo(() => gitCommandsKey(entries), [entries]);
+  const git = useThreadFact(conversationId, gitCommandsKey);
   const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
   useEffect(() => {
     if (!session) return;
@@ -128,13 +125,14 @@ function statusOf(servers: readonly McpServerState[], used: string): McpServerSt
  */
 export function useUsedSources(conversationId: string): UsedSource[] {
   const messages = useApp((s) => s.threads[conversationId]?.items);
-  const entries = useEntries(conversationId);
+  const pagesSeen = useThreadFact(conversationId, pagesOf);
+  const serversUsed = useThreadFact(conversationId, serversOf);
   const servers = useSessionMcp(conversationId);
   return useMemo(() => {
     const users = (messages ?? []).filter((message) => message.role === "user");
     const files = [...new Map(users.flatMap((message) => message.attachments).map((file) => [file.id, file])).values()];
-    const { pages } = webUse(entries);
-    const used = usedMcpServers(entries);
+    const pages = pagesSeen === "" ? [] : pagesSeen.split("\n");
+    const used = serversUsed === "" ? [] : serversUsed.split("\n");
     return [
       ...files.map((file): UsedSource => ({ key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name })),
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
@@ -144,7 +142,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
-  }, [messages, entries, servers]);
+  }, [messages, pagesSeen, serversUsed, servers]);
 }
 
 /** Sources shown before "View all". */
@@ -236,8 +234,7 @@ function AddSource() {
  */
 function SessionSources({ conversationId }: { conversationId: string }) {
   const used = useUsedSources(conversationId);
-  const entries = useEntries(conversationId);
-  const searched = useMemo(() => webUse(entries).searches.length > 0, [entries]);
+  const searched = useThreadFact(conversationId, searchedIn);
   if (used.length === 0) return null;
   return (
     <SummarySection foldKey="sources" title="Sources" count={used.length} action={<AddSource />}>

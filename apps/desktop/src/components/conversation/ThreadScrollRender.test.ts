@@ -18,7 +18,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     error?: string;
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
     button: { at8: Button; at9: Button };
-    switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[]; loading: boolean; placeholders: number };
+    switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number };
     revealedBack: { offset: number; restoredOffset: number | null };
     fullscreen: {
       hiddenHeight: number;
@@ -78,15 +78,15 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(seen.button.at9.aboveStack, 16, "button above the composer");
   near(seen.button.at9.offCentre, 0, "button off the column's centre");
 
-  // A switch away and back restores the exact place, while the history and long replies load late.
+  // A switch away and back restores the exact place, while the history and long replies load late:
+  // the row at the view's top at its offset. Never past it: the row is never above that offset.
   const { switchBack } = seen;
-  assert.equal(switchBack.restored, switchBack.top);
   assert.equal(switchBack.restoredOffset, switchBack.offset);
-  assert.ok(switchBack.early.every((top) => top <= switchBack.top), `no overshoot: ${switchBack.early.join(", ")}`);
-  assert.equal(switchBack.early.at(-1), switchBack.top);
+  assert.ok(switchBack.early.every((offset) => offset === null || offset >= switchBack.offset - 0.5), `no overshoot: ${switchBack.early.join(", ")}`);
+  assert.equal(switchBack.early.at(-1), switchBack.offset);
   // While its history loads the column stays empty, saying so only to a screen reader.
   assert.deepEqual([switchBack.loading, switchBack.placeholders], [true, 0]);
-  // Earlier turns, once shown, stay shown: their row is found again.
+  // An old turn scrolled to, once mounted, is found again in its place.
   assert.equal(seen.revealedBack.restoredOffset, seen.revealedBack.offset);
 
   // A fullscreen side panel hiding the thread and back: the same place, mid-scroll and at the bottom.

@@ -14,6 +14,7 @@ import {
   blockSequence,
   foldsAway,
   foldTurns,
+  turnsFrom,
   heldForWait,
   isUpdate,
   judgementCall,
@@ -477,6 +478,20 @@ test("a long thread folds its oldest turns, other versions of a folded turn with
   assert.equal(folded.tree.nodes[0]?.parentId, null);
   // Short enough: nothing folds.
   assert.deepEqual(foldTurns(tree, 5), { tree, hidden: 0 });
+});
+
+test("the turns a thread must hold to show a row count from that row's turn to the end", () => {
+  const nodes: ThreadNode[] = [];
+  for (let turn = 1; turn <= 5; turn += 1) {
+    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), node(`r${turn}`, `u${turn}`, "block"));
+  }
+  const tree = { nodes, headId: "r5" };
+  assert.equal(turnsFrom(tree, "u5"), 1);
+  assert.equal(turnsFrom(tree, "r4"), 2);
+  assert.equal(turnsFrom(tree, "u2"), 4);
+  assert.equal(turnsFrom(tree, "missing"), null);
+  // Held from there, the row is in the list.
+  assert.ok(foldTurns(tree, turnsFrom(tree, "r2")!).tree.nodes.some((kept) => kept.id === "r2"));
 });
 
 test("a turn still waiting on the user keeps itself and every later turn out of the fold", () => {

@@ -5,7 +5,7 @@
 // drew; and where the main thread's time went while it streamed (a CPU profile, by function).
 // The draws are counted in a second run, as counting costs time of its own.
 // With STREAM_LOAD_EXTRA=1 it goes on to typing (this script types into the composer), switching
-// between two long sessions, showing the earlier turns and scrolling.
+// between two long sessions, jumping to the first turn, finding in the thread and scrolling.
 // CHROME_BIN=<a Chromium> node scripts/measure-stream-load.mjs [turns] [rate] [scratch dir]
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

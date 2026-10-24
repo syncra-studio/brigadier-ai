@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
+import { useKeptState } from "@/components/conversation/row-memory";
 
 /**
  * A quiet box of exact text: a tool's input or output, a command a card asks about, a brief or
@@ -21,7 +22,7 @@ export function ToolBox({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useKeptState(`box:${title ?? ""}`, false);
   const [clamped, setClamped] = useState(false);
   useEffect(() => {
     const element = ref.current;

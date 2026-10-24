@@ -7,9 +7,9 @@ import { Spinner } from "@/components/icons";
 import { useApp } from "@/state/store";
 
 /**
- * Above the messages: "N earlier messages" while older turns are folded away; then, while older
- * pages wait in the database, they load as the user scrolls to the top (a spinner while one
- * does, Try again when it failed), or with "Load earlier messages" when nothing scrolls yet.
+ * Above the messages, while older pages wait in the database: they load as the user scrolls to
+ * the top (a spinner while one does, Try again when it failed), or with "Load earlier messages"
+ * when nothing scrolls yet.
  */
 export const LoadEarlier: FC = () => {
   const { selection } = useContext(ViewContext);
@@ -20,7 +20,7 @@ export const LoadEarlier: FC = () => {
   const earlier = useContext(ThreadHistoryContext);
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
   const loadOlder = earlier?.loadOlder;
-  const auto = hasMore && !loading && !earlier?.failed && (earlier?.hidden ?? 0) === 0;
+  const auto = hasMore && !loading && !earlier?.failed;
   // Scrolled to the top, the next page loads: the thread keeps what shows where it is.
   useEffect(() => {
     const viewport = sentinel?.closest("[data-slot=aui_thread-viewport]");
@@ -36,16 +36,7 @@ export const LoadEarlier: FC = () => {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [auto, sentinel, loadOlder]);
-  if (earlier && earlier.hidden > 0) {
-    return (
-      <div className="mb-4 flex justify-center">
-        <Button variant="ghost" size="sm" data-slot="earlier-turns" onClick={earlier.unfold}>
-          {earlier.hidden} earlier {earlier.hidden === 1 ? "message" : "messages"}
-        </Button>
-      </div>
-    );
-  }
-  if (!hasMore || !loadOlder) return null;
+  if (!earlier || !hasMore || !loadOlder) return null;
   if (loading) {
     return (
       <div data-slot="earlier-loading" role="status" className="flex justify-center py-4">

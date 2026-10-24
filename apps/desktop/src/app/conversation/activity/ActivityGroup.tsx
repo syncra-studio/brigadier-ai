@@ -8,7 +8,7 @@ import { InFold, InGroup } from "@/app/conversation/activity/groupContext";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
-import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, RowOpens, StepIcon, ThreadActivity } from "@/components/conversation";
+import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, RowOpens, StepIcon, ThreadActivity, useKeptState } from "@/components/conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRightAlt, Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
@@ -73,7 +73,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   /** After the words, in and out of a group: an edit's "+7 −2". */
   trail?: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKeptState("open", false);
   // In a fold of its repeats, a call names what it was given: the fold's row already says the tool.
   const given = useContext(InFold) ? said.given : undefined;
   const words = given ? { ...said, doing: `${said.doing} ${given}`, done: `${said.done} ${given}`, object: given } : said;
@@ -157,11 +157,11 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   /** The step a jump asks to show, if it is one of these: the group opens to it. */
   reveal?: ((step: S) => boolean) | undefined;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKeptState("open", false);
   // While Find searches, closed it keeps its rows, hidden, to be found.
   const searched = useFindSearching();
   // A lone step's row the user opened: swapping it for the live line would close it.
-  const [rowOpen, setRowOpen] = useState(false);
+  const [rowOpen, setRowOpen] = useKeptState("row-open", false);
   // A jump to one of its steps opens it, once per jump.
   const holds = !!reveal && items.some((item) => reveal(item.step));
   const [revealed, setRevealed] = useState(false);

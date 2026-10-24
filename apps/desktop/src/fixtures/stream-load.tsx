@@ -10,7 +10,8 @@
  * length, `rate=<n>` the deltas a second, `phase=<ms>` each phase's length; `count=0` counts no
  * draws (counting costs time of its own). `extra=1` goes on: typing in the composer while it streams
  * (the measuring script types, as `data-typing` asks), opening a second long session and
- * switching between the two, showing the earlier turns, and scrolling the whole thread.
+ * switching between the two, jumping to the first turn from the rail, finding in the thread, and
+ * scrolling the whole thread.
  */
 // First: React DOM finds the counting hook as it loads.
 import { countRenders, renderCounts } from "@/fixtures/renderCounts";
@@ -19,7 +20,7 @@ import { Profiler, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
-import { openConversation } from "@/state/actions";
+import { openConversation, setPinnedSummary } from "@/state/actions";
 import type { Conversation, FileEntry, ProviderEvent, Project, Request, ThreadTurn, ThreadView } from "@/ipc/generated";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { emptyBoard, type ShownApproval, useBoard } from "@/state/board";
@@ -234,22 +235,41 @@ async function drive() {
 const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
 /** Milliseconds from `action` to the first painted frame where `ready` holds. */
-async function timeTo(action: () => unknown, ready: () => boolean): Promise<number> {
+async function timeTo(action: () => unknown, ready: () => boolean, most = 600): Promise<number> {
   const asked = performance.now();
   await action();
-  for (let tries = 0; tries < 600; tries++) {
+  for (let tries = 0; tries < most; tries++) {
     await painted();
     const now = performance.now();
     if (ready()) return Math.round(now - asked);
   }
-  throw new Error("it never got there");
+  throw new Error(`it never got there (${document.documentElement.dataset.phase} ${document.documentElement.dataset.step ?? ""})`);
 }
 
 const viewport = () => document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
 /** Whether the open thread shows its newest turn, asked as `asked`. */
 const showing = (asked: string) => () => (viewport()?.textContent ?? "").includes(`${asked} ${TURNS}:`);
 
-/** Typing, switching sessions, showing the earlier turns and scrolling, while it streams. */
+/** Whether a row of the open thread holding `text` is mounted and shows in the view. */
+const inView = (text: string) => () => {
+  const sides = viewport()?.getBoundingClientRect();
+  if (!sides) return false;
+  return [...document.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row]')].some((row) => {
+    const box = row.getBoundingClientRect();
+    return box.bottom > sides.top && box.top < sides.bottom && (row.textContent ?? "").includes(text);
+  });
+};
+
+/** What Find's bar counts. */
+const counted = () => (document.querySelector('[data-slot="thread-find-count"]')?.textContent ?? "").trim();
+
+/** `text` typed into a field React holds, as one change. */
+function typeIn(field: HTMLInputElement, text: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, text);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** Typing, switching sessions, jumping to the first turn, finding and scrolling, while it streams. */
 async function extra(seen: Record<string, unknown>) {
   // The approval answered: the composer is back in its place.
   useBoard.setState((state) => ({ board: state.board && { ...state.board, approvals: {} } }));
@@ -299,13 +319,49 @@ async function extra(seen: Record<string, unknown>) {
   }
   switches.back = await timeTo(() => openConversation(ID), showing("Question"));
   seen.switching = { ...switches, ...summary(1) };
-  // The earlier turns: all of them shown at once.
+  // A jump from the rail to the first turn, far out of what is mounted.
   await wait(500);
   reset();
-  document.documentElement.dataset.phase = "unfold";
-  const earlier = document.querySelector<HTMLElement>('[data-slot="earlier-turns"]');
-  const unfold = earlier ? await timeTo(() => earlier.click(), () => !document.querySelector('[data-slot="earlier-turns"]')) : null;
-  seen.unfold = { ms: unfold, ...summary(1) };
+  document.documentElement.dataset.phase = "jump";
+  // The rail's first marker: the oldest turn the thread holds (a long one holds its newest turns).
+  // The pinned summary leaves the rail no room beside the column at this window's width: unpinned.
+  setPinnedSummary(false);
+  for (let tries = 0; tries < 40 && !document.querySelector('[data-slot="message-rail"] button'); tries++) await wait(50);
+  const first = document.querySelector<HTMLElement>('[data-slot="message-rail"] button');
+  const label = first?.getAttribute("aria-label")?.split(":")[0] ?? "";
+  const jump = first && label ? await timeTo(() => first.click(), inView(`${label}:`)) : null;
+  seen.jump = { ms: jump, to: label, rail: document.querySelectorAll('[data-slot="message-rail"] button').length, ...summary(1) };
+  // Find: a word in one old turn, gone to; then a word in every turn, counted over the whole thread.
+  await wait(500);
+  reset();
+  try {
+    document.documentElement.dataset.phase = "find";
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", key: "f", metaKey: true, bubbles: true }));
+    await painted();
+    const bar = document.querySelector<HTMLInputElement>('[data-slot="thread-find"] input');
+    if (!bar) throw new Error("no find bar");
+    document.documentElement.dataset.step = "count one";
+    const one = await timeTo(() => typeIn(bar, "Question 2:"), () => /[1-9]/.test(counted()), 3600);
+    document.documentElement.dataset.step = "go to it";
+    const goneTo = await timeTo(() => bar.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })), inView("Question 2:"));
+    const everyFrom = performance.now();
+    typeIn(bar, "Paragraph 1.");
+    let shown = "";
+    let stableFrom = performance.now();
+    while (performance.now() - everyFrom < PHASE_MS * 3 && performance.now() - stableFrom < 1000) {
+      await wait(50);
+      const now = counted();
+      if (now !== shown) {
+        shown = now;
+        stableFrom = performance.now();
+      }
+    }
+    const every = Math.round(stableFrom - everyFrom);
+    bar.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    seen.find = { one, goneTo, every, label: shown, ...summary(performance.now() - everyFrom) };
+  } catch (error) {
+    seen.find = { error: String(error) };
+  }
   // Scrolling the whole thread to its top, a screen's worth each frame.
   await wait(500);
   reset();

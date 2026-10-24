@@ -174,7 +174,7 @@ const editor = () => document.querySelector<HTMLElement>("[data-slot=pasted-text
 const shown = () => document.querySelector("[data-slot=pasted-text-editor] [contenteditable=false]");
 /** The thread's scrolling view, and how many rows it holds. */
 const thread = () => document.querySelector<HTMLElement>("[data-slot=aui_thread-viewport]");
-const rows = () => document.querySelector("[data-slot=aui_message-group]")?.children.length ?? 0;
+const rows = () => document.querySelectorAll("[data-slot=aui_message-group] > [data-thread-row]").length;
 
 function pasteData(data: Record<string, string>) {
   const clipboardData = new DataTransfer();
