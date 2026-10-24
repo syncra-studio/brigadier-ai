@@ -24,6 +24,7 @@ use super::cli_ledger::{Ledger, LedgerFile};
 use super::long_sessions::LongSessions;
 use super::records::{READ_MAX, entry_text};
 use super::session_dir::{LineageEntry, write_atomic};
+use crate::manager::conversation::queue_judging::without_frames;
 use crate::thread_view::{HANDOFF_END, HANDOFF_MARK, NUDGE_MARK, SeamMark};
 use crate::{Error, Result};
 
@@ -32,12 +33,18 @@ pub(crate) const TOKENS_ENV: &str = "BRIGADIER_SEAM_TOKENS";
 /// What the successor is told after its hand-off when no message of the user's waits for it: it
 /// starts at once and carries on by itself, as a Delegator's successor does (user, 10-23).
 pub(crate) const CARRY_ON: &str = "Carry on from the hand-off note.";
+
+/// An end mark quoted inside a hand-off (an earlier one's, in the transcript or the ledger), so
+/// the one at its end is the only one.
+const QUOTED_END: &str = "[end of an earlier hand-off]";
 const DEFAULT_TOKENS: i64 = 200_000;
 /// How long a user message waits for the note turn before it goes to the successor anyway.
 const HOLD: Duration = Duration::from_secs(60);
 const SEAM_FILE: &str = "seam.json";
 /// The verbatim tail's budget, ≈15k tokens.
 const TAIL_BYTES: usize = 60_000;
+/// An expanded tail's most, ≈32k tokens, however large the window: a hand-off stays a start.
+const EXPANDED_TAIL_BYTES: usize = 128_000;
 /// One tail item's most; the rest is a read away.
 const ITEM_BYTES: usize = 6_000;
 /// One tool item's most in the latest exchange (its messages go whole).
@@ -224,7 +231,7 @@ impl TailBudget {
         Some(
             hot.saturating_mul(4)
                 .min(window.saturating_mul(2))
-                .min(128_000),
+                .min(EXPANDED_TAIL_BYTES),
         )
     }
 
@@ -392,7 +399,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     let read = |from: usize, to: usize| format!("`brigadier brain read {} {from} {to}`", boot.key);
     let item = |at: usize, max: usize| -> Option<String> {
         let (role, text) = readable[at].as_ref()?;
-        let text = without_handoff(text);
+        // The user's words, without the frame a queued message reached the session under.
+        let text = without_frames(without_handoff(text));
+        let text = text.as_ref();
         let mut out = format!("[#{at} · {role}]\n");
         if text.len() > max {
             let mut cut = max;
@@ -628,6 +637,8 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             out.push_str(&format!("- #{from}–#{to}: {}\n", read(from, to)));
         }
     }
+    // One end mark, the last line: one quoted from an earlier hand-off is no end.
+    let mut out = out.replace(HANDOFF_END, QUOTED_END);
     out.push_str(&format!("\n{HANDOFF_END}"));
     out
 }
@@ -841,44 +852,10 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
 pub(crate) fn without_handoff(text: &str) -> &str {
     match text.trim_start().strip_prefix(HANDOFF_MARK) {
         Some(rest) => rest
-            .rfind(HANDOFF_END)
+            .find(HANDOFF_END)
             .map_or(text, |end| rest[end + HANDOFF_END.len()..].trim_start()),
         None => text,
     }
-}
-
-/// Maintenance prompts and their replies stay in the CLI records, never in the chat view.
-pub(crate) fn hide_internal(view: &mut crate::thread_view::ThreadView) {
-    let mut hidden = std::collections::HashSet::new();
-    let mut maintenance = false;
-    let mut standalone = false;
-    view.entries.retain(|entry| {
-        if entry.parent.is_none()
-            && let ProviderEvent::Message {
-                item_id,
-                role: Role::User,
-                text,
-            } = &entry.event
-        {
-            maintenance = text.trim_start().starts_with(NUDGE_MARK)
-                || text.trim_start().starts_with(HANDOFF_MARK);
-            standalone = maintenance && !entry.steer;
-            if maintenance {
-                hidden.insert(item_id.clone());
-                return false;
-            }
-        }
-        if maintenance {
-            // A steered nudge still ends the real user's turn. Keep that end, not the
-            // maintenance reply or its tool calls. Standalone maintenance has no chat turn.
-            return !standalone
-                && entry.parent.is_none()
-                && matches!(entry.event, ProviderEvent::TurnCompleted { .. });
-        }
-        true
-    });
-    view.turns
-        .retain(|turn| !hidden.contains(&turn.user_message));
 }
 
 #[cfg(test)]

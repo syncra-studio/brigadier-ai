@@ -19,10 +19,11 @@
 //! back. Side chats and tab chats keep the plain queue.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use brigadier_cli::protocol::{CliReply, ErrorCode, Judgment, QueueOutput, QueueState};
+use regex::Regex;
 
 use super::{ConvLive, SendOutcome};
 use crate::manager::SessionManager;
@@ -58,6 +59,22 @@ pub(crate) fn own_turn_frame(shown: &str) -> String {
 /// What the session hears when the user deletes a queued message it already has.
 pub(crate) fn withdrawn_frame(shown: &str) -> String {
     format!("{FRAME}{shown} withdrawn: the user took it back; leave it]")
+}
+
+/// `text` without Brigadier's queue frames: the one a queued message starts with, and any word
+/// that one was taken back. The app's thread reads them the same way (`cliBlocks.ts`).
+pub(crate) fn without_frames(text: &str) -> std::borrow::Cow<'_, str> {
+    static START: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\[queued message \S{8}(?: · [^\]\n]*|, now on its own turn)\]\n?").unwrap()
+    });
+    static WITHDRAWN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\n*\[queued message \S{8} withdrawn: [^\]\n]*\]\n*").unwrap()
+    });
+    if !text.contains(FRAME) {
+        return text.into();
+    }
+    let body = START.replace(text, "");
+    WITHDRAWN.replace_all(&body, "\n").trim().to_owned().into()
 }
 
 /// Whether messages sent to `conversation` while it works are judged: a session's and a

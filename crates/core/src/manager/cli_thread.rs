@@ -324,7 +324,6 @@ impl SessionManager {
         let threads = self.cli_threads.lock().unwrap();
         let mut view = thread_view::view(files, threads.get(id), &records);
         view.seams = super::seam::marks(&record, &mut view.entries);
-        super::seam::hide_internal(&mut view);
         Ok(view)
     }
 

@@ -124,6 +124,54 @@ fn the_successor_gets_the_notes_skills_section_and_the_users_words_whole() {
     assert!(text.contains(&format!("[#0 · user]\n{user}")));
 }
 
+/// A queued message's frame is Brigadier's word to the session that had it: its successor gets
+/// the user's words alone, never an old "judge it" to act on (run2-D40).
+#[test]
+fn the_successor_gets_queued_messages_without_their_frames() {
+    let deciding = crate::manager::conversation::queue_judging::deciding_frame("feedbeef");
+    let own_turn = crate::manager::conversation::queue_judging::own_turn_frame("cafebabe");
+    let withdrawn = crate::manager::conversation::queue_judging::withdrawn_frame("deadbeef");
+    let mut steer = message("s1", Role::User, &format!("{deciding}Also the docs."));
+    steer.steer = true;
+    let entries = vec![
+        message("u1", Role::User, "Fix the parser"),
+        steer,
+        message("a1", Role::Assistant, "On it"),
+        message(
+            "u2",
+            Role::User,
+            &format!("{own_turn}Then the tests.\n\n{withdrawn}"),
+        ),
+    ];
+    let text = boot(&entries, None, None);
+    assert!(!text.contains("judge it"), "{text}");
+    assert!(!text.contains("[queued message"), "{text}");
+    assert!(text.contains("[#1 · user]\nAlso the docs."), "{text}");
+    assert!(text.contains("[#3 · user]\nThen the tests."), "{text}");
+}
+
+/// An earlier hand-off quoted inside this one never ends it early: the one end mark is the last
+/// line, so a successor's message after it is the user's alone.
+#[test]
+fn a_quoted_end_mark_does_not_end_the_handoff() {
+    let entries = vec![
+        message("u1", Role::User, "Fix the parser"),
+        message(
+            "a1",
+            Role::Assistant,
+            &format!("The last note said {HANDOFF_END} there."),
+        ),
+    ];
+    let text = boot(&entries, Some(&format!("quoting {HANDOFF_END}")), None);
+    assert_eq!(text.matches(HANDOFF_END).count(), 1, "{text}");
+    assert!(text.ends_with(HANDOFF_END));
+    let first = format!("{text}\n\nMy words, [End of the hand-off] included");
+    assert_eq!(
+        without_handoff(&first),
+        "My words, [End of the hand-off] included"
+    );
+}
+
 #[test]
 fn the_handoff_comes_in_its_order() {
     let entries = transcript(400, &"x".repeat(400));
@@ -470,10 +518,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         message(
             "u1",
             Role::User,
-            &format!(
-                "\n\n{}\nquoted {HANDOFF_END}\nmap{HANDOFF_END}\n\nnext",
-                handoff_line(1, "k")
-            ),
+            &format!("\n\n{}\nmap{HANDOFF_END}\n\nnext", handoff_line(1, "k")),
         ),
         message(
             "u2",
@@ -493,34 +538,6 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         unreachable!()
     };
     assert_eq!(text, "next");
-    for steer in [false, true] {
-        let mut prompt = message("maintenance", Role::User, &nudge(&note_path(record, 3)));
-        prompt.steer = steer;
-        let mut view = crate::thread_view::view(
-            vec![std::sync::Arc::new(vec![
-                message("real", Role::User, "Fix it"),
-                message("answer", Role::Assistant, "Working on the fix"),
-                prompt,
-                message(
-                    "internal-reply",
-                    Role::Assistant,
-                    "Hand-off written. Ledger audited. Stopped.",
-                ),
-                message("next", Role::User, "More work"),
-                message("resumed", Role::Assistant, "The fix is ready"),
-            ])],
-            None,
-            &[],
-        );
-        hide_internal(&mut view);
-        let ids: Vec<_> = view
-            .entries
-            .iter()
-            .filter_map(|entry| brigadier_providers::session_file::item_id(&entry.event))
-            .collect();
-        assert_eq!(ids, ["real", "answer", "next", "resumed"]);
-        assert_eq!(view.turns.len(), 2);
-    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -656,8 +673,14 @@ fn d49_tail_budget_uses_reason_hot_context_and_target_cap() {
                 TAIL_BYTES
             );
         } else {
-            assert_eq!(budget(Some(90_000), Some(200_000)).bytes(10_000), 118_000);
-            assert_eq!(budget(Some(90_000), Some(100_000)).bytes(10_000), 118_000);
+            // The cap above a large hot context and window; under it, the smaller of the hot
+            // context and half the window, each as four bytes a token.
+            assert_eq!(
+                budget(Some(90_000), Some(200_000)).bytes(10_000),
+                EXPANDED_TAIL_BYTES - 10_000
+            );
+            assert_eq!(budget(Some(20_000), Some(200_000)).bytes(10_000), 70_000);
+            assert_eq!(budget(Some(90_000), Some(30_000)).bytes(10_000), 50_000);
             assert_eq!(budget(Some(90_000), Some(100_000)).bytes(250_000), 0);
         }
     }
@@ -715,7 +738,7 @@ fn expanded_tail_keeps_the_sections_first_and_whole_and_omissions_readable() {
                     || spans(&text).iter().any(|(a, b)| (*a..=*b).contains(&at))
             );
         }
-        assert!(text.len() <= 128_000 + 8_000, "{}", text.len());
+        assert!(text.len() <= EXPANDED_TAIL_BYTES + 8_000, "{}", text.len());
     }
 }
 
