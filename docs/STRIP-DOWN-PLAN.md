@@ -159,7 +159,8 @@ just like the delegator, how an orchestrator works"; supersedes old-run D43 "Def
   before work starts. It answers its workers' questions itself when the code or a web search settle them, else
   asks the user; the user always decides spending money, a push or publish they didn't ask for, credentials,
   and changes to their settled decisions (run2-D32; the always-ask list is proposed, from the Delegator's
-  rules).
+  rules). A Chat's and side chat's own grilling line points to the skill's: one question at a time, no
+  numbered rounds (run2-D32).
 - After a block of work it replies in at most 3–5 short lines: what changed, what's next, what needs the user;
   workers keep full reports, which only the session reads (run2-D27).
 Every session and normal chat brigades, with no option; side chats stay as they are, with no workers (run2-D26).
