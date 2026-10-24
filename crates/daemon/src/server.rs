@@ -2414,6 +2414,40 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetPlugins { project_id } => Response::GetPlugins {
             plugins: daemon.sessions.plugins_view(project_id).await?,
         },
+        Request::SwitchPlugin {
+            key,
+            project_id,
+            on,
+            agent,
+        } => Response::SwitchPlugin {
+            job: daemon.sessions.switch_plugin(key, project_id, on, agent)?,
+        },
+        Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
+            check: daemon.sessions.check_plugin_add(text, name).await?,
+        },
+        Request::AddPlugin {
+            text,
+            name,
+            project_id,
+            shared,
+        } => Response::AddPlugin {
+            job: daemon.sessions.add_plugin(text, name, project_id, shared)?,
+        },
+        Request::UseEverywhere { key } => Response::UseEverywhere {
+            job: daemon.sessions.use_everywhere(key),
+        },
+        Request::UndoUseEverywhere { key } => Response::UndoUseEverywhere {
+            job: daemon.sessions.undo_use_everywhere(key),
+        },
+        Request::RemovePlugin { key } => Response::RemovePlugin {
+            job: daemon.sessions.remove_plugin(key),
+        },
+        Request::UpdatePlugin { key } => Response::UpdatePlugin {
+            job: daemon.sessions.update_plugin(key),
+        },
+        Request::GetPluginJob { id } => Response::GetPluginJob {
+            job: daemon.sessions.plugin_job_view(&id)?,
+        },
         Request::SignInMcpServer {
             server_id,
             project_id,

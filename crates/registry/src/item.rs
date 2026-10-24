@@ -46,7 +46,8 @@ pub struct SkillSpec {
 }
 
 /// Where a skill to add comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SkillSource {
     /// A folder holding `SKILL.md` (or folders that each do).
     Folder(PathBuf),

@@ -9,6 +9,7 @@ use super::{
     AgentAdapter, ApplyError, Capabilities, CliCall, Listed, Place, ProjectScope, Step, TomlEdit,
     Unsupported, app_server, apply,
 };
+use crate::item::ServerSpec;
 use crate::{Agent, Catalog, Roots, Source};
 
 const PROGRAM: &str = "codex";
@@ -27,10 +28,12 @@ fn enabled(table: &str, name: &str) -> Vec<String> {
 
 /// The edit of `key` at `place`: the user's config, or the project's file.
 fn edit(place: &Place, key: Vec<String>, value: Option<bool>) -> Step {
-    let edit = TomlEdit {
-        key,
-        value: value.map(toml::Value::Boolean),
-    };
+    table(place, key, value.map(toml::Value::Boolean))
+}
+
+/// `key` set to `value` (removed for `None`) at `place`.
+fn table(place: &Place, key: Vec<String>, value: Option<toml::Value>) -> Step {
+    let edit = TomlEdit { key, value };
     match place {
         Place::Everywhere => Step::UserConfig(edit),
         Place::Project { path, shared } => Step::ProjectFile {
@@ -123,6 +126,39 @@ impl AgentAdapter for Codex {
                 CliCall::new(PROGRAM, &["plugin", "remove"]).arg(id),
             )],
             Place::Project { .. } => vec![edit(place, enabled("plugins", id), None)],
+        })
+    }
+
+    fn add_server(
+        &self,
+        name: &str,
+        spec: &ServerSpec,
+        place: &Place,
+    ) -> Result<Vec<Step>, Unsupported> {
+        let mut entry = super::server_json(spec, "http_headers");
+        if let Some(entry) = entry.as_object_mut() {
+            // It tells the two apart by `command` or `url`.
+            entry.remove("type");
+        }
+        let value: toml::Value = serde_json::from_value(entry)
+            .map_err(|err| Unsupported(format!("Codex can't take this server: {err}")))?;
+        Ok(vec![table(
+            place,
+            vec!["mcp_servers".to_owned(), name.to_owned()],
+            Some(value),
+        )])
+    }
+
+    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
+        Ok(match place {
+            Place::Everywhere => vec![Step::Run(
+                CliCall::new(PROGRAM, &["mcp", "remove"]).arg(name),
+            )],
+            Place::Project { .. } => vec![table(
+                place,
+                vec!["mcp_servers".to_owned(), name.to_owned()],
+                None,
+            )],
         })
     }
 

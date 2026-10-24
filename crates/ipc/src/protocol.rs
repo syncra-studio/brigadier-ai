@@ -1106,6 +1106,48 @@ pub enum Request {
     GetPlugins {
         project_id: Option<String>,
     },
+    /// Turns Settings › Plugins item `key` on or off in project `projectId`, else in every
+    /// project; for agent `agent` only when given. Answers with a job ([`Request::GetPluginJob`]).
+    SwitchPlugin {
+        key: String,
+        project_id: Option<String>,
+        on: bool,
+        agent: Option<ProviderKind>,
+    },
+    /// What pasted `text` would add (a skill, an MCP server), before anything is added;
+    /// `name` names a server the paste doesn't.
+    CheckPluginAdd {
+        text: String,
+        name: Option<String>,
+    },
+    /// Adds what `text` holds for every agent: in project `projectId` only ("just me" unless
+    /// `shared`), else in every project. Answers with a job.
+    AddPlugin {
+        text: String,
+        name: Option<String>,
+        project_id: Option<String>,
+        shared: bool,
+    },
+    /// Moves an agent's own item `key` into the Library, for every agent. Answers with a job.
+    UseEverywhere {
+        key: String,
+    },
+    /// Undoes Use everywhere of Library item `key`. Answers with a job.
+    UndoUseEverywhere {
+        key: String,
+    },
+    /// Removes item `key` from every agent and project. Answers with a job.
+    RemovePlugin {
+        key: String,
+    },
+    /// Brings Library item `key` to its source's newest version. Answers with a job.
+    UpdatePlugin {
+        key: String,
+    },
+    /// How a Settings › Plugins job goes, each agent's part.
+    GetPluginJob {
+        id: String,
+    },
     /// Signs every agent that has the remote MCP server `serverId` (an id of
     /// [`Request::GetIntegrations`]'s catalog, of `projectId`'s when given; a project the user
     /// doesn't trust is refused) and needs it in to it, one after another, each with its CLI's
@@ -1812,6 +1854,30 @@ pub enum Response {
     },
     GetPlugins {
         plugins: brigadier_core::manager::plugins::PluginsView,
+    },
+    SwitchPlugin {
+        job: String,
+    },
+    CheckPluginAdd {
+        check: brigadier_core::manager::plugins::ops::PluginAddCheck,
+    },
+    AddPlugin {
+        job: String,
+    },
+    UseEverywhere {
+        job: String,
+    },
+    UndoUseEverywhere {
+        job: String,
+    },
+    RemovePlugin {
+        job: String,
+    },
+    UpdatePlugin {
+        job: String,
+    },
+    GetPluginJob {
+        job: brigadier_core::manager::plugins::ops::PluginJobView,
     },
     SignInMcpServer {
         id: String,

@@ -456,3 +456,57 @@ fn both_clis_list_a_library_skill_and_server() {
     assert!(catalog.skills.iter().any(|skill| skill.name == "marker"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_item_fetched_from_git_knows_when_its_source_moved_on() {
+    let dir = scratch("origin");
+    let repo = dir.join("repo");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    std::fs::create_dir_all(repo.join("tidy")).unwrap();
+    std::fs::write(repo.join("tidy/SKILL.md"), "---\nname: tidy\n---\nv1\n").unwrap();
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "v1"]);
+    let source = SkillSource::Git {
+        url: repo.display().to_string(),
+        rev: None,
+        subdir: None,
+    };
+    let fetched = dir.join("fetch");
+    std::fs::create_dir_all(&fetched).unwrap();
+    fetch_skill(&source, &fetched).unwrap();
+    let commit = fetched_commit(&fetched).unwrap();
+    assert_eq!(latest_commit(&source).unwrap(), commit);
+
+    let library = Library::at(dir.join("library"), PathBuf::from("/bin/brigadier"));
+    let origin = Origin {
+        source: source.clone(),
+        commit: commit.clone(),
+    };
+    library.set_origin("tidy", Some(&origin)).unwrap();
+    assert_eq!(library.origin("tidy"), Some(origin));
+
+    std::fs::write(repo.join("tidy/SKILL.md"), "---\nname: tidy\n---\nv2\n").unwrap();
+    git(&["commit", "-q", "-am", "v2"]);
+    assert_ne!(latest_commit(&source).unwrap(), commit);
+    library.set_origin("tidy", None).unwrap();
+    assert_eq!(library.origin("tidy"), None);
+    assert!(latest_commit(&SkillSource::Folder(dir.clone())).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

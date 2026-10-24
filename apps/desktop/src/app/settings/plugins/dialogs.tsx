@@ -153,6 +153,7 @@ export function SignInDialog({ view, item, projectId, adapter, refresh, onClose 
   const [error, setError] = useState<string | null>(null);
   const start = () => {
     setError(null);
+    if (!adapter.signIn) return;
     adapter.signIn(item.key, projectId).then(setResults, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   };
   // Starts once, as the dialog opens.
@@ -161,7 +162,7 @@ export function SignInDialog({ view, item, projectId, adapter, refresh, onClose 
   const waiting = view.agents.filter((agent) => stateOf(item, agent.agent).type === "needsSignIn");
   useWatch(refresh, waiting.length > 0);
   const cancel = () => {
-    void adapter.cancelSignIn(item.key).catch(() => {});
+    void adapter.cancelSignIn?.(item.key).catch(() => {});
     onClose();
   };
   return (

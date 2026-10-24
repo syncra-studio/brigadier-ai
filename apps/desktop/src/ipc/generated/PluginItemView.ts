@@ -55,6 +55,10 @@ switchable: boolean,
  */
 updateAvailable: boolean, 
 /**
+ * It came into the Library by Use everywhere, which can be undone.
+ */
+canUndo: boolean, 
+/**
  * The files it is set up in.
  */
 files: Array<string>, 

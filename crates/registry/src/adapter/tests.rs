@@ -207,3 +207,68 @@ fn terminal_escapes_and_links_are_left_out() {
         "  http://a/b?c=1\nnext bold"
     );
 }
+
+#[test]
+fn a_server_goes_back_through_each_agents_own_setup() {
+    use crate::Secret;
+    use crate::item::{ServerSpec, TransportSpec};
+    let spec = ServerSpec {
+        name: "pg".into(),
+        transport: TransportSpec::Stdio {
+            command: "pg-mcp".into(),
+            args: vec!["--ro".into()],
+            env: vec![("PGPASS".into(), Secret::new("s"))],
+            cwd: None,
+        },
+    };
+    let steps = adapter(Agent::Claude)
+        .add_server("pg", &spec, &project())
+        .unwrap();
+    let (program, args, dir) = run(&steps[0]);
+    assert_eq!((program, dir), ("claude", Some(Path::new("/p"))));
+    assert_eq!(&args[..3], ["mcp", "add-json", "pg"]);
+    let json: serde_json::Value = serde_json::from_str(args[3]).unwrap();
+    assert_eq!(json["command"], "pg-mcp");
+    assert_eq!(json["env"]["PGPASS"], "s");
+    assert_eq!(&args[4..], ["--scope", "local"]);
+    assert_eq!(
+        run(&adapter(Agent::Claude)
+            .remove_server("pg", &Place::Everywhere)
+            .unwrap()[0])
+        .1,
+        ["mcp", "remove", "pg", "--scope", "user"]
+    );
+
+    let http = ServerSpec {
+        name: "linear".into(),
+        transport: TransportSpec::Http {
+            url: "https://mcp.linear.app/mcp".into(),
+            headers: vec![("X-Team".into(), Secret::new("t"))],
+        },
+    };
+    let steps = adapter(Agent::Codex)
+        .add_server("linear", &http, &Place::Everywhere)
+        .unwrap();
+    let Step::UserConfig(edit) = &steps[0] else {
+        panic!("{steps:?}")
+    };
+    assert_eq!(edit.key, ["mcp_servers", "linear"]);
+    let table = edit.value.as_ref().unwrap();
+    assert_eq!(table["url"].as_str(), Some("https://mcp.linear.app/mcp"));
+    assert_eq!(table["http_headers"]["X-Team"].as_str(), Some("t"));
+    assert!(table.get("type").is_none());
+    let steps = adapter(Agent::Codex)
+        .remove_server("linear", &project())
+        .unwrap();
+    assert!(matches!(
+        &steps[0],
+        Step::ProjectFile { edit, .. } if edit.key == ["mcp_servers", "linear"] && edit.value.is_none()
+    ));
+    assert_eq!(
+        run(&adapter(Agent::Codex)
+            .remove_server("linear", &Place::Everywhere)
+            .unwrap()[0])
+        .1,
+        ["mcp", "remove", "linear"]
+    );
+}

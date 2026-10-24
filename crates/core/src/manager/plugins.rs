@@ -6,6 +6,9 @@
 //! started in that project gets. Items Brigadier adds live in the Library
 //! ([`brigadier_registry::library`]) and reach each agent through its own plugin commands.
 
+mod jobs;
+pub mod ops;
+
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
@@ -94,6 +97,8 @@ pub struct PluginItemView {
     pub switchable: bool,
     /// A newer version is waiting (a Library item from Git or skills.sh).
     pub update_available: bool,
+    /// It came into the Library by Use everywhere, which can be undone.
+    pub can_undo: bool,
     /// The files it is set up in.
     pub files: Vec<String>,
     /// For another app's: the app ("Claude Desktop").
@@ -387,6 +392,7 @@ fn gather(
                         attention: None,
                         switchable: false,
                         update_available: false,
+                        can_undo: false,
                         files: vec![server.file.display().to_string()],
                         found_in: Some(server.source.label().to_owned()),
                     });
@@ -622,6 +628,7 @@ pub(crate) fn build(
                 attention,
                 switchable: library || presence.switchable,
                 update_available: false,
+                can_undo: false,
                 files: presence.files,
                 found_in: None,
             })
@@ -729,6 +736,109 @@ impl super::SessionManager {
             ))
         })
         .await
+        .map(|mut view| {
+            jobs::mark_library(&mut view, self.library());
+            view
+        })
+    }
+
+    /// The folder of the user's trusted project `id`.
+    fn plugin_project(&self, id: Option<String>) -> crate::Result<Option<PathBuf>> {
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        self.plugin_projects()
+            .into_iter()
+            .find(|(known, _, _)| *known == id)
+            .map(|(_, _, path)| Some(path))
+            .ok_or_else(|| crate::Error::Invalid(format!("no project {id}")))
+    }
+
+    fn plugin_job(&self, action: jobs::Action) -> String {
+        jobs::start(
+            jobs::Setup {
+                registry: self.registry(),
+                library: self.library(),
+                cli: self.brigadier_cli(),
+                projects: self
+                    .plugin_projects()
+                    .into_iter()
+                    .map(|(_, _, path)| path)
+                    .collect(),
+            },
+            action,
+        )
+    }
+
+    /// Turns item `key` on or off: in project `project_id`, else in every project; for one
+    /// agent only when `agent`. Its job's id.
+    pub fn switch_plugin(
+        &self,
+        key: String,
+        project_id: Option<String>,
+        on: bool,
+        agent: Option<ProviderKind>,
+    ) -> crate::Result<String> {
+        let project = self.plugin_project(project_id)?;
+        Ok(self.plugin_job(jobs::Action::Switch {
+            key,
+            project,
+            on,
+            agent: agent.and_then(ops::agent_of),
+        }))
+    }
+
+    /// What pasted `text` would add, before anything is added.
+    pub async fn check_plugin_add(
+        &self,
+        text: String,
+        name: Option<String>,
+    ) -> crate::Result<ops::PluginAddCheck> {
+        let home = self.registry().roots().home.clone();
+        super::blocking(move || Ok(jobs::check_add(&home, &text, name.as_deref()))).await
+    }
+
+    /// Adds what `text` holds for every agent: in project `project_id` only ("just me" unless
+    /// `shared`), else in every project. Its job's id.
+    pub fn add_plugin(
+        &self,
+        text: String,
+        name: Option<String>,
+        project_id: Option<String>,
+        shared: bool,
+    ) -> crate::Result<String> {
+        let project = self.plugin_project(project_id)?;
+        Ok(self.plugin_job(jobs::Action::Add {
+            text,
+            name,
+            project,
+            shared,
+        }))
+    }
+
+    /// Moves an agent's own item `key` into the Library for every agent. Its job's id.
+    pub fn use_everywhere(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::UseEverywhere { key })
+    }
+
+    /// Undoes Use everywhere of Library item `key`. Its job's id.
+    pub fn undo_use_everywhere(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::Undo { key })
+    }
+
+    /// Removes item `key` from every agent and project. Its job's id.
+    pub fn remove_plugin(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::Remove { key })
+    }
+
+    /// Brings Library item `key` to its source's newest version. Its job's id.
+    pub fn update_plugin(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::Update { key })
+    }
+
+    /// How plugin job `id` goes.
+    pub fn plugin_job_view(&self, id: &str) -> crate::Result<ops::PluginJobView> {
+        jobs::job(id).ok_or_else(|| crate::Error::Invalid(format!("no job {id}")))
     }
 
     /// What the agents' own lists said of their servers, last time they were read.

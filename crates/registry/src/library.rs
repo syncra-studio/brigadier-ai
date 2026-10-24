@@ -111,6 +111,14 @@ pub struct Packed {
     pub server: Option<String>,
 }
 
+/// Where a Library item fetched from Git or skills.sh came from, and the commit it was packed
+/// from: what "Update available" compares with.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Origin {
+    pub source: SkillSource,
+    pub commit: String,
+}
+
 /// The Library at a folder.
 pub struct Library {
     root: PathBuf,
@@ -283,6 +291,34 @@ impl Library {
             std::fs::remove_dir_all(dir).map_err(io)?;
         }
         Ok(())
+    }
+
+    fn origins_file(&self) -> PathBuf {
+        self.root.join(".origins.json")
+    }
+
+    fn origins(&self) -> BTreeMap<String, Origin> {
+        std::fs::read_to_string(self.origins_file())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    /// Where plugin `name` was fetched from, when from Git or skills.sh.
+    pub fn origin(&self, name: &str) -> Option<Origin> {
+        self.origins().remove(name)
+    }
+
+    /// Keeps (or with `None` forgets) where plugin `name` was fetched from.
+    pub fn set_origin(&self, name: &str, origin: Option<&Origin>) -> Result<(), LibraryError> {
+        let mut origins = self.origins();
+        match origin {
+            Some(origin) => origins.insert(name.to_owned(), origin.clone()),
+            None => origins.remove(name),
+        };
+        let value =
+            serde_json::to_value(&origins).map_err(|err| LibraryError::Io(err.to_string()))?;
+        write_json(&self.origins_file(), &value)
     }
 
     fn marketplace(&self) -> Value {
@@ -503,6 +539,61 @@ pub fn fetch_skill(source: &SkillSource, scratch: &Path) -> Result<PathBuf, Stri
         [] => Err(format!("No skill found in {url}.")),
         _ => Err(format!("{url} has several skills: name the one you want.")),
     }
+}
+
+/// The repository `source` is fetched from, and the branch or tag (`None`: its default).
+fn remote(source: &SkillSource) -> Option<(String, Option<String>)> {
+    match source {
+        SkillSource::Folder(_) => None,
+        SkillSource::Git { url, rev, .. } => Some((url.clone(), rev.clone())),
+        SkillSource::SkillsSh(id) => {
+            let mut parts = id.split('/');
+            Some((
+                format!("https://github.com/{}/{}", parts.next()?, parts.next()?),
+                None,
+            ))
+        }
+    }
+}
+
+/// The name the skill at `dir` gives itself in its `SKILL.md`.
+pub fn skill_name(dir: &Path) -> Option<String> {
+    crate::skills::frontmatter(&std::fs::read_to_string(dir.join("SKILL.md")).ok()?).0
+}
+
+/// The commit [`fetch_skill`] fetched into `scratch`, for a Git or skills.sh source.
+pub fn fetched_commit(scratch: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(scratch.join("checkout"))
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (out.status.success() && !commit.is_empty()).then_some(commit)
+}
+
+/// The commit `source`'s repository is at now (its branch or tag, else its default branch).
+pub fn latest_commit(source: &SkillSource) -> Result<String, String> {
+    let (url, rev) = remote(source).ok_or("A folder has no newer version.")?;
+    let out = Command::new("git")
+        .args(["ls-remote", &url, rev.as_deref().unwrap_or("HEAD")])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|err| format!("Couldn't run git: {err}."))?;
+    if !out.status.success() {
+        return Err(format!("Couldn't reach {url}."));
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            format!(
+                "{url} has no {}.",
+                rev.as_deref().unwrap_or("default branch")
+            )
+        })
 }
 
 /// The folders under `dir` (a few levels down) that hold `SKILL.md`.

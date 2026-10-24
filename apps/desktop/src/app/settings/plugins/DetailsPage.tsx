@@ -12,7 +12,8 @@ type DetailsActions = {
   busy: boolean;
   onBack: () => void;
   onSwitch: (projectId: string | null, on: boolean) => void;
-  onSignIn: () => void;
+  /** Absent while the agents can't be signed in from here. */
+  onSignIn?: (() => void) | undefined;
   onUseEverywhere: () => void;
   onRemove: () => void;
   onRetry: () => void;
@@ -84,7 +85,7 @@ export function DetailsPage({ view, item, focus, actions }: { view: PluginsView;
                 <span className="text-label font-medium">Sign-in</span>
                 <span className="text-foreground/65 text-xs">{signInLine(view, item)}</span>
               </span>
-              <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in again</Button>
+              {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in again</Button>}
             </div>
           )}
           {item.files.map((file) => <InfoRow key={file} title="Saved in" value={shortPath(file)} />)}
@@ -112,7 +113,7 @@ function AttentionBanner({ view, item, actions }: { view: PluginsView; item: Plu
     const who = listNames(agentsIn(view, item, "needsSignIn"));
     return (
       <Banner tone="warning" text={`${who} ${agentsIn(view, item, "needsSignIn").length === 1 ? "needs" : "need"} you to sign in to ${item.name}. Until then, ${who} sessions can't use it.`}>
-        <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>
+        {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
       </Banner>
     );
   }

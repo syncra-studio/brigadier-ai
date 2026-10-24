@@ -6,8 +6,10 @@
 use std::path::Path;
 
 use super::{
-    AgentAdapter, Capabilities, CliCall, Listed, Place, ProjectScope, Step, Unsupported, plain_text,
+    AgentAdapter, Capabilities, CliCall, Listed, Place, ProjectScope, Step, Unsupported,
+    plain_text, server_json,
 };
+use crate::item::ServerSpec;
 use crate::{Agent, Catalog, Roots, Source};
 
 const PROGRAM: &str = "claude";
@@ -118,6 +120,36 @@ impl AgentAdapter for Claude {
             id,
             place,
         ))])
+    }
+
+    fn add_server(
+        &self,
+        name: &str,
+        spec: &ServerSpec,
+        place: &Place,
+    ) -> Result<Vec<Step>, Unsupported> {
+        let (scope, dir) = scope(place);
+        let call = CliCall::new(PROGRAM, &["mcp", "add-json"])
+            .arg(name)
+            .arg(server_json(spec, "headers").to_string())
+            .arg("--scope")
+            .arg(scope);
+        Ok(vec![Step::Run(match dir {
+            Some(dir) => call.in_dir(dir),
+            None => call,
+        })])
+    }
+
+    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
+        let (scope, dir) = scope(place);
+        let call = CliCall::new(PROGRAM, &["mcp", "remove"])
+            .arg(name)
+            .arg("--scope")
+            .arg(scope);
+        Ok(vec![Step::Run(match dir {
+            Some(dir) => call.in_dir(dir),
+            None => call,
+        })])
     }
 
     fn set_plugin(&self, id: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {

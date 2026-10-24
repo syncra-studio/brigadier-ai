@@ -1,9 +1,28 @@
 import { create } from "zustand";
 
-import type { PluginAgentResult, PluginDraft } from "@/app/settings/plugins/pending";
-import type { PluginsView } from "@/ipc/generated";
+import type { PluginKind, PluginsView, ProviderKind } from "@/ipc/generated";
 
-export type { PluginAgentResult, PluginDraft } from "@/app/settings/plugins/pending";
+/** Something read from what the user pasted, before it is added. */
+export type PluginDraft = {
+  name: string;
+  kind: PluginKind;
+  /** Its command, address or folder. */
+  detail: string;
+  /** Reached over the network. */
+  remote: boolean;
+  /** Signs in with the user's browser. */
+  signsIn: boolean;
+  /** Why it can't be added, in words for the user. */
+  error: string | null;
+};
+
+/** How one agent took a change. */
+export type PluginAgentResult = {
+  agent: ProviderKind;
+  ok: boolean;
+  /** Why it didn't (or what to know although it did), in words for the user. */
+  message: string | null;
+};
 
 /** The page's boundary to the daemon; fixtures supply the same data and actions. */
 export type PluginsAdapter = {
@@ -21,9 +40,12 @@ export type PluginsAdapter = {
   undoEveryAgent: (key: string) => Promise<PluginAgentResult[]>;
   remove: (key: string) => Promise<PluginAgentResult[]>;
   update: (key: string) => Promise<PluginAgentResult[]>;
-  /** Signs each agent in to the item's server in turn, opening the browser for the next. */
-  signIn: (key: string, projectId: string | null) => Promise<PluginAgentResult[]>;
-  cancelSignIn: (key: string) => Promise<void>;
+  /**
+   * Signs each agent in to the item's server in turn, opening the browser for the next. Absent
+   * while the daemon can't: the page offers no Sign in then.
+   */
+  signIn?: (key: string, projectId: string | null) => Promise<PluginAgentResult[]>;
+  cancelSignIn?: (key: string) => Promise<void>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;
   /** Trusts the project's folder, in Brigadier and in each agent's own settings. */

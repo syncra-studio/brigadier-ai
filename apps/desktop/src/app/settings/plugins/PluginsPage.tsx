@@ -100,7 +100,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           busy,
           onBack: () => setSelected(null),
           onSwitch: (where, on) => flip(current, on, where),
-          onSignIn: () => setOpen({ type: "signIn", key: current.key }),
+          onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key }) : undefined,
           onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
           onRemove: () => setOpen({ type: "remove", key: current.key }),
           onRetry: refresh,
@@ -234,7 +234,7 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
                   lit={(state) => state.type === "ready" || state.type === "working"}
                   onOpen={() => onOpen(item)}
                   end={
-                    <Button
+                    kind === "signIn" && !adapter?.signIn ? undefined : <Button
                       variant="soft"
                       size="sm"
                       disabled={!adapter}

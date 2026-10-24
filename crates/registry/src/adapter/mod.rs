@@ -17,6 +17,7 @@ pub mod codex;
 
 use std::path::{Path, PathBuf};
 
+use crate::item::{ServerSpec, TransportSpec};
 use crate::{Agent, Catalog, Roots, Source};
 
 pub use apply::{Applied, ApplyError, apply};
@@ -201,6 +202,18 @@ pub trait AgentAdapter: Send + Sync {
     /// Uninstalls plugin `id` from `place`.
     fn remove_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
 
+    /// Adds MCP server `name` to the user's own config (`Everywhere`) or the project's,
+    /// as `spec` describes it: what Undo puts back.
+    fn add_server(
+        &self,
+        name: &str,
+        spec: &ServerSpec,
+        place: &Place,
+    ) -> Result<Vec<Step>, Unsupported>;
+
+    /// Removes the user's own MCP server `name` (not a plugin's) from `place`.
+    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
+
     /// Turns installed plugin `id` on or off at `place`: off in one project for one that is on
     /// everywhere, on in one project for one that is off everywhere.
     fn set_plugin(&self, id: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported>;
@@ -255,6 +268,44 @@ pub fn adapter(agent: Agent) -> &'static dyn AgentAdapter {
         Agent::Claude => &CLAUDE,
         Agent::Codex => &CODEX,
     }
+}
+
+/// `spec` as the JSON both CLIs' server entries take: `{"type": "stdio", "command": …}`,
+/// `{"type": "http", "url": …}`. `headers_key` is what the CLI calls the headers.
+pub(crate) fn server_json(spec: &ServerSpec, headers_key: &str) -> serde_json::Value {
+    let pairs = |pairs: &[(String, crate::Secret)]| -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.clone(), value.expose().into()))
+            .collect()
+    };
+    let mut entry = serde_json::Map::new();
+    match &spec.transport {
+        TransportSpec::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+        } => {
+            entry.insert("type".into(), "stdio".into());
+            entry.insert("command".into(), command.as_str().into());
+            entry.insert("args".into(), args.clone().into());
+            if !env.is_empty() {
+                entry.insert("env".into(), pairs(env).into());
+            }
+            if let Some(cwd) = cwd {
+                entry.insert("cwd".into(), cwd.display().to_string().into());
+            }
+        }
+        TransportSpec::Http { url, headers } => {
+            entry.insert("type".into(), "http".into());
+            entry.insert("url".into(), url.as_str().into());
+            if !headers.is_empty() {
+                entry.insert(headers_key.into(), pairs(headers).into());
+            }
+        }
+    }
+    entry.into()
 }
 
 /// The agent whose own configuration `source` is.
