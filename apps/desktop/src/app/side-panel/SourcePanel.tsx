@@ -662,20 +662,22 @@ const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: Rea
   const name = (
     <>
       <FileIcon name={file.path} />
+      {/* A long name gives way before the row's actions do; its folder takes what is left. */}
       <span
         className={cn(
-          "shrink-0",
+          "min-w-0 truncate",
           file.status === "deleted" && "line-through",
           file.status === "conflicted" && "text-destructive",
         )}
       >
         {baseName(file.path)}
       </span>
-      <span className="text-muted-foreground min-w-0 truncate text-xs">{dirName(file.path)}</span>
+      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{dirName(file.path)}</span>
     </>
   );
   const title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
-  const look = "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-6 text-start text-sm";
+  // Inset as the Files tree's rows are.
+  const look = "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm";
   return (
     <li className="group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1">
       {onOpen ? (
