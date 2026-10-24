@@ -1190,6 +1190,7 @@ export async function dontResume(conversationId: string): Promise<void> {
  */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
   const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
+  // The CLI's own background agents stop with them; one that won't is no failure of the rest.
   const native = useCliThread.getState().views[conversationId]?.background?.filter((task) => task.kind === "agent" && task.status === "running") ?? [];
   const [stopped] = await Promise.all([
     showStopped(
@@ -1197,7 +1198,7 @@ export async function stopWorkers(conversationId: string): Promise<string[]> {
       async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
       (taskIds) => taskIds,
     ),
-    ...native.map((task) => stopBackgroundTask(conversationId, task.id)),
+    Promise.allSettled(native.map((task) => stopBackgroundTask(conversationId, task.id))),
   ]);
   return stopped;
 }

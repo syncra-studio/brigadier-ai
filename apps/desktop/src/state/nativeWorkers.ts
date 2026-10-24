@@ -24,12 +24,18 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
   for (const entry of view.entries) {
     if (entry.parent) lastChild.set(entry.parent, entry.updatedAtMs ?? entry.atMs ?? 0);
   }
+  // A foreground agent works while its call does, in a turn still running: one its turn left
+  // unfinished (the CLI ended or was stopped under it) is over.
+  const last = view.turns.at(-1);
+  const liveFrom = last && last.end === null ? (last.startedAtMs ?? 0) : Infinity;
+  // Numbered after the engine's workers, so none shares a number.
+  let next = Math.max(0, ...rows.map((row) => row.number)) + 1;
   const add = (callId: string | null, task: BackgroundTask | undefined, title: string, prompt: string, model: string | null, at: number, status: string, ended: number) => {
-    const working = task ? task.status === "running" : status === "inProgress";
+    const working = task ? task.status === "running" : status === "inProgress" && at >= liveFrom;
     const end = task ? task.status === "stopped" ? "stopped" : task.status === "failed" ? "failed" : "done"
       : status === "failed" || status === "declined" ? "failed" : "done";
     const row: NativeWorker = {
-      id: `native:${conversationId}:${callId ?? task!.id}`, number: rows.length + 1, title,
+      id: `native:${conversationId}:${callId ?? task!.id}`, number: next++, title,
       agent: "claude", model, startedAtMs: task?.startedAtMs ?? at,
       working, lastEnd: working ? null : end, gone: !working,
       lastEventAtMs: task?.endedAtMs ?? ended, limit: null, freshContext: false,

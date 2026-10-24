@@ -17,6 +17,7 @@ const { fromSnapshot, rowActivity, useActivity } = await import("./activity");
 const { emptyBoard, stoppedBoard, useBoard } = await import("./board");
 const { useStopping } = await import("./stopping");
 const { useApp } = await import("./store");
+const { useCliThread } = await import("./cliThread");
 
 const id = "session-1";
 
@@ -60,7 +61,7 @@ beforeEach(() => {
     },
   });
   mockIPC((_command, payload) => {
-    const req = (payload as { request: RequestOf<"interrupt"> | RequestOf<"stopTask"> | RequestOf<"stopWorkers"> | RequestOf<"restore"> }).request;
+    const req = (payload as { request: RequestOf<"interrupt"> | RequestOf<"stopTask"> | RequestOf<"stopWorkers"> | RequestOf<"stopBackgroundTask"> | RequestOf<"restore"> }).request;
     sent.push(req.method);
     return new Promise((resolve, reject) => {
       pending.push({
@@ -123,6 +124,20 @@ test("Stop all shows the workers stopped at once; one the daemon didn't stop sho
   assert.deepEqual(await done, ["w1"]);
   assert.equal(shown().tasks.w1?.state, "stopped");
   assert.equal(shown().tasks.w2?.state, "queued");
+});
+
+const agent = (taskId: string) => ({ id: taskId, kind: "agent", status: "running", label: taskId, itemId: null, startedAtMs: 1, endedAtMs: null });
+
+test("Stop all stops the CLI's own agents too; one that won't stop is no failure of the rest", async () => {
+  useCliThread.setState({ views: { [id]: { entries: [], turns: [], background: [agent("a1"), agent("a2")] } } } as never);
+  const done = stopWorkers(id).catch((error: unknown) => error);
+  await flushed();
+  assert.deepEqual(sent.toSorted(), ["stopBackgroundTask", "stopBackgroundTask", "stopWorkers"]);
+  await answer("stopBackgroundTask", true);
+  await answer("stopBackgroundTask");
+  await answer("stopWorkers");
+  assert.deepEqual(await done, ["w1"]);
+  useCliThread.setState({ views: {} });
 });
 
 test("a Stop all that fails shows the workers running again", async () => {
