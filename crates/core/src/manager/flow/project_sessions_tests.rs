@@ -575,3 +575,105 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     );
     flow.stop().await;
 }
+
+/// #524: a fork cannot bypass the checkout admission guard, even for its source's folder.
+#[tokio::test]
+async fn a_fork_in_the_same_folder_respects_the_checkout_guard() {
+    use crate::model::{EnvironmentRequest, ForkPlace, MessageRole, SetupRequest};
+    let flow = Flow::start("fork-one-local", Options::default(), writing(None)).await;
+    let first = flow.core.conversation(&flow.conversation).unwrap();
+    let Some(Setup::Session {
+        repo,
+        permission,
+        orchestrator,
+        ..
+    }) = first.setup
+    else {
+        unreachable!()
+    };
+    let local = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            first.project_id,
+            Some("Here".into()),
+            Some(SetupRequest::Session {
+                repo,
+                environment: EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission,
+                orchestrator,
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap();
+    flow.say_to(&local.id, "Hello.").await;
+    flow.settled_in(&local.id).await;
+    let answer = flow
+        .core
+        .all_messages(&local.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .rfind(|message| message.role == MessageRole::Assistant)
+        .unwrap()
+        .id;
+    let before = flow.core.catalog().conversations.len();
+    let branches = git(&flow.repo, &["branch", "--list"]);
+    let refused = flow
+        .manager
+        .fork(local.id.clone(), answer.clone(), ForkPlace::Workspace)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        super::super::checkout_taken(&local).to_string()
+    );
+    assert_eq!(flow.core.catalog().conversations.len(), before);
+    assert_eq!(git(&flow.repo, &["branch", "--list"]), branches);
+    // Forking a worktree session into the occupied checkout is refused before making a branch.
+    flow.say("Hello.").await;
+    flow.settled().await;
+    let branches = git(&flow.repo, &["branch", "--list"]);
+    let other_answer = flow
+        .core
+        .all_messages(&flow.conversation)
+        .await
+        .unwrap()
+        .into_iter()
+        .rfind(|message| message.role == MessageRole::Assistant)
+        .unwrap()
+        .id;
+    let refused = flow
+        .manager
+        .fork(
+            flow.conversation.clone(),
+            other_answer,
+            ForkPlace::Workspace,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        super::super::checkout_taken(&local).to_string()
+    );
+    assert_eq!(git(&flow.repo, &["branch", "--list"]), branches);
+    assert_eq!(flow.core.catalog().conversations.len(), before);
+    // A fork on a worktree of its own remains available.
+    let fork = flow
+        .manager
+        .fork(local.id.clone(), answer, ForkPlace::NewWorktree)
+        .await
+        .unwrap();
+    assert!(matches!(
+        fork.setup,
+        Some(Setup::Session {
+            environment: Environment::NewWorktree { .. },
+            ..
+        })
+    ));
+    flow.stop().await;
+}

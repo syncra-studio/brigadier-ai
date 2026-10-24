@@ -108,6 +108,13 @@ impl SessionManager {
             self.check_choice(setup.choice())?;
         }
 
+        // Keep checkout admission locked from the environment's git side effects through
+        // recording the new session, just as starting a local-checkout session does.
+        let admitting = if place == ForkPlace::Workspace {
+            Some(self.local_checkouts.lock().await)
+        } else {
+            None
+        };
         let id = ConversationId::generate();
         let setup = match conversation.setup.clone() {
             Some(Setup::Session {
@@ -155,6 +162,7 @@ impl SessionManager {
                 },
             )
             .await?;
+        drop(admitting);
 
         // Every id that names the source's things is swapped for the fork's own.
         let mut ids: Vec<(String, String)> = vec![(source.0.clone(), id.0.clone())];
@@ -412,6 +420,9 @@ impl SessionManager {
                 start: Some(start.to_owned()),
             }),
             ForkPlace::Workspace => {
+                if let Some(holder) = self.checkout_holder(repo, None) {
+                    return Err(super::checkout_taken(&holder));
+                }
                 let (git, repo, start, same, name) = (
                     self.git.clone(),
                     repo.to_owned(),
