@@ -670,6 +670,17 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::Ledger
         }
+        "checkpoint" => {
+            if action == "set" {
+                if text.trim().is_empty() {
+                    return Err(error("give the checkpoint's text"));
+                }
+                put("text", Some(json!(text)));
+            } else if let Some(extra) = words.first() {
+                return Err(error(&format!("unexpected argument {extra:?}")));
+            }
+            Tool::Checkpoint
+        }
         "brain" | "transcript" => {
             put("role", flag("role"));
             put("tool", flag("tool"));
@@ -1148,6 +1159,20 @@ mod tests {
         assert!(fails(&["app", "open", "tab"]).contains("is not one of"));
         assert!(fails(&["page", "write", "p1", "text"]).contains("--revision"));
         assert!(fails(&["page", "list"]).contains("not one of"));
+        assert_eq!(
+            tool(&["checkpoint", "set", "Goal:", "ship.", "Next:", "test."]),
+            (
+                Tool::Checkpoint,
+                "set".into(),
+                json!({"text": "Goal: ship. Next: test."})
+            )
+        );
+        assert_eq!(
+            tool(&["checkpoint", "show"]),
+            (Tool::Checkpoint, "show".into(), json!({}))
+        );
+        assert!(fails(&["checkpoint", "set", " "]).contains("checkpoint's text"));
+        assert!(fails(&["checkpoint", "show", "extra"]).contains("unexpected argument"));
         assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 4 options"));
     }
 

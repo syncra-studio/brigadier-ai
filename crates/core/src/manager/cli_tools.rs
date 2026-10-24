@@ -203,6 +203,17 @@ impl SessionManager {
                 Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
             };
         }
+        if tool == Tool::Checkpoint {
+            return match self.cli_checkpoint(caller, action, given).await {
+                Ok(text) => CliReply::ok(&ToolOutput {
+                    action: action.to_owned(),
+                    text,
+                    images: vec![],
+                    saved: vec![],
+                }),
+                Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
+            };
+        }
         if tool == Tool::Library {
             return self.cli_library(caller, action, given).await;
         }

@@ -25,10 +25,14 @@ pub(crate) mod restore;
 use std::path::Path;
 
 use brigadier_providers::{NativeCompaction, ProviderKind, RestoreHooks};
+use serde::Deserialize;
+use serde_json::Value;
 
 use super::SessionManager;
+use super::cli::CliCaller;
 use super::conversation::ConvLive;
 use crate::model::ConversationKind;
+use crate::{Error, Result};
 
 /// The switch, read once when the daemon starts; its value is the mode.
 pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
@@ -184,6 +188,56 @@ impl LongSessions {
         let words: String = keep.into_iter().flatten().collect();
         let words = words.trim();
         (!words.is_empty()).then(|| words.to_owned())
+    }
+}
+
+impl SessionManager {
+    /// `brigadier checkpoint set|show`: the session thread's checkpoint record (run2-D9). It
+    /// works with the switch off too: the record is only read back when the mode is on.
+    pub(super) async fn cli_checkpoint(
+        &self,
+        caller: &CliCaller,
+        action: &str,
+        given: Value,
+    ) -> Result<String> {
+        // Check the stored conversation too: a tab chat must never leave a kept record.
+        let conv = self.core.conversation(&caller.conversation_id)?;
+        if conv.tab_chat.is_some()
+            || conv.kind != ConversationKind::Session
+            || caller.task_id.is_some()
+        {
+            return Err(Error::Invalid(
+                "Only a session's thread keeps a checkpoint.".into(),
+            ));
+        }
+        let record = self.session_dir(&caller.conversation_id).record();
+        let invalid =
+            |err: serde_json::Error| Error::Invalid(format!("bad checkpoint call: {err}"));
+        match action {
+            "set" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Set {
+                    text: String,
+                }
+                let set: Set = serde_json::from_value(given).map_err(invalid)?;
+                super::blocking(move || {
+                    checkpoint::set(&record, &set.text, checkpoint::Source::Thread)?;
+                    Ok("Checkpoint saved.\n".to_owned())
+                })
+                .await
+            }
+            "show" => {
+                super::blocking(move || {
+                    Ok(checkpoint::read(&record).map_or_else(
+                        || "No checkpoint yet.\n".to_owned(),
+                        |text| format!("{text}\n"),
+                    ))
+                })
+                .await
+            }
+            other => Err(Error::Invalid(format!("no checkpoint action {other:?}"))),
+        }
     }
 }
 

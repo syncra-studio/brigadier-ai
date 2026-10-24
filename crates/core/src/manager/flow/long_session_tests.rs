@@ -844,7 +844,10 @@ mod checkpoint {
                 let (turns, at, asked) = (turns.clone(), at.clone(), asked.clone());
                 async move {
                     let compactions = asked.compactions.lock().unwrap().len();
-                    turns.lock().unwrap().push((compactions, turn.input.clone()));
+                    turns
+                        .lock()
+                        .unwrap()
+                        .push((compactions, turn.input.clone()));
                     if turn.input.contains(ASK_MARK) {
                         tokio::time::sleep(ask.takes).await;
                         let record = at.lock().unwrap().clone().expect("the record");
@@ -918,7 +921,12 @@ mod checkpoint {
     fn one_note_with(flow: &Flow, holds: &str) {
         let notes = notes(flow);
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert_eq!(notes[0].matches(holds).count(), 1, "{holds} in {}", notes[0]);
+        assert_eq!(
+            notes[0].matches(holds).count(),
+            1,
+            "{holds} in {}",
+            notes[0]
+        );
         for kept in KEPT {
             assert_eq!(notes[0].matches(kept).count(), 1, "{kept}");
         }
@@ -933,7 +941,10 @@ mod checkpoint {
         assert_eq!(asks(&seen), 1);
         // Codex's compaction takes no instructions; the checkpoint was asked for before it.
         assert_eq!(*flow.behavior.compactions.lock().unwrap(), vec![None]);
-        one_note_with(&flow, "Goal: ship the parser.\nNext: run cargo test -p parser.");
+        one_note_with(
+            &flow,
+            "Goal: ship the parser.\nNext: run cargo test -p parser.",
+        );
         let file = read_long(&record(&flow));
         assert_eq!(file.checkpoint, None);
         assert!(file.put_back.unwrap().checkpoint.is_some());
@@ -1110,7 +1121,9 @@ mod checkpoint {
             Some("## Summary\nWork.\n## Checkpoint\nGoal: ship.\nNext: test.\n## Other\nx"),
         )
         .await;
-        let asked = flow.behavior.compactions.lock().unwrap()[0].clone().unwrap();
+        let asked = flow.behavior.compactions.lock().unwrap()[0]
+            .clone()
+            .unwrap();
         assert!(asked.starts_with("Besides your usual summary"));
         assert!(asked.contains("\"## Checkpoint\""));
         assert_eq!(
@@ -1130,10 +1143,87 @@ mod checkpoint {
         )
         .await;
         // Only the checkpoint's section is asked for without the keep-instructions (run2-D7 off).
-        let asked = flow.behavior.compactions.lock().unwrap()[0].clone().unwrap();
+        let asked = flow.behavior.compactions.lock().unwrap()[0]
+            .clone()
+            .unwrap();
         assert!(asked.starts_with("End the summary"));
         assert_eq!(checkpoint::read(&record(&flow)), None);
         assert_eq!(sources(&flow), [Source::Missing]);
         flow.stop().await;
     }
+}
+
+/// `brigadier checkpoint` (run2-D9): the thread replaces and shows its checkpoint, with the
+/// switch off too; a worker and a Chat keep none.
+#[tokio::test]
+async fn the_thread_sets_and_shows_its_checkpoint_and_workers_and_chats_keep_none() {
+    use brigadier_cli::protocol::Tool;
+    use serde_json::{Value, json};
+
+    use super::chat_thread_tests::new_chat;
+    use super::cli_tests::{brigadier, tool};
+
+    let refused = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let flow = Flow::start(
+        "long-checkpoint",
+        Options::default(),
+        script({
+            let refused = refused.clone();
+            move |turn| {
+                let refused = refused.clone();
+                async move {
+                    let set = |text: &str| tool(Tool::Checkpoint, "set", json!({"text": text}));
+                    if turn.worker().is_some() || !turn.input.contains("Start a worker") {
+                        let answer = brigadier(&turn, set("Goal: mine.")).await;
+                        refused.lock().unwrap().push(answer);
+                        return Reply::text("Refused.");
+                    }
+                    let show = || tool(Tool::Checkpoint, "show", json!({}));
+                    let none = brigadier(&turn, show()).await;
+                    assert_eq!(
+                        none,
+                        json!({"action": "show", "text": "No checkpoint yet.\n"})
+                    );
+                    for text in ["Goal: one.", "Goal: two.\nNext: test."] {
+                        let saved = brigadier(&turn, set(text)).await;
+                        assert_eq!(
+                            saved,
+                            json!({"action": "set", "text": "Checkpoint saved.\n"})
+                        );
+                    }
+                    let shown = brigadier(&turn, show()).await;
+                    assert_eq!(shown["text"], "Goal: two.\nNext: test.\n");
+                    turn.start_worker("Checkpoint", "Keep a checkpoint.").await;
+                    Reply::text("Saved.")
+                }
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a worker and keep a checkpoint.").await;
+    flow.settled().await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Keep a checkpoint.").await;
+    flow.settled_in(&chat).await;
+    let record = flow.manager.session_dir(&flow.conversation).record();
+    assert_eq!(
+        crate::manager::long_sessions::checkpoint::read(&record).as_deref(),
+        Some("Goal: two.\nNext: test.")
+    );
+    {
+        let refused = refused.lock().unwrap();
+        assert_eq!(refused.len(), 2, "the worker's and the Chat's: {refused:?}");
+        for answer in refused.iter() {
+            assert_eq!(
+                answer["error"]["message"], "Only a session's thread keeps a checkpoint.",
+                "{answer}"
+            );
+        }
+    }
+    let chat_record = flow.manager.session_dir(&chat).record();
+    assert_eq!(
+        crate::manager::long_sessions::checkpoint::read(&chat_record),
+        None
+    );
+    flow.stop().await;
 }

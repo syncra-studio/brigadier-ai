@@ -533,6 +533,20 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/ledger.schema.json"),
     },
     Command {
+        name: "checkpoint",
+        summary: "Set or show your session's checkpoint.",
+        details: "`set <text…>` replaces this session's checkpoint: goal, open requests with \
+                  Brain item ids, files changed, last test and command, next step. With no \
+                  text, or `-`, reads standard input. `show` prints the current checkpoint. \
+                  Only a session's thread keeps one.",
+        args: &[
+            action(&["set", "show"], "What to do."),
+            rest("args", "set: the checkpoint's text.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/checkpoint.schema.json"),
+    },
+    Command {
         name: "brain",
         summary: "Search the project's records: every session's transcript, ledger and notes.",
         details: "`search <query…>` finds the newest matching entries of the records the \

@@ -687,6 +687,8 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["ledger", "show", "--json"],
         &["ledger", "show", "--open", "--rules", "--json"],
         &["ledger", "close", "L3", "asked", "again", "--json"],
+        &["checkpoint", "set", "Goal:", "ship.", "--json"],
+        &["checkpoint", "show", "--json"],
         &[
             "ledger",
             "check",
@@ -950,6 +952,76 @@ fn wrong_arguments_exit_2_with_the_usage() {
     assert_fits(ERROR_SCHEMA, &output, "usage");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("missing <id>") && stderr.contains("usage: brigadier read"));
+}
+
+#[test]
+fn checkpoint_set_reads_stdin_and_show_prints_it() {
+    fn checkpoint(request: &CliRequest) -> CliReply {
+        let CliRequest::Tool {
+            tool: Tool::Checkpoint,
+            action,
+            args,
+        } = request
+        else {
+            panic!("expected a checkpoint call: {request:?}");
+        };
+        let text = match action.as_str() {
+            "set" => {
+                assert_eq!(args["text"], "Goal: ship.\nNext: test.\n");
+                "Checkpoint saved.\n"
+            }
+            "show" => {
+                assert_eq!(args, &serde_json::json!({}));
+                "Goal: ship.\nNext: test.\n"
+            }
+            _ => panic!("unexpected action"),
+        };
+        CliReply::ok(&ToolOutput {
+            action: action.clone(),
+            text: text.into(),
+            images: vec![],
+            saved: vec![],
+        })
+    }
+    let dir = DataDir::new("checkpoint");
+    let daemon = stand_in_daemon(&dir.0, 3, checkpoint);
+    for words in [vec!["checkpoint", "set"], vec!["checkpoint", "set", "-"]] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_brigadier"))
+            .args(words)
+            .env("BRIGADIER_DATA_DIR", &dir.0)
+            .env(SESSION_ENV, SESSION)
+            .env(GRANT_ENV, GRANT)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"Goal: ship.\nNext: test.\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(stdout(&output), "Checkpoint saved.\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    let output = brigadier(Some(&dir.0), Some(GRANT), &["checkpoint", "show"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stdout(&output), "Goal: ship.\nNext: test.\n");
+    daemon.join().unwrap();
+
+    for words in [
+        vec!["checkpoint"],
+        vec!["checkpoint", "show", "extra"],
+        vec!["checkpoint", "set", "  "],
+        vec!["checkpoint", "unknown"],
+    ] {
+        let output = brigadier(None, None, &words);
+        assert_eq!(output.status.code(), Some(2), "{words:?}");
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]
