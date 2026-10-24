@@ -135,7 +135,10 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
   const opening = automatic?.chosen
     ? AUTOMATIC
     : (groups.find((group) => group.provider === (checked?.provider ?? opensOn)) ?? groups[0])?.provider ?? AUTOMATIC;
-  const [browsing, setBrowsing] = useState<ProviderKind | typeof AUTOMATIC>(opening);
+  const [browsed, setBrowsing] = useState<ProviderKind | typeof AUTOMATIC>(opening);
+  // Agents still loading when it opened (or one gone since): it shows where it would open now.
+  const browsing =
+    browsed === AUTOMATIC ? (automatic ? browsed : opening) : groups.some((group) => group.provider === browsed) ? browsed : opening;
   const [query, setQuery] = useState("");
   const [older, setOlder] = useState<ReadonlySet<ProviderKind>>(new Set());
   const [inSearch, setInSearch] = useState(false);

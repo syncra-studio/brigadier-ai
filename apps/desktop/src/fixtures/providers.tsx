@@ -597,6 +597,17 @@ function Fixture() {
           await fixtureInput({ type: "type", text: "X" });
           await pressKey("Escape")();
         });
+        // A name that looks like an email, masked: its field starts empty, and leaving it untouched keeps it.
+        const s = useApp.getState();
+        useApp.setState({
+          accounts: { accounts: [{ ...listed[0]!, name: "home@example.net" }, ...listed.slice(1)], warnings: [] },
+          settings: { ...s.settings, ownAccountNames: [{ provider: "claude", name: "home@example.net" }] },
+        });
+        await pause(150);
+        const hide = accountRow(0)?.querySelector('[data-slot="account-line"] button[aria-pressed="true"]');
+        if (hide) await fixtureClick(hide);
+        await pause(150);
+        seen.untouched = await rename(pressKey("Tab"));
         // Back to the agents, then Codex's page.
         button("Providers", pageRoot())?.click();
       },

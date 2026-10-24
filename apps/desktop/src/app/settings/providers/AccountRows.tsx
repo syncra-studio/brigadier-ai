@@ -563,7 +563,8 @@ const WEEKDAY = new Intl.DateTimeFormat(undefined, { weekday: "short" });
 
 /**
  * The account's name, editable: Enter or leaving the field keeps it (emptied, the account goes
- * by its email again), Escape drops the edit (`null`).
+ * by its email again), Escape drops the edit (`null`), and so does leaving it untouched: a masked
+ * name starts empty, and an untouched field never clears it.
  */
 function RenameField({ name, onDone }: { name: string; onDone: (name: string | null) => void }) {
   const [value, setValue] = useState(name);
@@ -571,7 +572,7 @@ function RenameField({ name, onDone }: { name: string; onDone: (name: string | n
   const finish = (next: string | null) => {
     if (done.current) return;
     done.current = true;
-    onDone(next === null ? null : next.trim());
+    onDone(next === null || next === name ? null : next.trim());
   };
   return (
     <Input

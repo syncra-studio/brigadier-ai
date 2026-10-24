@@ -171,6 +171,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.deepEqual(seen.renamed, { field: "Personal", open, names: [{ provider: "claude", name: "Home" }], stillOpen: true });
   assert.deepEqual(seen.cleared, { field: "Personal", open, names: [], stillOpen: true });
   assert.deepEqual(seen.cancelled, { field: "Personal", open, names: [], stillOpen: true });
+  // A masked email-like name starts the field empty; leaving it untouched keeps the name.
+  assert.deepEqual(seen.untouched, { field: "", open, names: [{ provider: "claude", name: "home@example.net" }], stillOpen: true });
   // Codex's page has its own logo too (#386).
   assert.deepEqual(seen.codexMark, { provider: "codex", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
 });
