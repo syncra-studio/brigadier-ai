@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       arms:
-        description: "Comma-separated arms to run: seam, plain, zed"
+        description: "Comma-separated arms to run: seam, plain, zed, summary"
         type: string
-        default: seam,plain,zed
+        default: seam,plain,zed,summary
       zed_long:
         description: "Run the zed arm's long recall + decisions profiles too (default: short only)"
         type: boolean
@@ -33,10 +33,10 @@ jobs:
       arms: ${{ steps.arms.outputs.arms }}
     steps:
       - uses: actions/checkout@v7
-      - name: Validate requested arms (nightly always runs all three)
+      - name: Validate requested arms (nightly always runs all four)
         id: arms
         env:
-          ARMS: ${{ github.event_name == 'workflow_dispatch' && inputs.arms || 'seam,plain,zed' }}
+          ARMS: ${{ github.event_name == 'workflow_dispatch' && inputs.arms || 'seam,plain,zed,summary' }}
         run: |
           python3 -B - <<'PY'
           import json, os, sys
@@ -203,7 +203,7 @@ jobs:
       - name: Summarize measurements
         if: always()
         env:
-          ARMS: ${{ needs.selection.outputs.arms || 'seam,plain,zed' }}
+          ARMS: ${{ needs.selection.outputs.arms || 'seam,plain,zed,summary' }}
         run: |
           python3 tools/continuity-battery/nightly.py collect --input "$RUNNER_TEMP/continuity-input" \
             --output "$RUNNER_TEMP/continuity-report" --previous "$RUNNER_TEMP/continuity-previous/summary.json" \
