@@ -105,7 +105,8 @@ fn commands(text: &str, name: Option<&str>, home: &Path) -> Result<Vec<Item>, Ad
     Ok(items)
 }
 
-/// The skills in a picked folder: a skill folder (with `SKILL.md`) or a folder of them.
+/// The skills in a picked folder: a skill folder (with `SKILL.md`), or each skill folder in it.
+/// `name` names the skill when there is just one.
 pub fn folder(path: &Path, name: Option<&str>) -> Result<Vec<Item>, AddError> {
     let path = if path.file_name().is_some_and(|file| file == "SKILL.md") && path.is_file() {
         path.parent().unwrap_or(path)
@@ -116,20 +117,27 @@ pub fn folder(path: &Path, name: Option<&str>) -> Result<Vec<Item>, AddError> {
         return Err(AddError::NoFolder(path.to_owned()));
     }
     let has_skill = |dir: &Path| dir.join("SKILL.md").is_file();
-    let holds_skills = || {
-        std::fs::read_dir(path).is_ok_and(|entries| {
-            entries
-                .flatten()
-                .any(|entry| entry.path().is_dir() && has_skill(&entry.path()))
-        })
+    let dirs = if has_skill(path) {
+        vec![path.to_owned()]
+    } else {
+        let mut children: Vec<PathBuf> = std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|child| child.is_dir() && has_skill(child))
+            .collect();
+        children.sort();
+        children
     };
-    if !has_skill(path) && !holds_skills() {
+    if dirs.is_empty() {
         return Err(AddError::NoSkill(path.to_owned()));
     }
-    Ok(vec![Item::Skill(SkillSpec {
-        name: name.map(str::to_owned),
-        source: SkillSource::Folder(path.to_owned()),
-    })])
+    let name = name.filter(|_| dirs.len() == 1);
+    Ok(dirs
+        .into_iter()
+        .map(|dir| skill(name, SkillSource::Folder(dir)))
+        .collect())
 }
 
 fn local_path(text: &str, home: &Path) -> Option<PathBuf> {

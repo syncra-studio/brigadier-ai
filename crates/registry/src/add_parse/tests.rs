@@ -446,7 +446,7 @@ fn folders() {
     let home = root.to_str().unwrap();
     let parse_at = |text: &str| parse(text, None, &root);
     assert_eq!(parse_at(one.to_str().unwrap()), Ok(folder_item(&one)));
-    assert_eq!(parse_at("~/many"), Ok(folder_item(&many)));
+    assert_eq!(parse_at("~/many"), Ok(folder_item(&many.join("a"))));
     assert_eq!(
         parse_at(&format!("{home}/one/SKILL.md")),
         Ok(folder_item(&one))
@@ -456,12 +456,43 @@ fn folders() {
         Ok(folder_item(&one)),
         "a quoted path"
     );
-    assert_eq!(folder(&many, None), Ok(folder_item(&many)));
+    assert_eq!(folder(&many, None), Ok(folder_item(&many.join("a"))));
     assert_eq!(parse_at("~/empty"), Err(AddError::NoSkill(empty.clone())));
     assert_eq!(
         parse_at("~/missing"),
         Err(AddError::NoFolder(root.join("missing")))
     );
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A folder of skills gives each skill inside it, each a folder with its own `SKILL.md`, so
+/// what Continue accepts can be added.
+#[test]
+fn folder_of_skills_gives_each_skill() {
+    let root = std::env::temp_dir().join(format!(
+        "20261024-1114-plugins-redesign-w10b-many-{}",
+        std::process::id()
+    ));
+    for skill in ["b", "a"] {
+        std::fs::create_dir_all(root.join(skill)).unwrap();
+        std::fs::write(root.join(skill).join("SKILL.md"), "").unwrap();
+    }
+    std::fs::create_dir_all(root.join("notes")).unwrap();
+
+    let items = folder(&root, Some("ignored")).unwrap();
+    let dirs: Vec<PathBuf> = items
+        .iter()
+        .map(|item| match item {
+            Item::Skill(SkillSpec {
+                name: None,
+                source: SkillSource::Folder(dir),
+            }) => dir.clone(),
+            other => panic!("not an unnamed folder skill: {other:?}"),
+        })
+        .collect();
+    assert_eq!(dirs, vec![root.join("a"), root.join("b")]);
+    assert!(dirs.iter().all(|dir| dir.join("SKILL.md").is_file()));
 
     std::fs::remove_dir_all(&root).unwrap();
 }
