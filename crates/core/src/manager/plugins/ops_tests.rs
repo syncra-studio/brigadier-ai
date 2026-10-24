@@ -243,6 +243,56 @@ fn off_everywhere_also_turns_it_off_where_a_project_turned_it_on() {
 }
 
 #[test]
+fn off_everywhere_also_turns_it_off_where_a_project_switches_it_on_over_every_project() {
+    let fx = Fixture::new("off-all-over", Some(true), Some(true));
+    write(
+        &fx.project.join(".claude/settings.local.json"),
+        r#"{"enabledPlugins": {"tidy@brigadier": true}}"#,
+    );
+    write(
+        &fx.project.join(".codex/config.toml"),
+        "[plugins.\"tidy@brigadier\"]\nenabled = true\n",
+    );
+    assert_eq!(
+        lines(&fx.plan(Agent::Claude, None, false).unwrap()),
+        [
+            "claude plugin disable tidy@brigadier --scope user --json",
+            "claude plugin disable tidy@brigadier --scope local --json",
+        ]
+    );
+    assert_eq!(
+        lines(&fx.plan(Agent::Codex, None, false).unwrap()),
+        [
+            format!("user plugins.tidy@brigadier.enabled = {OFF:?}"),
+            format!("project plugins.tidy@brigadier.enabled = {OFF:?}"),
+        ]
+    );
+    // Remove takes the project's own switch too, so it isn't on there again once reinstalled.
+    let projects = [fx.project.clone()];
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &|_, _| {},
+    };
+    assert_eq!(
+        lines(&removal(&ctx, adapter(Agent::Codex), "tidy@brigadier")),
+        [
+            format!("project plugins.tidy@brigadier.enabled = {OFF:?}"),
+            "codex plugin remove tidy@brigadier".to_owned(),
+        ]
+    );
+    // Only on for every project: nothing in the project.
+    std::fs::remove_file(fx.project.join(".claude/settings.local.json")).unwrap();
+    assert_eq!(
+        lines(&fx.plan(Agent::Claude, None, false).unwrap()),
+        ["claude plugin disable tidy@brigadier --scope user --json"]
+    );
+}
+
+#[test]
 fn remove_also_takes_an_install_a_project_has_of_its_own() {
     let fx = Fixture::new("remove-local", None, None);
     let dir = fx.library.entry("tidy").unwrap().dir;

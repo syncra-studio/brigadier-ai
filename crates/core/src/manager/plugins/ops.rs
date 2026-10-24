@@ -219,6 +219,16 @@ fn plugin_on(catalog: &Catalog, agent: Agent, id: &str, only_here: bool) -> bool
     })
 }
 
+/// Whether `project` keeps plugin `id` on for `adapter`'s agent by itself, so it stays on there
+/// once it is off for every project: it counts only there, or the project's own settings switch
+/// it on over every project's.
+fn kept_on_in(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str, project: &Path) -> bool {
+    let catalog = ctx.read(Some(project));
+    let agent = adapter.agent();
+    plugin_on(&catalog, agent, id, true)
+        || (plugin_on(&catalog, agent, id, false) && adapter.switched_on_in(project, id))
+}
+
 /// `agent`'s id for the plugin named `name` (another marketplace's), wherever it has it.
 fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<String> {
     std::iter::once(None)
@@ -290,7 +300,7 @@ fn plugin_plan(
             }
             // Where a project turns it on by itself, it stays on: each is turned off too.
             for path in ctx.projects {
-                if plugin_on(&ctx.read(Some(path)), agent, id, true) {
+                if kept_on_in(ctx, adapter, id, path) {
                     steps.extend(
                         adapter
                             .set_plugin(id, &just_me(path), false)
@@ -1074,7 +1084,7 @@ pub(crate) fn use_everywhere(ctx: &Ctx<'_>, key: &str) -> Result<String, String>
 fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Vec<Step> {
     let mut steps = Vec::new();
     for path in ctx.projects {
-        if plugin_on(&ctx.read(Some(path)), adapter.agent(), id, true) {
+        if kept_on_in(ctx, adapter, id, path) {
             steps.extend(
                 adapter
                     .set_plugin(id, &just_me(path), false)

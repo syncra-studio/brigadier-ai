@@ -95,6 +95,10 @@ impl AgentAdapter for Codex {
         crate::plugins::codex_installed(roots, id)
     }
 
+    fn switched_on_in(&self, project: &Path, id: &str) -> bool {
+        crate::plugins::codex_file_switch(&project_file(project), id) == Some(true)
+    }
+
     fn refresh_marketplace(&self, _: &str) -> Option<CliCall> {
         // It reads a local marketplace as it is.
         None

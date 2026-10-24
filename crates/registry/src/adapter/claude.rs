@@ -97,6 +97,10 @@ impl AgentAdapter for Claude {
             .collect()
     }
 
+    fn switched_on_in(&self, project: &Path, id: &str) -> bool {
+        crate::plugins::claude_project_switch(project, id) == Some(true)
+    }
+
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall> {
         Some(CliCall::new(PROGRAM, &["plugin", "marketplace", "update"]).arg(name))
     }

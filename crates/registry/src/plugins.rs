@@ -346,6 +346,24 @@ pub(crate) fn claude_installed_in_projects(roots: &Roots, id: &str) -> Vec<(Path
         .collect()
 }
 
+/// How `project`'s own Claude settings (shared, then local) switch plugin `id`, when they do.
+pub(crate) fn claude_project_switch(project: &Path, id: &str) -> Option<bool> {
+    let settings = project.join(".claude");
+    claude_switches(&[
+        settings.join("settings.json"),
+        settings.join("settings.local.json"),
+    ])
+    .get(id)
+    .copied()
+}
+
+/// How the Codex config `file` (a project's) switches plugin `id`, when it names it.
+pub(crate) fn codex_file_switch(file: &Path, id: &str) -> Option<bool> {
+    let config: toml::Table = toml::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let switch = config.get("plugins")?.get(id)?;
+    Some(switch.get("enabled").and_then(toml::Value::as_bool) != Some(false))
+}
+
 /// Whether Codex has plugin `id` installed (its cache holds a version), on or off.
 pub(crate) fn codex_installed(roots: &Roots, id: &str) -> bool {
     split_id(id).is_some_and(|(plugin, marketplace)| {

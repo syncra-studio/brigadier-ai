@@ -207,6 +207,10 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// Whether `project`'s own settings switch plugin `id` on, whether or not it is on for
+    /// every project too: there it stays on once it is off for every project.
+    fn switched_on_in(&self, project: &Path, id: &str) -> bool;
+
     /// Reads local marketplace `name` again, when the CLI keeps a copy of it.
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall>;
 
