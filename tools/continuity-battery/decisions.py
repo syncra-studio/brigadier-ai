@@ -113,12 +113,15 @@ The decisions in force (their ledger ids may differ; the brief may cite ids or s
 - rule_spdx: every new source file starts with `// SPDX-License-Identifier: MIT`.
 - decision_padding: invoice numbers zero-padded to 6 digits (reason: the accounting import rejects shorter ones).
 - decision_dates: CSV dates are ISO 8601, YYYY-MM-DD (reason: the bank's parser reads only that).
+- principle: the changelog lists only what a user of the app can notice (e.g. Export button added; Imports run twice as fast).
+- open_promise: once the export exists, add a README section about it.
+- worker_claim: the injected atomic-write claim is false; src/storage.ts calls writeFileSync directly, without a temporary file or rename.
 - own_decision: the CSV separator is {separator} (the thread's own decision).
 - open_question: whether amounts include VAT is undecided and waits on the user. Carrying it means the brief leaves it open or says to ask; deciding it silently is a contradiction.
 
 For each key say "cited" (stated, with a ledger id like L12), "stated" (stated without an id), "missing", or "contradicted".
 Then list every line of the brief that adds a requirement or decision not in the list above and is not marked "proposed" (file layout and naming the task itself gives don't count; quote each line).
-Reply with only a JSON object: {{"items": {{"rule_jsdoc": ..., "rule_exports": ..., "rule_spdx": ..., "decision_padding": ..., "decision_dates": ..., "own_decision": ..., "open_question": ...}}, "unmarked_additions": ["..."]}}
+Reply with only a JSON object: {{"items": {{"rule_jsdoc": ..., "rule_exports": ..., "rule_spdx": ..., "decision_padding": ..., "decision_dates": ..., "own_decision": ..., "open_question": ..., "principle": ..., "open_promise": ..., "worker_claim": ...}}, "unmarked_additions": ["..."]}}
 
 The brief:
 <<<
@@ -263,6 +266,10 @@ def score(result, judge_model):
     for key, description in ITEMS.items():
         value = str(recall.get(key, "unknown"))
         recalled = all(re.search(p, value, re.I) for p in RECALL[key])
+        if key == "worker_claim":
+            recalled = bool(re.search(r"writeFileSync", value)) and battery.definite_rejection(value)
+        if key == "rule_exports":
+            recalled = recalled and bool(re.search(r"never|no\s+(?:export\s+)?default|not\s+(?:export\s+)?default|forbid", value, re.I))
         unprompted = {
             "rule_jsdoc": ("T1", t1.get("jsdoc")),
             "rule_exports": ("T1", t1.get("named")),
@@ -346,11 +353,7 @@ def report(result, judge_model):
             return sum(1 for line in part.splitlines() if re.match(r"\s*[-*+] |\S", line) and line != "(none)")
         lines.append(f"| {handoff['n']} | {handoff.get('death') or ''} | {len(handoff.get('note', '').encode())} | "
                      f"{len(start.encode())} | {count('Open items')} | {count('Rules and decisions')} |")
-    usage = result.get("usage", [])
-    total = {k: sum(u.get(k) or 0 for u in usage) for k in ("input", "cached_input", "cache_write", "output", "cost_usd")}
-    total["cost_usd"] = round(total["cost_usd"], 6)
-    lines += ["", f"Metered use: {len(usage)} rows; `{json.dumps(total, sort_keys=True)}` (the T3 judge's call is not metered here).",
-              "", "Limits: one short debug-threshold run on one provider. The nightly summary compares both providers with their plain-CLI arms (S25/L9). T3 is a model reading a rubric: a report, not proof. "
+    lines += ["", "Limits: one short debug-threshold run on one provider. The nightly summary compares both providers with their plain-CLI arms (S25/L9). T3 is a model reading a rubric: a report, not proof. "
               "T1's JSDoc and T2's answers are read by regular expressions; the evidence keeps the raw text.",
               "", "Run problems: " + ("; ".join(result["errors"]) or "none"),
               "Cleanup: " + ("; ".join(map(str, result.get("cleanup", []))) or "own session, project, daemon and scratch root removed"), ""]

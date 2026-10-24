@@ -194,14 +194,14 @@ class NightlyTests(unittest.TestCase):
             self.assertFalse(result["roles"]["successor"]["usage_available"])
             self.assertIsNone(nightly.metrics(result)["list_price_usd"])
 
-    def test_list_price_aggregates_preserve_reported_cost_regressions(self):
+    def test_list_price_aggregates_drive_cost_regressions(self):
         roles = {"parent": battery.historical({"input": 100}, ["claude-opus-5-5"])}
         summary = {"run_url": "fixture", "source": "fixture", "regressions": [], "providers": [{
             "provider": "claude", "status": "complete", "arms": [
                 {"block": "recall", "profile": "short", "arm": arm, "status": "complete",
                  "roles": roles, "list_price_usd": price, "usage": {"cost_usd": None}}
                 for arm, price in (("plain", 1), ("seam", 2), ("seam", 4))]}]}
-        self.assertEqual(nightly.regressions(summary), [])
+        self.assertEqual(len(nightly.regressions(summary)), 2)
         text = nightly.markdown(summary)
         seam = summary["aggregate"][1]
         self.assertEqual(seam["mean_list_price_usd"], 3)

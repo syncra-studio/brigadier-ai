@@ -54,10 +54,11 @@ def grade(answer, expected, stale, status=""):
         old = [item for item in stale.get(key, []) if contains(value, item)]
         correct = contains(value, target) and not old
         rows[key] = {"description": DESCRIPTIONS[key], "answer": str(value),
+                     "category": "visibility" if key == "tool_receipt" else "recall",
                      "verdict": "pass" if correct else "unknown" if str(value).lower() == "unknown" else "fail",
                      "newest": correct if key in DECISIONS else None,
                      "stale": bool(old) if key in DECISIONS else None}
-    scores = {"recall": sum(r["verdict"] == "pass" for r in rows.values()) / len(rows),
+    scores = {"recall": sum(r["verdict"] == "pass" for r in battery.recall_rows(rows).values()) / len(battery.recall_rows(rows)),
               "newest_decision_wins": sum(rows[k]["newest"] for k in DECISIONS) / len(DECISIONS),
               "stale_decision_mistakes": sum(rows[k]["stale"] for k in DECISIONS),
               "decision_count": len(DECISIONS),
@@ -118,7 +119,7 @@ def report(result):
         value = row["answer"].replace("|", "\\|").replace("\n", " ")
         lines.append(f"| {key} | {row['verdict']} | {row['newest']} | {row['stale']} | {value} |")
     lines += ["", "Run problems: " + ("; ".join(result["errors"]) or "none"),
-              "The large-output item also measures provider tool-output excerpting. "
+              "The large-output item is a visibility diagnostic, excluded from recall. "
               "Exact-identifier scoring measures retention, not semantic equivalence. "
               "CLI summary cut points are checked between turns; seam notes can close asynchronously.", ""]
     lines += battery.arm_markdown(result) + battery.economics_markdown(result)

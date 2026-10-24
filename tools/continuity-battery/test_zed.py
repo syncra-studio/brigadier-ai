@@ -156,7 +156,7 @@ class ZedTests(unittest.TestCase):
             {"provider": "claude", "status": "incomplete", "arms": rows}]}
         text = nightly.markdown(summary)
         comparison = {r["check"]: r for r in summary["seam_vs_zed"] if r["block"] == "decisions"}
-        for key in ("T1", "T2", "T3", "T4", "T5", "T6", "list_price_usd", "reported_cost_usd"):
+        for key in ("T1", "T2", "T3", "T4", "T5", "T6", "list_price_usd"):
             self.assertTrue(comparison[key]["seam_meets_zed"])
         self.assertEqual(comparison["list_price_usd"]["dollar_ratio"], .5)
         self.assertIn("skipped: could not fetch", text)

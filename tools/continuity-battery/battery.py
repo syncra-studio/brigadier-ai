@@ -20,6 +20,7 @@ SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC / "tools/bench"))
 from metrics import parse as parse_native
 from economics import NOTE, combine, historical, role_table, usd
+from scoring import definite_rejection, recall_rows
 spec = importlib.util.spec_from_file_location("live_smoke", SRC / "tools/live-smoke/smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
@@ -64,11 +65,14 @@ def grade(answer, expected, action):
         value = str(parsed.get(key, "unknown"))
         pats = patterns or [re.escape(expected[key])]
         passed = all(re.search(p, value, re.I) for p in pats)
+        if key == "false_worker":
+            passed = bool(re.search(r"writeFileSync", value)) and definite_rejection(value)
         if key in ("rule", "exception"):
             passed = passed and action.get(key, False)
         rows[key] = {"description": description, "verdict": "pass" if passed else
                      "unknown" if "unknown" in value.lower() else "fail", "answer": value,
-                     "action": action.get(key)}
+                     "action": action.get(key),
+                     "category": "visibility" if key == "large_failure" else "recall"}
     return rows
 
 
@@ -483,7 +487,14 @@ def capture_roles(entries):
         seen.add(filename)
         try:
             provider = entry["entry"].get("provider", "claude")
-            value = parse_native(native_path(filename, provider), provider, "")["economics"]
+            path = native_path(filename, provider)
+            value = parse_native(path, provider, "")["economics"]
+            if provider == "claude" and any(
+                    (row.get("message") or {}).get("model") == "<synthetic>" and
+                    any((row.get("message") or {}).get("usage", {}).values())
+                    for row in (json.loads(line) for line in path.read_text().splitlines() if line.strip())):
+                value["list_price_usd"] = None
+                value["notes"].append("Synthetic successor usage present: model/price attribution unavailable")
         except (OSError, RuntimeError):
             value = historical({}, [])
             value["usage_available"] = False
@@ -498,9 +509,14 @@ def prepare_economics(result):
         totals = {k: sum(u.get(alias, 0) or 0 for u in result.get("usage", []))
                   for k, alias in (("input", "input"), ("cache_write", "cache_write"),
                                    ("cache_read", "cached_input"), ("output", "output"))}
-        result["roles"] = {"parent": historical(totals, [])}
+        unavailable = historical(totals, [])
+        unavailable["usage_available"] = False
+        unavailable["notes"].append("Native deduplicated economics unavailable; metered estimates are not dollars")
+        result["roles"] = {"parent": unavailable}
     result["economics"] = combine(result["roles"].values())
     result["list_price_usd"] = result["economics"]["list_price_usd"]
+    result["native_compaction_in_seam"] = (result.get("arm") == "seam" and (result.get("compactions") or 0) > 0)
+    result["run_kind"] = "fault-recovery" if any(not s.get("skipped") for s in result.get("seams", [])) else "continuity"
     return result
 
 
@@ -536,7 +552,7 @@ def write_report(result, text, path):
     public = {k: result[k] for k in ("source", "started_at", "provider", "model", "arm", "threshold",
                                     "roles", "economics", "list_price_usd", "status", "reason", "zed_compactions", "zed_commit",
                                     "summary_compactions", "summary_commit", "block", "update_scores",
-                                    "variant", "budget_scores", "first_successor_write", "extra_bootstrap_estimate") if k in result}
+                                    "native_compaction_in_seam", "run_kind", "variant", "budget_scores", "first_successor_write", "extra_bootstrap_estimate") if k in result}
     path.with_suffix(".json").write_text(json.dumps(public, indent=2) + "\n")
 
 
@@ -618,8 +634,9 @@ def report(result):
              "Random one-time facts are removed from the fixture after observation. Inert batches displace the early items.", "",
              "| Item | Result | In final verbatim tail? | Successor searched? | Answer / evidence |", "|---|---|---|---|---|"]
     if rows:
-        passed = sum(row["verdict"] == "pass" for row in rows.values())
-        lines.insert(4, f"{passed}/{len(ITEMS)} planted items passed. The final probe was allowed to search existing records.\n")
+        memory = recall_rows(rows)
+        passed = sum(row["verdict"] == "pass" for row in memory.values())
+        lines.insert(4, f"{passed}/{len(memory)} recall items passed (large-output visibility scored separately). The final probe was allowed to search existing records.\n")
     # The successor's verbatim part: the user's own messages, the latest exchange and the tail.
     last = (result.get("handoffs") or [{}])[-1].get("start", "")
     recent = last.partition("## The user's messages, oldest first")[2].partition("## Left out")[0]
@@ -679,12 +696,9 @@ def report(result):
     lines += ["", f"Final probe provider/model: `{probe_start.get('provider', 'unavailable')}/{(probe_start.get('event') or {}).get('model', 'unavailable')}`."]
     lines += ["", f"Probe lookup calls observed: {len(lookup)}. Item search evidence means its marker appeared in a lookup result, or an explicit query attempted it; one result can serve several items.",
                             "Seam cost below includes all metered handoff calls; ordinary thread calls are separate (successor bootstrap is included in thread use)."]
-    for kind in ("handoff", "thread"):
-        mine = [u for u in usage if (u.get("step") or u.get("kind")) == kind]
-        total = {k: sum(u.get(k) or 0 for u in mine) for k in ("input", "cached_input", "cache_write", "output", "cost_usd")}
-        total["cost_usd"] = round(total["cost_usd"], 6)
-        missing_cost = sum(u.get("cost_usd") is None for u in mine)
-        lines.append(f"- {kind}: {len(mine)} usage rows; `{json.dumps(total, sort_keys=True)}`; {missing_cost} rows without reported dollar cost")
+    lines += ["", "Large-output middle marker: visibility diagnostic, excluded from recall.",
+              f"Run class: {result.get('run_kind', 'unclassified')}; native compaction inside seam arm: "
+              f"{result.get('native_compaction_in_seam', False)}."]
     lines += ["", "Limits: a short debug-threshold baseline, not the ≥400k token A/B or a nightly result. "
               "Nightly A/B, observed cold-return costs, and opted-in real-lineage samples are summarized by nightly.py (S25/L4). "
               "No fewer-tokens claim is established. Later seams share this session, so recall cannot be attributed to one seam alone."]

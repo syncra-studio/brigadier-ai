@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools/bench"))
 from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
+from scoring import recall_rows
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
 ARMS = ("seam", "plain", "zed", "summary")
 PROFILES = (("recall", "short", 9, 1200), ("recall", "long", 90, 3500),
@@ -35,7 +36,7 @@ def decision_checks(result):
         items = result.get("items")
         if not isinstance(items, dict):
             return {}
-        checks = {f"recall.{key}": row.get("verdict") == "pass" for key, row in items.items()}
+        checks = {f"recall.{key}": row.get("verdict") == "pass" for key, row in recall_rows(items).items()}
         checks.update({f"apply.{key}": row["action"] for key, row in items.items() if row.get("action") is not None})
         if result.get("block") == "updates":
             checks.update({f"newest.{key}": row["newest"] for key, row in items.items() if row.get("newest") is not None})
@@ -78,6 +79,8 @@ def metrics(result):
         {"input": totals["input"], "cache_write": totals["cache_write"],
          "cache_read": totals["cached_input"], "output": totals["output"]}, [])}
     return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
+            "run_kind": "fault-recovery" if any(not s.get("skipped") for s in result.get("seams", [])) else "continuity",
+            "native_compaction_in_seam": result.get("arm") == "seam" and (result.get("compactions") or 0) > 0,
             "compactions": result.get("compactions"), "zed_compactions": result.get("zed_compactions"),
             "checks": decision_checks(result),
             "summary_compactions": result.get("summary_compactions"),
@@ -87,8 +90,8 @@ def metrics(result):
             "extra_bootstrap_estimate": result.get("extra_bootstrap_estimate"),
             "seams": result.get("seams_before_checks", result.get("size_seams_before_faults", 0)),
             "contexts_before_checks": result.get("seams_before_checks"),
-            "recall": (sum(row.get("verdict") == "pass" for row in result["items"].values()) / len(result["items"]))
-                       if isinstance(result.get("items"), dict) and result["items"]
+            "recall": (sum(row.get("verdict") == "pass" for row in recall_rows(result["items"]).values()) / len(recall_rows(result["items"])))
+                       if isinstance(result.get("items"), dict) and recall_rows(result["items"])
                        else sum(bool(row.get("recalled")) for row in rows.values()) / len(rows) if rows else None,
             "decision_recall": sum(bool(row.get("recalled")) for row in rows.values()) / len(rows) if rows else None,
             "applied": sum(bool(row["unprompted"]) for row in applicable) if applicable else None,
@@ -179,7 +182,7 @@ def regressions(summary, previous=None):
             if row["status"] != "complete" or row["block"] in ("p2", "p3"):
                 continue
             label = f"{provider['provider']} {row['block']} {row['profile']} {row['arm']}"
-            if provider["provider"] == "claude" and row["arm"] == "seam" and (row.get("compactions") or 0) > 0:
+            if row["arm"] == "seam" and (row.get("compactions") or 0) > 0:
                 found.append(label + ": native compaction observed")
             if row.get("recall") is not None and row["recall"] < .9:
                 found.append(label + ": recall below 90%")
@@ -194,7 +197,7 @@ def regressions(summary, previous=None):
                     found.append(label + ": decisions-survive bar missed")
             plain = next((p for p in provider["arms"] if p["arm"] == "plain" and p["block"] == row["block"]
                           and p["profile"] == row["profile"] and p["status"] == "complete"), {})
-            cost, baseline = row.get("usage", {}).get("cost_usd"), plain.get("usage", {}).get("cost_usd")
+            cost, baseline = row.get("list_price_usd"), plain.get("list_price_usd")
             if row["arm"] == "seam" and cost is not None and baseline:
                 row["price_weighted_ratio"] = cost / baseline
                 if cost / baseline > (1.01 if row["profile"] == "short" else .95):
@@ -245,7 +248,7 @@ def prepare(summary):
             pair = {arm: [r for r in provider["arms"] if r["arm"] == arm and r["block"] == block
                           and r["profile"] == profile and r["status"] == "complete"] for arm in ("seam", "zed")}
             check_keys = sorted({key for rows in pair.values() for row in rows for key in row.get("checks", {})})
-            for key in ["recall", "task_passed", *check_keys, "list_price_usd", "reported_cost_usd"]:
+            for key in ["recall", "task_passed", *check_keys, "list_price_usd"]:
                 def values(arm):
                     return [r.get("usage", {}).get("cost_usd") if key == "reported_cost_usd" else
                             r.get(key) if key in ("recall", "task_passed", "list_price_usd") else
@@ -271,11 +274,11 @@ def markdown(summary):
              "", f"Run: {summary['run_url']}", f"Source: `{summary['source']}`", ""]
     for provider in summary["providers"]:
         lines += [f"## {provider['provider']}", "", provider["status"] + (": " + provider["reason"] if provider.get("reason") else ""), "",
-                  "| Script | Size | Arm | Native compactions | Zed compactions | Summary handoffs | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Cost USD | Cold return USD |",
-                  "|---|---|---|---:|---:|---:|---:|---:|---|---:|---|---:|---:|"]
+                  "| Script | Size | Arm | Native compactions | Zed compactions | Summary handoffs | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Native list-price USD |",
+                  "|---|---|---|---:|---:|---:|---:|---:|---|---:|---|---:|"]
         for row in provider["arms"]:
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
-            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('summary_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
+            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('summary_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {usd(row.get('list_price_usd'))} |")
         for row in provider["arms"]:
             if row.get("update_scores") is not None:
                 scores = row["update_scores"]
@@ -287,6 +290,10 @@ def markdown(summary):
                 lines += ["", f"D49 {row['block']}/{row['profile']}: `{json.dumps(row['budget_scores'], sort_keys=True)}`; "
                           f"first successor input/write `{json.dumps(row.get('first_successor_write'))}`; "
                           f"extra bootstrap estimate `{json.dumps(row.get('extra_bootstrap_estimate'))}`.", ""]
+            if row.get("native_compaction_in_seam"):
+                lines += ["", "WARNING: native compaction occurred inside the seam arm; transition comparison is confounded."]
+            if row.get("run_kind") == "fault-recovery":
+                lines += ["", "Fault-recovery run: excluded from paired continuity comparisons."]
             if row.get("reason"):
                 lines += ["", f"{row['block']}/{row['profile']} {row['arm']}: " + row["reason"], ""]
             if row.get("errors"):

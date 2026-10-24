@@ -150,7 +150,7 @@ class UpdatesTests(unittest.TestCase):
         rows, scores = updates.grade(json.dumps(answer), expected, stale)
         self.assertEqual(scores["newest_decision_wins"], 5 / 8)
         self.assertEqual(scores["stale_decision_mistakes"], 2)
-        self.assertEqual(scores["recall"], 26 / 30)
+        self.assertEqual(scores["recall"], 25 / 29)
         with tempfile.TemporaryDirectory(prefix=PREFIX) as folder:
             report = Path(folder) / "report.md"
             result = {"block": "updates", "update_scores": scores, "items": rows, "expected": expected}
@@ -166,7 +166,7 @@ class UpdatesTests(unittest.TestCase):
         # A value under a different key cannot earn credit.
         wrong = dict(expected)
         wrong["release"], wrong["ticket"] = wrong["ticket"], wrong["release"]
-        self.assertEqual(updates.grade(json.dumps(wrong), expected, stale)[1]["recall"], 28 / 30)
+        self.assertEqual(updates.grade(json.dumps(wrong), expected, stale)[1]["recall"], 27 / 29)
 
     def test_schedule_tool_removal_and_updates_are_identical_for_every_arm(self):
         schedules = []
