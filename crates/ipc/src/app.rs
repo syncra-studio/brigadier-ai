@@ -58,9 +58,9 @@ pub enum BridgeEvent {
     WorkspaceChanged {
         target: brigadier_core::WorkspaceTarget,
     },
-    /// What a CLI's live stream added to a conversation's thread (S9).
+    /// What CLIs' live streams added to conversations' threads (S9), in the order it came.
     ThreadNews {
-        news: brigadier_core::thread_view::ThreadNews,
+        news: Vec<brigadier_core::thread_view::ThreadNews>,
     },
     /// What the right sidebar's search with `id` found next, or that it ended.
     Search {

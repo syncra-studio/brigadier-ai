@@ -150,9 +150,12 @@ function onBridgeEvent(message: BridgeEvent) {
       emitCleanProgress(message.progress);
       break;
     case "threadNews":
-      applyThreadNews(message.news);
-      applyActivityNews(message.news);
-      applyBoardNews(message.news);
+      // Up to a frame of news, in the order it came (one piece per conversation).
+      for (const news of message.news) {
+        applyThreadNews(news);
+        applyActivityNews(news);
+        applyBoardNews(news);
+      }
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);

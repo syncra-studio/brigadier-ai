@@ -38,7 +38,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -2151,10 +2151,12 @@ pub enum ServerFrame {
     WorkspaceChanged {
         target: WorkspaceTarget,
     },
-    /// What a CLI's live stream added to a thread ([`Request::ThreadView`]). Sent to every
+    /// What CLIs' live streams added to threads ([`Request::ThreadView`]), in the order it
+    /// came: items held up to a frame, one piece per conversation, then sent together; a
+    /// turn's opening or end and every other frame send what waits at once. Sent to every
     /// subscribed connection. Live only.
     ThreadNews {
-        news: brigadier_core::thread_view::ThreadNews,
+        news: Vec<brigadier_core::thread_view::ThreadNews>,
     },
     /// What this connection's search with `id` found next, or that it ended. Live only.
     Search {

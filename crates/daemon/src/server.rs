@@ -25,7 +25,7 @@ use brigadier_ipc::protocol::{
     DictationUpdate, ErrorCode, EventEnvelope, IpcError, LifecycleOutcome, Outcome, RawJson,
     Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
-use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
+use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token};
 use brigadier_providers::ProviderKind;
 use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
@@ -38,6 +38,7 @@ use crate::awake::Awake;
 use crate::dictation::{Dictation, Started};
 use crate::idle;
 use crate::metrics::Metrics;
+use crate::news::{NewsWriter, news_due};
 use crate::site_icons::SiteIcons;
 use crate::storage::Storage;
 use crate::supervisor::Supervisor;
@@ -222,7 +223,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
     let mut session = Session {
         daemon: daemon.clone(),
         client,
-        writer: connection.writer,
+        writer: NewsWriter::new(connection.writer),
         feed: None,
         last_sent: 0,
         metrics: None,
@@ -262,7 +263,8 @@ struct Session {
     daemon: Arc<Daemon>,
     /// Who connected: kept with what this connection answers for the user.
     client: ClientInfo,
-    writer: Writer,
+    /// Its frames, the live threads' news held for a frame ([`NewsWriter`]).
+    writer: NewsWriter<interprocess::local_socket::tokio::SendHalf>,
     /// Live event feed, once subscribed.
     feed: Option<broadcast::Receiver<Arc<StoredEvent>>>,
     /// Highest `seq` delivered to this client.
@@ -408,8 +410,11 @@ impl Session {
                 }
                 news = next_thread_news(&mut self.thread_feed) => {
                     if let Some(news) = news {
-                        self.writer.write(&ServerFrame::ThreadNews { news }).await?;
+                        self.writer.news(news).await?;
                     }
+                }
+                () = news_due(self.writer.due()) => {
+                    self.writer.send_news().await?;
                 }
                 change = next_page_change(&mut self.page_feed) => {
                     if let Some(PageChange { id, revision }) = change {

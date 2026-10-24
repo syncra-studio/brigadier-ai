@@ -24,6 +24,7 @@ mod hook;
 mod idle;
 mod logging;
 mod metrics;
+mod news;
 mod quit;
 mod registry;
 mod server;
