@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
-use crate::protocol::{Agent, Answer, Capability, CliRequest, Permission, StartRequest, Tool};
+use crate::protocol::{
+    Agent, Answer, Capability, CliRequest, Judgment, Permission, StartRequest, Tool,
+};
 
 /// What the command line asks for.
 #[derive(Debug)]
@@ -401,6 +403,24 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
+        "queue" => {
+            let worker = args.one("worker").map(str::to_owned);
+            let judgment = match (args.one("judgment"), worker) {
+                (Some("worker"), Some(id)) => Judgment::Worker { id },
+                (Some("worker"), None) => {
+                    return Err(error(
+                        "say which worker: queue <id> worker <worker-id>".into(),
+                    ));
+                }
+                (_, Some(extra)) => {
+                    return Err(error(format!("unexpected argument {extra:?}")));
+                }
+                (Some("wait"), None) => Judgment::Wait,
+                (Some("new-session"), None) => Judgment::NewSession,
+                _ => Judgment::Join,
+            };
+            CliRequest::Queue { id: id(), judgment }
+        }
         "continue-on" => CliRequest::ContinueOn {
             agent: match args.one("agent") {
                 Some("codex") => Agent::Codex,
@@ -1006,6 +1026,28 @@ mod tests {
             }
         );
         assert!(parse(["continue-on", "gemini"]).is_err());
+        // A queued message's judgment (run2-D40): worker names its worker, the rest nothing.
+        for (words, judgment) in [
+            (&["queue", "9f8e", "join"][..], Judgment::Join),
+            (&["queue", "9f8e", "wait"][..], Judgment::Wait),
+            (&["queue", "9f8e", "new-session"][..], Judgment::NewSession),
+            (
+                &["queue", "9f8e", "worker", "a1b2"][..],
+                Judgment::Worker { id: "a1b2".into() },
+            ),
+        ] {
+            assert_eq!(
+                run(words).0,
+                CliRequest::Queue {
+                    id: "9f8e".into(),
+                    judgment
+                }
+            );
+        }
+        assert!(fails(&["queue", "9f8e", "worker"]).contains("say which worker"));
+        assert!(fails(&["queue", "9f8e", "join", "a1b2"]).contains("unexpected argument"));
+        assert!(fails(&["queue", "9f8e", "later"]).contains("is not one of"));
+        assert!(fails(&["queue", "9f8e"]).contains("missing <judgment>"));
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
         assert!(fails(&["start", "--skill", "a", "go"]).contains("goes with --lean"));

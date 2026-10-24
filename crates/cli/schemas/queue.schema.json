@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier queue --json",
+  "type": "object",
+  "required": [
+    "id",
+    "state",
+    "already"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "joined",
+        "waiting",
+        "sent-to-worker",
+        "offered"
+      ]
+    },
+    "already": {
+      "type": "boolean",
+      "description": "It had already joined the work by itself, unjudged, before this judgment came."
+    },
+    "worker": {
+      "type": "string",
+      "description": "For sent-to-worker: the worker's id."
+    }
+  }
+}

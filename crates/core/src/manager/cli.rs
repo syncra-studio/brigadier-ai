@@ -29,7 +29,7 @@ use crate::tools::Role;
 use crate::work::{ConversationActivity, DiffStat, RunState, Task, TaskState};
 
 /// The shortest id start a call may give.
-const MIN_ID: usize = 4;
+pub(super) const MIN_ID: usize = 4;
 
 /// What `read` looks back through for the last message or the screen.
 const LOOK_BACK: u32 = 200;
@@ -421,6 +421,7 @@ impl SessionManager {
                     reply
                 }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
+            CliRequest::Queue { id, judgment } => self.cli_queue(caller, &id, judgment).await,
             CliRequest::ContinueOn { agent, after_turn } => {
                 Ok(self.cli_continue_on(caller, agent, after_turn).await)
             }

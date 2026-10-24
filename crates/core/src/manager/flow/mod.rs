@@ -1348,6 +1348,14 @@ impl ProviderSession for FakeSession {
         self.send(input)
     }
 
+    /// Codex never starts a turn for it (run2-D46); Claude takes it as [`steer`](Self::steer).
+    fn steer_running(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<bool>> {
+        if self.kind == ProviderKind::Codex && !*self.running.lock().unwrap() {
+            return Box::pin(async { Ok(false) });
+        }
+        Box::pin(async move { self.steer(input).await.map(|()| true) })
+    }
+
     fn can_compact(&self) -> bool {
         true
     }
@@ -2432,6 +2440,8 @@ mod plain_merge_tests;
 mod pr_card_tests;
 #[cfg(unix)]
 mod preview_tests;
+#[cfg(unix)]
+mod queue_judging_tests;
 #[cfg(unix)]
 mod quota_resume_tests;
 #[cfg(unix)]

@@ -139,6 +139,7 @@ pub(crate) struct Envelope {
 
 mod continue_on;
 pub(super) mod long;
+pub(super) mod queue_judging;
 use long::thrashing;
 mod seam;
 mod watchdog;
@@ -268,8 +269,19 @@ struct ConvState {
     /// Brigadier's own notes for the running turn held the same way: steered in once no
     /// command runs, else carried by the next turn.
     held_notes: Vec<String>,
-    /// The steered requests marked as waiting behind them, unmarked when the last ends.
+    /// The steered requests and Deciding queued messages marked as waiting behind them,
+    /// unmarked when the last ends.
     held_requests: Vec<String>,
+    held_items: Vec<String>,
+    /// Queued messages the session has to judge (run2-D40), given to it while a turn ran and
+    /// still Deciding: each joins by itself after [`queue_judging::DECIDING_WAIT`], or when its
+    /// turn completes.
+    deciding: Vec<String>,
+    /// Those being handed to a worker right now: no timer, turn end or pump settles them.
+    claimed: HashSet<String>,
+    /// Queued messages that joined unjudged, newest last: the session's late judgment of one
+    /// hears so.
+    joined_unjudged: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -359,10 +371,11 @@ impl ConvState {
         carried
     }
 
-    /// The requests marked as waiting behind a command, unless none are.
-    fn take_held(&mut self) -> Option<Vec<String>> {
+    /// The requests and queued messages marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
         let requests = std::mem::take(&mut self.held_requests);
-        (!requests.is_empty()).then_some(requests)
+        let items = std::mem::take(&mut self.held_items);
+        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
     }
 
     /// The thread's oldest command running now, which a message sent in waits behind.
@@ -499,6 +512,10 @@ pub(crate) struct ConvLive {
     /// The running turn and the output of the thread's running commands
     /// ([`super::thread_items`]).
     items: std::sync::Mutex<super::thread_items::ThreadItems>,
+    /// The line a message's text goes to its CLI under, by message id, taken once: a queued
+    /// message's, given to the session to judge or sent later on its own turn
+    /// ([`queue_judging`]).
+    frames: std::sync::Mutex<HashMap<String, String>>,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -537,6 +554,7 @@ impl ConvLive {
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             items: std::sync::Mutex::default(),
+            frames: std::sync::Mutex::default(),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
         }
@@ -601,13 +619,14 @@ impl ConvLive {
     }
 
     /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
-    /// the turn wait behind; once none runs, returns the requests marked as waiting, to unmark.
+    /// the turn wait behind; once none runs, returns the requests and queued messages marked as
+    /// waiting, to unmark.
     async fn holding_command(
         &self,
         item: &str,
         words: &str,
         status: ItemStatus,
-    ) -> Option<Vec<String>> {
+    ) -> Option<(Vec<String>, Vec<String>)> {
         let mut state = self.state.lock().await;
         if status == ItemStatus::InProgress {
             if !state.holding.iter().any(|(of, _)| of == item) {
@@ -987,7 +1006,7 @@ impl SessionManager {
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
-            && board.queue.next_to_send().is_some();
+            && board.queue.ready_to_send().is_some();
         if waiting {
             self.kick(&conv);
         }
@@ -1101,6 +1120,13 @@ impl SessionManager {
                 self.settle_requests(&id).await;
                 return Ok(SendOutcome::Sent(message));
             }
+            if !paused && queue_judging::judges_queue(&conversation) {
+                // A Chat judges it too, as a session does (run2-D46); a side chat doesn't.
+                drop(state);
+                return self
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
+                    .await;
+            }
             let item = self
                 .core
                 .enqueue(&id, text, attachments, mentions, queue_index)
@@ -1149,6 +1175,10 @@ impl SessionManager {
         let conv = self.conv(&id)?;
         // At a seam it stays queued for the successor (S22).
         if conv.state.lock().await.seam.held {
+            return Ok(());
+        }
+        // One the session already has joins without going again (run2-D46).
+        if self.steered_delivered(&conv, &item_id).await? {
             return Ok(());
         }
         let message = conv
@@ -1200,6 +1230,12 @@ impl SessionManager {
                 .await?;
             self.join_working(conv, message.clone()).await;
             return Ok(SendOutcome::Sent(message));
+        }
+        if busy && !paused {
+            // The session judges it, as it waits Deciding (run2-D40).
+            return self
+                .queue_to_judge(conv, text, attachments, mentions, queue_index)
+                .await;
         }
         if busy || paused {
             // A turn runs, or the queue is paused: it waits for its own turn.
@@ -1308,8 +1344,9 @@ impl SessionManager {
         words: &str,
         status: ItemStatus,
     ) {
-        if let Some(requests) = conv.holding_command(item, words, status).await {
+        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, None).await;
+            self.mark_items_held(conv, &items, None).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
@@ -1341,8 +1378,9 @@ impl SessionManager {
             state.notes.extend(notes);
             state.take_held()
         };
-        if let Some(requests) = held {
+        if let Some((requests, items)) = held {
             self.mark_held(conv, &requests, None).await;
+            self.mark_items_held(conv, &items, None).await;
         }
     }
 
@@ -1354,7 +1392,7 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board.queue.next_to_send().is_some(),
+            Ok(board) => board.queue.ready_to_send().is_some(),
             Err(_) => false,
         };
         if !ready {
@@ -1366,6 +1404,7 @@ impl SessionManager {
                 let Some(item) = self.core.pop_queued(&conv.id).await? else {
                     return Ok(None);
                 };
+                conv.goes_on_own_turn(&item);
                 Ok(Some(self.core.append_queued(conv.id.clone(), item).await))
             })
             .await;
@@ -2061,12 +2100,15 @@ impl SessionManager {
             };
             if users.is_empty() && envelopes.is_empty() && !session {
                 match self.core.pop_queued(&conv.id).await {
-                    Ok(Some(item)) => match self.core.append_queued(conv.id.clone(), item).await {
-                        Ok(message) => users.push(message),
-                        Err(err) => {
-                            crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
+                    Ok(Some(item)) => {
+                        conv.goes_on_own_turn(&item);
+                        match self.core.append_queued(conv.id.clone(), item).await {
+                            Ok(message) => users.push(message),
+                            Err(err) => {
+                                crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
+                            }
                         }
-                    },
+                    }
                     Ok(None) => {}
                     Err(err) => {
                         crate::logging::private_trace!(conv.private_logs, warn, "could not read the queue"; conversation = %conv.id, error = %err);
@@ -2322,6 +2364,7 @@ impl SessionManager {
             state.inbox = inbox;
             failed
         };
+        self.end_judging(conv, false).await;
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
         if failed.is_none() {
@@ -2863,7 +2906,10 @@ impl SessionManager {
         let mut copied = HashMap::new();
         let mut ordered = Vec::new();
         for message in users {
-            let user_text = self.full_text(message).await;
+            let mut user_text = self.full_text(message).await;
+            if let Some(frame) = conv.take_frame(&message.id) {
+                user_text.insert_str(0, &frame);
+            }
             let plan = image_plan(&user_text, &message.attachments, &copied);
             for attachment in &plan.copies {
                 copied.insert(
@@ -4492,6 +4538,9 @@ impl SessionManager {
                 .await;
         }
         self.release_held(conv).await;
+        // What it left unjudged joins it when it got through, else waits (run2-D40).
+        self.end_judging(conv, status == TurnStatus::Completed && limit_hit.is_none())
+            .await;
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
             #[cfg(test)]

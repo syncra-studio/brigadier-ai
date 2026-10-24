@@ -120,6 +120,8 @@ impl SessionManager {
             if let Some(live) = &live {
                 live.recovering(true).await;
             }
+            // A queued message the stop caught Deciding waits for its own turn (#449).
+            self.settle_unjudged(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request
             // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;

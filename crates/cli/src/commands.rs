@@ -285,6 +285,41 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/close.schema.json"),
     },
     Command {
+        name: "queue",
+        summary: "Judge a message the user sent while you work: join, wait, worker or \
+                  new-session.",
+        details: "A message the user sends while you work reaches you at once, under a \
+                  `[queued message <id> …]` line, and waits in their queue, Deciding, until you \
+                  judge it. join: it belongs to this work; act on it now. wait: a request of \
+                  its own; it comes again on its own turn once this work is done. worker <id>: \
+                  it belongs to the work of one of your workers (`brigadier workers`); its \
+                  words go to that worker. new-session: a request of its own that could run \
+                  apart; the user is offered a new session for it. One left unjudged joins this \
+                  work by itself shortly, or when your turn ends.",
+        args: &[
+            positional(
+                "id",
+                "The queued message, from its `[queued message <id> …]` line.",
+            ),
+            Arg::Positional {
+                name: "judgment",
+                help: "Where it goes.",
+                required: true,
+                rest: false,
+                choices: &["join", "wait", "worker", "new-session"],
+            },
+            Arg::Positional {
+                name: "worker",
+                help: "worker: the worker it goes to.",
+                required: false,
+                rest: false,
+                choices: &[],
+            },
+        ],
+        available: true,
+        schema: include_str!("../schemas/queue.schema.json"),
+    },
+    Command {
         name: "continue-on",
         summary: "Move this session to another CLI, when the user asks.",
         details: "Its CLI writes the hand-off note, then a new session starts on the other CLI \

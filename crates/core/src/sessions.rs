@@ -21,7 +21,7 @@ use crate::projection::Projection;
 
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, OrchestratorEntry,
-    QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
+    QueuedMessage, RequestState, RequestUndo, SentToWorker, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -681,10 +681,19 @@ impl Core {
     }
 
     /// Sends queued message `item` as the user's message. A merge card answered in the words
-    /// it carries points at the message from now on.
+    /// it carries points at the message from now on. One the session already has (given to it
+    /// to judge, run2-D40) keeps the queued message's id, so its thread names it once.
     pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
+        let message_id = item.delivered.then(|| item.id.clone());
         let message = self
-            .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+            .append_user_message_as(
+                id.clone(),
+                item.text,
+                item.attachments,
+                item.mentions,
+                None,
+                message_id,
+            )
             .await?;
         let board = self.board(&id).await?;
         let events: Vec<_> = board
@@ -715,6 +724,21 @@ impl Core {
         mentions: Vec<Mention>,
         parent: Option<String>,
     ) -> Result<Message> {
+        self.append_user_message_as(id, text, attachments, mentions, parent, None)
+            .await
+    }
+
+    /// [`Self::append_user_message_under`], with the message's id given (`message_id`) rather
+    /// than a new one.
+    async fn append_user_message_as(
+        &self,
+        id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+        parent: Option<String>,
+        message_id: Option<String>,
+    ) -> Result<Message> {
         let conversation = self.conversation(&id)?;
         let trimmed = text.trim().to_owned();
         if trimmed.is_empty() && attachments.is_empty() {
@@ -725,7 +749,7 @@ impl Core {
             .new_message(
                 &id,
                 MessageRole::User,
-                uuid::Uuid::now_v7().to_string(),
+                message_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
                 text,
             )
             .await?;
@@ -1855,6 +1879,20 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
     ) -> Result<QueuedMessage> {
+        self.enqueue_as(id, text, attachments, mentions, index, false)
+            .await
+    }
+
+    /// [`Self::enqueue`]; `deciding` while the session judges it (run2-D40).
+    pub(crate) async fn enqueue_as(
+        &self,
+        id: &ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+        index: Option<u32>,
+        deciding: bool,
+    ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err(Error::Invalid("message is empty".into()));
         }
@@ -1866,6 +1904,10 @@ impl Core {
             mentions,
             queued_at_ms: now_ms(),
             edited_at_ms: None,
+            deciding,
+            delivered: false,
+            held_by: None,
+            offer_session: false,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {
@@ -1898,6 +1940,11 @@ impl Core {
         check_attachments(&attachments)?;
         self.change_queue(id, |queue| {
             let item = find_queued(queue, item_id)?;
+            if item.delivered {
+                return Err(Error::Invalid(
+                    "the session already has this message; delete it and send it again".into(),
+                ));
+            }
             item.text = text;
             item.attachments = attachments;
             item.mentions = mentions;
@@ -1944,13 +1991,161 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// Takes the next message to send, unless the queue is paused or holds none.
+    /// The session took queued message `item_id` to judge (run2-D40): its words can't change
+    /// any more, and it says which command of the thread's it waits behind, if one. False if
+    /// it is no longer queued.
+    pub(crate) async fn mark_delivered(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+        held: Option<HeldBy>,
+    ) -> Result<bool> {
+        let mut found = false;
+        self.change_queue(id, |queue| {
+            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
+                item.delivered = true;
+                item.held_by = held;
+                found = true;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(found)
+    }
+
+    /// Ends the judging of queued messages `item_ids` (`deciding`: claims them again, for a
+    /// hand-off under way): those still queued wait there for their turn. Returns those whose
+    /// mark changed.
+    pub(crate) async fn settle_queued(
+        &self,
+        id: &ConversationId,
+        item_ids: &[String],
+        deciding: bool,
+    ) -> Result<Vec<String>> {
+        let board = self.board(id).await?;
+        let changed: Vec<String> = board
+            .queue
+            .items
+            .iter()
+            .filter(|item| item.deciding != deciding && item_ids.contains(&item.id))
+            .map(|item| item.id.clone())
+            .collect();
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let settled = changed.clone();
+        self.change_queue(id, move |queue| {
+            for item in &mut queue.items {
+                if settled.contains(&item.id) {
+                    item.deciding = deciding;
+                    item.held_by = None;
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(changed)
+    }
+
+    /// Ends the judging of queued message `item_id` with the session's offer to open it as a
+    /// new session: it waits, showing the offer. False if it is no longer queued.
+    pub(crate) async fn offer_queued_as_session(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+    ) -> Result<bool> {
+        let mut found = false;
+        self.change_queue(id, |queue| {
+            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
+                item.deciding = false;
+                item.held_by = None;
+                item.offer_session = true;
+                found = true;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(found)
+    }
+
+    /// The user's "Run here" on a message the session offered as a new session: the offer goes
+    /// and it waits like any other. Fails if it is no longer queued.
+    pub async fn run_queued_here(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+    ) -> Result<MessageQueue> {
+        self.change_queue(id, |queue| {
+            find_queued(queue, item_id)?.offer_session = false;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Says which of the thread's commands the Deciding messages `item_ids` wait behind
+    /// (`None`: none any more). Those already saying so, or gone, are left as they are.
+    pub(crate) async fn mark_queued_held(
+        &self,
+        id: &ConversationId,
+        item_ids: &[String],
+        held: Option<HeldBy>,
+    ) -> Result<()> {
+        if item_ids.is_empty() {
+            return Ok(());
+        }
+        let board = self.board(id).await?;
+        let changes = board
+            .queue
+            .items
+            .iter()
+            .any(|item| item_ids.contains(&item.id) && item.held_by != held);
+        if !changes {
+            return Ok(());
+        }
+        self.change_queue(id, |queue| {
+            for item in &mut queue.items {
+                if item_ids.contains(&item.id) {
+                    item.held_by = held.clone();
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// Keeps the notice of a queued message the session sent on to one of its workers.
+    pub(crate) async fn keep_sent(&self, id: &ConversationId, sent: SentToWorker) -> Result<()> {
+        self.change_queue(id, |queue| {
+            queue.sent.retain(|kept| kept.id != sent.id);
+            queue.sent.push(sent);
+            Ok(())
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// The user dismissed the notice of sent message `item_id`.
+    pub async fn dismiss_sent(&self, id: &ConversationId, item_id: &str) -> Result<MessageQueue> {
+        self.change_queue(id, |queue| {
+            let before = queue.sent.len();
+            queue.sent.retain(|sent| sent.id != item_id);
+            if queue.sent.len() == before {
+                return Err(Error::NotFound(format!("sent message {item_id}")));
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Takes the next message to send, unless the queue is paused or holds none ready (the
+    /// next one is still Deciding).
     pub async fn pop_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {
             return Ok(None);
         }
-        let Some(next) = board.queue.next_to_send() else {
+        let Some(next) = board.queue.ready_to_send() else {
             return Ok(None);
         };
         let next = next.id.clone();

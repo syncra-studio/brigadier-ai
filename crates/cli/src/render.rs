@@ -3,9 +3,9 @@
 use base64::Engine as _;
 
 use crate::protocol::{
-    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, LibraryOutput, ReadOutput, SendOutput,
-    SessionsOutput, ShowOutput, StartOutput, ToolOutput, WaitOutput, WhyBy, WhyOutput, WorkerRow,
-    WorkersOutput,
+    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, LibraryOutput, QueueOutput,
+    QueueState, ReadOutput, SendOutput, SessionsOutput, ShowOutput, StartOutput, ToolOutput,
+    WaitOutput, WhyBy, WhyOutput, WorkerRow, WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -378,6 +378,32 @@ pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
         ContinueWhen::AfterTurn => format!(
             "Continues on {agent}{on} once this turn ends: the hand-off note first, then the \
              new session.\n"
+        ),
+    }
+}
+
+pub fn queue(output: &QueueOutput) -> String {
+    let id = &output.id;
+    match output.state {
+        QueueState::Joined if output.already => format!(
+            "{id} had already joined this work, unjudged: it is the user's message here; act on \
+             it and answer it with the rest.\n"
+        ),
+        QueueState::Joined => {
+            format!("{id} joined this work: act on it and answer it with the rest.\n")
+        }
+        QueueState::Waiting => {
+            format!(
+                "{id} waits in the queue and comes again on its own turn once this work is done.\n"
+            )
+        }
+        QueueState::SentToWorker => format!(
+            "{id} went to worker {}; the user sees where it went.\n",
+            output.worker.as_deref().unwrap_or("?")
+        ),
+        QueueState::Offered => format!(
+            "{id} waits in the queue offering the user \"Open as a new session\" or \"Run \
+             here\" until they pick.\n"
         ),
     }
 }

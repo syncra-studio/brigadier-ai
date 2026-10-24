@@ -1469,7 +1469,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             item_id,
         } => {
-            heap(|| core.take_queued(&conversation_id, &item_id)).await?;
+            // Through the sessions: one the session already has is withdrawn (run2-D46).
+            heap(|| sessions.delete_queued(&conversation_id, &item_id)).await?;
             Response::DeleteQueued {
                 queue: heap(|| core.conversation_view(conversation_id, 1))
                     .await?
@@ -1485,6 +1486,18 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::ResumeQueue { conversation_id } => Response::ResumeQueue {
             queue: heap(|| sessions.resume_queue(conversation_id)).await?,
+        },
+        Request::RunQueuedHere {
+            conversation_id,
+            item_id,
+        } => Response::RunQueuedHere {
+            queue: heap(|| sessions.run_queued_here(&conversation_id, &item_id)).await?,
+        },
+        Request::DismissSent {
+            conversation_id,
+            item_id,
+        } => Response::DismissSent {
+            queue: heap(|| core.dismiss_sent(&conversation_id, &item_id)).await?,
         },
         Request::AddAttachment {
             name,

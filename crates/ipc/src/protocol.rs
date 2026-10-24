@@ -529,6 +529,17 @@ pub enum Request {
     ResumeQueue {
         conversation_id: ConversationId,
     },
+    /// "Run here" on a queued message the session offered as a new session: it waits like any
+    /// other and is sent once nothing works (run2-D40).
+    RunQueuedHere {
+        conversation_id: ConversationId,
+        item_id: String,
+    },
+    /// Dismisses the notice of a queued message the session sent on to one of its workers.
+    DismissSent {
+        conversation_id: ConversationId,
+        item_id: String,
+    },
     /// Stops the running turn; the queue pauses.
     Interrupt {
         conversation_id: ConversationId,
@@ -1552,6 +1563,12 @@ pub enum Response {
     },
     SteerQueued,
     ResumeQueue {
+        queue: MessageQueue,
+    },
+    RunQueuedHere {
+        queue: MessageQueue,
+    },
+    DismissSent {
         queue: MessageQueue,
     },
     Interrupt,

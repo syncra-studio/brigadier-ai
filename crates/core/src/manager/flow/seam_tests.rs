@@ -385,9 +385,20 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
     );
+    // It reached the working thread at once, Deciding (run2-D40), and joined that work; the
+    // successor has it in its hand-off, and nothing sends it again.
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
-    assert_eq!(meanwhile[0].0, file.seams[0].successor);
+    assert_eq!(meanwhile.len(), 2, "{meanwhile:?}");
+    assert_ne!(meanwhile[0].0, file.seams[0].successor);
+    assert!(
+        meanwhile[0].1.starts_with("[queued message "),
+        "{meanwhile:?}"
+    );
+    assert_eq!(meanwhile[1].0, file.seams[0].successor);
+    assert!(
+        meanwhile[1].1.starts_with("[Brigadier hand-off"),
+        "{meanwhile:?}"
+    );
     flow.stop().await;
 }
 

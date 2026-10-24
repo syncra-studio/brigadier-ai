@@ -636,7 +636,7 @@ impl SessionManager {
 
     /// One of the caller's own workers, by an id `brigadier workers` showed; another
     /// session's worker, or a session, is refused.
-    async fn own_worker(
+    pub(super) async fn own_worker(
         &self,
         caller: &CliCaller,
         id: &str,

@@ -1370,6 +1370,41 @@ pub struct QueuedMessage {
     pub mentions: Vec<Mention>,
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
+    /// Sent while the session's turn works: the session has it and judges it with `brigadier
+    /// queue` (run2-D40); it waits here, Deciding, until it is judged or joins by itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub deciding: bool,
+    /// The session already has its words (given to it to judge): it can't be edited any more,
+    /// and the turn it goes on later names it (run2-D46).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub delivered: bool,
+    /// The thread's command it waits behind while Deciding: the session reads it once that
+    /// command ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub held_by: Option<HeldBy>,
+    /// The session judged it could run apart (`brigadier queue <id> new-session`): it waits for
+    /// the user's pick, "Open as a new session" or "Run here", and is never sent until then.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub offer_session: bool,
+}
+
+/// A queued message the session sent on to one of its workers (`brigadier queue <id> worker
+/// <worker-id>`, run2-D40/D38): the one-line notice the rail keeps until the user dismisses it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SentToWorker {
+    /// The queued message's id.
+    pub id: String,
+    pub text: String,
+    pub worker: TaskId,
+    /// The worker's number and title then.
+    pub worker_number: u32,
+    pub worker_title: String,
+    pub sent_at_ms: i64,
 }
 
 /// The thread's command that a message sent into its running turn waits behind: the thread
@@ -1389,12 +1424,22 @@ pub struct MessageQueue {
     pub items: Vec<QueuedMessage>,
     /// The user interrupted the turn; nothing is sent until they resume.
     pub paused: bool,
+    /// What the session sent on to its workers: notices, never sent from here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<SentToWorker>>", optional)]
+    pub sent: Vec<SentToWorker>,
 }
 
 impl MessageQueue {
-    /// The next message in queue order.
+    /// The next message in queue order, past those waiting for the user's pick on a new
+    /// session offer.
     pub fn next_to_send(&self) -> Option<&QueuedMessage> {
-        self.items.first()
+        self.items.iter().find(|item| !item.offer_session)
+    }
+
+    /// The next message to send now: none while the next one is still Deciding.
+    pub fn ready_to_send(&self) -> Option<&QueuedMessage> {
+        self.next_to_send().filter(|item| !item.deciding)
     }
 }
 
@@ -3000,7 +3045,9 @@ pub enum SettingChange {
 mod tests {
     use super::*;
 
-    /// Removed queue-routing fields in stored events are ignored without a migration.
+    /// The retired routing's offer and move notices in stored events are ignored without a
+    /// migration; Deciding and its held note read again (run2-D40), and a restart settles
+    /// them.
     #[test]
     fn old_queue_events_read_without_retired_routing_state() {
         let item = serde_json::json!({
@@ -3018,11 +3065,13 @@ mod tests {
         }))
         .expect("an old stored queue");
         let serialized = serde_json::to_value(&queue).unwrap();
-        assert!(serialized["items"][0].get("deciding").is_none());
+        assert_eq!(serialized["items"][0]["deciding"], true);
         assert!(serialized["items"][0].get("offerTab").is_none());
-        assert!(serialized["items"][0].get("heldBy").is_none());
+        assert!(serialized["items"][0].get("offerSession").is_none());
         assert!(serialized.get("moved").is_none());
+        assert!(serialized.get("sent").is_none());
         assert_eq!(queue.next_to_send().unwrap().id, "first");
+        assert!(queue.ready_to_send().is_none(), "Deciding holds the queue");
     }
 
     /// Log entries and injection kinds an earlier version wrote still read: as retired, or as
