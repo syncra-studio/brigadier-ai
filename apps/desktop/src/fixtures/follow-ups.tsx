@@ -3,7 +3,7 @@
 import "@/fixtures/flow";
 import { mockIPC } from "@tauri-apps/api/mocks";
 
-import type { EventEnvelope, Message, MovedMessage, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
+import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
 import { applyActivityNews } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
@@ -11,17 +11,12 @@ import { applyEvents, emptyThread, useApp } from "@/state/store";
 
 const id = "flow-session";
 const text = "Follow-up awaiting admission";
-const item: QueuedMessage = { id: "follow-up", text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null, deciding: true };
+const item: QueuedMessage = { id: "follow-up", text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null };
 const message: Message = { id: "admitted", conversationId: id, seq: 4, role: "user", text, attachments: [], mentions: [], createdAtMs: Date.now() + 100, blob: null, model: null, requestId: "admitted", parentId: null };
 let respond: (outcome: SendOutcome) => void;
-const settled: unknown[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "settleMoved" || req.method === "runQueuedHere" || req.method === "deleteQueued" || req.method === "startSession") settled.push(req.method === "startSession" ? { method: req.method, from: req.from, text: req.text } : req);
-  if (req.method === "runQueuedHere") return { method: req.method, queue: { items: [{ ...item, deciding: false }], paused: false } };
-  if (req.method === "deleteQueued") return { method: req.method, queue: { items: [], paused: false } };
-  if (req.method === "startSession") return { method: req.method, conversation: { ...useApp.getState().conversations[id], id: "new-session" }, outcome: { type: "sent", message } };
   if (req.method === "sendMessage") return new Promise((resolve) => { respond = (outcome) => resolve({ method: req.method, outcome }); });
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "listFiles") return { method: req.method, files: [], truncated: false };
@@ -38,8 +33,8 @@ function apply(events: EventEnvelope["event"][]) {
   applyEvents(batch);
   applyBoardEvents(batch);
 }
-function queued(items: QueuedMessage[], moved?: MovedMessage[]): EventEnvelope["event"] {
-  return { type: "queueChanged", conversationId: id, queue: { items, paused: false, ...(moved ? { moved } : {}) } };
+function queued(items: QueuedMessage[]): EventEnvelope["event"] {
+  return { type: "queueChanged", conversationId: id, queue: { items, paused: false } };
 }
 const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
 function view() {
@@ -48,9 +43,6 @@ function view() {
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(text)).length,
   };
 }
-/** The offer's choices on the queued rows. */
-const choices = () => [...document.querySelectorAll('[data-slot="message-queue-item"] button')].map((node) => node.textContent).filter((label) => label === "Open as a new session" || label === "Run here");
-const click = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[data-slot="message-queue-item"] button')].find((node) => node.textContent === label)?.click();
 async function drive() {
   await pause();
   const sending = send({ text, attachments: [], mentions: [] });
@@ -58,14 +50,11 @@ async function drive() {
   const idle = view();
   apply([queued([item])]);
   await pause();
-  const deciding = view();
+  const queuedView = view();
   respond({ type: "queued", item });
   await sending;
   await pause();
   const lateResponse = view();
-  apply([queued([{ ...item, deciding: false }])]);
-  await pause();
-  const waiting = view();
   apply([queued([]), { type: "messageAppended", message }]);
   await pause();
   const joined = view();
@@ -75,32 +64,9 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
-  // The thread offers it as a new session: its row waits with two choices until the user picks.
-  apply([queued([{ ...item, deciding: false, offerTab: true }])]);
-  await pause();
-  const offered = choices();
-  // "Run here": the offer goes and it waits like any other.
-  click("Run here");
-  await pause();
-  const ranHere = { choices: choices(), rail: view().rail };
-  // "Open as a new session": it leaves the queue and starts as a new session of the project.
-  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, projectId: "project-1" } } }));
-  apply([queued([{ ...item, deciding: false, offerTab: true }])]);
-  await pause();
-  click("Open as a new session");
-  await pause();
-  const opened = { choices: choices(), rail: view().rail };
-  // The thread sent it on to another session: a notice with Undo, which asks the daemon to take it back.
-  const sentOn: MovedMessage = { id: "moved", text: "Rename the login file.", attachments: [], mentions: [], to: "other-tab", toTitle: "Login page", movedAtMs: Date.now(), sent: { type: "sent", messageId: "m-1" } };
-  apply([queued([], [sentOn])]);
-  await pause();
-  const notice = document.querySelector('[data-slot="message-queue-moved"]');
-  const noticeText = notice?.textContent ?? "";
-  [...(notice?.querySelectorAll("button") ?? [])].find((node) => node.textContent === "Undo")?.click();
-  await pause();
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, deciding, lateResponse, waiting, joined, removed, offered, ranHere, opened, noticeText, settled });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed });
   document.body.append(result);
 }
 void drive();

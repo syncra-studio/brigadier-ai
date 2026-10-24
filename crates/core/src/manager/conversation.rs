@@ -266,10 +266,8 @@ struct ConvState {
     /// Brigadier's own notes for the running turn held the same way: steered in once no
     /// command runs, else carried by the next turn.
     held_notes: Vec<String>,
-    /// The steered requests and queued follow-ups marked as waiting behind them, unmarked when
-    /// the last ends.
+    /// The steered requests marked as waiting behind them, unmarked when the last ends.
     held_requests: Vec<String>,
-    held_items: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -357,11 +355,10 @@ impl ConvState {
         carried
     }
 
-    /// The requests and follow-ups marked as waiting behind a command, unless none are.
-    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
+    /// The requests marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<Vec<String>> {
         let requests = std::mem::take(&mut self.held_requests);
-        let items = std::mem::take(&mut self.held_items);
-        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
+        (!requests.is_empty()).then_some(requests)
     }
 
     /// The thread's oldest command running now, which a message sent in waits behind.
@@ -600,14 +597,13 @@ impl ConvLive {
     }
 
     /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
-    /// the turn wait behind; once none runs, returns the requests and queued follow-ups marked
-    /// as waiting, to unmark.
+    /// the turn wait behind; once none runs, returns the requests marked as waiting, to unmark.
     async fn holding_command(
         &self,
         item: &str,
         words: &str,
         status: ItemStatus,
-    ) -> Option<(Vec<String>, Vec<String>)> {
+    ) -> Option<Vec<String>> {
         let mut state = self.state.lock().await;
         if status == ItemStatus::InProgress {
             if !state.holding.iter().any(|(of, _)| of == item) {
@@ -987,10 +983,7 @@ impl SessionManager {
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
-            && board
-                .queue
-                .next_to_send()
-                .is_some_and(|item| !item.deciding);
+            && board.queue.next_to_send().is_some();
         if waiting {
             self.kick(&conv);
         }
@@ -1106,7 +1099,7 @@ impl SessionManager {
             }
             let item = self
                 .core
-                .enqueue(&id, text, attachments, mentions, queue_index, false)
+                .enqueue(&id, text, attachments, mentions, queue_index)
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
@@ -1114,7 +1107,7 @@ impl SessionManager {
             // Back into the paused queue it came from; nothing sends until the user resumes.
             let item = self
                 .core
-                .enqueue(&id, text, attachments, mentions, queue_index, false)
+                .enqueue(&id, text, attachments, mentions, queue_index)
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
@@ -1144,21 +1137,6 @@ impl SessionManager {
                     .edit_queued(id, item_id, text, attachments, mentions),
             )
             .await
-    }
-
-    /// "Run here" on a message the thread offered as a new tab: it waits like any other and is
-    /// sent once nothing works.
-    pub async fn run_queued_here(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-    ) -> Result<crate::work::MessageQueue> {
-        let conv = self.conv(id)?;
-        let queue = conv
-            .user_write(self.core.run_queued_here(id, item_id))
-            .await?;
-        self.kick(&conv);
-        Ok(queue)
     }
 
     /// Sends a queued message now, into the running turn (or as a new turn when none runs).
@@ -1203,7 +1181,7 @@ impl SessionManager {
             let item = conv
                 .user_write(
                     self.core
-                        .enqueue(id, text, attachments, mentions, queue_index, false),
+                        .enqueue(id, text, attachments, mentions, queue_index),
                 )
                 .await?;
             self.arm_seam_hold(conv).await;
@@ -1224,7 +1202,7 @@ impl SessionManager {
             let item = conv
                 .user_write(
                     self.core
-                        .enqueue(id, text, attachments, mentions, queue_index, false),
+                        .enqueue(id, text, attachments, mentions, queue_index),
                 )
                 .await?;
             return Ok(SendOutcome::Queued(item));
@@ -1284,8 +1262,7 @@ impl SessionManager {
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
         if let (Some(held), Some(request)) = (held, &message.request_id) {
-            self.hold(conv, std::slice::from_ref(request), &[], held)
-                .await;
+            self.hold(conv, std::slice::from_ref(request), held).await;
         }
         self.settle_requests(&conv.id).await;
         if !steered {
@@ -1293,42 +1270,27 @@ impl SessionManager {
         }
     }
 
-    /// Marks steered requests and queued follow-ups, already listed as held in the live state,
-    /// as waiting behind the thread's command `held`. A command that ended while this was
-    /// written released them first, and its release is written again after it, so no message
-    /// keeps waiting behind a command that is over.
-    async fn hold(&self, conv: &ConvLive, requests: &[String], items: &[String], held: HeldBy) {
-        self.mark_held(conv, requests, items, Some(held)).await;
-        let (requests, items): (Vec<String>, Vec<String>) = {
+    /// Marks steered requests, already listed as held in the live state, as waiting behind
+    /// the thread's command `held`. A command that ended while this was written released them
+    /// first, and its release is written again after it, so none keeps waiting on an ended command.
+    async fn hold(&self, conv: &ConvLive, requests: &[String], held: HeldBy) {
+        self.mark_held(conv, requests, Some(held)).await;
+        let released: Vec<String> = {
             let state = conv.state.lock().await;
-            (
-                requests
-                    .iter()
-                    .filter(|request| !state.held_requests.contains(request))
-                    .cloned()
-                    .collect(),
-                items
-                    .iter()
-                    .filter(|item| !state.held_items.contains(item))
-                    .cloned()
-                    .collect(),
-            )
+            requests
+                .iter()
+                .filter(|request| !state.held_requests.contains(request))
+                .cloned()
+                .collect()
         };
-        if !requests.is_empty() || !items.is_empty() {
-            self.mark_held(conv, &requests, &items, None).await;
+        if !released.is_empty() {
+            self.mark_held(conv, &released, None).await;
         }
     }
 
-    /// Marks steered requests and queued follow-ups as waiting behind the thread's command
-    /// `held`, or (`None`) as read now.
-    async fn mark_held(
-        &self,
-        conv: &ConvLive,
-        requests: &[String],
-        items: &[String],
-        held: Option<HeldBy>,
-    ) {
-        if let Err(err) = self.core.mark_held(&conv.id, requests, items, held).await {
+    /// Marks steered requests as waiting behind the thread's command `held`, or as read now.
+    async fn mark_held(&self, conv: &ConvLive, requests: &[String], held: Option<HeldBy>) {
+        if let Err(err) = self.core.mark_held(&conv.id, requests, held).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not mark messages held by a command"; conversation = %conv.id, error = %err);
         }
     }
@@ -1342,8 +1304,8 @@ impl SessionManager {
         words: &str,
         status: ItemStatus,
     ) {
-        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
-            self.mark_held(conv, &requests, &items, None).await;
+        if let Some(requests) = conv.holding_command(item, words, status).await {
+            self.mark_held(conv, &requests, None).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
@@ -1375,8 +1337,8 @@ impl SessionManager {
             state.notes.extend(notes);
             state.take_held()
         };
-        if let Some((requests, items)) = held {
-            self.mark_held(conv, &requests, &items, None).await;
+        if let Some(requests) = held {
+            self.mark_held(conv, &requests, None).await;
         }
     }
 
@@ -1388,10 +1350,7 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board
-                .queue
-                .next_to_send()
-                .is_some_and(|item| !item.deciding),
+            Ok(board) => board.queue.next_to_send().is_some(),
             Err(_) => false,
         };
         if !ready {
@@ -1659,28 +1618,6 @@ impl SessionManager {
         self.idle_without_turn(&conv).await;
         self.settle_requests(&id).await;
         interrupted
-    }
-
-    /// After a start: follow-ups still deciding when the daemon stopped wait in the queue for
-    /// their own turn, as after a stopped or failed turn. Their judging (the thread's ask and
-    /// its timer) didn't outlive the stop, so nothing else would ever settle them (#449).
-    pub(crate) async fn settle_unjudged_follow_ups(&self, id: &ConversationId) {
-        let Ok(board) = self.core.board(id).await else {
-            return;
-        };
-        let deciding: Vec<String> = board
-            .queue
-            .items
-            .iter()
-            .filter(|item| item.deciding)
-            .map(|item| item.id.clone())
-            .collect();
-        if deciding.is_empty() {
-            return;
-        }
-        if let Err(err) = self.core.settle_queued(id, &deciding).await {
-            tracing::warn!(conversation = %id, error = %err, "could not settle follow-ups after a restart");
-        }
     }
 
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit

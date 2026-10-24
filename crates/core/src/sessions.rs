@@ -20,8 +20,8 @@ use crate::model::{
 use crate::projection::Projection;
 
 use crate::work::{
-    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, MovedMessage,
-    OrchestratorEntry, QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
+    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, OrchestratorEntry,
+    QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -1789,14 +1789,13 @@ impl Core {
         Ok(())
     }
 
-    /// Says which of the thread's commands the steered requests `request_ids` and the queued
-    /// follow-ups `item_ids` wait behind (`None`: none any more, the thread reads them).
+    /// Says which of the thread's commands the steered requests `request_ids` wait behind
+    /// (`None`: none any more, the thread reads them).
     /// Those already saying so, or gone, are left as they are.
     pub(crate) async fn mark_held(
         &self,
         id: &ConversationId,
         request_ids: &[String],
-        item_ids: &[String],
         held: Option<HeldBy>,
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
@@ -1807,7 +1806,7 @@ impl Core {
         let Some(board) = boards.get(id) else {
             return Ok(());
         };
-        let mut events: Vec<DomainEvent> = request_ids
+        let events: Vec<DomainEvent> = request_ids
             .iter()
             .filter_map(|request_id| board.requests.get(request_id))
             .filter(|request| request.held_by != held)
@@ -1818,20 +1817,6 @@ impl Core {
                 },
             })
             .collect();
-        let mut queue = board.queue.clone();
-        let mut queue_changed = false;
-        for item in &mut queue.items {
-            if item_ids.contains(&item.id) && item.held_by != held {
-                item.held_by = held.clone();
-                queue_changed = true;
-            }
-        }
-        if queue_changed {
-            events.push(DomainEvent::QueueChanged {
-                conversation_id: id.clone(),
-                queue,
-            });
-        }
         if events.is_empty() {
             return Ok(());
         }
@@ -1862,7 +1847,6 @@ impl Core {
     }
 
     /// Queues a message while a turn runs: last, or at `index` (clamped to the queue).
-    /// `deciding` while the orchestrator judges whether it joins the working answer.
     pub async fn enqueue(
         &self,
         id: &ConversationId,
@@ -1870,7 +1854,6 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         index: Option<u32>,
-        deciding: bool,
     ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err(Error::Invalid("message is empty".into()));
@@ -1883,9 +1866,6 @@ impl Core {
             mentions,
             queued_at_ms: now_ms(),
             edited_at_ms: None,
-            deciding,
-            held_by: None,
-            offer_tab: false,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {
@@ -1964,96 +1944,7 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// Ends the orchestrator's judging of queued messages `item_ids`: those still in the queue
-    /// wait there for their turn. Returns the ones that were being judged.
-    pub async fn settle_queued(
-        &self,
-        id: &ConversationId,
-        item_ids: &[String],
-    ) -> Result<Vec<String>> {
-        let board = self.board(id).await?;
-        let judged: Vec<String> = board
-            .queue
-            .items
-            .iter()
-            .filter(|item| item.deciding && item_ids.contains(&item.id))
-            .map(|item| item.id.clone())
-            .collect();
-        if judged.is_empty() {
-            return Ok(judged);
-        }
-        let settled = judged.clone();
-        self.change_queue(id, move |queue| {
-            for item in &mut queue.items {
-                if settled.contains(&item.id) {
-                    item.deciding = false;
-                }
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(judged)
-    }
-
-    /// Ends the judging of queued message `item_id` with the thread's offer to open it as a
-    /// new tab: it waits like any other, showing the offer. False if it is no longer queued.
-    pub async fn offer_queued_as_tab(&self, id: &ConversationId, item_id: &str) -> Result<bool> {
-        let mut found = false;
-        self.change_queue(id, |queue| {
-            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
-                item.deciding = false;
-                item.offer_tab = true;
-                found = true;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(found)
-    }
-
-    /// Keeps the notice of a queued message the thread sent on to another tab.
-    pub async fn keep_moved(&self, id: &ConversationId, moved: MovedMessage) -> Result<()> {
-        self.change_queue(id, |queue| {
-            queue.moved.retain(|kept| kept.id != moved.id);
-            queue.moved.push(moved);
-            Ok(())
-        })
-        .await
-        .map(|_| ())
-    }
-
-    /// Takes the notice of moved message `item_id` away (undone or dismissed).
-    pub async fn take_moved(&self, id: &ConversationId, item_id: &str) -> Result<MovedMessage> {
-        let mut taken = None;
-        self.change_queue(id, |queue| {
-            let index = queue
-                .moved
-                .iter()
-                .position(|moved| moved.id == item_id)
-                .ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))?;
-            taken = Some(queue.moved.remove(index));
-            Ok(())
-        })
-        .await?;
-        taken.ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))
-    }
-
-    /// The user's "Run here" on a message the thread offered as a new tab: the offer goes and
-    /// it waits like any other. Fails if it is no longer queued.
-    pub async fn run_queued_here(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-    ) -> Result<MessageQueue> {
-        self.change_queue(id, |queue| {
-            find_queued(queue, item_id)?.offer_tab = false;
-            Ok(())
-        })
-        .await
-    }
-
-    /// Takes the next message to send, unless the queue is paused or holds none. One offered
-    /// as a new tab waits for the user's pick, so the next one goes past it.
+    /// Takes the next message to send, unless the queue is paused or holds none.
     pub async fn pop_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {

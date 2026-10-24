@@ -105,7 +105,7 @@ mockIPC((command, payload) => {
       const { text, attachments, mentions } = req;
       // The daemon's outcome: a slot asked for waits in the queue, anything else is sent.
       if (req.queueIndex !== null) {
-        const item = { id: `q-${sent.length}`, text, attachments, mentions, queuedAtMs: Date.now(), editedAtMs: null, deciding: false };
+        const item = { id: `q-${sent.length}`, text, attachments, mentions, queuedAtMs: Date.now(), editedAtMs: null };
         return { method: req.method, outcome: { type: "queued", item } };
       }
       const message = {

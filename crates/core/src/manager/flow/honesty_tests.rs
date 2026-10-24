@@ -140,9 +140,11 @@ async fn a_message_sent_while_a_turn_runs_waits_for_it_in_the_queue() {
     flow.say("Also check the formatting.").await;
     let board = flow
         .until("the message to wait in the queue", |board| {
-            board.queue.items.first().is_some_and(|queued| {
-                !queued.deciding && queued.text == "Also check the formatting."
-            })
+            board
+                .queue
+                .items
+                .first()
+                .is_some_and(|queued| queued.text == "Also check the formatting.")
         })
         .await;
     assert!(

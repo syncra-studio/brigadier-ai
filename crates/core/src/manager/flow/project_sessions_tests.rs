@@ -1,7 +1,6 @@
 //! A project's sessions (Q73): each one task on its own worktree. A session starts another in
 //! the background from its own base; sessions of one project work at once without sharing a
-//! file, see each other on the board (no overlap or merge is pushed to them), and a queued
-//! message may go to the sibling it belongs to.
+//! file and see each other on the board (no overlap or merge is pushed to them).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -388,105 +387,6 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
             }
             write(turn).await
         }
-    })
-}
-
-/// The thread inputs of the tab working in `folder` that hold `what`.
-fn heard(inputs: &Inputs, folder: &std::path::Path, what: &str) -> usize {
-    inputs
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(at, input)| at == folder && input.contains(what))
-        .count()
-}
-
-/// How the next follow-up is routed (its `follow_up` id is filled in), what route_follow_up
-/// answered, and the gate the routing turn waits at after it routed.
-#[derive(Default)]
-struct Routing {
-    args: std::sync::Mutex<serde_json::Value>,
-    follow_up: std::sync::Mutex<String>,
-    results: std::sync::Mutex<Vec<String>>,
-    gate: tokio::sync::Notify,
-}
-
-fn bash(status: brigadier_providers::ItemStatus) -> brigadier_providers::ProviderEvent {
-    brigadier_providers::ProviderEvent::ToolCall {
-        item_id: "bash-1".into(),
-        name: "Bash".into(),
-        input: Some(serde_json::json!({ "command": "cargo test --workspace" }).to_string()),
-        status,
-        output: (status != brigadier_providers::ItemStatus::InProgress).then(|| "ok".into()),
-        kept: None,
-    }
-}
-
-impl Routing {
-    /// Runs one routed follow-up on `tab`: "Run the tests.", then `follow_up` while it works,
-    /// routed by `args`. Returns route_follow_up's answer, with the turn still at the gate.
-    async fn route(
-        &self,
-        flow: &Flow,
-        tab: &ConversationId,
-        follow_up: &str,
-        args: serde_json::Value,
-    ) -> String {
-        *self.args.lock().unwrap() = args;
-        *self.follow_up.lock().unwrap() = follow_up.to_owned();
-        let before = self.results.lock().unwrap().len();
-        flow.say_to(tab, "Run the tests.").await;
-        flow.until_in(tab, "the command to run", |board| {
-            board.orchestrator_steps.iter().any(|step| {
-                matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == brigadier_providers::ItemStatus::InProgress)
-            })
-        })
-        .await;
-        flow.say_to(tab, follow_up).await;
-        super::eventually("the follow-up routed", || {
-            self.results.lock().unwrap().len() > before
-        })
-        .await;
-        self.results.lock().unwrap()[before].clone()
-    }
-
-    /// Lets the routing turn end, and waits for what stayed queued to reach its next turn.
-    async fn release(&self, flow: &Flow, tab: &ConversationId, inputs: &Inputs) {
-        let folder = worktree(flow, tab).0.expect("the session's worktree");
-        let waiting: Vec<_> = flow
-            .board_of(tab)
-            .await
-            .queue
-            .items
-            .into_iter()
-            .map(|item| {
-                let before = heard(inputs, &folder, &item.text);
-                (item.text, before)
-            })
-            .collect();
-        self.gate.notify_one();
-        flow.until_in(tab, "the queue to empty", |board| {
-            board.queue.items.is_empty()
-        })
-        .await;
-        // The queue empties before the next request is recorded as working. The old
-        // requests can all be settled in that gap, before the script has read the message.
-        for (text, before) in waiting {
-            super::eventually("the queued follow-up's turn to start", || {
-                heard(inputs, &folder, &text) > before
-            })
-            .await;
-        }
-        flow.settled_in(tab).await;
-    }
-}
-
-fn last_queue(flow: &Flow, id: &ConversationId) -> crate::work::MessageQueue {
-    let core = flow.core.clone();
-    let id = id.clone();
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { core.board(&id).await.unwrap().queue })
     })
 }
 

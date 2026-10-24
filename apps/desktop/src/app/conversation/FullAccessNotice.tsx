@@ -24,8 +24,8 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
-  const { queue, rows } = useQueueRows(conversation.id);
-  const queued = rows.length > 0 || (queue?.moved?.length ?? 0) > 0;
+  const { rows } = useQueueRows(conversation.id);
+  const queued = rows.length > 0;
   if (!show || !full || queued || closedNotices.has(conversation.id)) return null;
   const close = () => {
     closedNotices.add(conversation.id);

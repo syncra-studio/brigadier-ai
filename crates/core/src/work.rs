@@ -1370,53 +1370,6 @@ pub struct QueuedMessage {
     pub mentions: Vec<Mention>,
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
-    /// Sent to a session while its answer works: the orchestrator is judging whether it
-    /// belongs to that answer (it joins it) or is a request of its own (it waits here).
-    #[serde(default)]
-    pub deciding: bool,
-    /// The thread's command it waits behind while being judged: the thread reads it once
-    /// that command ends.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub held_by: Option<HeldBy>,
-    /// The thread judged it could run apart (`route_follow_up` route "new_session"): it waits for
-    /// the user's pick, "Open as a new session" or "Run here", and is never sent until then.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
-    pub offer_tab: bool,
-}
-
-/// A queued message the thread sent on to another session of its project (`route_follow_up`
-/// route "session"): the one-line notice this session keeps, with Undo, until the user undoes
-/// or dismisses it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MovedMessage {
-    /// The queued message's id here.
-    pub id: String,
-    pub text: String,
-    pub attachments: Vec<AttachmentRef>,
-    pub mentions: Vec<Mention>,
-    /// The tab it went to, and its title then.
-    pub to: ConversationId,
-    pub to_title: String,
-    pub moved_at_ms: i64,
-    /// Where it stands there: sent into its thread, or waiting in its queue.
-    pub sent: MovedAs,
-}
-
-/// How a moved message arrived in the other tab.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum MovedAs {
-    /// Sent as the user's message.
-    Sent { message_id: String },
-    /// Queued there (that tab was working).
-    Queued { item_id: String },
 }
 
 /// The thread's command that a message sent into its running turn waits behind: the thread
@@ -1436,16 +1389,12 @@ pub struct MessageQueue {
     pub items: Vec<QueuedMessage>,
     /// The user interrupted the turn; nothing is sent until they resume.
     pub paused: bool,
-    /// What the thread sent on to another tab: notices with Undo, never sent from here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(as = "Option<Vec<MovedMessage>>", optional)]
-    pub moved: Vec<MovedMessage>,
 }
 
 impl MessageQueue {
-    /// The message sent next: the first one not waiting for the user's pick on a new-tab offer.
+    /// The next message in queue order.
     pub fn next_to_send(&self) -> Option<&QueuedMessage> {
-        self.items.iter().find(|item| !item.offer_tab)
+        self.items.first()
     }
 }
 
@@ -3050,6 +2999,31 @@ pub enum SettingChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Removed queue-routing fields in stored events are ignored without a migration.
+    #[test]
+    fn old_queue_events_read_without_retired_routing_state() {
+        let item = serde_json::json!({
+            "id": "first", "text": "Later.", "attachments": [], "mentions": [],
+            "queuedAtMs": 1, "editedAtMs": null, "deciding": true, "offerTab": true,
+            "heldBy": { "command": "sleep 30", "sinceMs": 1 }
+        });
+        let queue: MessageQueue = serde_json::from_value(serde_json::json!({
+            "items": [item], "paused": false,
+            "moved": [{
+                "id": "old", "text": "Moved.", "attachments": [], "mentions": [],
+                "to": "other", "toTitle": "Other", "movedAtMs": 2,
+                "sent": { "type": "queued", "itemId": "there" }
+            }]
+        }))
+        .expect("an old stored queue");
+        let serialized = serde_json::to_value(&queue).unwrap();
+        assert!(serialized["items"][0].get("deciding").is_none());
+        assert!(serialized["items"][0].get("offerTab").is_none());
+        assert!(serialized["items"][0].get("heldBy").is_none());
+        assert!(serialized.get("moved").is_none());
+        assert_eq!(queue.next_to_send().unwrap().id, "first");
+    }
 
     /// Log entries and injection kinds an earlier version wrote still read: as retired, or as
     /// a hand-off.

@@ -108,7 +108,7 @@ const daemon: { messages: Message[]; requests: Record<string, UserRequest>; step
   run: "running",
 };
 const queued: QueuedMessage = {
-  id: "q1", text: "Also check the currency formatting", attachments: [], mentions: [], queuedAtMs: begun, editedAtMs: null, deciding: false,
+  id: "q1", text: "Also check the currency formatting", attachments: [], mentions: [], queuedAtMs: begun, editedAtMs: null,
 };
 
 function view(): View {
@@ -412,31 +412,11 @@ async function driveTurn(): Promise<object> {
   return out;
 }
 
-/** A rail narrow enough that a queued row's message and its held note can't both show whole. */
-const NARROW_RAIL_PX = 560;
-
 async function driveSteer(): Promise<object> {
   await settle(600);
   steps([tool("sleep", 1.1, "shell", "sleep 30", "inProgress")]);
   await settle();
   const before = seen();
-  // A follow-up sent meanwhile waits behind the command rather than deciding on and on.
-  const held = { command: "sleep 30", sinceMs: Date.now() - 2 * 60_000 };
-  change(() => ({ queue: { items: [{ ...queued, deciding: true, heldBy: held }], paused: false } }));
-  await settle();
-  const deciding = { note: text(one("[data-slot=message-queue-item] [data-slot=held-note]")), shimmer: text(one("[data-slot=message-queue-item] .shimmer")) };
-  // #447: on a narrow rail the message stays readable; the note gives way first.
-  const list = one("[data-slot=message-queue]");
-  if (list) list.style.width = `${NARROW_RAIL_PX}px`;
-  await settle();
-  const message = one("[data-slot=message-queue-item] [data-slot=queue-item-text]");
-  const note = one("[data-slot=message-queue-item] [data-slot=held-note]");
-  const narrow = {
-    messageShown: message ? message.clientWidth / message.scrollWidth : null,
-    noteWidth: note?.clientWidth ?? null,
-  };
-  if (list) list.style.width = "";
-  change(() => ({ queue: { items: [], paused: false } }));
   // The user steers a message in while the command runs.
   const steered = user("r2", 2, "Use banker's rounding instead", Date.now());
   daemon.messages = [...daemon.messages, steered];
@@ -450,6 +430,7 @@ async function driveSteer(): Promise<object> {
   const stillRuns = commandRow();
   const bubble = text(one("[data-slot=request-steer]"));
   // Not read yet: the thread is inside the command.
+  const held = { command: "sleep 30", sinceMs: Date.now() - 2 * 60_000 };
   request("r2", { heldBy: held });
   await settle();
   const steerHeld = text(one("[data-slot=request-steer] [data-slot=held-note]"));
@@ -463,7 +444,7 @@ async function driveSteer(): Promise<object> {
   // Once it ends, the work above the bubble sums up.
   steps([tool("sleep", 1.1, "shell", "sleep 30", "completed")]);
   await settle();
-  return { before, after, stillRuns, ended: commandRow(), bubble, deciding, narrow, steerHeld, steerRead };
+  return { before, after, stillRuns, ended: commandRow(), bubble, steerHeld, steerRead };
 }
 
 /** A message steered in before the turn did anything: its bubble sits under the first, above the header. */

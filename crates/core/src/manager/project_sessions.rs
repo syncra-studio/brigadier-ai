@@ -1,13 +1,12 @@
 //! A project's sessions (Q73): each one task, on its own branch and worktree. Sessions of the
 //! same project see each other on a read-only board (title, state, repository, branch and
-//! changed files), and a queued message may go to the sibling it belongs to. A new session starts from another one
-//! here (⌘⏎, "Open as a new session", "Start as session").
+//! changed files). A new session starts from another one here (⌘⏎, "Start as session").
 
 use crate::model::{
     Conversation, ConversationId, EnvironmentRequest, Lifecycle, Mention, Setup, SetupRequest,
 };
 use crate::work::AttachmentRef;
-use crate::work::{MovedAs, SettledTab, TabState};
+use crate::work::{SettledTab, TabState};
 use crate::{Error, Result};
 
 use super::SessionManager;
@@ -348,39 +347,5 @@ impl SessionManager {
         .await
         .ok()
         .flatten()
-    }
-
-    /// The user's Undo (`undo`) or dismissal of moved message `item_id`'s notice. Undo sends
-    /// it here again, as if just written, then takes it back from the other tab's queue if it
-    /// still waits there (else that tab hears the user took it back). A resend that fails
-    /// changes nothing, so the notice stays for another try.
-    pub async fn settle_moved(&self, id: &ConversationId, item_id: &str, undo: bool) -> Result<()> {
-        if !undo {
-            return self.core.take_moved(id, item_id).await.map(|_| ());
-        }
-        let moved = self
-            .core
-            .board(id)
-            .await?
-            .queue
-            .moved
-            .into_iter()
-            .find(|moved| moved.id == item_id)
-            .ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))?;
-        crate::heap(|| {
-            self.send_message(
-                id.clone(),
-                moved.text.clone(),
-                moved.attachments.clone(),
-                moved.mentions.clone(),
-                false,
-                None,
-            )
-        })
-        .await?;
-        if let MovedAs::Queued { item_id } = &moved.sent {
-            let _ = self.core.take_queued(&moved.to, item_id).await;
-        }
-        self.core.take_moved(id, item_id).await.map(|_| ())
     }
 }

@@ -60,7 +60,7 @@ function setQueue(items: { id: string; text: string }[]): void {
             ...board,
             queue: {
               paused: false,
-              items: items.map((item) => ({ ...item, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null, deciding: false })),
+              items: items.map((item) => ({ ...item, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null })),
             },
           },
         }

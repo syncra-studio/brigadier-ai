@@ -37,7 +37,6 @@ import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
-import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { realActivity, onRealActivity } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
@@ -674,8 +673,7 @@ export async function send(
           mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
-          // The daemon has the thread judge what is sent while a session's answer works.
-          ...(queued ? { queued: { index: slot, deciding: working && !paused } } : {}),
+          ...(queued ? { queued: { index: slot } } : {}),
         },
       ],
     }));
@@ -913,31 +911,6 @@ export async function openQueuedInSideChat(conversationId: string, item: QueuedM
   }
 }
 
-/**
- * "Open as a new session" on a message the thread offered as one: it leaves the queue first,
- * then starts a new background session of the same project on the session's own model,
- * permission and plan mode; the user stays where they are. If that fails, it goes back in its
- * slot and the error is thrown; one the queue already sent goes nowhere (`false`).
- */
-export async function openQueuedAsSession(conversationId: string, item: QueuedMessage): Promise<boolean> {
-  const source = useApp.getState().conversations[conversationId];
-  if (!source || !isTaskTab(source)) return false;
-  const index = Math.max(0, boardOf(conversationId)?.queue.items.findIndex((entry) => entry.id === item.id) ?? 0);
-  try {
-    await deleteQueued(conversationId, item.id);
-  } catch {
-    await loadConversation(conversationId).catch(() => {});
-    return false;
-  }
-  try {
-    await startSessionFrom(source, item);
-    return true;
-  } catch (error) {
-    await restoreQueued(conversationId, item, index);
-    throw error;
-  }
-}
-
 /** A new session's setup: `source`'s model, permission and plan mode (it starts from `source`'s base). */
 function sessionSetupFrom(source: Conversation): SetupRequest | null {
   return source.setup?.type === "session"
@@ -955,8 +928,8 @@ function sessionSetupFrom(source: Conversation): SetupRequest | null {
 }
 
 /**
- * Starts `outgoing` as a new background session of `source`'s project (⌘⏎, "Open as a new
- * session", "Start as session"), on its own worktree; the user stays where they are. Its task
+ * Starts `outgoing` as a new background session of `source`'s project (⌘⏎, "Start as session"),
+ * on its own worktree; the user stays where they are. Its task
  * mentions stay behind: they name `source`'s workers.
  */
 export async function startSessionFrom(source: Conversation, outgoing: Outgoing): Promise<Conversation> {
@@ -972,19 +945,8 @@ export async function startSessionFrom(source: Conversation, outgoing: Outgoing)
   return conversation;
 }
 
-/** The notice of a message the thread sent on to another session: Undo takes it back here, else it goes. */
-export async function settleMoved(conversationId: string, itemId: string, undo: boolean): Promise<void> {
-  await request({ method: "settleMoved", conversationId, itemId, undo });
-}
-
 export async function steerQueued(conversationId: string, itemId: string): Promise<void> {
   await request({ method: "steerQueued", conversationId, itemId });
-}
-
-/** "Run here" on a message the thread offered as a new session: it waits like any other and is sent once nothing works. */
-export async function runQueuedHere(conversationId: string, itemId: string): Promise<void> {
-  const { queue } = await request({ method: "runQueuedHere", conversationId, itemId });
-  showQueue(conversationId, queue);
 }
 
 export async function resumeQueue(conversationId: string): Promise<void> {

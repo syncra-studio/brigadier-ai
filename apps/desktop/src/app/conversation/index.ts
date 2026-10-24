@@ -35,7 +35,6 @@ export * from "./JoinedAnswerActions";
 export * from "./LimitBar";
 export * from "./LoadEarlier";
 export * from "./ModelChanged";
-export * from "./MovedMessageNotice";
 export * from "./Notices";
 export * from "./PickerRow";
 export * from "./QuestionAction";

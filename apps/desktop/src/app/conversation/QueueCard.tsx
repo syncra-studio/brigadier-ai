@@ -24,18 +24,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
-import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated";
+import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere, settleMoved } from "@/state/actions";
-import { HeldNote } from "@/app/conversation/HeldNote";
-import { MovedMessageNotice } from "@/app/conversation/MovedMessageNotice";
+import { deleteQueued, openQueuedInSideChat, resumeQueue } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
 const NO_ITEMS: QueuedMessage[] = [];
-const NO_MOVED: MovedMessage[] = [];
 
 function useQueueItems(conversationId: string | null): QueuedMessage[] {
   return useBoard((s) =>
@@ -87,9 +84,7 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
- * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
- * the thread judged could run apart waits for the user's pick, "Open as a new session" or
- * "Run here"; one it sent on to another session leaves a one-line notice with Undo. Its ⋯ edits
+ * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
  * so follow-ups steer into the turn.
  * Steering, moving and deleting go through assistant-ui's queue (the view's adapter talks to
@@ -99,7 +94,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   const aui = useAui();
   // A message just sent shows at once; its row does nothing until the daemon has it.
   const { queue, rows: items } = useQueueRows(conversationId);
-  const moved = queue?.moved ?? NO_MOVED;
   // Behind the row now `to - 1` (the front for 0), in assistant-ui's terms.
   const moveTo = (id: string, to: number) => {
     if (items.find((item) => item.id === id)?.local) return;
@@ -122,7 +116,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   // A session's own view has Side chat tabs; a side chat has none of its own.
   const view = useContext(ViewContext);
   const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
-  if (items.length === 0 && moved.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
     <ComposerRailItem label="Message queue">
@@ -148,7 +142,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             <MessageQueueItem
               key={item.id}
               dragging={dragging === item.id}
-              deciding={item.deciding}
               grip={
                 items.length > 1 && !item.local && (
                   <button
@@ -163,7 +156,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )
               }
             >
-              {/* The message comes first: with no room for both, the status note gives way, down to its first words (#447). */}
               <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={preview || undefined}>
                 {item.text ? (
                   <>
@@ -174,37 +166,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                   <span className="text-muted-foreground">{attached}</span>
                 )}
               </span>
-              {item.deciding && item.heldBy ? (
-                <HeldNote held={item.heldBy} className="min-w-24 shrink-8 truncate" />
-              ) : item.deciding ? (
-                <span
-                  title="Brigadier is checking whether this belongs to the answer in progress"
-                  className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"
-                >
-                  Deciding
-                </span>
-              ) : item.offerTab && (
-                <>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    title="It can run apart from the work in progress"
-                    disabled={action.busy}
-                    onClick={() => action.run(() => openQueuedAsSession(conversationId, item))}
-                  >
-                    Open as a new session
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    title="It runs in this session once the work in progress is done"
-                    disabled={action.busy}
-                    onClick={() => action.run(() => runQueuedHere(conversationId, item.id))}
-                  >
-                    Run here
-                  </Button>
-                </>
-              )}
               <TooltipIconButton
                 tooltip="Submit without interrupting the model"
                 side="top"
@@ -257,15 +218,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             </MessageQueueItem>
           );
         })}
-        {moved.map((notice) => (
-          <MovedMessageNotice
-            key={notice.id}
-            notice={notice}
-            busy={action.busy}
-            onUndo={() => action.run(() => settleMoved(conversationId, notice.id, true))}
-            onDismiss={() => action.run(() => settleMoved(conversationId, notice.id, false))}
-          />
-        ))}
       </MessageQueue>
       {action.error && (
         <p role="alert" className="text-destructive px-3 pb-1 text-xs">
