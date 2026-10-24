@@ -300,10 +300,9 @@ class Battery:
 
     def run(self):
         self.setup()
-        self.send("plant-user", "This is a bounded continuity measurement in a throwaway repo. Do not use workers unless asked. " +
-                  ("" if self.args.arm == "summary" else
-                   "Keep your session ledger (the file your standing instructions name) with only my rules, decision, "
-                   "release, path, timeout and rejected approach. ") +
+        self.send("plant-user", "This is a bounded continuity measurement in a throwaway repo. Do not use workers unless asked. "
+                  "Keep your session ledger (the file your standing instructions name) with only my rules, decision, "
+                  "release, path, timeout and rejected approach. "
                   "Standing rule: every new exported function gets a JSDoc first line starting 'Since 0.5:'. "
                   "Correction: in src/exporters/ use 'Exporter since 0.5:' instead. "
                   "Decision: invoice numbers stay zero-padded to 6 digits because the accounting import rejects shorter ones. "
@@ -511,11 +510,6 @@ def arm_markdown(result):
         lines += [f"Zed text compactions: {result.get('zed_compactions', 0)}; "
                   f"native compactions: {result.get('compactions', 'unavailable')}.",
                   "Summary calls and all fresh sessions are included in usage and role costs.", ""]
-    if result.get("arm") == "summary":
-        lines += [f"Model-written handoffs: {result.get('summary_compactions', 0)}; "
-                  f"native compactions: {result.get('compactions', 'unavailable')}.",
-                  f"Handoff skill pinned to `{result.get('summary_commit', 'unavailable')}`.",
-                  "Only the model-written document bootstraps each fresh CLI; all calls are included in role costs.", ""]
     return lines
 
 
@@ -535,7 +529,6 @@ def write_report(result, text, path):
     path.write_text(text)
     public = {k: result[k] for k in ("source", "started_at", "provider", "model", "arm", "threshold",
                                     "roles", "economics", "list_price_usd", "status", "reason", "zed_compactions", "zed_commit",
-                                    "summary_compactions", "summary_commit", "block", "update_scores",
                                     "variant", "budget_scores", "first_successor_write", "extra_bootstrap_estimate") if k in result}
     path.with_suffix(".json").write_text(json.dumps(public, indent=2) + "\n")
 
@@ -613,7 +606,7 @@ def report(result):
              "Report only; no recall result gates a session or changes continuity.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
              f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one measured lineage, several requests.",
-             f"Size threshold: `{result['threshold']}` tokens (seam, zed and summary arms).",
+             f"Size threshold: `{result['threshold']}` tokens (seam and zed arms).",
              "A labelled, injected unverified worker report supplies the false claim; no real worker is spawned.",
              "Random one-time facts are removed from the fixture after observation. Inert batches displace the early items.", "",
              "| Item | Result | In final verbatim tail? | Successor searched? | Answer / evidence |", "|---|---|---|---|---|"]
@@ -707,7 +700,7 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain", "zed", "summary"], default="seam")
+    parser.add_argument("--arm", choices=["seam", "plain", "zed"], default="seam")
     parser.add_argument("--ballast", type=int, default=1200)
     parser.add_argument("--min-fillers", type=int, default=9)
     parser.add_argument("--tokens", type=int, default=43750, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
@@ -733,9 +726,6 @@ def main():
     elif args.arm == "zed":
         from zed import ZedBattery
         battery = ZedBattery(args)
-    elif args.arm == "summary":
-        from summary import SummaryBattery
-        battery = SummaryBattery(args)
     else:
         battery = Battery(args)
     def terminated(signum, frame):

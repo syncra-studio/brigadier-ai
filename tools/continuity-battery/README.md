@@ -82,20 +82,20 @@ unchanged-commit build skip. To run only the battery (no app publication):
 gh workflow run continuity-battery.yml --repo syncra-studio/brigadier-ai --ref main
 ```
 
-The existing scripts now accept `--provider claude|codex` and `--arm seam|plain|zed|summary`.
+The existing scripts now accept `--provider claude|codex` and `--arm seam|plain|zed`.
 `plain.py` changes only the transport: the same plants, fixture, tasks and scorers go
 through `claude -p --resume` or `codex exec resume`, with automatic compaction at the
 CLI's own default. It installs no seam or standing ledger instructions. The decision
 block scores a plain CLI's own decision by its announced choice and applied separator;
 only Brigadier's arm is also checked for its ledger marker. No `/compact` is sent.
 
-The workflow runs all four arms for short recall (nine filler turns), long recall (90),
-decision survival (90), and updates (short: nine; long: 90), with matching filler schedules within each provider.
-Manual dispatches accept an `arms` string (default `seam,plain,zed,summary`), for example
+The workflow runs all three arms for short recall (nine filler turns), long recall (90),
+and decision survival (90), with matching filler schedules within each provider.
+Manual dispatches accept an `arms` string (default `seam,plain,zed`), for example
 `gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main -f arms=seam`.
 Only the selected arms run on both providers. Omitted arms are labelled "not run on this
 dispatch" in the report and cannot trigger regression issues. Nightly calls always run
-all four arms; an absent selected arm still makes its provider incomplete.
+all three arms; an absent selected arm still makes its provider incomplete.
 The long schedule supplies over 400k inert input tokens at ordinary tokenization;
 the metered usage and observed compactions/seams are reported rather than assumed.
 The three-context decision bar is unqualified if fewer than three native compactions
@@ -243,51 +243,3 @@ unavailable without a matched old-budget run. High-entropy text can exceed that 
 No incremental causal dollar saving/cost is claimed without a matched live baseline. These bars
 are reports only and never create regression issues or gate work. `--evidence` keeps private raw
 inputs outside git; report JSON retains numeric scores and economics only.
-
-## Summary handoff and updates (D66)
-
-`--arm summary` asks the running plain CLI to write a handoff at the same configured
-`--tokens` threshold as the seam. Like the Zed arm, the CLI transport checks latest
-input (including cache) plus output between turns; it cannot intercept a seam's
-internal tool-call boundary. The full upstream handoff skill is fetched verbatim at
-run time, pinned to
-[`5beb35b040e3de97e54fa9e386d7e42d15c295c2`](https://github.com/mattpocock/skills/blob/5beb35b040e3de97e54fa9e386d7e42d15c295c2/skills/productivity/handoff/SKILL.md)
-(MIT), into disposable scratch. The only added instruction selects the document's
-absolute path inside that run's `/tmp` directory. Fetch failure is a skipped arm.
-
-A fresh CLI starts in the same fixture folder with exactly `Read <file> and continue.`
-The pending scenario request follows in a separate resumed turn. The harness adds
-no Brigadier seam, ledger, decisions block, user-message replay or verbatim tail.
-The old recall script's explicit ledger-creation request is omitted for this arm;
-all planted facts, action checks and recall scoring remain the same. The decision
-scenario uses the existing CLI rubric, including the thread's own choice without a
-Brigadier ledger marker. Claude auto-compaction is disabled for this explicit arm;
-any observed native compactions are counted separately. Summary writing, reading
-and every fresh successor are included in usage and per-role list-price dollars.
-
-Run the harder scenario with `tools/continuity-battery/run.sh updates --arm plain`
-or invoke `updates.py` directly with a debug `--daemon`. It plants 30 randomized
-identifiers: 18 facts given once early, eight decisions subsequently replaced twice
-(two reverse back to their first choice), three promises left open, and one receipt
-in the middle of a >250 KB diagnostic output. The diagnostic fixture deletes itself before printing, so a later source read
-cannot recover the receipt from disk; the harness also removes any unexecuted fixture. The first and second decision revisions occur
-at one-third and two-thirds of the fixed filler schedule. Every arm uses all nine
-short or 90 long filler turns, with 1,200 or 3,500 inert words per turn respectively.
-No arm exits early on a transition count. Long inputs displace early facts through
-multiple contexts, while CLI native-compaction defaults remain unchanged.
-
-Recall, newest-decision accuracy, and the number of stale-decision mistakes are
-reported separately in per-run Markdown/JSON and consolidated nightly reports.
-A stale answer counts even when it also lists the current choice; `unknown` loses
-recall/newest credit without being a stale mistake. Exact values must occur under
-their own keys. A separate "where are we?" turn measures open promises raised before
-the recall prompt. The tool-only item also measures provider output excerpting;
-its absence does not by itself prove a continuity failure. Scores never gate work.
-
-Both updates sizes run on every selected arm, including Zed even when `zed_long`
-is false (that flag still controls only the older long recall/decision profiles).
-Nightly selects all four arms. A targeted dispatch can compare the requested three:
-
-```sh
-gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main -f arms=seam,plain,summary
-```

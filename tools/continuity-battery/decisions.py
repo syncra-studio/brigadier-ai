@@ -270,7 +270,7 @@ def score(result, judge_model):
             "principle": ("T2", t2["pass"]),
             "decision_padding": ("T1", t1.get("padding")),
             "decision_dates": ("T1", t1.get("dates")),
-            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and (own["marked"] or result.get("arm") in ("plain", "zed", "summary"))),
+            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and (own["marked"] or result.get("arm") in ("plain", "zed"))),
             "open_question": ("T4", t4["open_question"]),
             "open_promise": ("T4", t4["open_promise"]),
             "worker_claim": ("—", None),
@@ -297,7 +297,7 @@ def report(result, judge_model):
              "Report only; no result gates a session (plan §5). The baseline of `research/CONTINUITY.md` §3.7.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
              f"{result.get('provider', 'claude')} `{result['model']}`, {result.get('effort', 'high')} effort; {result.get('arm', 'seam')} arm; one measured lineage; size threshold "
-             f"`{result['threshold']}` (seam, zed and summary arms). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
+             f"`{result['threshold']}` (seam and zed arms). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
              "Ten items were planted as a user gives them, with no word about the ledger; nothing was restated "
              "before the checks.", ""]
     if rows:
@@ -373,7 +373,7 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain", "zed", "summary"], default="seam")
+    parser.add_argument("--arm", choices=["seam", "plain", "zed"], default="seam")
     parser.add_argument("--min-fillers", type=int, default=0)
     parser.add_argument("--judge-model", default=None)
     parser.add_argument("--tokens", type=int, default=60000, help="the debug seam threshold (BRIGADIER_SEAM_TOKENS)")
@@ -405,11 +405,6 @@ def main():
         class ZedDecisions(Decisions, ZedBattery):
             pass
         run = ZedDecisions(args)
-    elif args.arm == "summary":
-        from summary import SummaryBattery
-        class SummaryDecisions(Decisions, SummaryBattery):
-            pass
-        run = SummaryDecisions(args)
     else:
         run = Decisions(args)
     run.result["block"] = "decisions"

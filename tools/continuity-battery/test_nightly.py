@@ -17,7 +17,7 @@ from plain import PlainBattery
 
 class NightlyTests(unittest.TestCase):
     def test_dispatch_arm_selection_validates_and_deduplicates(self):
-        self.assertEqual(nightly.parse_arms("seam,plain,zed,summary"), nightly.ARMS)
+        self.assertEqual(nightly.parse_arms("seam,plain,zed"), nightly.ARMS)
         self.assertEqual(nightly.parse_arms(" zed, seam,zed "), ("zed", "seam"))
         for value in ("", "seam,", "unknown", "seam,unknown"):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
@@ -51,7 +51,7 @@ class NightlyTests(unittest.TestCase):
             self.assertEqual(summary["regressions"], [])
             for provider in summary["providers"]:
                 omitted = [r for r in provider["arms"] if r["arm"] != "seam"]
-                self.assertEqual({r["arm"] for r in omitted}, {"plain", "zed", "summary"})
+                self.assertEqual({r["arm"] for r in omitted}, {"plain", "zed"})
                 self.assertTrue(all(r["status"] == "not_run" and r["reason"] == "not run on this dispatch"
                                     for r in omitted))
             text = (root / "output/report.md").read_text()
@@ -137,7 +137,7 @@ class NightlyTests(unittest.TestCase):
                 nightly.provider_report("claude", root, "/missing/daemon", True, "zed", zed_long=True)
             report = json.loads((root / "claude-zed.json").read_text())
             self.assertEqual({(r["block"], r["profile"]) for r in report["arms"]},
-                              {(b, p) for b, p, _, _ in nightly.PROFILES})
+                              {("recall", "short"), ("recall", "long"), ("decisions", "long")})
             self.assertFalse(any(r["status"] == "skipped" for r in report["arms"]))
 
     def test_missing_secrets_still_yield_both_provider_artifact(self):

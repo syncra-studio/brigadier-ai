@@ -108,7 +108,7 @@ class ZedBattery(PlainBattery):
                         continue
                 count = active_tokens(events, self.args.provider)
         if count is None:
-            raise RuntimeError("explicit handoff arm: latest native context usage unavailable; cannot apply threshold")
+            raise RuntimeError("Zed arm: latest native context usage unavailable; cannot apply threshold")
         self.hot_tokens = count
 
     def send(self, name, text, fault=None):
