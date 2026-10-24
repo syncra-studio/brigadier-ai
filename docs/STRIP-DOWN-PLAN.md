@@ -204,24 +204,91 @@ end. The card shows the exact diff between the two, minus files that a merge of 
 worker's merge brought into the parent shows under that worker's card, not as the parent's own change. Revert
 restores the start snapshot. A worker's card shows its own +/− against the parent's branch (G21).
 
-**Long sessions (G12).** The CLI never compacts.
-- **Ledger.** The thread keeps `record/ledger.md`: one entry per thing settled (a rule or decision, an open item
-  opened or closed), batched with its other tool calls, never a progress log, and none for a task that settled
+**Long sessions (G12).** Two designs sit behind one switch, `BRIGADIER_LONG_SESSIONS`. It stays off by default
+until the test round passes (run2-D15). Off, the seam design (switch off, below) is what ships. On, the CLI
+compacts in place (switch on, below; run2-D2).
+- **Ledger.** Both designs keep it. The thread keeps `record/ledger.md`: one entry per thing settled (a rule
+  or decision, an open item opened or closed), batched with its other tool calls, never a progress log, and none for a task that settled
   nothing. A standing instruction asks for it; nothing enforces it (Q3). (The "never a progress log" wording
   came from the w123 bench, 10-23: Codex wrote 3.6 entries per small task, +26% wall against plain.)
   - `brigadier ledger add` gives each entry an id and the time. Rules and decisions quote the user. Open items
     (promises, questions waiting on the user) are one kind, closed by id. At every seam they travel first and
     whole (S22b, `research/CONTINUITY.md`).
-- **Nudge.** Past 200k tokens of hot context, Brigadier queues one mid-turn nudge, Delegator style. 200k is an
-  env default, not a cap (Q1, Q2). The thread finishes the step it is on, at a boundary it chooses, then
-  updates the ledger and writes a hand-off note. The hand-off instructions travel in that nudge, not in the
-  standing instructions (§6).
-- **Successor.** A fresh CLI session continues in the same tab, after a visible divider: "Fresh context ·
-  hand-off note", and the note opens from it. It starts at once and carries on from the note by itself, as a
-  Delegator's successor does; it never waits for the user's next message (S22, S23) (user, 2026-10-23: "Why
-  wait? See how delegator works"). Its bootstrap is the first lines of its first user message, also
-  saved to disk (Q4). The successor may search every earlier file of the lineage (Q5).
-- **Codex.** Codex's forced compaction at 90% is a known limit. The divider shows when it happens (Q0).
+- **Switch off (the default, what ships today): seams.** The CLI never compacts.
+  - **Nudge.** Past 200k tokens of hot context, Brigadier queues one mid-turn nudge, Delegator style. 200k is
+    an env default, not a cap (Q1, Q2). The thread finishes the step it is on, at a boundary it chooses, then
+    updates the ledger and writes a hand-off note. The hand-off instructions travel in that nudge, not in the
+    standing instructions (§6).
+  - **Successor.** A fresh CLI session continues in the same tab, after a visible divider: "Fresh context ·
+    hand-off note", and the note opens from it. It starts at once and carries on from the note by itself, as a
+    Delegator's successor does; it never waits for the user's next message (S22, S23) (user, 2026-10-23: "Why
+    wait? See how delegator works"). Its bootstrap is the first lines of its first user message, also
+    saved to disk (Q4). The successor may search every earlier file of the lineage (Q5).
+  - **Codex.** Codex's forced compaction at 90% is a known limit. The divider shows when it happens (Q0).
+- **Switch on: the CLI compacts in place (run2-D2).** Behind `BRIGADIER_LONG_SESSIONS`, off by default, until
+  the test round passes (run2-D15). The tab keeps one CLI session for its whole life. What each lever did on
+  the installed CLIs: `docs/evidence/2026-10-24-long-session-levers.md`.
+  - **The switch.** Read when the daemon starts. Its value is the mode, one of the battery's candidate arms
+    (`tools/continuity-battery/arms.py`): `native-bare` adds nothing; `native` or `restore-only` puts the
+    decisions back; `instructions-only` steers Claude's `/compact`; `native-full` does both;
+    `native+checkpoint` and `native-full+checkpoint` add the checkpoint. An empty or unknown value is off. It
+    applies to a session's thread on Claude and Codex only; everything else keeps seams.
+  - **Codex (P1, run2-D2, run2-D6).** No size seams. The 872k window override goes. Brigadier sets
+    `model_auto_compact_token_limit` only when `BRIGADIER_SEAM_TOKENS` is set explicitly. Codex compacts by
+    itself at its own point (≈245k on a 272k-window model). Brigadier reads the compaction from the completed
+    `contextCompaction` item. The thread shows the CLI's own "Compacted" divider.
+  - **Claude (P2, run2-D5, run2-D7, run2-D12).** At a turn end past the point (≈200k), Brigadier's next turn
+    is `/compact` with keep-instructions: open items; decisions in the user's words with their ledger ids;
+    failed commands with their error lines; checked claims; files changed; the last test and its command; the
+    next step; skills in use; exact evidence pointers, `brigadier brain search/read` ids included; never a
+    secret (D71). Only the `instructions` arms send them.
+    - No PreCompact refuse hook and no `DISABLE_AUTO_COMPACT`.
+    - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is the point + 50k: the backstop for a turn that runs on. Claude
+      compacts ≈20k below its window, so at ≈230k.
+    - A user's own window or `autoCompactEnabled: false` wins: Brigadier sets no backstop, and its own
+      `/compact` at the point still runs (G17).
+    - `idleCompaction: false` stays (run2-D12).
+  - **Decisions put back whole (run2-D8, S22b).** After every compaction, the ledger's open items, rules and
+    decisions go back word for word.
+    - **Claude:** 8 `SessionStart` hooks on `compact` (`brigadierd hook restore --slot k`). Each prints one
+      labelled slice of at most 9,500 characters, plus a lookup line (`brigadier brain search/read`).
+    - **Codex:** one `thread/inject_items` note, marked `brigadier-restore <compaction-id> <fingerprint>`.
+    - **Receipts.** Brigadier reads the CLI's own file: Claude's hook attachments after the
+      `compact_boundary`, the Codex rollout's note naming the compaction. Every active entry must arrive whole,
+      exactly once. The state is kept in `record/long.json`, so a retry or a restart checks the file instead of
+      sending again (tested: answer lost, receipt lost, restart).
+    - **What the user sees:** the divider only. A notice shows only on failure (D13). With Claude's hooks off
+      in the user's settings, a one-time notice says so. The ledger is unchanged (D28: append-only).
+  - **Checkpoint (P2b, run2-D9), in the `+checkpoint` arms.** `brigadier checkpoint set <text>` and
+    `brigadier checkpoint show`. A separate, replaceable record (`record/checkpoint.md`, history in
+    `checkpoints.jsonl`), not the ledger (D28), at most 8,000 characters. It holds the goal; open requests with
+    their Brain item ids and the exact `brigadier brain read <session> --item <id>`; important command results
+    by item id; files changed; the last test and its command; the next step; skills in use. It needs the
+    Brain's read by id (P7).
+    - **Codex:** past the point (≈200k, so before Codex's own), Brigadier asks for it in a turn of its own,
+      hidden in the thread like `/compact`, then calls `thread/compact/start`. No user message joins the ask or slips in between: it waits
+      until the compaction ends. A checkpoint written goes back inside the decisions note, and the receipt
+      checks it whole. None written: Codex compacts anyway, and the checkpoint is marked missing. Codex
+      compacting by itself during the ask calls Brigadier's compaction off. The run is kept in
+      `record/long.json`, so a restart goes on: asked → compact with what was written, never asking again;
+      compacting → compact again.
+    - **Claude:** the steered `/compact` asks the summary to end with a "## Checkpoint" section. Brigadier
+      keeps that section as the record. A compaction Claude starts by itself marks it missing.
+    - Codex's own token_budget, history_notes and new_context stay off.
+  - **Fallback seam (run2-D10, P3).** A fresh session starts only when:
+    - compaction fails;
+    - Claude stops with "Autocompact is thrashing";
+    - the decisions can't be put back whole;
+    - the context stays above half the point after compacting (**proposed**; the threshold waits on the test
+      round).
+
+    On `prompt_too_long`, the CLI compacts first and the failed request goes again once, by itself. A second
+    failure starts a fresh session that carries the request. The seam's hand-off gets P3's repairs: the
+    lookup instruction, tool-evidence pointers and the working state. Moves to another CLI (D46) and quota
+    fallback across CLIs (D23, D25) still use the seam. Account and model switches resume the same session
+    (D14).
+  - **Not built: a higher Codex output cap (P5, run2-D11).** On Codex 0.164.0, `tool_output_token_limit`
+    changed nothing on gpt-6-luna with code-mode `exec`. Revisit when a Codex version honours it.
 
 **Brain (G14).** The Brain is a pull-only search over the project's records:
 - every session's ledger;
@@ -2065,12 +2132,18 @@ sessions with token economy. Each has a measurable bar against the best rival to
   request, the latest exchange and a token-budgeted verbatim slice, and works across providers
   (`EXCEL-long-sessions.md` §2).
 - **Our bar:**
-  - **No compaction:** 0 in Claude sessions of any length (Codex's are counted, no bar). **Fewer tokens:**
-    price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the short one (< 150k).
-  - **Recall** ≥ 90% of planted items across forced seams. The **cold return** bar went with S24; the nightly
-    battery reports cold-return cost, never gates (Delegator's judgement, 2026-10-23: the research's saving
-    is one uncached read per cold return; plain Claude Code never restarts on a cold cache; S24 stays
-    dropped; the nightly battery reports cold-return cost, never gates).
+  - **Compaction in place** (behind `BRIGADIER_LONG_SESSIONS`, off by default, until the test round passes,
+    run2-D15): 0 size seams on Claude and Codex; the CLI compacts in the same session (run2-D2, run2-D5,
+    run2-D6). After every compaction, every active ledger entry arrives whole, exactly once, by the receipt
+    (run2-D8). A fresh session only on the fallbacks (run2-D10); "above half the point after compacting" is
+    proposed, waiting on the test round. With the switch off, the old bar holds: **no compaction**, 0 in
+    Claude sessions of any length (Codex's are counted, no bar).
+  - **Fewer tokens:** price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the
+    short one (< 150k).
+  - **Recall** ≥ 90% of planted items across compactions (switch on) or forced seams (switch off). The **cold
+    return** bar went with S24; the nightly battery reports cold-return cost, never gates (Delegator's
+    judgement, 2026-10-23: the research's saving is one uncached read per cold return; plain Claude Code never
+    restarts on a cold cache; S24 stays dropped; the nightly battery reports cold-return cost, never gates).
     **Done:** each scripted task still passes its test command.
   - **Decisions survive** (CONTINUITY §3.7) (user, 2026-10-23: "find a fix for this"): after three seams, ≥ 9 of 10
     planted items applied without being asked where they apply; a brief derived from them has 0 contradictions and
