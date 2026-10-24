@@ -678,8 +678,24 @@ export function ConversationView({
       parts: [{ type: "text", text: item.text }],
     }));
     const find = (id: string) => queued.findIndex((item) => item.id === id);
+    // What waits includes a send not yet in the daemon's queue, read when asked: assistant-ui
+    // keeps its own copy of a sent message in the thread unless the queue grew as it sent, and
+    // a queued message shows in the rail only (#491).
+    let shown: { waiting: readonly PendingMessage[]; items: readonly QueueItemState[] } | null = null;
     return {
-      items: states,
+      get items() {
+        const waiting = useApp.getState().pending.filter((entry) => entry.conversationId === conversationId && entry.queued);
+        if (waiting.length === 0) return states;
+        if (shown && shown.waiting.length === waiting.length && shown.waiting.every((entry, index) => entry === waiting[index])) {
+          return shown.items;
+        }
+        const rows = [
+          ...states,
+          ...waiting.map((entry) => ({ id: entry.localId, prompt: entry.text, parts: [{ type: "text" as const, text: entry.text }] })),
+        ];
+        shown = { waiting, items: rows };
+        return rows;
+      },
       steerItems: [],
       // Sent with nothing running, or the follow-up's other way when steering is the default.
       enqueue: (message) => submit(message, "auto"),

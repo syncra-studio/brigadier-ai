@@ -103,8 +103,9 @@ mockIPC((command, payload) => {
     case "sendMessage": {
       sent.push(req);
       const { text, attachments, mentions } = req;
-      // The daemon's outcome: a slot asked for waits in the queue, anything else is sent.
-      if (req.queueIndex !== null) {
+      // The daemon's outcome: a slot asked for waits in the queue, as does anything sent while
+      // the answer works (`busySend`); anything else is sent.
+      if (req.queueIndex !== null || which === "busySend") {
         const item = { id: `q-${sent.length}`, text, attachments, mentions, queuedAtMs: Date.now(), editedAtMs: null };
         return { method: req.method, outcome: { type: "queued", item } };
       }
@@ -621,7 +622,39 @@ async function stopCase(seen: Record<string, unknown>) {
   seen.said = document.body.textContent?.includes("The turn would not stop.") ?? false;
 }
 
+/**
+ * Issue 491: a message sent from the composer while the answer works waits in the queue rail only:
+ * no copy of it in the thread until it is delivered, a file attached to it too.
+ */
+async function busySendCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  setRun("running");
+  setState({ type: "working" });
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "while busy" });
+  await until("the typed text", () => field()?.textContent === "while busy");
+  const files = new DataTransfer();
+  files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+  field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: files, bubbles: true, cancelable: true }));
+  await until("the upload", () => finishUpload !== null);
+  finishUpload!();
+  await until("the upload done", () => sendButton()?.disabled === false);
+  await fixtureInput({ type: "key", key: "Enter" });
+  await until("the message sent", () => sends().length === 1, 3000);
+  await sleep(50);
+  seen.sending = busyView();
+  await sleep(300);
+  seen.queued = busyView();
+}
+
+/** Where the `busySend` case's message shows: queue rail rows and thread bubbles. */
+const busyView = () => ({
+  rail: [...document.querySelectorAll('[data-slot="message-queue-item"]')].filter((node) => node.textContent?.includes("while busy")).length,
+  chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes("while busy")).length,
+});
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
+  busySend: busySendCase,
   focus: focusCase,
   uploading: uploadingCase,
   paused: pausedCase,

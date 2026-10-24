@@ -113,3 +113,9 @@ test("Stop shows the turn stopped the moment it is pressed; a stop that fails sh
   assert.equal(seen.afterFailure, "stop");
   assert.equal(seen.said, true);
 });
+
+test("a message sent while the answer works, a file attached, waits in the queue rail, not also in the thread (issue 491)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "busySend");
+  assert.deepEqual(seen.sending, { rail: 1, chat: 0 });
+  assert.deepEqual(seen.queued, { rail: 1, chat: 0 });
+});
