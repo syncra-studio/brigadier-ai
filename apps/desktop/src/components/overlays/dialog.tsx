@@ -55,21 +55,50 @@ function DialogPlainContent(props: React.ComponentProps<typeof DialogPrimitive.C
   return <DialogPrimitive.Content {...props} />;
 }
 
+/**
+ * Keeps an open dialog's top edge where it first opened, centred in the window. A centred card
+ * whose content changes after it opens (a preview that arrives, a line that loads) moves both
+ * edges at once, a jump; held by its top it only grows or shrinks downward. It moves up only as
+ * far as it must to stay in the window, and centres again when the window resizes. A dialog that
+ * places its top itself (a `top-*` class, which replaces `top-(--dialog-top)`) keeps its own.
+ */
+function pinTop(card: HTMLDivElement | null) {
+  if (!card) return;
+  const room = () => document.documentElement.clientHeight - card.offsetHeight;
+  let top = 0;
+  const place = () => {
+    card.style.setProperty("--dialog-top", `${Math.max(0, Math.min(top, room()))}px`);
+  };
+  const centre = () => {
+    top = Math.round(Math.max(0, room() / 2));
+    place();
+  };
+  centre();
+  const observer = new ResizeObserver(place);
+  observer.observe(card);
+  window.addEventListener("resize", centre);
+  return () => {
+    observer.disconnect();
+    window.removeEventListener("resize", centre);
+  };
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+}: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "ref"> & {
   showCloseButton?: boolean;
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
+        ref={pinTop}
         data-slot="dialog-content"
         className={cn(
-          "data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 bg-popover text-popover-foreground ring-foreground/10 data-[state=closed]:animate-out data-[state=open]:animate-in rounded-dialog fixed start-1/2 top-1/2 z-50 grid w-full max-w-sm -translate-x-1/2 -translate-y-1/2 gap-4 p-5 text-sm ring-1 duration-100 outline-none rtl:translate-x-1/2",
+          "data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 bg-popover text-popover-foreground ring-foreground/10 data-[state=closed]:animate-out data-[state=open]:animate-in rounded-dialog fixed start-1/2 top-(--dialog-top) z-50 grid w-full max-w-sm -translate-x-1/2 gap-4 p-5 text-sm ring-1 duration-100 outline-none rtl:translate-x-1/2",
           className,
         )}
         {...props}

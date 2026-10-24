@@ -12,6 +12,15 @@ import { cn } from "@/lib/utils";
 import { previewRemoveProject } from "@/state/actions";
 
 /**
+ * How long the dialog waits for the daemon's preview before it opens on "Looking at…": a quick
+ * preview opens straight on the form, so the card doesn't open small and then grow.
+ */
+const PREVIEW_WAIT_MS = 200;
+
+/** The preview for one project: what it holds, why it couldn't be had, and whether the wait is over. */
+type Look = { id: string; preview: ProjectRemoval | null; error: string | null; due: boolean };
+
+/**
  * Removes a project from Brigadier. The daemon's preview says what goes: its conversations
  * (archived ones too), their worktrees, the merged branches Brigadier made for them (unmerged
  * ones stay) and, if the user leaves it checked, its Brain. The repository's files never go.
@@ -21,12 +30,35 @@ export function RemoveProjectDialog({
   project,
   onOpenChange,
 }: {
-  /** The project to remove; the dialog is open while it is set. */
+  /** The project to remove; the dialog is open while it is set (once its preview is in, or after a short wait). */
   project: Project | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const id = project?.id ?? null;
+  const [look, setLook] = useState<Look | null>(null);
+
+  useEffect(() => {
+    if (id === null) return;
+    let current = true;
+    const update = (change: Partial<Look>) =>
+      current &&
+      setLook((last) => ({ ...(last?.id === id ? last : { id, preview: null, error: null, due: false }), ...change }));
+    const timer = setTimeout(() => update({ due: true }), PREVIEW_WAIT_MS);
+    previewRemoveProject(id).then(
+      (removal) => update({ preview: removal }),
+      (cause: unknown) => update({ error: errorText(cause) }),
+    );
+    return () => {
+      current = false;
+      clearTimeout(timer);
+      setLook(null);
+    };
+  }, [id]);
+
+  const shown = look !== null && look.id === id ? look : null;
+  const ready = shown !== null && (shown.due || shown.preview !== null || shown.error !== null);
   return (
-    <Dialog open={project !== null} onOpenChange={onOpenChange}>
+    <Dialog open={project !== null && ready} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className={cn(PROJECT_DIALOG_CARD, "max-w-project-dialog max-h-full gap-7 overflow-y-auto p-6")}
@@ -36,7 +68,15 @@ export function RemoveProjectDialog({
           (event.currentTarget as HTMLElement).focus();
         }}
       >
-        {project && <RemoveFlow key={project.id} project={project} onOpenChange={onOpenChange} />}
+        {project && shown && (
+          <RemoveFlow
+            key={project.id}
+            project={project}
+            preview={shown.preview}
+            error={shown.error}
+            onOpenChange={onOpenChange}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -44,25 +84,16 @@ export function RemoveProjectDialog({
 
 function RemoveFlow({
   project,
+  preview,
+  error,
   onOpenChange,
 }: {
   project: Project;
+  preview: ProjectRemoval | null;
+  error: string | null;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [preview, setPreview] = useState<ProjectRemoval | null>(null);
   const [report, setReport] = useState<RemoveProjectReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let current = true;
-    previewRemoveProject(project.id).then(
-      (removal) => current && setPreview(removal),
-      (cause: unknown) => current && setError(errorText(cause)),
-    );
-    return () => {
-      current = false;
-    };
-  }, [project.id]);
 
   if (report) return <Removed name={project.name} report={report} onOpenChange={onOpenChange} />;
   if (!preview) {
