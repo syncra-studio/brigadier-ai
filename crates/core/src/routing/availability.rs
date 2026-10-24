@@ -103,16 +103,6 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
             incoming.hidden_models.push(model.clone());
         }
     }
-    // A client open before the optional catalog existed can't enable its new skills by
-    // saving an unrelated setting from its older off-list.
-    if incoming.settings_version < 6 {
-        for id in crate::model::OPTIONAL_SKILL_IDS {
-            incoming.skills_off.retain(|off| off != id);
-            if current.skills_off.iter().any(|off| off == id) {
-                incoming.skills_off.push((*id).to_owned());
-            }
-        }
-    }
     incoming.settings_version = incoming.settings_version.max(current.settings_version);
     incoming
 }
@@ -137,8 +127,6 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 ///
 /// Version 4: account switching is set per agent, and the one switch saved before covers
 /// every agent: off, every agent's work stays on its default account.
-///
-/// Version 6: the new optional skills start off for existing users too.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -162,13 +150,6 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
         for provider in ProviderKind::ALL {
             if !next.manual_accounts.contains(&provider) {
                 next.manual_accounts.push(provider);
-            }
-        }
-    }
-    if settings.settings_version < 6 {
-        for id in crate::model::OPTIONAL_SKILL_IDS {
-            if !next.skills_off.iter().any(|off| off == id) {
-                next.skills_off.push((*id).to_owned());
             }
         }
     }
@@ -251,39 +232,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(saved.user_name, "Ann");
-        assert!(migrate(&saved).is_some());
-    }
-
-    #[test]
-    fn optional_skills_start_off_once_and_keep_the_users_later_choice() {
-        let saved: Settings =
-            serde_json::from_str(r#"{"skillsOff":["agents:user:mine"],"settingsVersion":5}"#)
-                .unwrap();
-        let mut next = migrate(&saved).unwrap();
-        for id in crate::model::OPTIONAL_SKILL_IDS {
-            assert!(next.skill_off(id, None));
-            assert!(Settings::default().skill_off(id, None));
-        }
-        assert!(next.skill_off("agents:user:mine", None));
-        next.skills_off
-            .retain(|id| id != "brigadier:optional:retro");
-        assert!(migrate(&next).is_none());
-        assert!(!next.skill_off("brigadier:optional:retro", None));
-    }
-
-    #[test]
-    fn a_client_from_before_the_optional_catalog_keeps_the_current_choices() {
-        let old: Settings =
-            serde_json::from_str(r#"{"skillsOff":[],"settingsVersion":5,"userName":"Ann"}"#)
-                .unwrap();
-        let mut current = Settings::default();
-        assert_eq!(rebase(&current, old.clone()).skills_off, current.skills_off);
-        current
-            .skills_off
-            .retain(|id| id != "brigadier:optional:retro");
-        let rebased = rebase(&current, old);
-        assert_eq!(rebased.skills_off, current.skills_off);
-        assert_eq!(rebased.user_name, "Ann");
+        assert!(migrate(&saved).is_none());
     }
 
     #[test]

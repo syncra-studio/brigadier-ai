@@ -704,19 +704,7 @@ impl SessionManager {
             )),
             mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),
             tools: ToolSet::Lean,
-            skill_plugins: computer
-                .into_iter()
-                .map(|kit| kit.plugin)
-                .chain(
-                    self.optional_skill_plugins(
-                        &conversation_id,
-                        task.plain
-                            .as_ref()
-                            .filter(|plain| plain.lean)
-                            .map(|plain| plain.skills.as_slice()),
-                    ),
-                )
-                .collect(),
+            skill_plugins: computer.into_iter().map(|kit| kit.plugin).collect(),
             installed_skills: Vec::new(),
             switched_off,
             add_dirs: vec![record],

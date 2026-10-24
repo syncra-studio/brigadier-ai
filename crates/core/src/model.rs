@@ -1196,13 +1196,7 @@ fn default_true() -> bool {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 6;
-
-/// Shipped optional skills, offered in Settings and supplied only after the user turns them on.
-pub(crate) const OPTIONAL_SKILL_IDS: &[&str] = &[
-    "brigadier:optional:retro",
-    "brigadier:optional:writing-for-agents",
-];
+pub const SETTINGS_VERSION: u32 = 5;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1260,10 +1254,7 @@ impl Default for Settings {
             browser_downloads_dir: String::new(),
             browser_ask_downloads: false,
             mcp_servers_off: Vec::new(),
-            skills_off: OPTIONAL_SKILL_IDS
-                .iter()
-                .map(|id| (*id).to_owned())
-                .collect(),
+            skills_off: Vec::new(),
             project_switches: Vec::new(),
             servers_everywhere: Vec::new(),
             skills_everywhere: Vec::new(),

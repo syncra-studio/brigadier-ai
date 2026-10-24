@@ -17,7 +17,7 @@ type State = {
 test("skills: drawn states, separate project switches, folders and Claude always on", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "integrations.html?drive=skills", "integrations-result", 10000)) as Record<string, unknown> & Record<string, State>;
   assert.equal(seen.error, undefined);
-  for (const state of ["grill-me", "delegator", "claude-skill", "plugin-skill", "retro"]) {
+  for (const state of ["grill-me", "delegator", "claude-skill", "plugin-skill"]) {
     assert.equal(seen[state]!.settingsColumn, true, state);
     assert.equal(seen[state]!.pagePadding, seen.skills!.pagePadding, state);
   }
@@ -42,15 +42,9 @@ test("skills: drawn states, separate project switches, folders and Claude always
   assert.equal(seen["plugin-skill"]!.title, "spreadsheets:chart");
   assert.match(seen["plugin-skill"]!.text, /From the spreadsheets@openai-primary-runtime plugin · Codex reads this folder/);
   assert.match(seen["plugin-skill"]!.text, /Claude doesn't read ~\/.codex\/plugins\/cache\/openai-primary-runtime\/spreadsheets\/26.1017.22135\/skills, so Brigadier gives it to them/);
-  assert.equal(seen.retro!.title, "retro");
-  assert.deepEqual(seen.retro!.switches, [{ label: "retro", checked: "false", disabled: false }]);
-  assert.match(seen.retro!.text, /Brigadier supplies this folder when enabled/);
-  assert.match(seen.retro!.text, /Off: Brigadier doesn't give it to Claude workers/);
-  assert.deepEqual(seen.retroEnabled!.switches, [{ label: "retro", checked: "true", disabled: false }]);
-  assert.match(seen.retroEnabled!.text, /Given by Brigadier/);
   assert.match(seen["empty-skills"]!.text, /No skills found/);
   assert.equal(seen["empty-skills"]!.tiles.length, 0);
-  for (const state of ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "retro", "empty-skills", "narrow-skills"]) {
+  for (const state of ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "empty-skills", "narrow-skills"]) {
     assert.equal(seen[state]!.overflow, false, state);
   }
   assert.equal(seen.duplicateSwitch, true);

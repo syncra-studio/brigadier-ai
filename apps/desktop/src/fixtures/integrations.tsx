@@ -480,7 +480,7 @@ const SIGN_IN_STATES: Record<string, Partial<IntegrationServer>> = {
   "linear-partial": { signIn: { claude: native, codex: { kind: "needed" } } },
   "linear-not-mac": { signIn: { claude: native, codex: { kind: "unsupported" } } },
 };
-const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "retro", "empty-skills", "narrow-skills"];
+const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "empty-skills", "narrow-skills"];
 
 // The Plugins · Where it's used board: the user's projects, steady-app's own two servers and the exceptions it draws.
 const PROJECTS: IntegrationProject[] = [
@@ -578,14 +578,6 @@ function snapshotFor(state: string): IntegrationSnapshot {
     const target = snapshot.catalog.servers.find((server) => server.name === (state.startsWith("linear") ? "linear" : "notion"))!;
     Object.assign(target, structuredClone(SIGN_IN_STATES[state]));
   }
-  if (state === "retro") {
-    snapshot.catalog.skills.push({
-      id: "brigadier:optional:retro", name: "retro",
-      description: "Conduct a retrospective on a coding session. Type /retro to use it; includes writing-for-agents.",
-      locations: ["~/.brigadier/optional-skills/retro/skills/retro"], nativeAgents: [], canSwitchOff: true,
-    });
-    snapshot.switches.skillsOff.push("brigadier:optional:retro");
-  }
   if (state === "empty-servers") snapshot.catalog.servers = [];
   if (state === "empty-skills") snapshot.catalog.skills = [];
   if (state.startsWith("empty")) snapshot.catalog.untrustedProjects = [];
@@ -629,7 +621,7 @@ function viewFor(state: string) {
   if (where) return { initialTab: where.tab ?? "servers" as const, ...(where.name ? { initialId: ID(where.name) } : {}), ...(where.project ? { initialProject: where.project } : {}) };
   const tab = SKILL_STATES.includes(state) ? "skills" as const : "servers" as const;
   const name = state === "claude-skill" ? "higgsfield-websites" : state === "plugin-skill" ? "spreadsheets:chart" : state === "unreadable" ? "figma-dev" : state in SIGN_IN_STATES ? state.split("-")[0] : state;
-  const item = (tab === "skills" ? snapshotFor(state).catalog.skills : snapshotFor(state).catalog.servers).find((entry) => entry.name === name);
+  const item = (tab === "skills" ? skills : snapshotFor(state).catalog.servers).find((entry) => entry.name === name);
   return { initialTab: tab, ...(item ? { initialId: item.id } : {}) };
 }
 
@@ -893,10 +885,6 @@ async function drive(change: (state: string) => void) {
   for (const state of skillMode ? SKILL_STATES : SERVER_STATES) {
     await openState(state);
     seen[state] = readState();
-    if (state === "retro") {
-      click("retro"); await pause();
-      seen.retroEnabled = readState();
-    }
   }
   await openState(skillMode ? "skills" : "servers");
   if (skillMode) {

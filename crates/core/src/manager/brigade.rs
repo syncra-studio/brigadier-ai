@@ -113,7 +113,7 @@ fn write_plugin(dir: &Path, skill: &str) -> std::io::Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
-pub(super) fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
+fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read_to_string(path).is_ok_and(|current| current == contents) {
         return Ok(());
     }
