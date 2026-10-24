@@ -2120,10 +2120,15 @@ impl Flow {
     /// Waits until the requests are over and the thread's turn too: a report's turn for a
     /// request that already ended shows nothing working on the board while it runs.
     pub async fn idle(&self) -> Board {
+        self.idle_in(&self.conversation).await
+    }
+
+    /// [`Self::idle`] for the session `id`.
+    pub async fn idle_in(&self, id: &ConversationId) -> Board {
         let deadline = tokio::time::Instant::now() + *PATIENCE;
         loop {
-            let board = self.settled().await;
-            let conv = self.manager.conv(&self.conversation).unwrap();
+            let board = self.settled_in(id).await;
+            let conv = self.manager.conv(id).unwrap();
             if conv.idle().await {
                 return board;
             }

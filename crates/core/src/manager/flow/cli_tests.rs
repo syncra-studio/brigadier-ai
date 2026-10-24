@@ -231,7 +231,8 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
                 .any(|task| task.state == crate::work::TaskState::Reported)
         })
         .await;
-        flow.settled_in(session).await;
+        // The report's turn too, so `read other` below sees the session's last answer.
+        flow.idle_in(session).await;
     }
     answers
         .lock()
