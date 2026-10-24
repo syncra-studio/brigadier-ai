@@ -29,6 +29,24 @@ import type { PendingMessage } from "@/state/store";
 const NUDGE_MARK = "[Brigadier] A fresh session will continue this work.";
 const HANDOFF_MARK = "[Brigadier hand-off ";
 const HANDOFF_END = "[End of the hand-off]";
+const CARRY_ON = "Carry on from the hand-off note.";
+
+/**
+ * How Brigadier's own messages to the thread's CLI start (run2-D44: never a bubble): a card's
+ * answer, a resume, a background command's result, another session's message, a preview's end,
+ * a carry-on after a limit. The CLI's reply to one still shows.
+ */
+const BRIGADIER_SAYS =
+  /^\[(?:message from session |decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier: this conversation continues |Your last turn stopped early)/;
+
+/** A notice the CLI starts a turn of its own with, not the user's: a background job's end. */
+const CLI_NOTICE = /^(?:<task-notification>|\[your background command )/;
+
+/** Whether a call is the hand-off's upkeep the nudge asks for: the ledger, or the note's file. */
+function upkeep(event: FileEntry["event"]): boolean {
+  const said = event.type === "toolCall" ? (event.input ?? "") : event.type === "command" ? event.command : event.type === "fileChanges" ? event.changes.map((change) => change.path).join("\n") : null;
+  return said !== null && (said.includes("brigadier ledger") || /[/\\]record[/\\]handoff[/\\]/.test(said));
+}
 
 /** How Brigadier's checkpoint request starts (`long_sessions/checkpoint.rs` ASK_MARK). */
 const CHECKPOINT_MARK = "[Brigadier · checkpoint]";
@@ -443,7 +461,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   const times: [number, number][][] = [];
   let block: Block | null = null;
   const internal = new Set<Block>();
-  let maintenance = false;
+  let maintenance: "turn" | "steered" | "upkeep" | null = null;
   const seams = view.seams ?? [];
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
   // A successor that started by itself: its first message is Brigadier's word to carry on.
@@ -461,25 +479,35 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     let { event } = entry;
-    if (event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK)) {
-      const end = event.text.lastIndexOf(HANDOFF_END);
+    // A successor's first message: the hand-off, then the user's words, if any.
+    const handoff = event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
+    if (handoff && event.type === "message") {
+      const end = event.text.indexOf(HANDOFF_END);
       if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
     }
-    // Brigadier's one message at a seam is its line in the turn, never a bubble of the user's;
-    // sent as a turn of its own, that turn has no user message, as a successor's that carried on.
     const asked = event.type === "message" && event.role === "user" ? event : null;
-    const own = !!asked && (carried.has(asked.itemId) || asked.text === "Carry on from the hand-off note.");
+    // Brigadier's own turn carries no request of the user's: what the user sent shows as ever.
+    const brigadiers = startsTurn(entry) && view.turns[blocks.length]?.requests.length === 0;
+    // The hand-off is under the hood (run2-D44): Brigadier's word to write the note, the turn
+    // it starts, and from the ledger's upkeep on, the rest of a turn it was steered into; the
+    // work the CLI finishes first still shows. A notice the CLI starts a turn with goes on it.
     if (asked) {
-      maintenance = nudges.has(asked.itemId) || asked.text.trimStart().startsWith(NUDGE_MARK) || asked.text.trimStart().startsWith(HANDOFF_MARK);
-      if (maintenance && startsTurn(entry)) {
-        if (block) settle(block, view.turns[blocks.length - 1]);
-        block = emptyBlock(asked.itemId, entry.atMs ?? 0, []);
-        blocks.push(block);
-        internal.add(block);
-        times.push([[position, entry.atMs ?? 0]]);
+      const text = asked.text.trimStart();
+      const nudge = nudges.has(asked.itemId) || text.startsWith(NUDGE_MARK);
+      if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && CLI_NOTICE.test(text))) maintenance = null;
+      if (nudge) {
+        if (startsTurn(entry)) {
+          maintenance = "turn";
+          if (block) settle(block, view.turns[blocks.length - 1]);
+          block = emptyBlock(asked.itemId, entry.atMs ?? 0, []);
+          blocks.push(block);
+          internal.add(block);
+          times.push([[position, entry.atMs ?? 0]]);
+        } else maintenance = "steered";
+        return;
       }
-    }
-    if (maintenance) return;
+    } else if (maintenance === "steered" && upkeep(event)) maintenance = "upkeep";
+    if (maintenance === "turn" || (maintenance === "upkeep" && !asked)) return;
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && workerNotices(asked.text);
     const queued = asked && queuedId(asked.text);
@@ -488,11 +516,17 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep.
     // Its checkpoint request before Codex compacts is Brigadier's too (run2-D9).
-    // Brigadier's own turn carries no request of the user's: what the user sent shows as ever.
-    const brigadiers = startsTurn(entry) && view.turns[blocks.length]?.requests.length === 0;
     const compacting =
       !!asked && session && brigadiers && (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK));
-    if (asked && (own || compacting || news || unshown || nudges.has(asked.itemId))) {
+    // Brigadier's word to a session's CLI is no bubble (run2-D44): its own turn's, or a turn
+    // of a request already shown (a background command's end), or steered in.
+    const carries = view.turns[blocks.length]?.requests ?? [];
+    const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
+    const says = !!asked && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore);
+    // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
+    // its word to carry on, no bubble; the successor's work shows.
+    const own = !!asked && (carried.has(asked.itemId) || (brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
+    if (asked && (own || compacting || news || unshown || says)) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
@@ -501,7 +535,6 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text }));
-      else if (!own && !compacting && !unshown) block?.nudges.push(position);
       return;
     }
     if (startsTurn(entry) && event.type === "message") {

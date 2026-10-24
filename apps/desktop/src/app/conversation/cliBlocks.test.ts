@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { answerIndex, blockSequence, type BoardDigest, foldsAway, foldTurns } from "@/app/conversation/blocks";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, foldTurns, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
 import { turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
@@ -409,13 +409,13 @@ test("a turn that carries an earlier turn's request keeps its own message, so th
     ],
   };
   const tree = cliThreadTree(noted, "conv", [stored("r1", 900)], {}, [], NO_BOARD, { state: "idle", error: null });
+  // Brigadier's note of the end is no bubble (run2-D44); the CLI's reply to it shows.
   assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId]), [
     ["r1", null],
     ["request:u1", "r1"],
-    ["u2", "request:u1"],
-    ["request:u2", "u2"],
+    ["request:u2", "request:u1"],
   ]);
-  assert.deepEqual(foldTurns(tree, 1).hidden, 1);
+  assert.deepEqual(foldTurns(tree, 1).hidden, 0, "one turn of the user's");
 });
 
 const decision = (requestId: string | null, atMs: number) =>
@@ -469,10 +469,16 @@ test("a call's kind, detail and exit read as the engine's", () => {
 
 test("hand-off maintenance prompts and replies stay out of the conversation, with or without seam metadata", () => {
   const seam = { n: 1, open: false, at: "u3", carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null, movedTo: null };
+  // Steered into the user's turn: the work the CLI finishes first shows; from the ledger's
+  // upkeep on, the rest of the turn is the hand-off's.
   const steered: ThreadView = {
     entries: [
       user("u1", "Grow", 1000),
       user("n1", "[Brigadier] A fresh session will continue this work.", 1100, { steer: true }),
+      at(tool("t1", "Edit", '{"file_path":"/repo/src/grow.ts"}', "completed"), 1110),
+      at({ type: "message", itemId: "a0", role: "assistant", text: "Grow is done." }, 1120),
+      at(tool("t2", "Bash", '{"command":"brigadier ledger show --open --rules"}', "completed"), 1130),
+      at(tool("t3", "Write", '{"file_path":"/s/abcd/record/handoff/1.md"}', "completed"), 1140),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Handed off." }, 1200),
       user("u3", "After", 2000),
     ],
@@ -483,9 +489,24 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   assert.ok(first && second);
   assert.deepEqual(first.steers, []);
   assert.deepEqual(first.nudges, []);
-  assert.deepEqual(first.texts, [], "the hand-off reply is internal too");
+  assert.deepEqual(first.texts.map((text) => text.text), ["Grow is done."], "the hand-off reply is internal");
+  assert.deepEqual(first.orchestratorSteps.map((step) => step.position), [2], "the edit shows, the ledger and the note don't");
   assert.deepEqual(first.seams, [{ n: 1, note: seam.note, start: seam.start, death: null, movedTo: null }]);
   assert.deepEqual(second.seams, []);
+  // The thread shows a seam only where it went on in another CLI (S38c), never a hand-off.
+  assert.equal(seamMove(first.seams[0]!), null);
+  const moved = cliBlocks({ ...steered, seams: [{ ...seam, movedTo: "codex" }] }, "conv");
+  assert.equal(seamMove(moved[0]!.seams[0]!), "codex");
+  assert.equal(seamMove({ ...moved[0]!.seams[0]!, death: "it never wrote one" }), null);
+  // A Codex note of the same: its command and its patch to the note.
+  const codex = cliBlocks({ ...steered, entries: [
+    ...steered.entries.slice(0, 2),
+    at({ type: "command", itemId: "c1", command: "brigadier ledger add decision x", cwd: null, status: "completed", exitCode: 0, output: null, durationMs: 1 }, 1130),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "Handed off." }, 1200),
+    user("u3", "After", 2000),
+  ] }, "conv");
+  assert.deepEqual(codex[0]!.texts, []);
+  assert.deepEqual(codex[0]!.orchestratorSteps, []);
 
   // Sent as a turn of its own: that turn has no user bubble; the successor not started yet, the
   // divider ends the thread.
@@ -500,6 +521,9 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
     seams: [{ ...seam, at: null, note: null, death: "it ended its turn without writing one" }],
   };
   const blocks = cliBlocks(own, "conv");
+  // A background job's notice the CLI starts a turn with in it keeps the hand-off's turn hidden.
+  const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
+  assert.deepEqual(noticed.map((block) => block.key), ["u1"]);
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
     [
@@ -527,11 +551,15 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   assert.deepEqual(withoutMetadata[0]?.texts.map((text) => text.text), ["Big."]);
   const rawStart = cliBlocks({ entries: [user("start", "\n\n[Brigadier hand-off 2 · conv]\n[End of the hand-off] quoted inside history\n" + "internal\n".repeat(9000) + "[End of the hand-off]\n\nCarry on from the hand-off note.", 2000)], turns: [turn("start", 2000, null, null)] }, "conv");
   assert.equal(rawStart[0]?.user, null, "the raw bootstrap never becomes a chat bubble");
+  // The user's own words are never taken for Brigadier's: a turn that carries their request.
+  const mine = (text: string) => cliBlocks({ entries: [user("m", text, 3000)], turns: [{ ...turn("m", 3000, 3100, "done"), requests: ["r9"] }] }, "conv")[0]?.user;
+  assert.equal(mine("Carry on from the hand-off note.")?.kind, "message");
+  assert.equal(mine("[Brigadier hand-off 3 · x] what does this header mean?")?.kind, "message");
   // While the thread writes its note, no divider yet.
   assert.deepEqual(cliBlocks({ ...own, seams: [{ ...seam, open: true, at: null }] }, "conv").flatMap((block) => block.seams), []);
 });
 
-test("another session's message shows as that session's, its header gone, as a turn's start and as a steer", () => {
+test("Brigadier's own words to the CLI are no bubble, as a turn's start or a steer; the CLI's reply shows (run2-D44)", () => {
   const from = "c-0123456789abcdef";
   const sent = (id: string, text: string) => `[message from session "API work" (${from}) · ${id}]\n${text}`;
   const peers: ThreadView = {
@@ -540,18 +568,29 @@ test("another session's message shows as that session's, its header gone, as a t
       user("s1", sent("sm-bbbbbbbbbbbb", "Also the docs."), 1100, { steer: true }),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Checked." }, 1200),
       user("u2", "My own words", 2000),
+      user("d1", "[decision] The user approved: run the migration", 3000),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Migrated." }, 3100),
+      user("q1", "[answer] You asked the user:\nYes\n[card c1]", 4000),
+      user("r1", "[The user stopped you, then asked you to resume. Continue their request from where you left off.]", 5000),
+      user("p1", "[preview ended: failed] p1 \"web\" stopped on its own; it is not running now.", 6000),
     ],
-    turns: [turn("u1", 1000, 1500, "done"), turn("u2", 2000, 2500, "done")],
+    turns: [
+      turn("u1", 1000, 1500, "done"),
+      { ...turn("u2", 2000, 2500, "done"), requests: ["r-u2"] },
+      turn("d1", 3000, 3200, "done"),
+      turn("q1", 4000, 4100, "done"),
+      turn("r1", 5000, 5100, "done"),
+      turn("p1", 6000, 6100, "done"),
+    ],
   };
-  const [first, second] = cliBlocks(peers, "c1", NO_BOARD);
-  assert.equal(first!.user?.kind, "peer");
-  assert.equal(first!.user?.kind === "peer" && first!.user.text, "Can you check the schema?");
-  assert.deepEqual(first!.user?.kind === "peer" && first!.user.message.peer, { messageId: "sm-aaaaaaaaaaaa", from });
-  assert.equal(first!.user?.kind === "peer" && first!.user.message.id, "sm-aaaaaaaaaaaa");
-  assert.equal(first!.steers[0]!.message.role, "peer");
-  assert.equal(first!.steers[0]!.text, "Also the docs.");
-  assert.equal(second!.user?.kind, "message");
-  assert.equal(second!.user?.kind === "message" && second!.user.text, "My own words");
+  const blocks = cliBlocks(peers, "c1", NO_BOARD);
+  assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [
+    ["u1", null], ["u2", "message"], ["d1", null], ["q1", null], ["r1", null], ["p1", null],
+  ]);
+  assert.deepEqual(blocks[0]!.steers, []);
+  assert.deepEqual(blocks[0]!.texts.map((text) => text.text), ["Checked."]);
+  assert.equal(blocks[1]!.user?.kind === "message" && blocks[1]!.user.text, "My own words");
+  assert.deepEqual(blocks[2]!.texts.map((text) => text.text), ["Migrated."]);
 });
 
 test("a queued message shows once, as the user's, its frame gone: in the rail while the CLI has it there, else where the CLI last took it", () => {

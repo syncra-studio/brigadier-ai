@@ -155,6 +155,14 @@ export type BlockSeam = {
 };
 
 /**
+ * What of a seam the thread shows: a hand-off is under the hood (run2-D44), its note and a
+ * missing one alike; only the other CLI the thread went on in, which now answers.
+ */
+export function seamMove(seam: BlockSeam): ProviderKind | null {
+  return seam.death ? null : seam.movedTo;
+}
+
+/**
  * A message steered into the block's running turn: the user's bubble, or another session's
  * message block (a message steered in, or a reply to the request), inside the block.
  */

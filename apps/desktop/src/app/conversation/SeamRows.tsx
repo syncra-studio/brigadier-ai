@@ -1,6 +1,19 @@
 import type { FC } from "react";
 
+import { type BlockSeam, seamMove } from "@/app/conversation/blocks";
+import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ROW } from "@/components/conversation";
+import { LabeledDivider } from "@/components/shared";
+
+/** "Continued on Codex" where a thread went on in another CLI (S38c); nothing for a hand-off. */
+export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
+  const movedTo = seamMove(seam);
+  return movedTo ? (
+    <LabeledDivider data-slot="seam" role="status">
+      Continued on {PROVIDER_LABELS[movedTo]}
+    </LabeledDivider>
+  ) : null;
+};
 
 /** The CLI's line for a background job's end ("Background command … completed"), a quiet line before its reply. */
 export const TaskNoticeRow: FC<{ text: string }> = ({ text }) => (
