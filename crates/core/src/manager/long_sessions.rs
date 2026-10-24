@@ -19,6 +19,7 @@
 //! Size seams go; the fresh-session seam stays for moves to another CLI (D46), quota fallback to
 //! another provider (D23, D25) and as the rare fallback when compaction fails (run2-D10).
 
+pub(crate) mod checkpoint;
 pub(crate) mod restore;
 
 use std::path::Path;
@@ -172,10 +173,17 @@ so it can be read again word for word. \
 Never copy a secret (a key, token or password) into the summary.";
 
 impl LongSessions {
-    /// The words after Claude's `/compact` in this mode: `None` without them (run2-D7's arm
-    /// off, as in `native-bare`).
+    /// The words after Claude's `/compact` in this mode: what its summary must keep (run2-D7)
+    /// and, with the checkpoint, the section that carries it (run2-D9). `None` without either
+    /// (as in `native-bare`).
     pub(crate) fn compact_instructions(self) -> Option<String> {
-        self.instructions.then(|| COMPACT_INSTRUCTIONS.to_owned())
+        let keep = [
+            self.instructions.then(|| COMPACT_INSTRUCTIONS.to_owned()),
+            self.checkpoint.then(checkpoint::claude_keep),
+        ];
+        let words: String = keep.into_iter().flatten().collect();
+        let words = words.trim();
+        (!words.is_empty()).then(|| words.to_owned())
     }
 }
 

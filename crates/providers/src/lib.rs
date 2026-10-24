@@ -237,6 +237,13 @@ pub trait ProviderSession: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The summary the CLI's own file holds for compaction `compaction_id`, as the model reads
+    /// it after: Claude's compact summary after that boundary. A long session's checkpoint
+    /// rides in it (run2-D9). `None`: not there, or a CLI that keeps none.
+    fn compact_summary(&self, _compaction_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Stops one of the CLI's background tasks ([`ProviderEvent::BackgroundTask`]) by its id.
     fn stop_task(&self, _task_id: String) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {

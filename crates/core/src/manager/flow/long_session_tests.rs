@@ -792,3 +792,348 @@ async fn claudes_thrash_stop_sends_the_session_to_a_fresh_one() {
     assert!(flow.behavior.compactions.lock().unwrap().is_empty());
     flow.stop().await;
 }
+
+/// The checkpoint record (run2-D9): Codex is asked for it in a turn of its own at the point,
+/// then compacts and gets it back beside the decisions.
+mod checkpoint {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::manager::conversation::long::checkpoint::{CheckpointPhase, CheckpointRun};
+    use crate::manager::long_sessions::checkpoint::{self, ASK_MARK, Source};
+
+    /// What each turn was given, with how many compactions Brigadier had asked for by then.
+    type Seen = Arc<Mutex<Vec<(usize, String)>>>;
+
+    /// How the checkpoint turn goes.
+    #[derive(Clone, Copy)]
+    struct Ask {
+        /// The checkpoint it writes.
+        writes: Option<&'static str>,
+        /// Codex compacts by itself during it.
+        compacts: bool,
+        /// It takes this long, for a message to come meanwhile.
+        takes: Duration,
+    }
+
+    const WRITTEN: Ask = Ask {
+        writes: Some("Goal: ship the parser.\nNext: run cargo test -p parser."),
+        compacts: false,
+        takes: Duration::ZERO,
+    };
+
+    /// A Codex session in `arm` whose "Fill." ends past the point.
+    async fn codex(name: &str, arm: &str, ask: Ask) -> (Flow, Seen) {
+        let seen: Seen = Arc::default();
+        let record_at: Arc<Mutex<Option<PathBuf>>> = Arc::default();
+        let behavior = Arc::new(FakeBehavior {
+            session_file: true,
+            take_in_steers: true,
+            ..FakeBehavior::default()
+        });
+        let (turns, at, asked) = (seen.clone(), record_at.clone(), behavior.clone());
+        let options = Options {
+            thread: ProviderKind::Codex,
+            behavior,
+            ..Options::default()
+        };
+        let mut flow = Flow::start(
+            name,
+            options,
+            script(move |turn| {
+                let (turns, at, asked) = (turns.clone(), at.clone(), asked.clone());
+                async move {
+                    let compactions = asked.compactions.lock().unwrap().len();
+                    turns.lock().unwrap().push((compactions, turn.input.clone()));
+                    if turn.input.contains(ASK_MARK) {
+                        tokio::time::sleep(ask.takes).await;
+                        let record = at.lock().unwrap().clone().expect("the record");
+                        if let Some(text) = ask.writes {
+                            checkpoint::set(&record, text, Source::Thread).unwrap();
+                        }
+                        if ask.compacts {
+                            turn.emit(ProviderEvent::CompactionStarted { automatic: true })
+                                .await;
+                            turn.emit(ProviderEvent::CompactionEnded {
+                                automatic: true,
+                                tokens_before: Some(63_000),
+                                tokens_after: Some(15_000),
+                                error: None,
+                                native_id: Some("compaction-auto".into()),
+                            })
+                            .await;
+                        }
+                        return Reply::text("Checkpoint written.");
+                    }
+                    let tokens = if turn.input.contains("Fill.") {
+                        62_000
+                    } else {
+                        20_000
+                    };
+                    Reply {
+                        text: "Done.".into(),
+                        context_tokens: Some(tokens),
+                        ..Reply::default()
+                    }
+                }
+            }),
+        )
+        .await;
+        switch(&mut flow, LongSessions::parse(arm));
+        *record_at.lock().unwrap() = Some(record(&flow));
+        write_ledger(&flow, LEDGER);
+        flow.say("Start.").await;
+        flow.settled().await;
+        (flow, seen)
+    }
+
+    fn asks(seen: &Seen) -> usize {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, input)| input.contains(ASK_MARK))
+            .count()
+    }
+
+    /// The notes put back so far.
+    fn notes(flow: &Flow) -> Vec<String> {
+        flow.behavior
+            .put_backs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|note| note.contains("brigadier-restore "))
+            .cloned()
+            .collect()
+    }
+
+    fn sources(flow: &Flow) -> Vec<Source> {
+        checkpoint::history(&record(flow))
+            .iter()
+            .map(|version| version.source)
+            .collect()
+    }
+
+    /// The one note put back, holding the decisions and `holds` once each.
+    fn one_note_with(flow: &Flow, holds: &str) {
+        let notes = notes(flow);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].matches(holds).count(), 1, "{holds} in {}", notes[0]);
+        for kept in KEPT {
+            assert_eq!(notes[0].matches(kept).count(), 1, "{kept}");
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_writes_its_checkpoint_then_compacts_and_gets_it_back_beside_the_decisions() {
+        let (flow, seen) = codex("long-checkpoint-written", "native+checkpoint", WRITTEN).await;
+        flow.say("Fill.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        assert_eq!(asks(&seen), 1);
+        // Codex's compaction takes no instructions; the checkpoint was asked for before it.
+        assert_eq!(*flow.behavior.compactions.lock().unwrap(), vec![None]);
+        one_note_with(&flow, "Goal: ship the parser.\nNext: run cargo test -p parser.");
+        let file = read_long(&record(&flow));
+        assert_eq!(file.checkpoint, None);
+        assert!(file.put_back.unwrap().checkpoint.is_some());
+        assert_eq!(sources(&flow), [Source::Thread]);
+        assert!(notices(&flow).await.is_empty());
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn with_no_checkpoint_written_codex_still_compacts_and_it_is_marked_missing() {
+        let ask = Ask {
+            writes: None,
+            ..WRITTEN
+        };
+        let (flow, _seen) = codex("long-checkpoint-missing", "native+checkpoint", ask).await;
+        flow.say("Fill.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+        one_note_with(&flow, KEPT[0]);
+        assert!(!notes(&flow)[0].contains("checkpoint, written"));
+        assert_eq!(sources(&flow), [Source::Missing]);
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn codex_compacting_by_itself_during_the_checkpoint_turn_calls_off_brigadiers() {
+        let ask = Ask {
+            compacts: true,
+            ..WRITTEN
+        };
+        let (flow, seen) = codex("long-checkpoint-auto", "native+checkpoint", ask).await;
+        flow.say("Fill.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        flow.say("After.").await;
+        flow.idle().await;
+        assert!(flow.behavior.compactions.lock().unwrap().is_empty());
+        assert_eq!(asks(&seen), 1);
+        one_note_with(&flow, "Goal: ship the parser.");
+        assert!(notes(&flow)[0].contains("brigadier-restore compaction-auto"));
+        assert_eq!(read_long(&record(&flow)).checkpoint, None);
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_during_the_checkpoint_turn_waits_for_the_compaction() {
+        let ask = Ask {
+            takes: Duration::from_millis(400),
+            ..WRITTEN
+        };
+        let (flow, seen) = codex("long-checkpoint-held", "native+checkpoint", ask).await;
+        flow.say("Fill.").await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while asks(&seen) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the checkpoint request");
+        flow.say("Meanwhile.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        let turns = seen.lock().unwrap().clone();
+        let meanwhile: Vec<_> = turns
+            .iter()
+            .filter(|(_, input)| input.contains("Meanwhile."))
+            .collect();
+        assert_eq!(meanwhile.len(), 1, "{turns:?}");
+        assert_eq!(meanwhile[0].0, 1, "it ran after the compaction");
+        assert!(!meanwhile[0].1.contains(ASK_MARK));
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn codex_compacting_by_itself_outside_a_checkpoint_run_marks_it_missing() {
+        let inputs: Inputs = Arc::default();
+        let flow = long_flow(
+            "long-checkpoint-stale",
+            ProviderKind::Codex,
+            FakeBehavior::default(),
+            "native+checkpoint",
+            inputs,
+        )
+        .await;
+        flow.say("Grow.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        assert_eq!(sources(&flow), [Source::Missing]);
+        assert!(flow.behavior.compactions.lock().unwrap().is_empty());
+        flow.stop().await;
+    }
+
+    /// A restart with a run in `phase` on record: Codex compacts at once, and never asks again.
+    async fn restarted_in(name: &str, phase: CheckpointPhase) -> Flow {
+        let (mut flow, seen) = codex(name, "native+checkpoint", WRITTEN).await;
+        let record = record(&flow);
+        let since_ms = crate::now_ms() - 1_000;
+        let text = match phase {
+            CheckpointPhase::Asked => {
+                checkpoint::set(&record, "Goal: resume.", Source::Thread).unwrap();
+                None
+            }
+            CheckpointPhase::Compacting => Some("Goal: resume.".to_owned()),
+        };
+        let mut file = read_long(&record);
+        file.checkpoint = Some(CheckpointRun {
+            since_ms,
+            phase,
+            text,
+        });
+        std::fs::write(record.join("long.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        flow.restart().await;
+        flow.say("After.").await;
+        until_put_back(&flow, PutBackState::Received).await;
+        flow.idle().await;
+        assert_eq!(asks(&seen), 0);
+        assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+        one_note_with(&flow, "Goal: resume.");
+        assert_eq!(read_long(&record).checkpoint, None);
+        flow
+    }
+
+    #[tokio::test]
+    async fn after_a_restart_while_asked_codex_compacts_with_what_was_written() {
+        restarted_in("long-checkpoint-restart-asked", CheckpointPhase::Asked)
+            .await
+            .stop()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn after_a_restart_while_compacting_codex_compacts_again_with_its_checkpoint() {
+        restarted_in(
+            "long-checkpoint-restart-compacting",
+            CheckpointPhase::Compacting,
+        )
+        .await
+        .stop()
+        .await;
+    }
+
+    /// A Claude session in `arm` through a turn past the point, its summary `summary`.
+    async fn claude(name: &str, arm: &str, summary: Option<&str>) -> Flow {
+        let inputs: Inputs = Arc::default();
+        let flow = long_flow(
+            name,
+            ProviderKind::Claude,
+            FakeBehavior {
+                summary: summary.map(str::to_owned),
+                ..FakeBehavior::default()
+            },
+            arm,
+            inputs,
+        )
+        .await;
+        flow.say("Grow.").await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while checkpoint::history(&record(&flow)).is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a checkpoint kept or marked missing");
+        flow.idle().await;
+        flow
+    }
+
+    #[tokio::test]
+    async fn claudes_steered_summary_carries_the_checkpoint_which_is_kept_as_the_record() {
+        let flow = claude(
+            "long-checkpoint-claude",
+            "native-full+checkpoint",
+            Some("## Summary\nWork.\n## Checkpoint\nGoal: ship.\nNext: test.\n## Other\nx"),
+        )
+        .await;
+        let asked = flow.behavior.compactions.lock().unwrap()[0].clone().unwrap();
+        assert!(asked.starts_with("Besides your usual summary"));
+        assert!(asked.contains("\"## Checkpoint\""));
+        assert_eq!(
+            checkpoint::read(&record(&flow)).as_deref(),
+            Some("Goal: ship.\nNext: test.")
+        );
+        assert_eq!(sources(&flow), [Source::Summary]);
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_claude_summary_without_the_checkpoint_marks_it_missing() {
+        let flow = claude(
+            "long-checkpoint-claude-missing",
+            "native+checkpoint",
+            Some("## Summary\nWork."),
+        )
+        .await;
+        // Only the checkpoint's section is asked for without the keep-instructions (run2-D7 off).
+        let asked = flow.behavior.compactions.lock().unwrap()[0].clone().unwrap();
+        assert!(asked.starts_with("End the summary"));
+        assert_eq!(checkpoint::read(&record(&flow)), None);
+        assert_eq!(sources(&flow), [Source::Missing]);
+        flow.stop().await;
+    }
+}

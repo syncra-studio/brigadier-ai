@@ -606,6 +606,8 @@ pub(crate) struct FakeBehavior {
     pub put_back_refused: std::sync::atomic::AtomicU32,
     /// Claude runs no hooks (the user's `disableAllHooks`).
     pub hooks_off: bool,
+    /// The summary each Claude compaction writes to its session file.
+    pub summary: Option<String>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -856,6 +858,7 @@ impl Provider for FakeCli {
                     .as_ref()
                     .and_then(|native| native.restore.clone()),
                 restored: Mutex::default(),
+                summaries: Mutex::default(),
                 kind: self.kind,
                 transcript: self.transcripts.join(&native_id),
                 session_file,
@@ -1008,6 +1011,8 @@ struct FakeSession {
     restore: Option<brigadier_providers::RestoreHooks>,
     /// What its put-back hooks printed after each compaction, by the compaction's id.
     restored: Mutex<std::collections::HashMap<String, Vec<String>>>,
+    /// Each compaction's summary, by its id (Claude).
+    summaries: Mutex<std::collections::HashMap<String, String>>,
     kind: ProviderKind,
     /// Its transcript ([`transcribe`]).
     transcript: PathBuf,
@@ -1370,6 +1375,10 @@ impl ProviderSession for FakeSession {
         })
     }
 
+    fn compact_summary(&self, compaction_id: &str) -> brigadier_providers::Result<Option<String>> {
+        Ok(self.summaries.lock().unwrap().get(compaction_id).cloned())
+    }
+
     fn put_back_received(&self, compaction_id: &str) -> brigadier_providers::Result<Vec<String>> {
         if self.kind == ProviderKind::Claude {
             return Ok(self
@@ -1400,6 +1409,12 @@ impl ProviderSession for FakeSession {
     ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         self.behavior.compactions.lock().unwrap().push(instructions);
         let compaction = uuid::Uuid::new_v4().to_string();
+        if let Some(summary) = &self.behavior.summary {
+            self.summaries
+                .lock()
+                .unwrap()
+                .insert(compaction.clone(), summary.clone());
+        }
         if let Some(hooks) = self.restore.as_ref().filter(|_| !self.behavior.hooks_off) {
             let record = hooks
                 .args

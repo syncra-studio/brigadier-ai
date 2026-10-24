@@ -207,6 +207,28 @@ test("a long session's /compact is never a bubble: its turn shows the compaction
   );
 });
 
+test("a long session's checkpoint request is never a bubble either", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Fill", 1000),
+        user("u2", "[Brigadier · checkpoint] The conversation is about to be compacted.", 3000),
+        user("u3", "After", 5000),
+      ],
+      turns: [turn("u1", 1000, 2000, "done"), turn("u2", 3000, 4000, "done"), turn("u3", 5000, 6000, "done")],
+    },
+    "conv",
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges]),
+    [
+      ["u1", "message", []],
+      ["u2", null, []],
+      ["u3", "message", []],
+    ],
+  );
+});
+
 test("a background job's end Claude took up shows the CLI's notice line before its reply, in view once the work folds", () => {
   const line = 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)';
   const [block] = cliBlocks(

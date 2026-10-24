@@ -25,6 +25,9 @@ import { sessionImageRef } from "@/state/cliThread";
 import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
 
+/** How Brigadier's checkpoint request starts (`long_sessions/checkpoint.rs` ASK_MARK). */
+const CHECKPOINT_MARK = "[Brigadier · checkpoint]";
+
 /**
  * The thread, drawn from the CLI's own session file (S9, S10): the engine's `ThreadView` as
  * blocks, one per turn. A turn is the user's message up to the CLI's end of it; its replies,
@@ -412,7 +415,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const news = asked && workerNotices(asked.text);
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep.
-    const compacting = !!asked && /^\/compact(\s|$)/.test(asked.text);
+    // Its checkpoint request before Codex compacts is Brigadier's too (run2-D9).
+    const compacting = !!asked && (/^\/compact(\s|$)/.test(asked.text) || asked.text.includes(CHECKPOINT_MARK));
     if (asked && (own || compacting || news || nudges.has(asked.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);

@@ -1961,6 +1961,14 @@ impl ProviderSession for ClaudeSession {
         Ok(session_file::restored_after(&text, compaction_id))
     }
 
+    fn compact_summary(&self, compaction_id: &str) -> Result<Option<String>> {
+        let Some(file) = &self.file else {
+            return Ok(None);
+        };
+        let text = std::fs::read_to_string(file)?;
+        Ok(session_file::summary_after(&text, compaction_id))
+    }
+
     fn compact(&self, instructions: Option<String>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             if !self.compacts {
