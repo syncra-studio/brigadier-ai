@@ -119,9 +119,12 @@ async function drive() {
     // search, then closes.
     await open();
     const keys: [string, string | null][] = [];
+    // Each key moves the focus or the search: what it saw once it did, not after a fixed wait
+    // a loaded machine can overrun.
     const press = async (name: string) => {
+      const before = focused();
       key(document.activeElement!, name);
-      await sleep(50);
+      await until(`the keyboard to move on ${name}`, () => focused() !== before, 2000).catch(() => null);
       keys.push([name, focused()]);
     };
     await press("ArrowDown");
