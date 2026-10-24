@@ -300,3 +300,35 @@ class ProbeAndReportingTests(unittest.TestCase):
             "replacement_history": [{"type": "compaction", "encrypted_content": "opaque-sealed-bytes"}]}}], "codex")[-1]
         self.assertFalse(snapshot["complete"])
         self.assertEqual(retention.classify("FACT", snapshot), "unverified")
+
+
+class FairLegacyEntryPoints(unittest.TestCase):
+    def test_legacy_thresholds_and_transport_are_unchanged_without_fair(self):
+        from updates import Updates
+        for legacy in (43750, 60000):
+            args = SimpleNamespace(arm="plain", fair=False, tokens=None)
+            arms.configure(args, argparse.ArgumentParser(), legacy)
+            self.assertEqual(args.tokens, legacy)
+            self.assertFalse(args.shared_transition)
+            with patch.object(battery.Battery, "__init__", return_value=None):
+                run = arms.make(Updates, args)
+            self.assertIs(run.run.__func__, Updates.run)
+            self.assertIs(run.send.__func__, PlainBattery.send)
+        args = SimpleNamespace(arm="plain@200k", fair=False, tokens=None)
+        arms.configure(args, argparse.ArgumentParser(), 43750)
+        self.assertTrue(args.shared_transition)
+        self.assertEqual(args.tokens, 200000)
+
+    def test_fair_original_probe_allows_only_equal_archive_lookup(self):
+        args = SimpleNamespace(arm="plain", fair=True, tokens=200000)
+        with patch.object(battery.Battery, "__init__", return_value=None):
+            run = arms.make(battery.Battery, args)
+        run.lookup_script, run.archive = Path("/tmp/continuity_lookup.py"), Path("/tmp/archive.json")
+        run.refresh_archive = Mock()
+        with patch.object(PlainBattery, "send", return_value={"settled": True}) as send:
+            run.send("probe", "Use existing tools; do not read fixture scripts, run commands, or edit files.")
+        text = send.call_args.args[1]
+        self.assertIn("lookup is allowed", text)
+        self.assertIn("do not read fixture scripts or edit files", text)
+        self.assertNotIn("run commands", text)
+        run.refresh_archive.assert_called_once()

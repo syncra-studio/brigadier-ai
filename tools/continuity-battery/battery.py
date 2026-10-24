@@ -16,6 +16,8 @@ import sys
 import time
 
 sys.dont_write_bytecode = True
+if __name__ == "__main__":
+    sys.modules["battery"] = sys.modules[__name__]
 SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC / "tools/bench"))
 from metrics import parse as parse_native
@@ -345,7 +347,7 @@ class Battery:
                   "claim is true, and acknowledge in one sentence. Do not put this report or finding in the ledger.")
         for i in range(self.args.max_fillers):
             before = self.generations()
-            if before >= 2 and i >= self.args.min_fillers:
+            if not getattr(self.args, "fair", False) and before >= 2 and i >= self.args.min_fillers:
                 break
             # Distinct inert text displaces the early plants from a bounded verbatim tail.
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12] for j in range(self.args.ballast))
@@ -355,7 +357,7 @@ class Battery:
                 self.wait(lambda: "handoff note written" in (self.root / "daemon.log").read_text(errors="replace") or
                           self.generations() > before, 3)
         self.result["size_seams_before_faults"] = self.generations()
-        for kind in ("context", "crash", "restart", "limit"):
+        for kind in (() if getattr(self.args, "fair", False) else ("context", "crash", "restart", "limit")):
             command = (f"touch {kind}.waiting; sleep 18; printf 'wait finished\\n'" if kind in ("crash", "restart")
                        else "printf 'fault tick 1\\n'; sleep 2")
             self.send("seam-" + kind, f"Run `{command}` as a foreground Bash command, then run `printf 'fault tick 2\\n'`. "
@@ -763,10 +765,12 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain", "zed", "summary"], default="seam")
+    from arms import ARMS, configure, make
+    parser.add_argument("--arm", choices=ARMS, default="seam")
+    parser.add_argument("--fair", action="store_true", help="opt-in shared threshold and identical lookup access")
     parser.add_argument("--ballast", type=int, default=1200)
     parser.add_argument("--min-fillers", type=int, default=9)
-    parser.add_argument("--tokens", type=int, default=43750, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
+    parser.add_argument("--tokens", type=int, default=None, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
     parser.add_argument("--max-fillers", type=int, default=18)
     parser.add_argument("--timeout", type=int, default=1500)
     parser.add_argument("--turn-timeout", type=int, default=100)
@@ -774,6 +778,7 @@ def main():
     parser.add_argument("--evidence", help="optional private JSON evidence, outside the repo")
     parser.add_argument("--scratch-prefix", default="continuity-battery", help="names the /tmp scratch root")
     args = parser.parse_args()
+    configure(args, parser, 43750)
     args.model = args.model or ("opus" if args.provider == "claude" else "gpt-6.1-sol")
     if not args.report:
         args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + f"-{args.provider}-{args.arm}.md"))
@@ -783,17 +788,7 @@ def main():
         parser.error("use a debug daemon built from this checkout")
     if args.evidence and Path(args.evidence).resolve().is_relative_to(SRC):
         parser.error("keep detailed evidence outside the repository")
-    if args.arm == "plain":
-        from plain import PlainBattery
-        battery = PlainBattery(args)
-    elif args.arm == "zed":
-        from zed import ZedBattery
-        battery = ZedBattery(args)
-    elif args.arm == "summary":
-        from summary import SummaryBattery
-        battery = SummaryBattery(args)
-    else:
-        battery = Battery(args)
+    battery = make(Battery, args)
     def terminated(signum, frame):
         raise TimeoutError("nightly supervisor stopped the run")
     signal.signal(signal.SIGTERM, terminated)

@@ -80,7 +80,7 @@ class Work(battery.Battery):
                     continue
                 # Native item id where present; otherwise a stable exact source/row id.
                 key = row.get("uuid") or (row.get("payload") or {}).get("id") or hashlib.sha256(
-                    (str(path) + ":" + str(index)).encode()).hexdigest()[:20]
+                    (path.name + ":" + str(index)).encode()).hexdigest()[:20]
                 items.append({"id": key, "provider": provider, "source": path.name, "raw": raw})
             for snapshot in snapshots(rows, provider):
                 from datetime import datetime

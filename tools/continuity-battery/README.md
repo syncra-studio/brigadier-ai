@@ -302,7 +302,14 @@ gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main 
 
 These profiles reuse `Battery`, the existing plain/Zed/summary transports, native accounting and
 cleanup. Tonight's existing nightly arm list, profile list, task schedule, thresholds and model
-calls are unchanged. The new entry point is not invoked by either workflow.
+calls are unchanged. The new entry point is not invoked by either workflow. The original `battery.py`, `decisions.py`
+and `updates.py` also accept `--fair`: this opts into a 200k default, fixed filler schedule,
+identical archive lookup access and continuity-only probes, with no injected faults. Their
+unflagged nightly defaults retain the original thresholds and fault prompts. For the original
+short recall pair, use `battery.py --fair --arm seam` and `battery.py --fair --arm plain@200k`
+with the same explicit `--tokens`, filler lengths and model. New candidate arm names implicitly
+select fair mode on those entry points. The work/endurance profile is the harder memory test;
+`--fair` does not move the legacy script's first-message facts.
 
 A plan-only dry run starts no daemon, model, judge or network request:
 

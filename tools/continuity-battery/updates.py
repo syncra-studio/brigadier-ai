@@ -130,9 +130,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
-    parser.add_argument("--arm", choices=("seam", "plain", "zed", "summary"), default="seam")
+    from arms import ARMS, configure, make
+    parser.add_argument("--arm", choices=ARMS, default="seam")
+    parser.add_argument("--fair", action="store_true", help="opt-in shared threshold and identical lookup access")
     parser.add_argument("--model")
-    parser.add_argument("--tokens", type=int, default=43750)
+    parser.add_argument("--tokens", type=int)
     parser.add_argument("--max-fillers", type=int, default=9)
     parser.add_argument("--min-fillers", type=int, default=9, help="compatibility with the shared nightly schedule")
     parser.add_argument("--ballast", type=int, default=1200)
@@ -142,6 +144,7 @@ def main():
     parser.add_argument("--evidence")
     parser.add_argument("--scratch-prefix", default="continuity-updates")
     args = parser.parse_args()
+    configure(args, parser, 43750)
     args.model = args.model or ("opus" if args.provider == "claude" else "gpt-6.1-sol")
     if "fable" in args.model.lower() or args.tokens <= 0 or args.max_fillers < 3 or args.ballast < 0:
         parser.error("use a permitted model, positive threshold, at least three fillers and nonnegative ballast")
@@ -151,11 +154,8 @@ def main():
         parser.error("keep detailed evidence outside the repository")
     args.report = args.report or str(Path(__file__).parent / "reports" /
                                   (time.strftime("%Y-%m-%d") + f"-{args.provider}-{args.arm}-updates.md"))
-    from plain import PlainBattery
-    from summary import SummaryBattery
-    from zed import SkippedArm, ZedBattery
-    transport = {"seam": battery.Battery, "plain": PlainBattery, "zed": ZedBattery, "summary": SummaryBattery}[args.arm]
-    run = type("UpdatesRun", (Updates, transport), {})(args) if args.arm != "seam" else Updates(args)
+    from zed import SkippedArm
+    run = make(Updates, args)
     run.result["block"] = "updates"
     def terminated(signum, frame):
         raise TimeoutError("nightly supervisor stopped the run")

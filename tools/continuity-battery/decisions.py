@@ -143,17 +143,18 @@ class Decisions(battery.Battery):
         self.result["plant_replies"] = replies
         for i in range(self.args.max_fillers):
             before = self.generations()
-            if before >= (2 if self.args.arm == "seam" else 3) and i >= self.args.min_fillers:
+            if not getattr(self.args, "fair", False) and before >= (2 if self.args.arm == "seam" else 3) and i >= self.args.min_fillers:
                 break
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12]
                                for j in range(self.args.ballast))
             self.send(f"ballast-{i:02}", f"Ignore this inert fixture batch {i}; reply only 'batch {i} read'.\n" + ballast)
             self.wait(lambda: self.generations() > before, 3)
         self.result["size_seams_before_faults"] = self.generations()
-        # The third seam: a death with no note (the prompt grew too long).
-        self.send("seam-context", "Run `printf 'fault tick 1\\n'; sleep 2` as a foreground Bash command, then "
-                  "run `printf 'fault tick 2\\n'`. Reply only 'done'.", fault=self.fault("context"))
-        self.wait(lambda: self.generations() >= self.result["size_seams_before_faults"] + 1, 30)
+        if not getattr(self.args, "fair", False):
+            # The third seam: a death with no note (the prompt grew too long).
+            self.send("seam-context", "Run `printf 'fault tick 1\\n'; sleep 2` as a foreground Bash command, then "
+                      "run `printf 'fault tick 2\\n'`. Reply only 'done'.", fault=self.fault("context"))
+            self.wait(lambda: self.generations() >= self.result["size_seams_before_faults"] + 1, 30)
         self.result["seams_before_checks"] = self.generations()
         self.checks()
 
@@ -388,10 +389,12 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain", "zed", "summary"], default="seam")
+    from arms import ARMS, configure, make
+    parser.add_argument("--arm", choices=ARMS, default="seam")
+    parser.add_argument("--fair", action="store_true", help="opt-in shared threshold and identical lookup access")
     parser.add_argument("--min-fillers", type=int, default=0)
     parser.add_argument("--judge-model", default=None)
-    parser.add_argument("--tokens", type=int, default=60000, help="the debug seam threshold (BRIGADIER_SEAM_TOKENS)")
+    parser.add_argument("--tokens", type=int, default=None, help="the debug seam threshold (BRIGADIER_SEAM_TOKENS)")
     parser.add_argument("--max-fillers", type=int, default=24)
     parser.add_argument("--ballast", type=int, default=2000, help="inert words per filler")
     parser.add_argument("--timeout", type=int, default=3000)
@@ -400,6 +403,7 @@ def main():
     parser.add_argument("--evidence", help="optional private JSON evidence, outside the repo")
     parser.add_argument("--scratch-prefix", default="continuity-decisions", help="names the /tmp scratch root")
     args = parser.parse_args()
+    configure(args, parser, 60000)
     args.model = args.model or ("opus" if args.provider == "claude" else "gpt-6.1-sol")
     args.judge_model = args.judge_model or ("sonnet" if args.provider == "claude" else args.model)
     if not args.report:
@@ -410,23 +414,7 @@ def main():
         parser.error("use a debug daemon built from this checkout")
     if args.evidence and Path(args.evidence).resolve().is_relative_to(battery.SRC):
         parser.error("keep detailed evidence outside the repository")
-    if args.arm == "plain":
-        from plain import PlainBattery
-        class PlainDecisions(Decisions, PlainBattery):
-            pass
-        run = PlainDecisions(args)
-    elif args.arm == "zed":
-        from zed import ZedBattery
-        class ZedDecisions(Decisions, ZedBattery):
-            pass
-        run = ZedDecisions(args)
-    elif args.arm == "summary":
-        from summary import SummaryBattery
-        class SummaryDecisions(Decisions, SummaryBattery):
-            pass
-        run = SummaryDecisions(args)
-    else:
-        run = Decisions(args)
+    run = make(Decisions, args)
     run.result["block"] = "decisions"
     def terminated(signum, frame):
         raise TimeoutError("nightly supervisor stopped the run")

@@ -54,3 +54,41 @@ class SharedPlainBattery(PlainBattery):
 def transport(arm):
     return {"seam": Battery, "plain": SharedPlainBattery, "plain@200k": SharedPlainBattery,
             "zed": ZedBattery, "summary": SummaryBattery}.get(arm, CandidateBattery)
+
+
+def configure(args, parser, legacy_tokens):
+    """Explicit fair options never alter an existing nightly invocation."""
+    args.fair = args.fair or args.arm not in ("seam", "plain", "zed", "summary")
+    args.shared_transition = args.fair
+    args.tokens = args.tokens if args.tokens is not None else (200000 if args.fair else legacy_tokens)
+    if args.fair and not 100000 <= args.tokens <= 1000000:
+        parser.error("fair shared threshold must be 100000..1000000")
+
+
+def make(scenario, args):
+    """Bind the existing scenario/scorer to its transport; optional shared record access."""
+    vehicle = transport(args.arm)
+    base = vehicle if scenario is Battery else scenario if vehicle is Battery else type("ScenarioRun", (scenario, vehicle), {})
+    if not args.fair:
+        return base(args)
+    from profiles import Work
+    class RecordAccess:
+        setup_archive = Work.setup_archive
+        lookup_instruction = Work.lookup_instruction
+        source_files = Work.source_files
+        refresh_archive = Work.refresh_archive
+
+        def setup(self):
+            self.candidate_arms = CANDIDATES
+            super().setup()
+            self.setup_archive()
+
+        def send(self, name, text, fault=None, **kwargs):
+            if name in ("probe", "t6-recall"):
+                text = text.replace("do not read fixture scripts, run commands, or edit files", "do not read fixture scripts or edit files")
+                text = text.replace("do not run commands, read workspace fixtures, or edit files", "do not read workspace fixtures or edit files")
+                text = self.lookup_instruction() + text
+            step = super().send(name, text, fault, **kwargs)
+            self.refresh_archive()
+            return step
+    return type("FairScenarioRun", (RecordAccess, base), {})(args)
