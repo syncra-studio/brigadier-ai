@@ -103,26 +103,8 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
             incoming.hidden_models.push(model.clone());
         }
     }
-    remove_reverted_skills(&mut incoming);
     incoming.settings_version = incoming.settings_version.max(current.settings_version);
     incoming
-}
-
-// Version 6 briefly saved switches for these catalog skills. Drop only those ids, including
-// when a page still open from that version saves its settings after the catalog was removed.
-fn remove_reverted_skills(settings: &mut Settings) {
-    let keep = |id: &String| {
-        !matches!(
-            id.as_str(),
-            "brigadier:optional:retro" | "brigadier:optional:writing-for-agents"
-        )
-    };
-    settings.skills_off.retain(keep);
-    settings.skills_everywhere.retain(keep);
-    for project in &mut settings.project_switches {
-        project.skills_on.retain(keep);
-        project.skills_off.retain(keep);
-    }
 }
 
 /// Whether a settings change may let work waiting for quota run now: an agent or model turned
@@ -173,7 +155,6 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
             }
         }
     }
-    remove_reverted_skills(&mut next);
     next.legacy_routing_overrides.clear();
     next.settings_version = SETTINGS_VERSION;
     Some(next)
@@ -257,37 +238,19 @@ mod tests {
     }
 
     #[test]
-    fn reverted_catalog_settings_load_and_drop_only_the_removed_skills() {
+    fn settings_saved_with_the_old_switches_still_load() {
         let saved: Settings = serde_json::from_str(
             r#"{"settingsVersion":6,"userName":"Ann",
-                "skillsOff":["brigadier:optional:retro","agents:user:mine","brigadier:optional:writing-for-agents"],
-                "skillsEverywhere":["brigadier:optional:writing-for-agents","agents:project:mine"],
-                "mcpServersOff":["brigadier:optional:retro"],
-                "projectSwitches":[{"projectId":"one",
-                    "skillsOn":["brigadier:optional:retro","agents:user:mine"],
-                    "skillsOff":["brigadier:optional:writing-for-agents","agents:project:other"],
-                    "serversOn":["brigadier:optional:writing-for-agents"],
-                    "serversOff":["server:mine"]}]}"#,
+                "skillsOff":["agents:user:mine"],
+                "skillsEverywhere":["agents:project:mine"],
+                "mcpServersOff":["claude:user:railway"],
+                "projectSwitches":[{"projectId":"one","serversOff":["server:mine"]}]}"#,
         )
         .unwrap();
         let next = migrate(&saved).expect("version 6 converts");
-        assert_eq!(next.settings_version, SETTINGS_VERSION);
         assert_eq!(next.user_name, "Ann");
-        assert_eq!(next.skills_off, ids(&["agents:user:mine"]));
-        assert_eq!(next.skills_everywhere, ids(&["agents:project:mine"]));
-        assert_eq!(next.mcp_servers_off, saved.mcp_servers_off);
-        let project = &next.project_switches[0];
-        assert_eq!(project.project_id, saved.project_switches[0].project_id);
-        assert_eq!(project.skills_on, ids(&["agents:user:mine"]));
-        assert_eq!(project.skills_off, ids(&["agents:project:other"]));
-        assert_eq!(project.servers_on, saved.project_switches[0].servers_on);
-        assert_eq!(project.servers_off, saved.project_switches[0].servers_off);
-        assert!(migrate(&next).is_none());
-        let written = rebase(&next, saved);
-        assert_eq!(written, next);
-        let reread: Settings =
-            serde_json::from_str(&serde_json::to_string(&written).unwrap()).unwrap();
-        assert_eq!(reread, next);
+        let json = serde_json::to_value(&next).unwrap();
+        assert!(json.get("skillsOff").is_none() && json.get("projectSwitches").is_none());
     }
 
     #[test]

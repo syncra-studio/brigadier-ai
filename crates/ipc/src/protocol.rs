@@ -1094,12 +1094,6 @@ pub enum Request {
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
-    /// Settings → MCP servers and Skills: every server and skill the agents' configs on this
-    /// machine name, with a project's own when `projectId` is given. Switching one off goes
-    /// through [`Request::UpdateSettings`] (`mcpServersOff`, `skillsOff`).
-    GetIntegrations {
-        project_id: Option<ProjectId>,
-    },
     /// Settings › Plugins: every skill and MCP server the agents have, where each is on and how
     /// each agent stands with it, looking at project `projectId` when given (else at every
     /// project).
@@ -1148,9 +1142,8 @@ pub enum Request {
     GetPluginJob {
         id: String,
     },
-    /// Signs every agent that has the remote MCP server `serverId` (an id of
-    /// [`Request::GetIntegrations`]'s catalog, of `projectId`'s when given; a project the user
-    /// doesn't trust is refused) and needs it in to it, one after another, each with its CLI's
+    /// Signs every agent that has the remote MCP server `serverId` (a catalog id, of
+    /// `projectId`'s catalog when given; a project the user doesn't trust is refused) and needs it in to it, one after another, each with its CLI's
     /// own `mcp login`; each sign-in page opens in the user's browser. Answers at once with the
     /// sign-in's id; how it goes comes from [`Request::GetMcpSignIn`] (all agents at once) and
     /// [`Request::GetMcpSignInProgress`] (agent by agent).
@@ -1182,7 +1175,7 @@ pub enum Request {
         project_id: Option<ProjectId>,
     },
     /// Reads each agent's own list of servers again (for `projectId`'s folder when given), so
-    /// the next [`Request::GetIntegrations`] shows who needs a sign-in to `serverId` as of now.
+    /// the next [`Request::GetPlugins`] shows who needs a sign-in to `serverId` as of now.
     AskMcpSignInAgain {
         server_id: String,
         project_id: Option<ProjectId>,
@@ -1848,9 +1841,6 @@ pub enum Response {
     SendConnectCode,
     GetAccounts {
         accounts: AccountsView,
-    },
-    GetIntegrations {
-        integrations: brigadier_core::manager::integrations::IntegrationsView,
     },
     GetPlugins {
         plugins: brigadier_core::manager::plugins::PluginsView,

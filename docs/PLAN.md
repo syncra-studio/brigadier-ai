@@ -323,6 +323,8 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 
 **Goal:** Every capability on the machine, available to every vendor.
 
+**Since 2026-10-24:** Settings › Plugins turns items on or off through each CLI's own setup (the adapters in `crates/registry/src/adapter`); the Brigadier-only switches below (`mcpServersOff`, `skillsOff`, `getIntegrations`) are gone, with no migration of saved ones.
+
 **Status (2026-10-21):** the backend of shared MCP servers and skills is built (`crates/registry`, `manager/integrations.rs`; probes in `docs/research/phase7-probes.md`, live run in `docs/evidence/2026-10-21-phase7-sharing.md`):
 - A catalog of every MCP server and skill: importers for `~/.claude.json` (honoring `CLAUDE_CONFIG_DIR`), `.mcp.json`, `$CODEX_HOME/config.toml` and a trusted project's Codex layers, Claude Desktop and Cursor; skills from `~/.agents/skills`, `~/.claude/skills` (with the Claude account skills Claude Code syncs into `synced/<account>`), `$CODEX_HOME/skills` and a trusted project's `.claude/skills` and `.agents/skills`, a copy with the same files counting as one skill; a debounced watcher. Brigadier only reads these configs.
 - The catalog over IPC (`getIntegrations`, generated TS types; env and header values never cross it, only their names) and the switches as Settings fields (`mcpServersOff`, `skillsOff`; default on, a change applies at each session's next start or resume).

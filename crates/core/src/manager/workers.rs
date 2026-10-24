@@ -636,10 +636,7 @@ impl SessionManager {
                 self.lean_worker_switched_off(&conversation_id, provider, &cwd, &plain.skills)
                     .await
             }
-            _ => {
-                self.thread_switched_off(&conversation_id, provider, &cwd)
-                    .await
-            }
+            _ => Default::default(),
         };
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));

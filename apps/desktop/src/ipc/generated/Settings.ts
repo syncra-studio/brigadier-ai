@@ -10,7 +10,6 @@ import type { ModelRef } from "./ModelRef";
 import type { NotifyFinished } from "./NotifyFinished";
 import type { OwnAccountName } from "./OwnAccountName";
 import type { PermissionLevel } from "./PermissionLevel";
-import type { ProjectSwitches } from "./ProjectSwitches";
 import type { ProviderKind } from "./ProviderKind";
 
 /**
@@ -212,34 +211,6 @@ browserDownloadsDir: string,
  * The built-in browser asks where to save each download.
  */
 browserAskDownloads: boolean, 
-/**
- * MCP servers switched off for Brigadier, by catalog id (`claude:user:railway`): no thread
- * or worker gets them, their agent's own included. A change takes effect at each
- * session's next start or resume.
- */
-mcpServersOff: Array<string>, 
-/**
- * Skills switched off for Brigadier, by catalog id (`agents:user:<folder>`), as for
- * [`Self::mcp_servers_off`].
- */
-skillsOff: Array<string>, 
-/**
- * A project's exceptions to [`Self::mcp_servers_off`] and [`Self::skills_off`], one entry
- * per project that has any. The project's threads and workers go by them.
- */
-projectSwitches: Array<ProjectSwitches>, 
-/**
- * Servers from a project's own config that the user uses in every project, by catalog id:
- * workers of every other project get them too, by the switches above, while a project's
- * own item otherwise stays in its project. Read only while that project's folder is
- * trusted.
- */
-serversEverywhere: Array<string>, 
-/**
- * Skills from a project's own config used in every project, as
- * [`Self::servers_everywhere`]. Apart from it: a project's server and skill can share an id.
- */
-skillsEverywhere: Array<string>, 
 /**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.

@@ -216,6 +216,7 @@ impl McpLogins {
     }
 
     /// The sign-in going for `target`, if one is.
+    #[cfg(test)]
     pub(crate) fn pending(&self, target: &Target) -> Option<String> {
         lock(&self.runs)
             .iter()

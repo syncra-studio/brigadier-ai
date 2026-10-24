@@ -2602,14 +2602,8 @@ impl SessionManager {
                 Some(_) => Vec::new(),
                 None => self.brigade_plugin().into_iter().collect(),
             },
-            // What the user switched off of its agent's own setup (`integrations`).
-            switched_off: match side {
-                false => {
-                    self.thread_switched_off(&conv.id, choice.provider, &cwd)
-                        .await
-                }
-                true => Default::default(),
-            },
+            // Its agent's own setup, as its CLI loads it.
+            switched_off: Default::default(),
             // A tab chat reads its session's checkout, never its own to clean up. A thread writes
             // its ledger in its folder's `record/`, outside its workspace (S17).
             add_dirs: match &tab_checkout {
