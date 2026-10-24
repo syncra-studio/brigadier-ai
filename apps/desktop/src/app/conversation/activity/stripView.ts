@@ -1,4 +1,5 @@
 import { rowFinished, rowWaiting } from "@/app/conversation/activity/workerState";
+import { isNativeWorker } from "@/state/nativeWorkers";
 import type { WorkerRow } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5): the workers at it. */
@@ -25,7 +26,7 @@ export function workersStrip(rows: readonly WorkerRow[], now: number): StripView
     working: live.length - waiting,
     waiting,
     // The daemon's `stop_workers` stops every worker whose CLI still runs.
-    stoppable: live.some((row) => !row.gone),
+    stoppable: live.some((row) => !row.gone && (!isNativeWorker(row) || row.native.backgroundId !== null)),
   };
 }
 

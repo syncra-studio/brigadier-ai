@@ -61,7 +61,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  const activities = [...rows, ...taskRows(cliTasks, clock.now)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), clock.now)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;

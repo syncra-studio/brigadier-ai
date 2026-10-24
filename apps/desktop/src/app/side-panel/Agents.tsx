@@ -15,6 +15,7 @@ import { useNow } from "@/hooks/use-now";
 import type { Task, WorkerRow } from "@/ipc/generated";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { useBoard } from "@/state/board";
+import { isNativeWorker } from "@/state/nativeWorkers";
 import { useWorkerRows } from "@/state/cliThread";
 
 export { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
@@ -58,10 +59,15 @@ function WorkerDetail({ conversationId, row, headerActions }: { conversationId: 
         state={state}
         details={details}
         onBack={() => details ? setDetails(false) : setPanel(null)}
-        onToggleDetails={task ? () => setDetails((open) => !open) : undefined}
+        onToggleDetails={task || isNativeWorker(row) ? () => setDetails((open) => !open) : undefined}
         headerActions={headerActions}
       />
-      {details && task ? <WorkerDetails task={task} model={model} /> : <WorkerThread key={row.id} conversationId={conversationId} row={row} />}
+      {details && isNativeWorker(row) ? (
+        <div data-slot="worker-details" data-selectable className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 wrap-anywhere">
+          <h3 className="mb-4 text-sm font-medium">Instructions</h3>
+          <MarkdownBlock text={row.native.prompt || "The CLI did not provide this agent’s instructions."} />
+        </div>
+      ) : details && task ? <WorkerDetails task={task} model={model} /> : <WorkerThread key={row.id} conversationId={conversationId} row={row} />}
     </section>
   );
 }

@@ -4,7 +4,8 @@ import { TooltipIconButton } from "@/components/controls";
 import { StopCircle } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { WorkerRow } from "@/ipc/generated";
-import { stopTask } from "@/state/actions";
+import { isNativeWorker } from "@/state/nativeWorkers";
+import { stopBackgroundTask, stopTask } from "@/state/actions";
 
 /**
  * The user's Stop for one worker while it is at work or waits (UI audit M4), on its strip row,
@@ -13,7 +14,7 @@ import { stopTask } from "@/state/actions";
  */
 export function StopWorker({ row, name }: { row: WorkerRow; name: string }) {
   const now = useNow(60_000);
-  const stoppable = !row.gone && !rowFinished(row, now);
+  const stoppable = !row.gone && !rowFinished(row, now) && (!isNativeWorker(row) || row.native.backgroundId !== null);
   const stop = useAction();
   if (!stoppable) return null;
   return (
@@ -25,7 +26,9 @@ export function StopWorker({ row, name }: { row: WorkerRow; name: string }) {
         disabled={stop.busy}
         onClick={(event) => {
           event.stopPropagation();
-          stop.run(() => stopTask(row.id));
+          stop.run(() => isNativeWorker(row)
+            ? stopBackgroundTask(row.native.conversationId, row.native.backgroundId!)
+            : stopTask(row.id));
         }}
         className="text-foreground/60 hover:text-foreground shrink-0"
       >

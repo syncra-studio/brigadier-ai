@@ -1190,11 +1190,16 @@ export async function dontResume(conversationId: string): Promise<void> {
  */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
   const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
-  return showStopped(
-    { conversationId, turn: false, tasks: ids },
-    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
-    (stopped) => stopped,
-  );
+  const native = useCliThread.getState().views[conversationId]?.background?.filter((task) => task.kind === "agent" && task.status === "running") ?? [];
+  const [stopped] = await Promise.all([
+    showStopped(
+      { conversationId, turn: false, tasks: ids },
+      async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
+      (taskIds) => taskIds,
+    ),
+    ...native.map((task) => stopBackgroundTask(conversationId, task.id)),
+  ]);
+  return stopped;
 }
 
 export async function pauseTask(taskId: string): Promise<void> {

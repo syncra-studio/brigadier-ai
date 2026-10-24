@@ -237,12 +237,13 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
   useCliThread.setState({ views: { [id]: { entries: [], turns: [] } } });
   tasksSaid(sleep, helper);
-  await until(() => ids().length === 2, 3000);
+  await until(() => ids().length === 1, 3000);
   seen.running = ids();
   seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
   seen.stops = ids().map((activity) => text(stop(activity!)));
   seen.buttons = ids().map((activity) => row(activity!)?.tagName ?? null);
-  // A command opens its output in a tab; a subagent has none to open.
+  seen.nativeWorkers = [...document.querySelectorAll('[data-slot="workers-summary-worker"]')].map((element) => element.textContent);
+  // A command opens its output in a tab; agents are listed in Workers.
   row("task:bdza4j3ng")?.click();
   await frame();
   seen.opened = sessionTabs(id).active;
@@ -250,14 +251,13 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   stop("task:bdza4j3ng")?.click();
   await until(() => calls.length > 0, 3000);
   seen.calls = calls.toSorted();
-  // The subagent finished 29 s ago: done for a second more, then gone (30 s). The command exited
-  // almost 5 minutes ago: done, then gone. A stopped or failed task leaves at once.
+  // The command exited almost 5 minutes ago: done, then gone. Native agents stay in Workers.
   const ended = Date.now();
   tasksSaid({ ...sleep, status: "completed", endedAtMs: ended - 5 * MIN + 2500 }, { ...helper, status: "completed", endedAtMs: ended - 29_000, summary: "hi" });
   await frame();
   seen.done = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
   seen.icons = ids().map((activity) => row(activity!)?.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null);
-  seen.agentLeft = await until(() => !row("task:a0c79"), 5000) < 5000 && Date.now() - ended >= 900;
+  seen.agentLeft = !row("task:a0c79");
   seen.agentLeftWith = ids();
   seen.shellLeft = await until(() => !row("task:bdza4j3ng"), 6000) < 6000 && Date.now() - ended >= 2400;
   tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });

@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
+import { workersOf } from "@/state/nativeWorkers";
 import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent, ThreadNews, ThreadView, WorkerRow } from "@/ipc/generated";
 
 /**
@@ -261,7 +262,7 @@ const NO_SERVERS: readonly McpServerState[] = [];
 
 /** A session's own workers, as their CLIs and git show them (S14), newest first. */
 export function useWorkerRows(conversationId: string | null): readonly WorkerRow[] {
-  return useCliThread((s) => (conversationId ? (s.views[conversationId]?.workers ?? NO_ROWS) : NO_ROWS));
+  return useCliThread((s) => (conversationId ? (s.views[conversationId] ? workersOf(conversationId, s.views[conversationId]) : NO_ROWS) : NO_ROWS));
 }
 
 /** The MCP servers a session's own CLI has, as it last said. */
@@ -272,7 +273,7 @@ export function useSessionMcp(conversationId: string): readonly McpServerState[]
 /** A worker's row, in whichever session's thread lists it. */
 export function workerRowIn(views: Readonly<Record<string, ThreadView>>, taskId: string): { conversationId: string; row: WorkerRow } | null {
   for (const [conversationId, view] of Object.entries(views)) {
-    const row = view.workers?.find((each) => each.id === taskId);
+    const row = workersOf(conversationId, view).find((each) => each.id === taskId);
     if (row) return { conversationId, row };
   }
   return null;

@@ -66,23 +66,23 @@ test("Background rows: a spinner while a process is on its way, a green live dot
   }
 });
 
-test("Background shows the CLI's own background tasks: a command and a subagent, each with Stop; the command opens its output; each drops on the CLI's own timing", { timeout: 90000 }, async (t) => {
+test("Background shows CLI commands with Stop and output; native agents appear in Workers", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?tasks=1", "activities-result", 60000)) as {
-    running: string[]; rows: Record<string, Row>; stops: string[]; buttons: string[]; opened: string; output: boolean; calls: string[];
+    running: string[]; nativeWorkers: string[]; rows: Record<string, Row>; stops: string[]; buttons: string[]; opened: string; output: boolean; calls: string[];
     done: Record<string, string>; icons: string[]; agentLeft: boolean; agentLeftWith: string[]; shellLeft: boolean; stoppedOrFailed: string[]; section: boolean;
   };
   // Newest first, each named as the CLI names it.
-  assert.deepEqual(seen.running, ["task:a0c79", "task:bdza4j3ng"]);
+  assert.deepEqual(seen.running, ["task:bdza4j3ng"]);
+  assert.deepEqual(seen.nativeWorkers, ["Reply with hi working"]);
   assert.deepEqual(seen.rows["task:bdza4j3ng"], { label: "Sleep 20 seconds then echo marker", state: "running", moving: false, elapsed: "8s", tip: "sleeping" });
-  assert.deepEqual(seen.rows["task:a0c79"], { label: "Reply with hi", state: "running", moving: false, elapsed: "5s", tip: "Reply with hi" });
-  assert.deepEqual(seen.stops, ["Stop", "Stop"]);
-  assert.deepEqual(seen.buttons, ["DIV", "BUTTON"], "only the command opens something");
+  assert.deepEqual(seen.stops, ["Stop"]);
+  assert.deepEqual(seen.buttons, ["BUTTON"], "the command opens its output");
   assert.equal(seen.opened, "panel:output:task:bdza4j3ng");
   assert.equal(seen.output, true, "its output tab reads the CLI's output file");
   assert.deepEqual(seen.calls, ["stopBackgroundTask bdza4j3ng"]);
-  assert.deepEqual(seen.done, { "task:a0c79": "done", "task:bdza4j3ng": "done" });
-  assert.deepEqual(seen.icons, ["done", "done"]);
-  assert.equal(seen.agentLeft, true, "a done subagent leaves 30 s after it ended");
+  assert.deepEqual(seen.done, { "task:bdza4j3ng": "done" });
+  assert.deepEqual(seen.icons, ["done"]);
+  assert.equal(seen.agentLeft, true, "native agents are absent from Background");
   assert.deepEqual(seen.agentLeftWith, ["task:bdza4j3ng"]);
   assert.equal(seen.shellLeft, true, "a command leaves 5 min after it exited");
   assert.deepEqual(seen.stoppedOrFailed, [], "stopped and failed tasks leave at once");

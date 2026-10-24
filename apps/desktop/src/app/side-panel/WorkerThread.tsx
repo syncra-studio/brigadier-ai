@@ -23,6 +23,8 @@ import type { ThreadView, WorkerRow } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
+import { request } from "@/ipc/client";
+import { isNativeWorker, type NativeWorker } from "@/state/nativeWorkers";
 import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
@@ -92,15 +94,54 @@ function useWorkerThread(conversationId: string, row: WorkerRow): { view: Thread
 const received = (entry: ThreadEntry) => entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user";
 
 export function WorkerThread({ conversationId, row }: { conversationId: string; row: WorkerRow }) {
+  return isNativeWorker(row)
+    ? <NativeWorkerThread conversationId={conversationId} row={row} />
+    : <BrigadierWorkerThread conversationId={conversationId} row={row} />;
+}
+
+function BrigadierWorkerThread({ conversationId, row }: { conversationId: string; row: WorkerRow }) {
   const { view, error } = useWorkerThread(conversationId, row);
+  return <WorkerTranscript row={row} view={view} error={error} />;
+}
+
+/** Read only while this native agent is open. Polling never republishes the parent conversation. */
+function NativeWorkerThread({ conversationId, row }: { conversationId: string; row: NativeWorker }) {
+  const [view, setView] = useState<ThreadView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const callId = row.native.callId;
+  useEffect(() => {
+    let current = true;
+    let reading = false;
+    const read = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const { view: parent } = await request({ method: "threadView", conversationId });
+        const entries = callId ? parent.entries.filter((entry) => entry.parent === callId) : [];
+        if (current) {
+          setView((held) => JSON.stringify(held?.entries) === JSON.stringify(entries) ? held : { entries, turns: [] });
+          setError(null);
+        }
+      } catch (cause) {
+        if (current) setError(cause instanceof Error ? cause.message : String(cause));
+      } finally { reading = false; }
+    };
+    void read();
+    const timer = row.working ? window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS) : null;
+    return () => { current = false; if (timer !== null) window.clearInterval(timer); };
+  }, [conversationId, callId, row.working]);
+  return <WorkerTranscript row={row} view={view} error={error} native />;
+}
+
+function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean }) {
   const clock = useNow(60_000);
   const state = workerStateOf(row, clock);
   const working = row.working;
   const failed = state.kind === "failed";
   // Its own items, not its subagents': their Agent call's row stands for them.
   const items = useMemo(
-    () => foldTranscript((view?.entries ?? []).filter((entry) => !entry.parent).map((entry, index) => ({ streamSeq: index, atMs: entry.atMs ?? 0, event: entry.event }))).items,
-    [view],
+    () => foldTranscript((view?.entries ?? []).filter((entry) => native || !entry.parent).map((entry, index) => ({ streamSeq: index, atMs: entry.atMs ?? 0, event: entry.event }))).items,
+    [view, native],
   );
   const all = useMemo(() => threadEntries(items).filter((entry) => !workerCliNotice(entry, failed)), [items, failed]);
   // Its first message is its brief, as the thread's first bubble.
@@ -175,6 +216,8 @@ export function WorkerThread({ conversationId, row }: { conversationId: string; 
             {error}
           </p>
         )}
+        {native && !view && !error && <p className="text-muted-foreground text-sm">Loading transcript…</p>}
+        {native && view && all.length === 0 && !error && <p className="text-muted-foreground text-sm">The CLI has not made this agent’s transcript available.</p>}
         {recent.map((item, index) => show(item, previous.length + index))}
         {thinking && <ThinkingLine text={thinking.text} />}
         {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}

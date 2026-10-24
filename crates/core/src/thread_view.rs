@@ -258,14 +258,35 @@ pub(crate) struct LiveTurn {
     pub mcp: Vec<McpServerState>,
 }
 
-/// A session file's items, with the length and change time they were read at, and its
-/// reading, to read only what it adds next.
+/// A session file's items, with the length and change time of it and its subagents' files
+/// they were read at, and its reading, to read only what they add next.
 struct CachedFile {
-    len: u64,
-    modified: std::time::SystemTime,
+    stamp: FileStamp,
     entries: Arc<Vec<FileEntry>>,
     /// None while a read of it runs.
     reading: Option<session_file::Reading>,
+}
+
+type FileStamp = Vec<(PathBuf, u64, std::time::SystemTime)>;
+
+fn file_stamp(kind: ProviderKind, path: &Path) -> Option<FileStamp> {
+    let mut paths = vec![path.to_owned()];
+    if kind == ProviderKind::Claude
+        && let Ok(children) = std::fs::read_dir(path.with_extension("").join("subagents"))
+    {
+        paths.extend(children.flatten().map(|entry| entry.path()).filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "jsonl" || ext == "json")
+        }));
+    }
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let meta = std::fs::metadata(&path).ok()?;
+            Some((path, meta.len(), meta.modified().ok()?))
+        })
+        .collect()
 }
 
 /// Session files read, kept while they don't change.
@@ -275,14 +296,11 @@ pub(crate) struct FileCache(Mutex<HashMap<PathBuf, CachedFile>>);
 impl FileCache {
     pub(crate) fn read(&self, kind: ProviderKind, path: &Path) -> Arc<Vec<FileEntry>> {
         let path = &session_file::locate(kind, path);
-        let stamp = std::fs::metadata(path)
-            .ok()
-            .and_then(|meta| Some((meta.len(), meta.modified().ok()?)));
-        let Some((len, modified)) = stamp else {
+        let Some(stamp) = file_stamp(kind, path) else {
             return Arc::default();
         };
         let held = match self.0.lock().unwrap().get_mut(path) {
-            Some(file) if file.len == len && file.modified == modified => {
+            Some(file) if file.stamp == stamp => {
                 return file.entries.clone();
             }
             Some(file) => file.reading.take(),
@@ -293,8 +311,7 @@ impl FileCache {
         self.0.lock().unwrap().insert(
             path.to_owned(),
             CachedFile {
-                len,
-                modified,
+                stamp,
                 entries: entries.clone(),
                 reading: Some(reading),
             },

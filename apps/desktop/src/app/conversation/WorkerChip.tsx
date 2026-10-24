@@ -7,6 +7,7 @@ import { useNow } from "@/hooks/use-now";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { workersOf } from "@/state/nativeWorkers";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRow, workerRowIn } from "@/state/cliThread";
 
@@ -53,7 +54,7 @@ export function taskStateLabel(task: Task): string {
 export function useWorkerName(taskId: string): string | null {
   const fromRow = useCliThread((s) => {
     const found = workerRowIn(s.views, taskId);
-    return found ? rowName(s.views[found.conversationId]?.workers ?? [], taskId) : null;
+    return found ? rowName(workersOf(found.conversationId, s.views[found.conversationId]!), taskId) : null;
   });
   const fromBoard = useBoard((s) => {
     if (fromRow !== null) return null;
