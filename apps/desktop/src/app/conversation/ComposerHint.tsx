@@ -1,7 +1,7 @@
 import type { ComposerTarget } from "@/app/conversation/composerTarget";
 import { ProjectSettingsButton, ProvidersButton } from "@/app/shell/SetupPickers";
 
-/** One line under the composer: what blocks sending, or what the setup implies. */
+/** A setup problem that blocks sending. */
 export function ComposerHint({ target }: { target: ComposerTarget }) {
   const { conversation, resolved } = target;
   if (conversation) return null;
@@ -18,15 +18,5 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
       </p>
     );
   }
-  // A new worktree starts from its base's last commit: what isn't committed stays out of it.
-  const dirty = repo.info?.dirty;
-  const local = resolved.environment === "localCheckout";
-  if (resolved.kind !== "session" || !dirty) return null;
-  return (
-    <p className="text-muted-foreground px-2 text-xs">
-      {local
-        ? "The session works in your checkout, uncommitted changes and all."
-        : "The session starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout."}
-    </p>
-  );
+  return null;
 }

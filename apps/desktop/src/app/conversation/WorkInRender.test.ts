@@ -10,11 +10,11 @@ test("Work in offers New worktree (the default) and Local checkout, and each ask
   const worktree = seen.worktreeSetup as { repo: string; environment: unknown };
   assert.equal(worktree.repo, "/work/todo-app");
   assert.deepEqual(worktree.environment, { type: "newWorktree", base: "feature-x", branch: null });
-  assert.match(String(seen.worktreeHint), /worktree of its own/);
+  assert.equal(seen.worktreeHint, "", "no worktree explanation below the composer");
   // Local checkout: the project's own folder, on the branch it has checked out.
   assert.deepEqual(seen.localPills, ["Local checkout", "feature-x"]);
   assert.deepEqual((seen.localSetup as { environment: unknown }).environment, { type: "localCheckout", branch: "feature-x", createFrom: null });
-  assert.match(String(seen.localHint), /works in your checkout/);
+  assert.equal(seen.localHint, "", "no checkout explanation below the composer");
   assert.deepEqual(seen.localRows, [["New worktree", "false"], ["Local checkout", "true"]]);
   assert.deepEqual((seen.backSetup as { environment: unknown }).environment, { type: "newWorktree", base: "feature-x", branch: null });
 });
