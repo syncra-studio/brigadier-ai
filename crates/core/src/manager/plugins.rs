@@ -175,8 +175,10 @@ pub(crate) trait Health {
 }
 
 /// No list read yet.
+#[cfg(test)]
 pub(crate) struct Unknown;
 
+#[cfg(test)]
 impl Health for Unknown {
     fn state(
         &self,
