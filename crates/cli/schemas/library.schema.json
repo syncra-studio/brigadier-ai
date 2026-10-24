@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier library --json",
+  "type": "object",
+  "required": ["action", "items", "agents"],
+  "additionalProperties": false,
+  "properties": {
+    "action": {"enum": ["list", "add", "remove", "login"]},
+    "items": {
+      "type": "array",
+      "description": "list: every Library item; add: the items it added; else empty.",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "detail", "everywhere", "onIn", "offIn", "agents"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"enum": ["skill", "server"]},
+          "detail": {"type": "string", "description": "Its command, address or folder."},
+          "everywhere": {"type": "boolean", "description": "On in every project."},
+          "onIn": {"type": "array", "description": "When not everywhere: the project folders it is on in.", "items": {"type": "string"}},
+          "offIn": {"type": "array", "description": "When everywhere: the project folders it is off in.", "items": {"type": "string"}},
+          "agents": {
+            "type": "array",
+            "description": "Each agent's state where the call looked (--project, else every project).",
+            "items": {
+              "type": "object",
+              "required": ["agent", "state"],
+              "additionalProperties": false,
+              "properties": {
+                "agent": {"type": "string"},
+                "state": {"enum": ["ready", "off", "needsSignIn", "wontStart", "missing", "notSupported", "working"]}
+              }
+            }
+          },
+          "attention": {"type": "string", "description": "A sign-in it waits for, or why it won't start."}
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "description": "add, remove and login: how each agent took it.",
+      "items": {
+        "type": "object",
+        "required": ["agent", "outcome"],
+        "additionalProperties": false,
+        "properties": {
+          "agent": {"type": "string"},
+          "outcome": {"enum": ["done", "skipped", "failed"]},
+          "message": {"type": "string"}
+        }
+      }
+    },
+    "warning": {"type": "string", "description": "Done, with something to know."}
+  }
+}

@@ -203,6 +203,9 @@ impl SessionManager {
                 Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
             };
         }
+        if tool == Tool::Library {
+            return self.cli_library(caller, action, given).await;
+        }
         if matches!(tool, Tool::Brain | Tool::Transcript) {
             return crate::heap(|| self.cli_records(caller, role.as_ref(), tool, action, given))
                 .await;

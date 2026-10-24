@@ -257,6 +257,8 @@ pub struct SessionManager {
     terminal_host: std::sync::OnceLock<Arc<dyn terminal_host::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
     pages: std::sync::OnceLock<Arc<crate::pages::Pages>>,
+    /// Opens a sign-in page in the user's browser (`brigadier library login`).
+    sign_in_browser: std::sync::OnceLock<mcp_login::Open>,
     /// Tabs' own chats: whether they may run yet, and what browser tabs sent them.
     tab_chats: side_chat::TabChats,
     /// The checkouts a tab chat saved a file in, for every window ([`page_tools`]).
@@ -423,6 +425,7 @@ impl SessionManager {
             app,
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
+            sign_in_browser: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),
             checkout_saves: tokio::sync::broadcast::channel(16).0,
             cli_threads: std::sync::Mutex::default(),

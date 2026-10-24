@@ -648,6 +648,45 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/code.schema.json"),
     },
     Command {
+        name: "library",
+        summary: "The skills and MCP servers every agent has: list, add, remove, sign in.",
+        details: "The Library is what Settings › Plugins adds: each item goes to every agent \
+                  through the agent's own setup, so a plain `claude` or `codex` in a terminal \
+                  has it too. `list` shows each item, where it's on and how each agent \
+                  stands with it. `add <what…>` takes what you'd paste in Add: an `mcp add` \
+                  line of any agent (after `--`, as it has flags of its own), server JSON, a \
+                  server URL, a skill folder, a GitHub link or a skills.sh name, or `-` to \
+                  read it from standard input; it goes in every project, or with `--project` \
+                  only in that one, for you alone unless `--shared`. `remove <name>` takes \
+                  it from every agent and project. `login <name>` signs every agent that \
+                  needs it in to a server, each with its own sign-in, in the user's browser. \
+                  A worker can only list.",
+        args: &[
+            action(&["list", "add", "remove", "login"], "What to do."),
+            flag(
+                "project",
+                "DIR",
+                "list: how the agents stand there; add: only in this project (`.` for this folder).",
+            ),
+            flag(
+                "name",
+                "NAME",
+                "add: its name, when what you give has none.",
+            ),
+            switch(
+                "shared",
+                "add, with --project: for the whole team, in the project's committed files.",
+            ),
+            rest(
+                "args",
+                "add: what to add; remove and login: the item's name.",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/library.schema.json"),
+    },
+    Command {
         name: "report",
         summary: "Keep a research answer's full report as a page of the user's.",
         details: "`save --title <title> <markdown…>`: everything the short answer leaves out, \

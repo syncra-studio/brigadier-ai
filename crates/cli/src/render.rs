@@ -3,7 +3,7 @@
 use base64::Engine as _;
 
 use crate::protocol::{
-    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, ReadOutput, SendOutput,
+    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, LibraryOutput, ReadOutput, SendOutput,
     SessionsOutput, ShowOutput, StartOutput, ToolOutput, WaitOutput, WhyBy, WhyOutput, WorkerRow,
     WorkersOutput,
 };
@@ -369,6 +369,67 @@ pub fn close(output: &CloseOutput) -> String {
 }
 
 /// `preview`, `browser`, `app` and `page`: the tool's answer, and where its screenshots went.
+/// A project folder by its last part.
+fn folder_name(path: &str) -> &str {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+}
+
+pub fn library(output: &LibraryOutput) -> String {
+    let mut out = String::new();
+    if output.action == "list" && output.items.is_empty() {
+        out.push_str(
+            "The Library is empty: `brigadier library add` puts a skill or MCP server in it.\n",
+        );
+    }
+    let mut rows = Vec::new();
+    for item in &output.items {
+        let names = |paths: &[String]| {
+            paths
+                .iter()
+                .map(|path| folder_name(path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let place = match (
+            item.everywhere,
+            item.on_in.is_empty(),
+            item.off_in.is_empty(),
+        ) {
+            (true, _, true) => "every project".to_owned(),
+            (true, _, false) => format!("every project but {}", names(&item.off_in)),
+            (false, false, _) => format!("only in {}", names(&item.on_in)),
+            (false, true, _) => "off".to_owned(),
+        };
+        let agents = item
+            .agents
+            .iter()
+            .map(|agent| format!("{} {}", agent.agent, agent.state))
+            .collect::<Vec<_>>()
+            .join(", ");
+        rows.push(vec![item.name.clone(), item.kind.clone(), place, agents]);
+    }
+    out.push_str(&table(&rows));
+    for item in &output.items {
+        if let Some(attention) = &item.attention {
+            out.push_str(&format!("{}: {attention}\n", item.name));
+        }
+    }
+    for agent in &output.agents {
+        match &agent.message {
+            Some(message) => {
+                out.push_str(&format!("{}: {} — {message}\n", agent.agent, agent.outcome))
+            }
+            None => out.push_str(&format!("{}: {}\n", agent.agent, agent.outcome)),
+        }
+    }
+    if let Some(warning) = &output.warning {
+        out.push_str(&format!("{warning}\n"));
+    }
+    out
+}
+
 pub fn tool(output: &ToolOutput) -> String {
     let mut out = output.text.trim_end().to_owned();
     out.push('\n');

@@ -7,6 +7,7 @@
 //! ([`brigadier_registry::library`]) and reach each agent through its own plugin commands.
 
 mod jobs;
+mod library_cli;
 pub mod ops;
 
 use std::path::{Path, PathBuf};

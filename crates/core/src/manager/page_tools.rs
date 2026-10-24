@@ -40,6 +40,11 @@ pub(crate) fn page_note(id: &str, title: &str) -> String {
 }
 
 impl SessionManager {
+    /// How the daemon opens a page in the user's browser, once.
+    pub fn set_browser(&self, open: Arc<dyn Fn(&str) + Send + Sync>) {
+        let _ = self.sign_in_browser.set(open);
+    }
+
     /// The pages folder the daemon shares, once.
     pub fn set_pages(&self, pages: Arc<Pages>) {
         let _ = self.pages.set(pages);

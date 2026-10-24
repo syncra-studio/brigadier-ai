@@ -163,6 +163,7 @@ fn print(
         "ledger" => present(output, json, |output: &protocol::LedgerOutput| {
             output.text.clone()
         }),
+        "library" => present(output, json, render::library),
         name if json && protocol::Tool::of_command(name).is_some() => {
             present(output, json, render::tool)
         }
@@ -198,6 +199,7 @@ fn text_from_stdin(command: &str, action: Option<&str>) -> Option<(&'static str,
         ("page", "file-write") => Some(("args", 0)),
         ("report", "save") => Some(("markdown", 0)),
         ("ledger", "add") => Some(("args", 0)),
+        ("library", "add") => Some(("args", 0)),
         ("feedback", "offer") => Some(("body", 0)),
         _ => None,
     }

@@ -332,6 +332,10 @@ async fn run(
     daemon.sessions.set_terminal_host(daemon.terminals.clone());
     // The thread reads and changes the page a message was sent from.
     daemon.sessions.set_pages(daemon.pages.clone());
+    // `brigadier library login` opens each agent's sign-in page in the browser.
+    daemon
+        .sessions
+        .set_browser(std::sync::Arc::new(crate::connect::open_in_browser));
     supervisor.spawn_critical(
         "ipc accept loop",
         server::accept_loop(daemon.clone(), listener, token),

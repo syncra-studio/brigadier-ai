@@ -721,6 +721,31 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::Code
         }
+        "library" => {
+            match action.as_str() {
+                "add" => {
+                    if text.trim().is_empty() {
+                        return Err(error("missing <what>: what you'd paste in Add"));
+                    }
+                    put("text", Some(json!(text)));
+                    put("name", flag("name"));
+                    put("shared", Some(json!(args.switch("shared"))));
+                }
+                "remove" | "login" => put("name", one("name", true)?),
+                _ => {
+                    one("nothing", false)?.map_or(Ok(()), |extra| {
+                        Err(error(&format!("unexpected argument {extra}")))
+                    })?;
+                }
+            }
+            if let Some(dir) = args.flag("project") {
+                // Resolved here: the folder is the caller's, relative to its own.
+                let path = std::fs::canonicalize(dir)
+                    .map_err(|err| error(&format!("--project {dir}: {err}")))?;
+                put("project", Some(json!(path.display().to_string())));
+            }
+            Tool::Library
+        }
         "report" => {
             let Some(title) = args.flag("title") else {
                 return Err(error("--title: the report's title"));

@@ -121,6 +121,7 @@ pub enum Tool {
     Brain,
     Transcript,
     Code,
+    Library,
     Report,
     Feedback,
     Approval,
@@ -137,6 +138,7 @@ impl Tool {
         Self::Brain,
         Self::Transcript,
         Self::Code,
+        Self::Library,
         Self::Report,
         Self::Feedback,
         Self::Approval,
@@ -153,6 +155,7 @@ impl Tool {
             Self::Brain => "brain",
             Self::Transcript => "transcript",
             Self::Code => "code",
+            Self::Library => "library",
             Self::Report => "report",
             Self::Feedback => "feedback",
             Self::Approval => "approval",
@@ -795,6 +798,61 @@ pub struct ToolOutput {
     /// Where `--json`-less output saved them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub saved: Vec<String>,
+}
+
+/// `brigadier library`: the Library's items, and how each agent took a change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryOutput {
+    pub action: String,
+    /// `list`: every Library item; `add`: the items it added.
+    pub items: Vec<LibraryItem>,
+    /// `add`, `remove` and `login`: each agent's part.
+    pub agents: Vec<LibraryAgentResult>,
+    /// Done, with something to know: "It's added, but it didn't start: …".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// One Library item: a skill or an MCP server every agent can have.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryItem {
+    pub name: String,
+    /// `skill` or `server`.
+    pub kind: String,
+    /// Its command, address or folder.
+    pub detail: String,
+    /// On in every project.
+    pub everywhere: bool,
+    /// When not everywhere: the project folders it is on in.
+    pub on_in: Vec<String>,
+    /// When everywhere: the project folders it is off in.
+    pub off_in: Vec<String>,
+    /// Each agent's state where the call looked: `ready`, `off`, `needsSignIn`, `wontStart`,
+    /// `missing`, `notSupported` or `working`.
+    pub agents: Vec<LibraryAgentState>,
+    /// A sign-in it waits for, or why it won't start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryAgentState {
+    pub agent: String,
+    pub state: String,
+}
+
+/// How one agent took a change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryAgentResult {
+    pub agent: String,
+    /// `done`, `skipped` or `failed`.
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// `brigadier ledger`: what it printed, and for `check` the lists behind that text.

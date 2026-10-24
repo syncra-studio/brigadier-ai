@@ -54,6 +54,26 @@ fn threads(answers: Answers) -> Script {
                             json!({"action": "Pay", "details": "Why"}),
                         ),
                     ),
+                    (
+                        "worker library list",
+                        tool(Tool::Library, "list", json!({})),
+                    ),
+                    (
+                        "worker library add",
+                        tool(
+                            Tool::Library,
+                            "add",
+                            json!({"text": "https://mcp.sentry.dev/mcp", "shared": false}),
+                        ),
+                    ),
+                    (
+                        "worker library remove",
+                        tool(Tool::Library, "remove", json!({"name": "sentry"})),
+                    ),
+                    (
+                        "worker library login",
+                        tool(Tool::Library, "login", json!({"name": "sentry"})),
+                    ),
                 ] {
                     keep(&answers, name, brigadier(&turn, request).await);
                 }
@@ -106,6 +126,11 @@ fn threads(answers: Answers) -> Script {
                     ),
                 ),
                 ("file read", tool(Tool::Page, "file-read", json!({}))),
+                ("library", tool(Tool::Library, "list", json!({}))),
+                (
+                    "library remove",
+                    tool(Tool::Library, "remove", json!({"name": "nothing-here"})),
+                ),
             ];
             for (name, request) in calls {
                 keep(&answers, name, brigadier(&turn, request).await);
@@ -169,6 +194,22 @@ async fn the_threads_moved_tools_run_behind_brigadier_and_its_workers_are_refuse
         "{:#?}",
         board.approvals
     );
+    // The Library: empty in the test's home; nothing to remove. A worker can only list it.
+    assert_eq!(
+        answers["library"]["action"], "list",
+        "{:#}",
+        answers["library"]
+    );
+    assert_eq!(answers["library"]["items"], json!([]));
+    assert_eq!(answers["library remove"]["error"]["code"], "failed");
+    assert_eq!(answers["worker library list"]["action"], "list");
+    for name in [
+        "worker library add",
+        "worker library remove",
+        "worker library login",
+    ] {
+        assert_eq!(answers[name]["error"]["code"], "refused", "{name}");
+    }
     // A side chat's file isn't the thread's.
     assert_eq!(answers["file read"]["error"]["code"], "refused");
     // A worker has none of them.

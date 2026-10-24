@@ -422,6 +422,58 @@ fn sample(request: &CliRequest) -> CliReply {
                 }],
             }),
         }),
+        CliRequest::Tool {
+            tool: Tool::Library,
+            action,
+            args,
+        } => CliReply::ok(&LibraryOutput {
+            action: action.clone(),
+            items: match action.as_str() {
+                "list" | "add" => vec![LibraryItem {
+                    name: args["name"].as_str().unwrap_or("sentry").to_owned(),
+                    kind: "server".into(),
+                    detail: "https://mcp.sentry.dev/mcp".into(),
+                    everywhere: args.get("project").is_none(),
+                    on_in: args["project"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect(),
+                    off_in: vec![],
+                    agents: vec![
+                        LibraryAgentState {
+                            agent: "claude".into(),
+                            state: "ready".into(),
+                        },
+                        LibraryAgentState {
+                            agent: "codex".into(),
+                            state: "needsSignIn".into(),
+                        },
+                    ],
+                    attention: Some("Codex needs you to sign in.".into()),
+                }],
+                _ => vec![],
+            },
+            agents: match action.as_str() {
+                "list" => vec![],
+                _ => vec![
+                    LibraryAgentResult {
+                        agent: "claude".into(),
+                        outcome: "done".into(),
+                        message: None,
+                    },
+                    LibraryAgentResult {
+                        agent: "codex".into(),
+                        outcome: "failed".into(),
+                        message: Some(
+                            "Codex only reads this project's settings once you trust the project."
+                                .into(),
+                        ),
+                    },
+                ],
+            },
+            warning: None,
+        }),
         CliRequest::Tool { tool, action, args } => CliReply::ok(&ToolOutput {
             action: action.clone(),
             text: format!("{tool:?} {action}: {args}"),
@@ -675,6 +727,25 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["code", "search", "--kind", "symbol", "--json", "ToolHost"],
         &["code", "refs", "cli_call", "--json"],
         &["code", "map", "--json"],
+        &["library", "list", "--json"],
+        &["library", "list", "--project", ".", "--json"],
+        &[
+            "library",
+            "add",
+            "--project",
+            ".",
+            "--json",
+            "--",
+            "claude",
+            "mcp",
+            "add",
+            "--transport",
+            "http",
+            "sentry",
+            "https://mcp.sentry.dev/mcp",
+        ],
+        &["library", "remove", "sentry", "--json"],
+        &["library", "login", "sentry", "--json"],
         &["why", "src/main.rs:3", "--json"],
         &["why", "src/main.rs", "--line", "4", "--json"],
         &["why", "src/main.rs:5", "--json"],
@@ -732,7 +803,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 12, sample);
+    let daemon = stand_in_daemon(&dir.0, 14, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -743,6 +814,21 @@ fn text_output_reads_well() {
     assert!(sessions.starts_with("brigadier-ai\nID"), "{sessions}");
     assert!(sessions.contains("Strip-down (this session)"), "{sessions}");
     assert!(sessions.contains("+12 −3"), "{sessions}");
+    let library = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["library", "list"]));
+    assert_eq!(
+        library,
+        "sentry  server  every project  claude ready, codex needsSignIn\n\
+         sentry: Codex needs you to sign in.\n"
+    );
+    let login = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &["library", "login", "sentry"],
+    ));
+    assert_eq!(
+        login,
+        "claude: done\ncodex: failed — Codex only reads this project's settings once you trust the project.\n"
+    );
     let workers = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["workers"]));
     assert!(workers.contains("codex-model-1 (high)"), "{workers}");
     let read = stdout(&brigadier(
