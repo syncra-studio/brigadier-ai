@@ -53,3 +53,21 @@ test("a dialog or popover closed while the page is hidden leaves though no frame
     "dialog frozen": { marked: false, mounted: dialog },
   });
 });
+
+test("a card that comes while the page is hidden is simply there when it shows again", { timeout: 60000 }, async (t) => {
+  type Card = { animations: number; opacity: string; height: number } | null;
+  const seen = JSON.parse(await renderFixtureLive(t, "hidden-entrance.html?drive=1", "hidden-entrance-result")) as Record<"hidden" | "shown", { slot: Card; rail: Card }>;
+  // Hidden with no frames: no entrance, so it shows whole the moment the window does.
+  for (const card of [seen.hidden.slot, seen.hidden.rail]) {
+    assert.ok(card, "the card mounted");
+    assert.equal(card.animations, 0);
+    assert.equal(card.opacity, "1");
+    assert.ok(card.height > 0);
+  }
+  // The control: shown, each still opens with its animation; held at its first frame, as the
+  // covered window held it, the approval is invisible though it takes its room.
+  assert.equal(seen.shown.slot?.animations, 1);
+  assert.equal(seen.shown.slot?.opacity, "0");
+  assert.ok((seen.shown.slot?.height ?? 0) > 0);
+  assert.equal(seen.shown.rail?.animations, 1);
+});
