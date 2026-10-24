@@ -627,6 +627,14 @@ async fn a_pending_move_survives_a_restart() {
     })
     .await;
     flow.settled().await;
+    // The seam is recorded as closed once the successor runs: settled can come first.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while read_seam(&record).seams.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the seam closed");
     let turns = turns.lock().unwrap().clone();
     let (_, _, input) = turns.last().unwrap();
     assert!(input.starts_with(HANDOFF_MARK), "{input}");
