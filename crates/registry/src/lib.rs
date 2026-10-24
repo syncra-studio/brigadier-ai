@@ -29,6 +29,7 @@
 //! [`Roots::vars`], the environment the CLIs themselves run with.
 
 pub mod adapter;
+pub mod add_parse;
 pub mod item;
 pub mod library;
 mod plugins;
