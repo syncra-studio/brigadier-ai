@@ -1114,13 +1114,21 @@ pub enum Request {
         text: String,
         name: Option<String>,
     },
-    /// Adds what `text` holds for every agent: in project `projectId` only ("just me" unless
-    /// `shared`), else in every project. Answers with a job.
+    /// Adds what `text` holds for every agent (only `agents`, when given): in project
+    /// `projectId` only ("just me" unless `shared`), else in every project. `values` sets or
+    /// adds the env (or headers) of the one server pasted; they go to the Keychain. Answers
+    /// with a job.
     AddPlugin {
         text: String,
         name: Option<String>,
         project_id: Option<String>,
         shared: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agents: Option<Vec<ProviderKind>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        values: Option<std::collections::BTreeMap<String, String>>,
     },
     /// Moves an agent's own item `key` into the Library, for every agent. Answers with a job.
     UseEverywhere {

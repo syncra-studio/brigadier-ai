@@ -5,7 +5,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 
 type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; switch: string | null; button: string | null };
 type SectionSeen = { title: string; description: string; count: string; rows: RowSeen[] };
-type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[] };
+type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[]; values: string[]; picks: string[]; count: string };
 type Seen = {
   settingsColumn: boolean;
   title: string;
@@ -182,7 +182,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   ]);
 
   // Every dialog is the app's dialog at Project settings' width.
-  for (const state of ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]) assert.equal(seen[state]!.dialog?.width, 560, state);
+  for (const state of ["G1", "G2", "G2A", "G3", "G4", "G5", "G6", "G7"]) assert.equal(seen[state]!.dialog?.width, 560, state);
 
   // G1: Add, paste.
   const g1 = seen.G1!.dialog!;
@@ -200,8 +200,26 @@ test("plugins: every drawn list, details and dialog state, and what the switches
     "Only in one projectSessions in other projects won't see it.",
   ]);
   assert.match(g2.text, /All 6/);
-  assert.match(g2.text, /Advancedname, share with the team/);
+  assert.match(g2.text, /Advancedname, headers, keep it to some agents/);
   assert.deepEqual(g2.buttons.slice(-3), ["Back", "Cancel", "Add"]);
+
+  // G2A: Advanced open for a command server: its pasted value's name, hidden values, every agent picked.
+  const g2a = seen.G2A!.dialog!;
+  assert.match(g2a.text, /Advancedname, environment, keep it to some agents/);
+  assert.match(g2a.text, /Add a valueKept in your Keychain, never in a file\. Leave one empty to keep what you pasted\./);
+  assert.match(g2a.text, /Share with the team/);
+  assert.deepEqual(g2a.values, ["text API_KEY = password (As pasted)"]);
+  assert.deepEqual(g2a.picks, AGENTS.map((agent) => `${agent} true`));
+  assert.equal(g2a.count, "All 6");
+  // Kept to two agents, with a value typed and one added; the last agent left can't be unticked.
+  const two = seen.advancedTwo!.dialog!;
+  assert.equal(two.count, "2 of 6");
+  assert.deepEqual(two.values, ["text API_KEY = password typed-key", "text REGION = password eu-west"]);
+  assert.deepEqual(two.picks, ["claude true", "codex true", "gemini false", "cursor false", "opencode false", "amp false"]);
+  assert.deepEqual(seen.advancedOne!.dialog!.picks.slice(0, 2), ["claude true fixed", "codex false"]);
+  assert.equal(seen.advancedOne!.dialog!.count, "1 of 6");
+  assert.deepEqual(seen.addingPicked!.dialog!.agents.length, 2);
+  assert.deepEqual(seen.advancedCalls, ["addPlugin - everywhere just me agents claude,codex values API_KEY=typed-key,REGION=eu-west"]);
 
   // G3: Add inside a project defaults to that project.
   const g3 = seen.G3!.dialog!;

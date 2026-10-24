@@ -431,6 +431,79 @@ fn a_paste_is_read_before_anything_is_added() {
     let _ = std::fs::remove_dir_all(home);
 }
 
+/// Every file under `dir`, read as text.
+fn texts(dir: &Path) -> Vec<(PathBuf, String)> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(texts(&path));
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            found.push((path, text));
+        }
+    }
+    found
+}
+
+#[test]
+fn add_goes_only_to_the_picked_agents_and_its_values_only_to_the_keychain() {
+    let home = home("add-picked");
+    let roots = roots(&home);
+    // No CLI can be found: each picked agent's part is tried, and fails, without running one.
+    let env = [("PATH".to_owned(), home.join("no-bin").display().to_string())];
+    let library = Library::in_home(&home, PathBuf::from("/bin/brigadier"));
+    let secrets = Kept::default();
+    let reported = std::sync::Mutex::new(Vec::new());
+    let report = |agent: Agent, _: PluginStep| reported.lock().unwrap().push(agent);
+    let missing = home.join("no-bin/agent");
+    let binary = |_: Agent| Some(missing.clone());
+    let ctx = Ctx {
+        roots: &roots,
+        env: &env,
+        library: &library,
+        secrets: &secrets,
+        projects: &[],
+        report: &report,
+        binary: &binary,
+    };
+    let picked = adapters().last().unwrap().agent();
+    let paste = r#"{"mcpServers": {"docs": {"command": "/nowhere/docs-mcp", "env": {"TOKEN": "pasted-token"}}}}"#;
+    let options = AddOptions {
+        agents: Some(vec![picked]),
+        values: BTreeMap::from([
+            ("TOKEN".to_owned(), "typed-token".to_owned()),
+            ("REGION".to_owned(), "region-eu-west".to_owned()),
+        ]),
+    };
+    let (keys, _) = add(&ctx, paste, None, None, false, &options).unwrap();
+    assert_eq!(keys, ["lib:docs"]);
+    let mut agents = reported.lock().unwrap().clone();
+    agents.dedup();
+    assert_eq!(agents, [picked], "only the picked agent's part is planned");
+    assert_eq!(
+        secrets.load("docs/docs").unwrap(),
+        BTreeMap::from([
+            ("REGION".to_owned(), "region-eu-west".to_owned()),
+            ("TOKEN".to_owned(), "typed-token".to_owned()),
+        ])
+    );
+    for (path, text) in texts(&home) {
+        for value in ["typed-token", "pasted-token", "region-eu-west"] {
+            assert!(!text.contains(value), "{value} in {}", path.display());
+        }
+    }
+
+    // Values go with one server; at least one agent is picked.
+    let two = r#"{"mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}}}"#;
+    assert!(add(&ctx, two, None, None, false, &options).is_err());
+    let none = AddOptions {
+        agents: Some(Vec::new()),
+        values: BTreeMap::new(),
+    };
+    assert!(add(&ctx, paste, Some("other"), None, false, &none).is_err());
+    let _ = std::fs::remove_dir_all(home);
+}
+
 #[test]
 fn use_everywhere_refuses_what_the_team_shares_and_keeps_everything_as_it_was() {
     let fx = Fixture::new("shared", None, None);
@@ -609,6 +682,7 @@ fn both_clis_follow_the_page() {
         None,
         Some(&project),
         false,
+        &AddOptions::default(),
     )
     .unwrap();
     assert_eq!(failures.lock().unwrap().as_slice(), [] as [String; 0]);
@@ -914,20 +988,45 @@ fn plain_clis_have_what_the_page_shows() {
     );
 
     // Only in this project: a server and a skill, "just me".
-    add(&ctx, &server("here"), None, Some(&project), false).unwrap();
+    add(
+        &ctx,
+        &server("here"),
+        None,
+        Some(&project),
+        false,
+        &AddOptions::default(),
+    )
+    .unwrap();
     add(
         &ctx,
         &tidy.display().to_string(),
         None,
         Some(&project),
         false,
+        &AddOptions::default(),
     )
     .unwrap();
     no_failures();
     // On everywhere, then off in this project: a server and a skill from the Library, and the
     // user's own Codex server.
-    add(&ctx, &server("every"), None, None, false).unwrap();
-    add(&ctx, &neat.display().to_string(), None, None, false).unwrap();
+    add(
+        &ctx,
+        &server("every"),
+        None,
+        None,
+        false,
+        &AddOptions::default(),
+    )
+    .unwrap();
+    add(
+        &ctx,
+        &neat.display().to_string(),
+        None,
+        None,
+        false,
+        &AddOptions::default(),
+    )
+    .unwrap();
     switch(&ctx, "lib:every", Some(&project), false, None).unwrap();
     switch(&ctx, "lib:neat", Some(&project), false, None).unwrap();
     switch(&ctx, "server:mine", Some(&project), false, None).unwrap();

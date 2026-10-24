@@ -926,14 +926,17 @@ impl super::SessionManager {
         super::blocking(move || Ok(jobs::check_add(&home, &text, name.as_deref()))).await
     }
 
-    /// Adds what `text` holds for every agent: in project `project_id` only ("just me" unless
-    /// `shared`), else in every project. Its job's id.
+    /// Adds what `text` holds for every agent (only `agents`, when given): in project
+    /// `project_id` only ("just me" unless `shared`), else in every project. `values` sets or
+    /// adds the one pasted server's env or headers. Its job's id.
     pub fn add_plugin(
         &self,
         text: String,
         name: Option<String>,
         project_id: Option<String>,
         shared: bool,
+        agents: Option<Vec<ProviderKind>>,
+        values: Option<std::collections::BTreeMap<String, String>>,
     ) -> crate::Result<String> {
         let project = self.plugin_project(project_id)?;
         Ok(self.plugin_job(jobs::Action::Add {
@@ -941,6 +944,10 @@ impl super::SessionManager {
             name,
             project,
             shared,
+            options: ops::AddOptions {
+                agents: agents.map(|kinds| kinds.into_iter().filter_map(ops::agent_of).collect()),
+                values: values.unwrap_or_default(),
+            },
         }))
     }
 

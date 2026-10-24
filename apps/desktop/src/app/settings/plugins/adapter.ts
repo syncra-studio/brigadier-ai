@@ -12,6 +12,8 @@ export type PluginDraft = {
   remote: boolean;
   /** Signs in with the user's browser. */
   signsIn: boolean;
+  /** The names of the values it is given (env, headers); their values stay in Brigadier. */
+  secrets: string[];
   /** Why it can't be added, in words for the user. */
   error: string | null;
 };
@@ -24,6 +26,14 @@ export type PluginAgentResult = {
   message: string | null;
 };
 
+/** Add's Advanced beyond the name and where. */
+export type PluginAddMore = {
+  /** Only these agents get it; null: every agent. */
+  agents: ProviderKind[] | null;
+  /** The one server's env (or headers) the user typed, by name: they go to the Keychain. */
+  values: Record<string, string> | null;
+};
+
 /** The page's boundary to the daemon; fixtures supply the same data and actions. */
 export type PluginsAdapter = {
   /** The page, looking at project `projectId`, else at every project. */
@@ -34,7 +44,7 @@ export type PluginsAdapter = {
   switchPlugin: (key: string, projectId: string | null, on: boolean, agent?: ProviderKind) => Promise<PluginAgentResult[]>;
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
-  add: (text: string, name: string | null, projectId: string | null, shared: boolean) => Promise<PluginAgentResult[]>;
+  add: (text: string, name: string | null, projectId: string | null, shared: boolean, more: PluginAddMore) => Promise<PluginAgentResult[]>;
   /** Use everywhere: into the Library, for every agent. `key`: the Library's copy, what Undo takes. */
   everyAgent: (key: string) => Promise<{ results: PluginAgentResult[]; key: string | null }>;
   undoEveryAgent: (key: string) => Promise<PluginAgentResult[]>;

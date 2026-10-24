@@ -151,12 +151,21 @@ impl Ctx<'_> {
     fn each(
         &self,
         only: Option<Agent>,
+        plan: impl FnMut(&dyn AgentAdapter) -> Result<Option<Vec<Step>>, String>,
+    ) -> bool {
+        self.each_of(|agent| only.is_none_or(|only| only == agent), plan)
+    }
+
+    /// [`Self::each`] for the agents `keep` takes.
+    fn each_of(
+        &self,
+        keep: impl Fn(Agent) -> bool,
         mut plan: impl FnMut(&dyn AgentAdapter) -> Result<Option<Vec<Step>>, String>,
     ) -> bool {
         let mut all = true;
         for adapter in adapters() {
             let agent = adapter.agent();
-            if only.is_some_and(|only| only != agent) {
+            if !keep(agent) {
                 continue;
             }
             (self.report)(agent, PluginStep::Working);
@@ -535,16 +544,69 @@ fn check_started(ctx: &Ctx<'_>, entry: &Entry) -> Option<String> {
     .err()
 }
 
-/// Adds what `text` holds to the Library and gives it to every agent: in `project` only
-/// ("just me" unless `shared`), else everywhere. Its keys, and what the user should know.
+/// What Add's Advanced asks for beyond the name and where.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AddOptions {
+    /// Only these agents get it (`None`: every agent).
+    pub agents: Option<Vec<Agent>>,
+    /// Set or added to the one pasted server's env (a command) or headers (an address). They
+    /// go to the Keychain, as pasted values do, never into a file.
+    pub values: BTreeMap<String, String>,
+}
+
+/// Gives the one server in `items` `values`: each replaces the pasted value of its name, or
+/// is added.
+fn give_values(items: &mut [Item], values: &BTreeMap<String, String>) -> Result<(), String> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let [Item::Server(spec)] = items else {
+        return Err(
+            "Headers and environment values go with one MCP server: paste just that server."
+                .to_owned(),
+        );
+    };
+    let kept = match &mut spec.transport {
+        TransportSpec::Stdio { env, .. } => env,
+        TransportSpec::Http { headers, .. } => headers,
+    };
+    for (name, value) in values {
+        let name = name.trim();
+        if name.is_empty() || name.contains(|c: char| c.is_whitespace() || c == '=') {
+            return Err(format!(
+                "\"{name}\" can't be a name: use letters, digits, - or _."
+            ));
+        }
+        match kept.iter_mut().find(|(have, _)| have == name) {
+            Some((_, secret)) => *secret = Secret::new(value.clone()),
+            None => kept.push((name.to_owned(), Secret::new(value.clone()))),
+        }
+    }
+    Ok(())
+}
+
+/// Adds what `text` holds to the Library and gives it to every agent (or the ones `options`
+/// picks): in `project` only ("just me" unless `shared`), else everywhere. Its keys, and what
+/// the user should know.
 pub(crate) fn add(
     ctx: &Ctx<'_>,
     text: &str,
     name: Option<&str>,
     project: Option<&Path>,
     shared: bool,
+    options: &AddOptions,
 ) -> Result<(Vec<String>, Option<String>), String> {
-    let items = add_parse::parse(text, name, &ctx.roots.home).map_err(|err| err.to_string())?;
+    if options.agents.as_ref().is_some_and(Vec::is_empty) {
+        return Err("Pick at least one agent to add it to.".to_owned());
+    }
+    let picked = |agent: Agent| {
+        options
+            .agents
+            .as_ref()
+            .is_none_or(|agents| agents.contains(&agent))
+    };
+    let mut items = add_parse::parse(text, name, &ctx.roots.home).map_err(|err| err.to_string())?;
+    give_values(&mut items, &options.values)?;
     let place = match project {
         Some(path) => Place::Project {
             path: path.to_owned(),
@@ -580,7 +642,7 @@ pub(crate) fn add(
                 .map_err(|err| err.to_string())?;
         }
         let entry = packed.entry;
-        let all = ctx.each(None, |adapter| {
+        let all = ctx.each_of(picked, |adapter| {
             ctx.library
                 .sync(adapter, &entry, &place, false)
                 .map(Some)

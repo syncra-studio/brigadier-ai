@@ -12,7 +12,7 @@ import type { AgentItemState, PluginAttention, PluginItemView, PluginKind, Plugi
 import { useApp } from "@/state/store";
 
 /*
- * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7) for shots; ?agents=2 keeps to the
+ * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, and G2A: G2's Advanced open) for shots; ?agents=2 keeps to the
  * two agents Brigadier drives today (the board draws six); ?drive=1 walks every state, flips
  * switches and confirms the dialogs, then writes what it saw to #plugins-result
  * (PluginsRender.test.ts reads it).
@@ -162,12 +162,16 @@ const adapter: PluginsAdapter = {
   checkAdd: async (text, name) => {
     calls.push(`checkPluginAdd ${text}${name ? ` name ${name}` : ""}`);
     // A bare server object has no name of its own.
-    if (text.startsWith("{")) return name ? { drafts: [{ name, kind: "server", detail: "docs", remote: false, signsIn: false, error: null }], needsName: false } : { drafts: [], needsName: true };
-    if (!text.includes("sentry")) return { drafts: [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, error: "That doesn't look like an MCP server or a skill." }], needsName: false };
-    return { drafts: [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, error: null }], needsName: false };
+    if (text.startsWith("{")) return name ? { drafts: [{ name, kind: "server", detail: "docs", remote: false, signsIn: false, secrets: [], error: null }], needsName: false } : { drafts: [], needsName: true };
+    // A command server that carries a value: its name comes along, its value stays behind.
+    if (text.includes("docs-mcp")) return { drafts: [{ name: "docs", kind: "server", detail: "npx docs-mcp", remote: false, signsIn: false, secrets: ["API_KEY"], error: null }], needsName: false };
+    if (!text.includes("sentry")) return { drafts: [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, secrets: [], error: "That doesn't look like an MCP server or a skill." }], needsName: false };
+    return { drafts: [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, secrets: [], error: null }], needsName: false };
   },
-  add: (_text, name, projectId, shared) => {
-    calls.push(`addPlugin ${name ?? "-"} ${projectId ?? "everywhere"} ${shared ? "shared" : "just me"}`);
+  add: (_text, name, projectId, shared, more) => {
+    const picked = more.agents ? ` agents ${more.agents.join(",")}` : "";
+    const values = more.values ? ` values ${Object.entries(more.values).map(([key, value]) => `${key}=${value}`).join(",")}` : "";
+    calls.push(`addPlugin ${name ?? "-"} ${projectId ?? "everywhere"} ${shared ? "shared" : "just me"}${picked}${values}`);
     // Claude Code and Codex have it already; the next is adding it.
     items.push({
       key: "lib:sentry", kind: "server", name: "sentry", description: "Errors and issues in Sentry.", detail: "https://mcp.sentry.dev/mcp", remote: true, library: true,
@@ -228,8 +232,10 @@ function click(label: string, root: ParentNode = document) {
   if (!button) throw new Error(`No button: ${label}`);
   button.click();
 }
-function type(label: string, value: string) {
-  const field = all<HTMLTextAreaElement | HTMLInputElement>("textarea, input").find((node) => node.getAttribute("aria-label") === label);
+/** Types `value` into the field named `label` (the last one so named, with `last`). */
+function type(label: string, value: string, last = false) {
+  const fields = all<HTMLTextAreaElement | HTMLInputElement>("textarea, input").filter((node) => node.getAttribute("aria-label") === label);
+  const field = last ? fields.at(-1) : fields[0];
   if (!field) throw new Error(`No field: ${label}`);
   const proto = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(field, value);
@@ -296,6 +302,12 @@ function read() {
           agents: all('[data-slot="agent-row"]', dialog).map(text),
           buttons: all("button", dialog).map((button) => button.getAttribute("aria-label") ?? text(button)).filter(Boolean),
           radios: all("[role=radio]", dialog).map((radio) => `${text(radio)}${radio.getAttribute("aria-checked") === "true" ? " *" : ""}`),
+          values: all('[data-slot="value-row"]', dialog).map((row) => all<HTMLInputElement>("input", row).map((input) => `${input.type} ${input.value || `(${input.placeholder})`}`).join(" = ")),
+          picks: all('[data-slot="agent-pick"]', dialog).map((pick) => {
+            const box = pick.querySelector("[role=checkbox]");
+            return `${pick.getAttribute("data-agent")} ${box?.getAttribute("aria-checked")}${box?.hasAttribute("disabled") ? " fixed" : ""}`;
+          }),
+          count: text(dialog.querySelector('[data-slot="agent-count"]')),
         }
       : null,
     toasts: all('[data-slot="toast"]').map(text),
@@ -355,6 +367,16 @@ const OPENERS: Record<string, () => Promise<void>> = {
     await pause();
     click("Add", document.querySelector("[data-dialog]")!);
   },
+  /** G2 with Advanced open, for a command server whose paste carried a value. */
+  G2A: async () => {
+    click("Add");
+    await pause();
+    type("What to add", "claude mcp add docs -e API_KEY=pasted -- npx docs-mcp");
+    await pause();
+    click("Continue");
+    await pause();
+    all<HTMLButtonElement>("[data-dialog] button[aria-expanded]").find((button) => text(button).startsWith("Advanced"))!.click();
+  },
   G5: async () => click("Sign in"),
   G6: async () => click("Use everywhere"),
   G7: async () => {
@@ -372,7 +394,7 @@ async function drive(setKey: (key: number) => void) {
     await pause(120);
     seen[state] = read();
   };
-  for (const state of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "D1", "D2", "D3", "G1", "G2", "G3", "G4", "G6", "G7"]) await open(state);
+  for (const state of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "D1", "D2", "D3", "G1", "G2", "G2A", "G3", "G4", "G6", "G7"]) await open(state);
   await open("G5", 4);
 
   // The project filter picks a project: the menu closes and the list follows it.
@@ -451,6 +473,31 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   seen.addedWithWarning = read();
   seen.nameCalls = calls.slice(named).filter((call) => !call.startsWith("switch"));
+
+  // Advanced: a value typed over the pasted one and one more, kept to two agents; the last
+  // picked agent can't be left out; Add sends both and only those agents show.
+  await open("G2A");
+  const advanced = calls.length;
+  type("API_KEY value", "typed-key");
+  click("Add a value");
+  await pause();
+  type("Environment name", "REGION", true);
+  await pause();
+  type("REGION value", "eu-west");
+  for (const label of ["Gemini CLI", "Cursor Agent", "OpenCode", "Amp"]) click(label, document.querySelector("[data-dialog]")!);
+  await pause();
+  seen.advancedTwo = read();
+  click("Codex", document.querySelector("[data-dialog]")!);
+  await pause();
+  seen.advancedOne = read();
+  click("Codex", document.querySelector("[data-dialog]")!);
+  await pause();
+  click("Add", document.querySelector("[data-dialog]")!);
+  await pause(120);
+  seen.addingPicked = read();
+  adding?.resolve(ok().slice(0, 2));
+  await pause(120);
+  seen.advancedCalls = calls.slice(advanced).filter((call) => call.startsWith("addPlugin"));
 
   // Only some agents have it: a Library item goes to the rest where the others have it; another
   // agent's plugin has no fix to offer.

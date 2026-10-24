@@ -166,7 +166,14 @@ impl SessionManager {
             }),
             "add" => {
                 let text = args.text.unwrap_or_default();
-                let job = match self.add_plugin(text, args.name, project.clone(), args.shared) {
+                let job = match self.add_plugin(
+                    text,
+                    args.name,
+                    project.clone(),
+                    args.shared,
+                    None,
+                    None,
+                ) {
                     Ok(id) => self.finished_job(&id).await,
                     Err(err) => return failed(err.to_string()),
                 };

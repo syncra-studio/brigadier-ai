@@ -84,12 +84,13 @@ export function livePlugins(): PluginsAdapter {
         detail: item.detail,
         remote: item.remote,
         signsIn: item.remote && item.secrets.length === 0,
+        secrets: item.secrets,
         error: null,
       }));
       return { drafts, needsName: false };
     },
-    add: async (text, name, projectId, shared) =>
-      finished((await request({ method: "addPlugin", text, name, projectId, shared })).job),
+    add: async (text, name, projectId, shared, { agents, values }) =>
+      finished((await request({ method: "addPlugin", text, name, projectId, shared, ...(agents ? { agents } : {}), ...(values ? { values } : {}) })).job),
     everyAgent: async (key) => {
       const job = await settled((await request({ method: "useEverywhere", key })).job);
       return { results: results(job), key: job.keys[0] ?? null };

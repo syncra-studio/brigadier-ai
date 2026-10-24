@@ -111,6 +111,7 @@ pub(crate) enum Action {
         name: Option<String>,
         project: Option<PathBuf>,
         shared: bool,
+        options: ops::AddOptions,
     },
     UseEverywhere {
         key: String,
@@ -191,7 +192,15 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
                 name,
                 project,
                 shared,
-            } => match ops::add(&ctx, text, name.as_deref(), project.as_deref(), *shared) {
+                options,
+            } => match ops::add(
+                &ctx,
+                text,
+                name.as_deref(),
+                project.as_deref(),
+                *shared,
+                options,
+            ) {
                 Ok((keys, warning)) => (Ok(keys), warning),
                 Err(err) => (Err(err), None),
             },

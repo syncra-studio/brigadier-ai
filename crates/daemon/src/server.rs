@@ -2427,8 +2427,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             name,
             project_id,
             shared,
+            agents,
+            values,
         } => Response::AddPlugin {
-            job: daemon.sessions.add_plugin(text, name, project_id, shared)?,
+            job: daemon
+                .sessions
+                .add_plugin(text, name, project_id, shared, agents, values)?,
         },
         Request::UseEverywhere { key } => Response::UseEverywhere {
             job: daemon.sessions.use_everywhere(key),

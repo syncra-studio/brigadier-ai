@@ -1,8 +1,8 @@
 import { useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, Button, CheckboxRow, ErrorLine, Input, SettingsSelect } from "@/components/controls";
-import { ChevronDown, ChevronRight, Folder, Spinner } from "@/components/icons";
+import { Badge, Button, Checkbox, CheckboxRow, ErrorLine, Input, SettingsSelect } from "@/components/controls";
+import { ChevronDown, ChevronRight, Folder, Plus, Spinner, X } from "@/components/icons";
 import type { PluginItemView, PluginsView } from "@/ipc/generated";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
 import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "./adapter";
@@ -11,6 +11,10 @@ import { KIND_LABEL, shownDetail } from "./model";
 import { AgentMark, AgentRow, ItemMark, RadioRow, stateOf } from "./parts";
 
 export const ADD_HINT = "Works with an mcp add line from any agent, a server URL, mcpServers JSON, a GitHub link, a skills.sh name or a skill folder.";
+
+type Agent = PluginsView["agents"][number];
+/** One env or header value in Advanced: `pasted` came with the paste (its value stays in Brigadier unless typed over). */
+type ValueRow = { id: number; name: string; value: string; pasted: boolean };
 
 type Step = { type: "paste" } | { type: "review"; drafts: PluginDraft[] } | { type: "adding"; drafts: PluginDraft[]; results: PluginAgentResult[] | null };
 
@@ -32,6 +36,9 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
   /** What was pasted has no name of its own (a bare server, an address): the user gives one. */
   const [needsName, setNeedsName] = useState(false);
   const [shared, setShared] = useState(false);
+  /** The agents that get it: every agent unless Advanced keeps it to some. */
+  const [picked, setPicked] = useState<Agent["agent"][]>(() => view.agents.map((agent) => agent.agent));
+  const [values, setValues] = useState<ValueRow[]>([]);
   const action = useAction();
   const adding = step.type === "adding" && step.results === null;
   useWatch(refresh, adding);
@@ -47,6 +54,8 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
       if (problem) throw new Error(problem);
       if (!drafts.length) throw new Error("That doesn't look like an MCP server or a skill.");
       setName(drafts.length === 1 ? drafts[0]!.name : "");
+      const server = drafts.length === 1 && drafts[0]!.kind === "server" ? drafts[0]! : null;
+      setValues((server?.secrets ?? []).map((secret, index) => ({ id: index, name: secret, value: "", pasted: true })));
       setStep({ type: "review", drafts });
     });
     const choose = () => action.run(async () => {
@@ -95,6 +104,11 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
   const single = drafts.length === 1 ? drafts[0]! : null;
   const shownName = single ? name.trim() || single.name : `${drafts.length} items`;
   const inProject = where === "one" && project ? view.projects.find((entry) => entry.id === project) ?? null : null;
+  const chosen = view.agents.filter((agent) => picked.includes(agent.agent));
+  const everyAgent = chosen.length === view.agents.length;
+  /** The one server's values are its headers (at an address) or its environment (a command). */
+  const server = single?.kind === "server" ? single : null;
+  const valuesLabel = server?.remote ? "Headers" : "Environment";
 
   if (step.type === "adding") {
     const done = step.results !== null;
@@ -106,7 +120,7 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
     return (
       <PluginDialog slot="adding" onClose={onClose} title={`Adding ${shownName}`} description="Each agent adds it its own way, so it works in a terminal too.">
         <div className="flex flex-col gap-3">
-          {addingStates(view, live, step.results).map(([agent, status]) => <AddingRow key={agent.agent} agent={agent} status={status} />)}
+          {addingStates(chosen, live, step.results).map(([agent, status]) => <AddingRow key={agent.agent} agent={agent} status={status} />)}
         </div>
         {problem && <ErrorLine error={problem} />}
         {note && <p data-slot="add-note" className="text-warning text-xs whitespace-pre-wrap">{note}</p>}
@@ -121,7 +135,13 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
     setStep({ type: "adding", drafts, results: null });
     // A paste with no name of its own always needs the one given.
     const given = single ? name.trim() || (needsName ? single.name : "") : "";
-    adapter.add(text, given && (needsName || given !== single?.name) ? given : null, inProject?.id ?? null, inProject ? shared : false).then(
+    // A pasted value left empty keeps the one pasted; a row without a name or value is left out.
+    const typed = server ? values.filter((row) => row.name.trim() && row.value) : [];
+    const more = {
+      agents: everyAgent ? null : chosen.map((agent) => agent.agent),
+      values: typed.length ? Object.fromEntries(typed.map((row) => [row.name.trim(), row.value])) : null,
+    };
+    adapter.add(text, given && (needsName || given !== single?.name) ? given : null, inProject?.id ?? null, inProject ? shared : false, more).then(
       (results) => {
         setStep({ type: "adding", drafts, results });
         refresh();
@@ -133,7 +153,7 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
     );
   };
   return (
-    <PluginDialog slot="add-review" onClose={onClose} title={inProject ? `Add ${shownName} to ${inProject.name}` : `Add ${shownName}`} description={single ? about(single) : "Each one goes to every agent."}>
+    <PluginDialog slot="add-review" onClose={onClose} title={inProject ? `Add ${shownName} to ${inProject.name}` : `Add ${shownName}`} description={single ? about(single) : everyAgent ? "Each one goes to every agent." : "Each one goes to the agents you picked."}>
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           {drafts.map((draft) => (
@@ -175,14 +195,14 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-foreground/65 w-24 shrink-0 text-label">Agents</span>
-          <span className="flex items-center gap-0.75">{view.agents.map((agent) => <AgentMark key={agent.agent} agent={agent} />)}</span>
-          <span className="text-foreground/65 text-label">All {view.agents.length}</span>
+          <span className="flex items-center gap-0.75">{view.agents.map((agent) => <AgentMark key={agent.agent} agent={agent} dim={!picked.includes(agent.agent)} />)}</span>
+          <span data-slot="agent-count" className="text-foreground/65 text-label">{everyAgent ? `All ${view.agents.length}` : `${chosen.length} of ${view.agents.length}`}</span>
         </div>
         <div className="flex flex-col gap-3">
           <button type="button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)} className="flex items-center gap-2 text-start">
             {advanced ? <ChevronDown aria-hidden className="text-foreground/65 size-icon-sm" /> : <ChevronRight aria-hidden className="text-foreground/65 size-icon-sm" />}
             <span className="text-label">Advanced</span>
-            <span className="text-foreground/50 text-xs">{single ? "name, share with the team" : "share with the team"}</span>
+            <span className="text-foreground/50 text-xs">{[single && "name", server && valuesLabel.toLowerCase(), "keep it to some agents"].filter(Boolean).join(", ")}</span>
           </button>
           {advanced && (
             <div className="flex flex-col gap-3 ps-6">
@@ -192,6 +212,28 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
                   <Input id={`${id}-name`} value={name} {...PLAIN_FIELD} onChange={(event) => setName(event.target.value)} className="h-8 font-mono text-xs" />
                 </div>
               )}
+              {server && <ValueRows label={valuesLabel} rows={values} onChange={setValues} />}
+              <div className="flex items-start gap-3">
+                <span className="text-foreground/65 w-20 shrink-0 pt-0.5 text-label">Agents</span>
+                <div role="group" aria-label="Agents" className="grid flex-1 grid-cols-2 gap-x-4 gap-y-2">
+                  {view.agents.map((agent) => {
+                    const on = picked.includes(agent.agent);
+                    return (
+                      <label key={agent.agent} data-slot="agent-pick" data-agent={agent.agent} className="flex min-w-0 items-center gap-2">
+                        <Checkbox
+                          aria-label={agent.label}
+                          checked={on}
+                          // At least one agent gets it.
+                          disabled={on && chosen.length === 1}
+                          onCheckedChange={(state) => setPicked((now) => (state === true ? [...now, agent.agent] : now.filter((entry) => entry !== agent.agent)))}
+                        />
+                        <AgentMark agent={agent} />
+                        <span className="truncate text-label">{agent.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
               <CheckboxRow
                 label="Share with the team"
                 note={inProject ? `Saved in ${inProject.name}'s own files for git, so everyone working there gets it.` : "Only for one project: pick Only in one project first."}
@@ -214,6 +256,57 @@ export function AddDialog({ view, adapter, projectId, refresh, onClose }: {
   );
 }
 
+/** The one server's headers or environment: name = value rows, each value hidden as it is typed. */
+function ValueRows({ label, rows, onChange }: { label: string; rows: ValueRow[]; onChange: (update: (rows: ValueRow[]) => ValueRow[]) => void }) {
+  const one = label === "Headers" ? "header" : "value";
+  const set = (row: ValueRow, change: Partial<ValueRow>) => onChange((now) => now.map((entry) => (entry.id === row.id ? { ...entry, ...change } : entry)));
+  return (
+    <div className="flex items-start gap-3">
+      <span className="text-foreground/65 w-20 shrink-0 pt-1.5 text-label">{label}</span>
+      <div role="group" aria-label={label} className="flex min-w-0 flex-1 flex-col gap-2">
+        {rows.map((row) => (
+          <div key={row.id} data-slot="value-row" className="flex items-center gap-2">
+            <Input
+              aria-label={`${label} name`}
+              value={row.name}
+              readOnly={row.pasted}
+              placeholder="Name"
+              {...PLAIN_FIELD}
+              onChange={(event) => set(row, { name: event.target.value })}
+              className="h-8 w-36 shrink-0 font-mono text-xs"
+            />
+            <span aria-hidden className="text-foreground/50 text-xs">=</span>
+            <Input
+              type="password"
+              aria-label={`${row.name.trim() || "New"} value`}
+              value={row.value}
+              placeholder={row.pasted ? "As pasted" : "Value"}
+              {...PLAIN_FIELD}
+              onChange={(event) => set(row, { value: event.target.value })}
+              className="h-8 font-mono text-xs"
+            />
+            {!row.pasted && (
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`Remove ${row.name.trim() || one}`} onClick={() => onChange((now) => now.filter((entry) => entry.id !== row.id))}>
+                <X />
+              </Button>
+            )}
+          </div>
+        ))}
+        <Button
+          variant="link-blue"
+          size="inline"
+          className="self-start"
+          onClick={() => onChange((now) => [...now, { id: Math.max(-1, ...now.map((row) => row.id)) + 1, name: "", value: "", pasted: false }])}
+        >
+          <Plus />
+          Add a {one}
+        </Button>
+        <p className="text-foreground/50 text-xs">Kept in your Keychain, never in a file.{rows.some((row) => row.pasted) ? " Leave one empty to keep what you pasted." : ""}</p>
+      </div>
+    </div>
+  );
+}
+
 /** "An MCP server from mcp.sentry.dev. It signs in with your browser." */
 function about(draft: PluginDraft): string {
   const signs = draft.signsIn ? " It signs in with your browser." : "";
@@ -231,12 +324,12 @@ function about(draft: PluginDraft): string {
 type Adding = { type: "done" } | { type: "adding" } | { type: "waiting" } | { type: "failed"; message: string };
 
 /**
- * How far each agent got: its result once the add answers; before that the page's own item
+ * How far each picked agent got: its result once the add answers; before that the page's own item
  * (each agent ready, or working), and the first agent not done yet is the one adding it.
  */
-function addingStates(view: PluginsView, live: PluginItemView | undefined, results: PluginAgentResult[] | null): [PluginsView["agents"][number], Adding][] {
+function addingStates(agents: Agent[], live: PluginItemView | undefined, results: PluginAgentResult[] | null): [Agent, Adding][] {
   let next = results === null;
-  return view.agents.map((agent) => {
+  return agents.map((agent) => {
     const result = results?.find((entry) => entry.agent === agent.agent);
     if (result) return [agent, result.ok ? { type: "done" } : { type: "failed", message: result.message ?? "Couldn't add it." }];
     const state = live ? stateOf(live, agent.agent).type : "missing";
@@ -250,7 +343,7 @@ function addingStates(view: PluginsView, live: PluginItemView | undefined, resul
 }
 
 /** One agent while an item is added. */
-function AddingRow({ agent, status }: { agent: PluginsView["agents"][number]; status: Adding }) {
+function AddingRow({ agent, status }: { agent: Agent; status: Adding }) {
   switch (status.type) {
     case "failed": return <AgentRow agent={agent} tone="error" line={status.message} end={<Badge variant="destructive">Failed</Badge>} />;
     case "done": return <AgentRow agent={agent} line="Added" end={<Badge variant="success">Done</Badge>} />;
