@@ -24,8 +24,9 @@ use crate::work::RunState;
 pub(super) struct LongLive {
     /// A turn ended past the point: the next turn is Brigadier's `/compact` (Claude).
     pub compact_due: bool,
-    /// The compaction whose put-back's receipt the turn's end checks (its CLI's id for it).
-    pub receipt_due: Option<String>,
+    /// The compaction whose put-back's receipt the turn's end checks (its CLI's id for it),
+    /// with the entries that went back after it: a decision written since is not one of them.
+    pub receipt_due: Option<(String, Vec<String>)>,
     /// Why the session goes on in a fresh one (run2-D10), until its seam is under way.
     pub fallback: Option<String>,
     /// Its context was too long for a turn and a compaction is to bring it back under: a
@@ -75,6 +76,10 @@ pub(crate) struct PutBack {
     /// The checkpoint it carries beside the decisions (Codex, run2-D9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint: Option<String>,
+    /// The entries it carries, until it is settled: a retry or a restart checks the CLI's file
+    /// for these, not for the ledger as it stands by then.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<String>,
 }
 
 /// What a put-back carries, each piece whole: the ledger's active entries in session record
@@ -130,8 +135,10 @@ fn codex_note(parts: &[String], compaction: &str, fingerprint: &str) -> String {
 
 /// What the thread is told when the decisions could not go back whole (no notice when they
 /// did: the divider is enough, D13).
-const NOT_RESTORED: &str = "The session's decisions could not be put back whole after it \
-compacted, so it goes on in a fresh session that carries them.";
+/// Told when the session goes on in a fresh one (run2-D10), with why: one of several failures.
+fn fallback_notice(why: &str) -> String {
+    format!("This session goes on in a fresh one, which carries its decisions, because {why}.")
+}
 
 /// Told once, with Claude's hooks off in the user's settings (G17: their setting wins).
 const HOOKS_OFF: &str = "Claude's hooks are off in your settings, so after Claude compacts \
@@ -282,7 +289,11 @@ impl SessionManager {
                     async move { manager.put_back(&conv, &cli, &compaction, checkpoint).await },
                 );
             }
-            _ => conv.state.lock().await.long.receipt_due = Some(compaction.to_owned()),
+            _ => {
+                // Claude's hooks put back the ledger as it stood as it compacted.
+                let entries = put_back_entries(&self.session_dir(&conv.id).record(), None);
+                conv.state.lock().await.long.receipt_due = Some((compaction.to_owned(), entries));
+            }
         }
     }
 
@@ -296,27 +307,36 @@ impl SessionManager {
         checkpoint: Option<String>,
     ) {
         let record = self.session_dir(&conv.id).record();
-        let entries = put_back_entries(&record, checkpoint.as_deref());
-        let back = restoration(&entries, &lookup_line());
-        let mut file = read_long(&record);
-        if file
-            .put_back
+        let file = read_long(&record);
+        let earlier = file.put_back.filter(|put| put.compaction == compaction);
+        if earlier
             .as_ref()
-            .is_some_and(|put| put.compaction == compaction && put.state == PutBackState::Received)
+            .is_some_and(|put| put.state == PutBackState::Received)
         {
             return;
         }
-        let set = |file: &mut LongFile, state| {
+        // A retry or a restart reconciles what went back after this compaction, not the ledger
+        // as it stands now.
+        let entries = earlier
+            .map(|put| put.entries)
+            .filter(|entries| !entries.is_empty())
+            .unwrap_or_else(|| put_back_entries(&record, checkpoint.as_deref()));
+        let back = restoration(&entries, &lookup_line());
+        // Read again for each write: a checkpoint run may have moved on meanwhile.
+        let set = |state| {
+            let mut file = read_long(&record);
+            let open = matches!(state, PutBackState::Sending | PutBackState::Sent);
             file.put_back = Some(PutBack {
                 compaction: compaction.to_owned(),
                 fingerprint: back.fingerprint.clone(),
                 state,
                 checkpoint: checkpoint.clone(),
+                entries: if open { entries.clone() } else { Vec::new() },
             });
-            write_long(&record, file);
+            write_long(&record, &file);
         };
         if !back.whole {
-            set(&mut file, PutBackState::Failed);
+            set(PutBackState::Failed);
             self.long_fallback(conv, cli, "its decisions are too long to go back whole")
                 .await;
             return;
@@ -326,23 +346,24 @@ impl SessionManager {
         const SENDS: usize = 2;
         for attempt in 0..=SENDS {
             match self.receipt(cli, compaction, &entries) {
-                Receipt::Whole => return set(&mut file, PutBackState::Received),
+                Receipt::Whole => return set(PutBackState::Received),
                 Receipt::Broken => break,
                 Receipt::None => {}
             }
             if attempt == SENDS {
                 break;
             }
-            set(&mut file, PutBackState::Sending);
+            set(PutBackState::Sending);
             match cli.session.put_back(note.clone()).await {
                 Ok(()) => {
                     // Codex writes it to its rollout as it takes it; a receipt not there yet
                     // is read again at the turn's end.
                     if self.receipt(cli, compaction, &entries) == Receipt::Whole {
-                        return set(&mut file, PutBackState::Received);
+                        return set(PutBackState::Received);
                     }
-                    set(&mut file, PutBackState::Sent);
-                    conv.state.lock().await.long.receipt_due = Some(compaction.to_owned());
+                    set(PutBackState::Sent);
+                    conv.state.lock().await.long.receipt_due =
+                        Some((compaction.to_owned(), entries.clone()));
                     return;
                 }
                 Err(err) => {
@@ -350,7 +371,7 @@ impl SessionManager {
                 }
             }
         }
-        set(&mut file, PutBackState::Failed);
+        set(PutBackState::Failed);
         self.long_fallback(conv, cli, "its decisions could not be put back whole")
             .await;
     }
@@ -402,7 +423,7 @@ impl SessionManager {
     /// The put-back's receipt at a turn's end, and the fallback still owed.
     async fn long_receipts(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) {
         let due = conv.state.lock().await.long.receipt_due.take();
-        if let Some(compaction) = due {
+        if let Some((compaction, entries)) = due {
             let record = self.session_dir(&conv.id).record();
             if cli.provider == ProviderKind::Claude && !cli.session.runs_hooks() {
                 let mut file = read_long(&record);
@@ -419,7 +440,6 @@ impl SessionManager {
                     .take()
                     .filter(|put| put.compaction == compaction)
                     .and_then(|put| put.checkpoint);
-                let entries = put_back_entries(&record, checkpoint.as_deref());
                 let receipt = self.receipt(cli, &compaction, &entries);
                 let fingerprint = crate::manager::long_sessions::restore::fingerprint(&entries);
                 let state = match receipt {
@@ -431,6 +451,7 @@ impl SessionManager {
                     fingerprint,
                     state,
                     checkpoint,
+                    entries: Vec::new(),
                 });
                 write_long(&record, &file);
                 if state == PutBackState::Failed {
@@ -497,7 +518,7 @@ impl SessionManager {
             .is_none();
         if first {
             crate::logging::private_trace!(conv.private_logs, info, "the long session goes on in a fresh one"; conversation = %conv.id, why = %why);
-            self.notice(&conv.id, NoticeLevel::Warning, NOT_RESTORED)
+            self.notice(&conv.id, NoticeLevel::Warning, &fallback_notice(why))
                 .await;
         }
         let used = conv.state.lock().await.context.map_or(0, |(used, _)| used);

@@ -433,9 +433,16 @@ async fn with_claudes_hooks_off_the_user_is_told_once_and_the_session_goes_on() 
         inputs.clone(),
     )
     .await;
-    for _ in 0..2 {
+    for round in 1..=2 {
         flow.say("Grow.").await;
-        flow.idle().await;
+        // The compaction is the turn after: idle can fall between the two.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while flow.behavior.compactions.lock().unwrap().len() < round {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the compaction");
         flow.idle().await;
     }
     assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 2);
@@ -476,7 +483,10 @@ async fn decisions_too_long_to_go_back_whole_send_the_session_to_a_fresh_one() {
     flow.idle().await;
     let told = notices(&flow).await;
     assert_eq!(told.len(), 1, "{told:?}");
-    assert!(told[0].contains("could not be put back whole"));
+    assert!(
+        told[0].contains("because its decisions did not all arrive whole"),
+        "{told:?}"
+    );
     flow.stop().await;
 }
 
@@ -586,6 +596,45 @@ async fn after_a_restart_a_put_back_that_arrived_is_not_sent_again() {
     );
 }
 
+/// A decision written after the compaction and before a restart cut the put-back's answer off:
+/// what went back is checked, not the ledger as it stands by then, and nothing goes twice.
+#[tokio::test]
+async fn after_a_restart_a_put_back_is_checked_for_what_went_back() {
+    let inputs: Inputs = Arc::default();
+    let mut flow = long_flow(
+        "long-codex-ledger-grew",
+        ProviderKind::Codex,
+        FakeBehavior::default(),
+        "native",
+        inputs,
+    )
+    .await;
+    flow.say("Grow.").await;
+    until_put_back(&flow, PutBackState::Received).await;
+    flow.idle().await;
+    let mut file = read_long(&record(&flow));
+    let put = file.put_back.as_mut().unwrap();
+    put.state = PutBackState::Sent;
+    put.entries = crate::manager::long_sessions::active_entries(&record(&flow));
+    std::fs::write(
+        record(&flow).join("long.json"),
+        serde_json::to_vec(&file).unwrap(),
+    )
+    .unwrap();
+    write_ledger(
+        &flow,
+        &format!("{LEDGER}- L5 · 10-24 15:01 · gen 1 · Decision: ship on Friday\n"),
+    );
+    flow.restart().await;
+    flow.say("After.").await;
+    until_put_back(&flow, PutBackState::Received).await;
+    flow.idle().await;
+    assert_eq!(codex_notes(&flow).len(), 1);
+    assert!(notices(&flow).await.is_empty());
+    assert_eq!(read_seam(&record(&flow)).generation, 1);
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn after_a_restart_a_put_back_that_never_arrived_goes_once() {
     assert_eq!(
@@ -684,6 +733,7 @@ async fn a_failed_compaction_sends_the_session_to_a_fresh_one_with_its_working_s
     );
     let told = notices(&flow).await;
     assert_eq!(told.len(), 1, "{told:?}");
+    assert!(told[0].contains("its compaction failed: the summary failed"));
     flow.stop().await;
 }
 
@@ -1046,6 +1096,19 @@ mod checkpoint {
         .expect("the checkpoint request");
         flow.say("Meanwhile.").await;
         until_put_back(&flow, PutBackState::Received).await;
+        // It goes once the compaction is done: idle can fall between the two.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, input)| input.contains("Meanwhile."))
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the message held for the compaction");
         flow.idle().await;
         let turns = seen.lock().unwrap().clone();
         let meanwhile: Vec<_> = turns
