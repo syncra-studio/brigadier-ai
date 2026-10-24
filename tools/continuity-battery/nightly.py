@@ -265,6 +265,9 @@ def markdown(summary):
                           f"extra bootstrap estimate `{json.dumps(row.get('extra_bootstrap_estimate'))}`.", ""]
             if row.get("reason"):
                 lines += ["", f"{row['block']}/{row['profile']} {row['arm']}: " + row["reason"], ""]
+            if row.get("errors"):
+                lines += ["", f"{row['block']}/{row['profile']} {row['arm']} run problems: " +
+                          "; ".join(row["errors"]), ""]
         lines += ["", "Price-weighted ratios: " + ", ".join(f"{r['block']}/{r['profile']} {r.get('price_weighted_ratio', 'unavailable')}" for r in provider["arms"] if r["arm"] == "seam"), ""]
     lines += ["## List-price aggregates", "", NOTE, "",
               "| Provider | Script | Size | Arm | Mean list-price USD | USD vs plain |",

@@ -120,7 +120,8 @@ class Battery:
         env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
                                                "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN") if k in os.environ}
         env.update(SHELL=shutil.which("zsh") or "/bin/bash", TMPDIR="/tmp", LANG="en_US.UTF-8",
-                   BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_SEAM_TOKENS=str(self.args.tokens))
+                   BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_SEAM_TOKENS=str(self.args.tokens),
+                   BRIGADIER_IDLE_EXIT_SECS=str(self.args.timeout + 600))
         with (self.root / "daemon.log").open("a") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)],
                                          env=env, stdout=out, stderr=subprocess.STDOUT,
@@ -173,7 +174,12 @@ class Battery:
                                            "projectId": self.project, "title": "Continuity baseline", "setup": setup})["conversation"]["id"]
 
     def view(self):
-        return self.ipc.view(self.conversation)
+        try:
+            return self.ipc.view(self.conversation)
+        except OSError as error:
+            code = self.proc.poll() if self.proc else None
+            self.result["daemon_failure"] = {"exit_code": code, "log_tail": read_text(self.root / "daemon.log")[-6000:]}
+            raise RuntimeError(f"daemon IPC unavailable (exit code {code}): {error}") from error
 
     def entries(self):
         entries, before = [], None
@@ -205,10 +211,25 @@ class Battery:
         log(name)
         step = {"name": name, "sent_ms": now()}
         self.steps.append(step)
+        previous = {r["id"] for r in self.view()["requests"]}
         outcome = self.ipc.call({"method": "sendMessage", "conversationId": self.conversation,
                                  "text": text, "attachments": [], "mentions": [], "steer": False})["outcome"]
         msg = outcome.get("message") or {}
         step["request"] = msg.get("requestId") or msg.get("id")
+        if outcome["type"] == "queued":
+            step["queued_id"] = outcome["item"]["id"]
+            # Queue ids are replaced when appended to the transcript. This harness is the
+            # session's only sender, so the next new request is the message we just queued.
+            def dispatched():
+                requests = [r for r in self.view()["requests"] if r["id"] not in previous]
+                if len(requests) > 1:
+                    raise RuntimeError("multiple requests appeared for one queued battery message")
+                if requests:
+                    step["request"] = requests[0]["id"]
+                    return True
+                return False
+            if not self.wait(dispatched, self.args.turn_timeout):
+                raise TimeoutError(name + ": queued message was not dispatched within bound")
         if fault:
             fault(step)
         def ended():
@@ -359,7 +380,11 @@ class Battery:
                                     and event.get("file") and e["entry"].get("provider") == self.args.provider})
         from lineages import compactions
         self.result["roles"] = capture_roles(entries)
-        self.result["compactions"] = sum(compactions(file, self.args.provider) for file in self.native_files)
+        missing = [file for file in self.native_files if not native_path(file, self.args.provider).is_file()]
+        self.result["compactions"] = (None if missing else
+            sum(compactions(native_path(file, self.args.provider), self.args.provider) for file in self.native_files))
+        if missing:
+            self.errors.append("capture: native transcripts unavailable: " + ", ".join(missing))
         self.result["native_calls"] = native_calls(entries)
         self.result["seam_observations"] = seam_observations(self.result)
         # The seam's own record: each note and what each successor started from.
@@ -384,6 +409,7 @@ class Battery:
                 "SELECT * FROM turn_usage WHERE conversation_id=? ORDER BY at_ms", (self.conversation,))]
 
     def cleanup(self):
+        self.deadline = max(self.deadline, time.monotonic() + 120)
         try:
             if self.proc and self.proc.poll() is None:
                 if self.conversation:
@@ -413,7 +439,7 @@ class Battery:
                     pass
         trusted = smoke.trust_left(str(self.root))
         for filename in self.native_files:
-            file = Path(filename)
+            file = native_path(filename, self.args.provider)
             # Only exact files the run's own provider events identified, after IPC Delete.
             if file.exists():
                 file.unlink()
@@ -432,6 +458,18 @@ class Battery:
             shutil.rmtree(self.root)
 
 
+def native_path(filename, provider):
+    """A closed Codex thread moves to its home's archived_sessions, keeping its basename."""
+    path = Path(filename)
+    if provider == "codex" and not path.is_file():
+        sessions = next((parent for parent in path.parents if parent.name == "sessions"), None)
+        if sessions:
+            archived = sessions.parent / "archived_sessions" / path.name
+            if archived.is_file():
+                return archived
+    return path
+
+
 def capture_roles(entries):
     """Use native model IDs, including a successor that ran on a different provider."""
     parts, seen = {}, set()
@@ -443,7 +481,8 @@ def capture_roles(entries):
         role = "parent" if not seen else "successor"
         seen.add(filename)
         try:
-            value = parse_native(filename, entry["entry"].get("provider", "claude"), "")["economics"]
+            provider = entry["entry"].get("provider", "claude")
+            value = parse_native(native_path(filename, provider), provider, "")["economics"]
         except (OSError, RuntimeError):
             value = historical({}, [])
             value["usage_available"] = False
@@ -524,7 +563,7 @@ def native_calls(entries):
             continue
         calls = {}
         try:
-            for line in Path(event["file"]).read_text().splitlines():
+            for line in native_path(event["file"], entry["entry"].get("provider", "claude")).read_text().splitlines():
                 row = json.loads(line)
                 message = row.get("message") or {}
                 if row.get("type") == "assistant" and message.get("id") and message.get("usage"):

@@ -103,7 +103,14 @@ Only existing repository secrets are consumed: `CLAUDE_CODE_OAUTH_TOKEN` or
 `ANTHROPIC_API_KEY` for Claude, `CODEX_AUTH_JSON` for the existing Codex account's
 native `auth.json`. No sign-in or credential creation runs. An absent provider's
 secret skips its live arms and writes **needs the user: secrets** into the report.
-An expired credential produces an incomplete observation, not a pass. Raw evidence
+An expired credential produces an incomplete observation, not a pass.
+Seam runs follow queued messages through their eventual transcript request IDs before
+injecting faults or awaiting completion. Closed Codex transcripts are read from their
+exact `archived_sessions/` path when moved there. The harness's debug daemon idle-exit
+bound outlives the measurement and cleanup; the normal product idle policy is unchanged.
+Run errors appear beside each observation in the consolidated report. Missing transcripts
+leave compactions unavailable and preserve the remaining seam/ledger evidence; private
+evidence retains the daemon exit code and log tail if its IPC connection disappears. Raw evidence
 stays in runner scratch and is deleted; uploaded Markdown contains only the synthetic
 battery's data, and `summary.json` contains the numbers. Never upload real transcripts.
 
