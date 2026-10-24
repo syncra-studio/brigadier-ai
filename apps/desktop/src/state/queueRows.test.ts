@@ -68,6 +68,22 @@ test("a message sent while a session works shows in the queue rail at once", asy
   assert.equal(inThread(), 0);
 });
 
+// run2-D40: the session judges what is sent while it works, so its row is Deciding from the
+// start; a side chat's waits plainly.
+test("a message sent while a session works is Deciding at once, a side chat's is not", async () => {
+  const deciding = () => queueRows([], useApp.getState().pending.filter((entry) => entry.conversationId === id)).map((row) => !!row.deciding);
+  const sent = send({ text, attachments: [], mentions: [] });
+  assert.deepEqual(deciding(), [true]);
+  reply({ type: "queued", item });
+  await sent;
+  useApp.setState({ conversations: { [id]: { id, kind: "chat", sideOf: "parent" } as Conversation }, pending: [] });
+  useBoard.setState({ board: { ...emptyBoard(id), run: "running" } });
+  const side = send({ text, attachments: [], mentions: [] });
+  assert.deepEqual(deciding(), [false]);
+  reply({ type: "queued", item });
+  await side;
+});
+
 test("a message put back in its slot shows there at once", async () => {
   queue([other, { ...other, id: "third", text: "Then the tests." }], 1);
   const sent = send({ text, attachments: [], mentions: [] }, undefined, { lane: "queue", queueIndex: 1 });

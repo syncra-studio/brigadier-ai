@@ -449,6 +449,7 @@ export function ConversationView({
             decisions: s.board.decisions,
             compactions: s.board.compactions,
             peerMessages: s.board.peerMessages,
+            queueItems: s.board.queue.items,
           }
         : null,
     ),

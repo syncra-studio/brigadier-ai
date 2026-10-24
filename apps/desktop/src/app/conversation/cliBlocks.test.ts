@@ -548,3 +548,48 @@ test("another session's message shows as that session's, its header gone, as a t
   assert.equal(second!.user?.kind, "message");
   assert.equal(second!.user?.kind === "message" && second!.user.text, "My own words");
 });
+
+test("a queued message shows once, as the user's, its frame gone: in the rail while the CLI has it there, else where the CLI last took it", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const deciding = `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\nAlso the docs.`;
+  const steered: ThreadView = {
+    entries: [
+      user("u1", "Fix the test", 1000),
+      user("s1", "A plain steer", 1050, { steer: true }),
+      user("s2", deciding, 1100, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1200),
+    ],
+    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", id, "r3"] }],
+  };
+  // Joined: its request is its own id; the plain steer takes the turn's other request.
+  const [joined] = cliBlocks(steered, "c1", NO_BOARD);
+  assert.deepEqual(joined!.steers.map((steer) => [steer.message.id, steer.text]), [["r3", "A plain steer"], [id, "Also the docs."]]);
+  // Still in the rail: only the rail shows it.
+  const queued = { id, text: "Also the docs.", attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, deciding: true, delivered: true };
+  const [inRail] = cliBlocks(steered, "c1", { ...NO_BOARD, queueItems: [queued] });
+  assert.deepEqual(inRail!.steers.map((steer) => steer.text), ["A plain steer"]);
+  assert.deepEqual(inRail!.nudges, []);
+  // Waited for its own turn: drawn there, not where the CLI read it first.
+  const waited: ThreadView = {
+    entries: [...steered.entries, user("u2", "[queued message feedbeef, now on its own turn]\nAlso the docs.", 2000)],
+    turns: [{ ...steered.turns[0]!, requests: ["r1", "r3"] }, { ...turn("u2", 2000, 2500, "done"), requests: [id] }],
+  };
+  const [first, second] = cliBlocks(waited, "c1", NO_BOARD);
+  assert.deepEqual(first!.steers.map((steer) => steer.text), ["A plain steer"]);
+  assert.equal(second!.user?.kind === "message" && second!.user.text, "Also the docs.");
+  assert.equal(second!.user?.kind === "message" && second!.user.message.id, id);
+});
+
+test("Brigadier's word that the user took a queued message back is never drawn", () => {
+  const withdrawn = "[queued message feedbeef withdrawn: the user took it back; leave it]";
+  const [block] = cliBlocks(
+    {
+      entries: [user("u1", "Fix the test", 1000), user("s1", withdrawn, 1100, { steer: true }), user("s2", `Then the docs.\n${withdrawn}`, 1200, { steer: true })],
+      turns: [turn("u1", 1000, 1500, "done")],
+    },
+    "c1",
+    NO_BOARD,
+  );
+  assert.deepEqual(block!.steers.map((steer) => steer.text), ["Then the docs."]);
+  assert.deepEqual(block!.nudges, []);
+});

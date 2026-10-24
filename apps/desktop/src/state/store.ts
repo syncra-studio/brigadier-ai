@@ -103,7 +103,7 @@ export type PendingMessage = {
    * Sent to wait in the queue: the rail shows it at `index` (else last) until the daemon's
    * queue item shows, rather than the thread (#491).
    */
-  queued?: { index: number | null };
+  queued?: { index: number | null; deciding: boolean };
 };
 
 export { shownIdOf, storedIdOf } from "@/state/shownIds";

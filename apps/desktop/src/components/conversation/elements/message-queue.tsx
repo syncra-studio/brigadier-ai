@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { QueueGlyph } from "@/components/icons";
+import { QueueGlyph, Spinner } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,16 +34,20 @@ export function MessageQueuePaused({ children }: { children?: ReactNode }) {
 }
 
 /**
- * One queued message: the glyph (a drag grip on hover), its text, then its actions.
+ * One queued message: the glyph (a drag grip on hover), its text, then its actions. While it
+ * is `deciding` (the session judges whether it joins the work in progress) a spinner takes the
+ * glyph's place.
  */
 export function MessageQueueItem({
   dragging,
+  deciding,
   grip,
   className,
   children,
   ...props
 }: ComponentProps<"li"> & {
   dragging?: boolean;
+  deciding?: boolean;
   /** Shown over the glyph on hover, when the order can change. */
   grip?: ReactNode;
 }) {
@@ -52,6 +56,8 @@ export function MessageQueueItem({
     <li
       data-slot="message-queue-item"
       data-dragging={dragging || undefined}
+      data-deciding={deciding || undefined}
+      aria-busy={deciding || undefined}
       className={cn(
         "group/queue-item rounded-control min-h-row fade-in animate-in flex items-center gap-2 ps-1.5 pe-1 text-sm duration-200",
         dragging && "bg-foreground/10 relative z-10",
@@ -60,7 +66,11 @@ export function MessageQueueItem({
       {...props}
     >
       <span className="text-muted-foreground/70 relative flex size-icon-button-sm shrink-0 items-center justify-center">
-        <QueueGlyph className={glyph} />
+        {deciding ? (
+          <Spinner className={cn(glyph, "animate-spin motion-reduce:animate-none")} />
+        ) : (
+          <QueueGlyph className={glyph} />
+        )}
         {grip && (
           <span className="invisible absolute inset-0 flex group-hover/queue-item:visible group-focus-within/queue-item:visible">
             {grip}

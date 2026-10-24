@@ -14,6 +14,7 @@ import type {
   OrchestratorStep,
   OrchestratorStepKind,
   PeerMessage,
+  QueuedMessage,
   ProviderKind,
   Question,
   RequestState,
@@ -249,6 +250,8 @@ export type BoardDigest = {
   compactions: Readonly<Record<string, Compaction>>;
   /** Messages to and from other sessions, by message id. */
   peerMessages?: Readonly<Record<string, PeerMessage>>;
+  /** The queue rail's messages: one the CLI already has shows there, not in the thread. */
+  queueItems?: readonly QueuedMessage[];
 };
 
 const WORKING: ReadonlySet<Task["state"]> = new Set([

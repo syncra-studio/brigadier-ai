@@ -24,15 +24,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
-import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
+import type { AttachmentRef, QueuedMessage, SentToWorker } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, openQueuedInSideChat, resumeQueue } from "@/state/actions";
+import { deleteQueued, dismissSent, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere } from "@/state/actions";
+import { HeldNote } from "@/app/conversation/HeldNote";
+import { SentToWorkerNotice } from "@/app/conversation/SentToWorkerNotice";
 import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
 const NO_ITEMS: QueuedMessage[] = [];
+const NO_SENT: SentToWorker[] = [];
 
 function useQueueItems(conversationId: string | null): QueuedMessage[] {
   return useBoard((s) =>
@@ -56,7 +59,8 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       const at = index < 0 ? items.length + index : index;
       const item = items[at];
       const composer = aui.composer();
-      if (!target || !conversationId || !item || !composer.getState().isEmpty) return;
+      // One the session already has can't be written again (run2-D46).
+      if (!target || !conversationId || !item || item.delivered || !composer.getState().isEmpty) return;
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions);
       target.mentions.recall(item.mentions);
@@ -84,7 +88,10 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
- * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. Its ⋯ edits
+ * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
+ * sent while the session works shows Deciding while the session judges it (run2-D40); one it
+ * judged could run apart waits for the user's pick, "Open as a new session" or "Run here"; one
+ * it sent on to a worker leaves a one-line notice. Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
  * so follow-ups steer into the turn.
  * Steering, moving and deleting go through assistant-ui's queue (the view's adapter talks to
@@ -94,6 +101,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   const aui = useAui();
   // A message just sent shows at once; its row does nothing until the daemon has it.
   const { queue, rows: items } = useQueueRows(conversationId);
+  const sent = queue?.sent ?? NO_SENT;
   // Behind the row now `to - 1` (the front for 0), in assistant-ui's terms.
   const moveTo = (id: string, to: number) => {
     if (items.find((item) => item.id === id)?.local) return;
@@ -116,7 +124,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   // A session's own view has Side chat tabs; a side chat has none of its own.
   const view = useContext(ViewContext);
   const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
-  if (items.length === 0) return null;
+  if (items.length === 0 && sent.length === 0) return null;
 
   return (
     <ComposerRailItem label="Message queue">
@@ -142,6 +150,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             <MessageQueueItem
               key={item.id}
               dragging={dragging === item.id}
+              deciding={!!item.deciding}
               grip={
                 items.length > 1 && !item.local && (
                   <button
@@ -156,6 +165,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )
               }
             >
+              {/* The message comes first: with no room for both, the status note gives way, down to its first words (#447). */}
               <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={preview || undefined}>
                 {item.text ? (
                   <>
@@ -166,6 +176,37 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                   <span className="text-muted-foreground">{attached}</span>
                 )}
               </span>
+              {item.deciding && item.heldBy ? (
+                <HeldNote held={item.heldBy} className="min-w-24 shrink-8 truncate" />
+              ) : item.deciding ? (
+                <span
+                  title="The session is checking whether this belongs to the work in progress"
+                  className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"
+                >
+                  Deciding
+                </span>
+              ) : item.offerSession && (
+                <>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="It can run apart from the work in progress"
+                    disabled={action.busy}
+                    onClick={() => action.run(() => openQueuedAsSession(conversationId, item))}
+                  >
+                    Open as a new session
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="It runs in this session once the work in progress is done"
+                    disabled={action.busy}
+                    onClick={() => action.run(() => runQueuedHere(conversationId, item.id))}
+                  >
+                    Run here
+                  </Button>
+                </>
+              )}
               <TooltipIconButton
                 tooltip="Submit without interrupting the model"
                 side="top"
@@ -197,7 +238,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem
-                    disabled={!pull || !composerEmpty || !!item.local}
+                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered}
                     onSelect={() => action.run(async () => pull?.(stored.indexOf(item)))}
                   >
                     <Pencil />
@@ -218,6 +259,13 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             </MessageQueueItem>
           );
         })}
+        {sent.map((notice) => (
+          <SentToWorkerNotice
+            key={notice.id}
+            notice={notice}
+            onDismiss={() => action.run(() => dismissSent(conversationId, notice.id))}
+          />
+        ))}
       </MessageQueue>
       {action.error && (
         <p role="alert" className="text-destructive px-3 pb-1 text-xs">

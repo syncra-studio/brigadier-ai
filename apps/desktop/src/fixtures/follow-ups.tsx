@@ -3,7 +3,7 @@
 import "@/fixtures/flow";
 import { mockIPC } from "@tauri-apps/api/mocks";
 
-import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
+import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome, SentToWorker } from "@/ipc/generated";
 import { send } from "@/state/actions";
 import { applyActivityNews } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
@@ -33,10 +33,21 @@ function apply(events: EventEnvelope["event"][]) {
   applyEvents(batch);
   applyBoardEvents(batch);
 }
-function queued(items: QueuedMessage[]): EventEnvelope["event"] {
-  return { type: "queueChanged", conversationId: id, queue: { items, paused: false } };
+function queued(items: QueuedMessage[], sent: SentToWorker[] = []): EventEnvelope["event"] {
+  return { type: "queueChanged", conversationId: id, queue: { items, paused: false, sent } };
 }
 const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
+/** The row's state as the rail shows it (run2-D40). */
+function railState() {
+  const row = document.querySelector('[data-slot="message-queue-item"]');
+  const notice = document.querySelector('[data-slot="message-queue-sent"]');
+  return {
+    deciding: row?.getAttribute("data-deciding") === "true" && row.getAttribute("aria-busy") === "true",
+    note: row?.querySelector(".shimmer, [data-slot=held-note]")?.textContent?.split(" · ")[0] ?? null,
+    buttons: [...(row?.querySelectorAll("button") ?? [])].map((button) => button.textContent ?? "").filter((label) => /new session|Run here/.test(label)),
+    notice: notice?.querySelector("span")?.textContent ?? null,
+  };
+}
 function view() {
   return {
     rail: [...document.querySelectorAll('[data-slot="message-queue-item"]')].filter((node) => node.textContent?.includes(text)).length,
@@ -64,9 +75,22 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
+  // The session judges it with `brigadier queue`; the rail shows each state the daemon writes.
+  apply([queued([{ ...item, deciding: true, delivered: true }])]);
+  await pause();
+  const deciding = railState();
+  apply([queued([{ ...item, deciding: true, delivered: true, heldBy: { command: "cargo test", sinceMs: Date.now() } }])]);
+  await pause();
+  const held = railState();
+  apply([queued([{ ...item, delivered: true, offerSession: true }])]);
+  await pause();
+  const offered = railState();
+  apply([queued([], [{ id: item.id, text, worker: "task-2", workerNumber: 2, workerTitle: "Docs", sentAtMs: Date.now() }])]);
+  await pause();
+  const sentToWorker = { ...railState(), ...view() };
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker });
   document.body.append(result);
 }
 void drive();

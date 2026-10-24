@@ -316,8 +316,32 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
  */
 const FROM_SESSION = /^\[message from session "[^"]*" \(([^)]+)\) · (sm-[0-9a-f]+)\]\n?/;
 
+/**
+ * A message the user sent while the session worked (run2-D40): Brigadier gives it to the CLI
+ * under a line naming its queue id, `[queued message ‹id› · judge it: …]`, or, when it waited
+ * for its own turn, `[queued message ‹id›, now on its own turn]`. The thread hides that line
+ * (run2-D44).
+ */
+const QUEUED = /^\[queued message (\S{8})(?: · [^\]\n]*|, now on its own turn)\]\n?/;
+
+/** What the session hears of a queued message the user deleted once it had it: never drawn. */
+const WITHDRAWN = /\n*\[queued message \S{8} withdrawn: [^\]\n]*\]\n*/g;
+
+/** The queue id a user message's frame names, if it has one. */
+function queuedId(text: string): string | null {
+  return QUEUED.exec(text)?.[1] ?? null;
+}
+
+/** Whether a user message is only Brigadier's word that a queued message was taken back. */
+function onlyWithdrawn(text: string): boolean {
+  return text.trim() !== "" && text.replace(WITHDRAWN, "").trim() === "";
+}
+
 /** A user message as the thread shows it: another session's when its header says so, its body without the header. */
 function fromSession(message: Message): { message: Message; text: string } {
+  const queued = QUEUED.exec(message.text);
+  const body = message.text.slice(queued?.[0].length ?? 0).replace(WITHDRAWN, "\n").trim();
+  if (queued || body !== message.text.trim()) message = { ...message, text: body };
   const header = FROM_SESSION.exec(message.text);
   if (!header) return { message, text: message.text };
   const text = message.text.slice(header[0].length);
@@ -417,6 +441,16 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
   // A successor that started by itself: its first message is Brigadier's word to carry on.
   const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
+  // A queued message shows once (run2-D44): in the rail while the CLI has it there, else
+  // where the CLI last took it (a message that waited for its own turn was read before).
+  const inRail = new Set((board?.queueItems ?? []).flatMap((item) => (item.delivered ? [item.id.slice(-8)] : [])));
+  const lastTaken = new Map<string, number>();
+  view.entries.forEach((entry, position) => {
+    const id = !entry.parent && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
+    if (id) lastTaken.set(id, position);
+  });
+  // The steers that name no queued message answer the turn's other requests, in order.
+  const framed = (request: string) => lastTaken.has(request.slice(-8));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     const { event } = entry;
@@ -426,6 +460,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const own = !!asked && carried.has(asked.itemId);
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && workerNotices(asked.text);
+    const queued = asked && queuedId(asked.text);
+    const unshown =
+      !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || onlyWithdrawn(asked.text));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep.
     // Its checkpoint request before Codex compacts is Brigadier's too (run2-D9).
@@ -433,7 +470,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const brigadiers = startsTurn(entry) && view.turns[blocks.length]?.requests.length === 0;
     const compacting =
       !!asked && session && brigadiers && (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK));
-    if (asked && (own || compacting || news || nudges.has(asked.itemId))) {
+    if (asked && (own || compacting || news || unshown || nudges.has(asked.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
@@ -442,7 +479,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text }));
-      else if (!own && !compacting) block?.nudges.push(position);
+      else if (!own && !compacting && !unshown) block?.nudges.push(position);
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
@@ -469,8 +506,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       case "message":
       case "messageDelta": {
         if (event.type === "message" && event.role === "user") {
-          // A steer answers its own request, the next the turn names.
-          const id = current.requestIds[current.steers.length + 1] ?? event.itemId;
+          // A steer answers its own request, the next the turn names; a queued message's is
+          // its own id (the request it joined as).
+          const named = queuedId(event.text);
+          const taken = new Set(current.steers.map((steer) => steer.message.id));
+          const id = named
+            ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+            : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId);
           current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, event.text, position + 1)), position });
           return;
         }
