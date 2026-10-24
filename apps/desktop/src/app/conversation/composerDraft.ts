@@ -1,6 +1,6 @@
 import { inlineKind, normalizedImages } from "@/lib/inlineImages";
 import { useAui, useAuiState } from "@/components/conversation/kit";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import type { MentionMemory } from "@/app/conversation/Mentions";
@@ -72,7 +72,8 @@ export function useComposerDraft(
   );
   const restored = useRef<string | null>(null);
 
-  useEffect(() => {
+  // Before paint, so the composer appears with its draft rather than empty, then taller.
+  useLayoutEffect(() => {
     if (restored.current === scope) return;
     restored.current = scope;
     const saved = loadDraft(scope);

@@ -59,6 +59,7 @@ import {
   forwardRef,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
 } from "react";
 
@@ -169,7 +170,9 @@ function RichSyncPlugin({ formatter }: { formatter: Unstable_DirectiveFormatter 
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [editor, aui]);
 
-  useEffect(() => {
+  // Before paint: a draft restored as the composer appears is in the field in its first frame,
+  // not an empty line that then grows.
+  useLayoutEffect(() => {
     // assistant-ui's own Lexical input listens to the runtime the same way.
     // oxlint-disable-next-line no-underscore-dangle
     const runtime = aui.composer.__internal_getRuntime?.();

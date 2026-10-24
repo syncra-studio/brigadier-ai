@@ -3,12 +3,14 @@
  * composer as the app starts (#469), IPC mocked. It mounts under the startup screen, with the
  * plain field standing in for the editor, and is measured there; the startup screen goes, the
  * editor takes the field's place and it is measured again; then another new chat's composer
- * mounts. What it saw goes as JSON into `<pre id="composer-startup-result">`.
+ * mounts, as a switch draws it, and a rail item comes a while after its rail. What it saw goes as JSON into `<pre id="composer-startup-result">`.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
+import { ComposerRail, ComposerRailItem } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { revealApp } from "@/lib/splash";
@@ -74,8 +76,24 @@ async function run() {
   const before = railItem();
   show({ type: "draft", kind: "chat" }, "second");
   await until("the next composer", () => railItem() !== null && railItem() !== before);
-  seen.later = measure();
+  seen.switched = measure();
+  // A rail item that comes once its rail has been there a while opens as it appears.
+  const late = document.createElement("div");
+  document.body.append(late);
+  createRoot(late).render(<LateRail />);
+  await until("the late rail item", () => late.querySelector("[data-slot=composer-rail-item]") !== null);
+  seen.later = { railOpens: getComputedStyle(late.querySelector("[data-slot=composer-rail-item]")!).animationName === "rail-open" };
   return seen;
+}
+
+/** A rail whose item comes after the rail has settled. */
+function LateRail() {
+  const [item, setItem] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setItem(true), 800);
+    return () => clearTimeout(timer);
+  }, []);
+  return <ComposerRail>{item && <ComposerRailItem>Late</ComposerRailItem>}</ComposerRail>;
 }
 
 void run()
