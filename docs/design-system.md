@@ -277,7 +277,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer menus, rail & queue | `Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
 | Composer menus, rail & queue | `Request capsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
 | Composer menus, rail & queue | `Diff pill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
-| Composer menus, rail & queue | `Moved notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
+| Composer menus, rail & queue | `Moved notice` | — | — | Pen only: the code was removed in efa933d5a |
 | Composer menus, rail & queue | `Rail pill` | `app/conversation/RailPill.tsx` | `RailPill` | |
 | Composer menus, rail & queue | `Stand-in pill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
 | Composer menus, rail & queue | `Waiting pill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
