@@ -7,7 +7,8 @@ import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
-import { fixtureInput } from "@/fixtures/input";
+import { account, snapshot, status as agentStatus, window as quotaWindow } from "@/fixtures/agents";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
 import { accounts, overviews, projects, usageView } from "@/fixtures/providersData";
 import type { AgentConnect, ProviderOverview, Request } from "@/ipc/generated";
@@ -19,7 +20,9 @@ import { useUpdates } from "@/state/updates";
 /*
  * ?drive=1 reads the agents, opens Claude's page, reveals one account's email, picks a binary
  * that isn't one and then one that is, leaves the page and comes back, follows the old Usage
- * page's link and shows this computer's login added again, writing what it saw to
+ * page's link and shows this computer's login added again, then every kind of account row
+ * (opened and closed by pointer and keyboard, its eye, Use and ⋯ menus, this computer's login
+ * renamed and cleared), writing what it saw to
  * #providers-result (ProvidersPageRender.test.ts reads it).
  * Without it the page stays as it opens, for screenshots; ?agent=claude opens Claude's page.
  * ?drive=missing starts with Codex not on this computer and walks its Set up (Connect) through
@@ -171,6 +174,35 @@ const button = (name: string, root: ParentNode = document) =>
   );
 const pageRoot = () => document.querySelector('[data-slot="settings-page"]') ?? document;
 const titles = () => all('[data-slot="account-title"]').map(text);
+/** Each account row as it reads: its title and line, where its eye sits, whether it opens and is open, its limits and actions. */
+const rows = () =>
+  all('[data-slot="account-row"]').map((row) => ({
+    title: text(row.querySelector('[data-slot="account-title"]')),
+    line: text(row.querySelector('[data-slot="account-line"]')),
+    eye: row.querySelector('[data-slot="account-title"] ~ button[aria-label$="email"]')
+      ? "title"
+      : row.querySelector('[data-slot="account-line"] button[aria-label$="email"]')
+        ? "line"
+        : null,
+    expanded: row.querySelector('[data-slot="account-toggle"]')?.getAttribute("aria-expanded") ?? null,
+    usage: text(row.querySelector('[data-slot="account-header"] > span:nth-last-child(2)')),
+    limits: all('[data-slot="account-limit"]', row).map(text),
+    actions: all<HTMLButtonElement>('[data-slot="account-header"] > div:last-child button', row).map((element) => text(element) || element.getAttribute("aria-label")),
+    inUse: Boolean(row.querySelector('[data-slot="in-use"]')),
+  }));
+const openRows = () => all('[data-slot="account-row"]').map((row) => row.hasAttribute("data-open"));
+const accountRow = (index: number) => all('[data-slot="account-row"]')[index];
+/** The ⋯ menu of row `index` opened by a real click: its items, then closed with Escape. */
+const menuOf = async (index: number) => {
+  const more = accountRow(index)?.querySelector('button[aria-label$=": more"]');
+  if (more) await fixtureClick(more);
+  await pause(200);
+  return all('[role="menuitem"]').map(text);
+};
+const escape = async () => {
+  await fixtureInput({ type: "key", key: "Escape" });
+  await pause(150);
+};
 const locationRow = () => document.querySelector('[data-slot="agent-location"]') ?? document;
 /** Every card's look, and the first switch that is on's, for the look drive. */
 const cards = () => all('[data-slot="settings-card"]').map(surface);
@@ -196,6 +228,31 @@ const inView = (element: Element | undefined | null) => {
   if (!element) return false;
   const box = element.getBoundingClientRect();
   return box.bottom > 0 && box.top < window.innerHeight;
+};
+/**
+ * This computer's login renamed from its ⋯ menu with `keys`: the field's first value, which rows
+ * are open, the names saved and whether Settings stays open.
+ */
+const rename = async (keys: () => Promise<void>) => {
+  await menuOf(0);
+  const item = all('[role="menuitem"]').find((element) => text(element) === "Rename");
+  if (item) await fixtureClick(item);
+  await pause(200);
+  const field = accountRow(0)?.querySelector<HTMLInputElement>('input[aria-label="Account name"]');
+  if (field) await fixtureClick(field);
+  await pause(100);
+  const shown = { field: field?.value ?? null, open: openRows() };
+  await keys();
+  await pause(250);
+  return {
+    ...shown,
+    names: useApp.getState().settings.ownAccountNames,
+    stillOpen: Boolean(document.querySelector('[data-slot="agent-page"]')),
+  };
+};
+/** `key` pressed `times` times. */
+const pressKey = (key: string, times = 1) => async () => {
+  for (let i = 0; i < times; i++) await fixtureInput({ type: "key", key });
 };
 function Fixture() {
   const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
@@ -239,7 +296,7 @@ function Fixture() {
         status: text(row.querySelector('[data-slot="connect-status"] [role="status"]')),
         buttons: all<HTMLButtonElement>("button", row).map((element) => `${text(element)}${element.disabled ? " (off)" : ""}`),
       }));
-    const steps: (() => void)[] = missing
+    const steps: (() => void | Promise<void>)[] = missing
       ? [
           () => {
             seen.agents = all('[data-slot="agent-row"]').map((row) => row.dataset.setting);
@@ -346,12 +403,7 @@ function Fixture() {
         seen.cli = text(document.querySelector('[data-slot="agent-cli"]'));
         seen.updateEnabled = button("Update")?.disabled === false;
         seen.location = text(document.querySelector('[data-slot="agent-location"]'));
-        seen.accounts = all('[data-slot="account-row"]').map((row) => ({
-          title: text(row.querySelector('[data-slot="account-title"]')),
-          inUse: Boolean(row.querySelector('[data-slot="in-use"]')),
-          meters: all('[data-slot="account-usage"]', row).map(text),
-          order: text(row.querySelector('[data-slot="account-order"]')),
-        }));
+        seen.rows = rows();
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
         seen.models = all('[data-slot="provider-model"]').map(text);
         // Reveal the second account's email only.
@@ -440,6 +492,78 @@ function Fixture() {
       },
       () => {
         seen.afterUse = accountSwitchState();
+        // Every kind of row (D2, D7, D11, D12, D14): this computer's login named, an account
+        // named by its email at 93%, one whose usage isn't read yet, and one signed out.
+        const hour = 3_600_000;
+        const limits = snapshot("claude", [
+          quotaWindow("seven_day", "Weekly", 41, { windowMinutes: 10_080, resetsAtMs: Date.now() + 50 * hour }),
+          quotaWindow("five_hour", "5-hour", 24, { windowMinutes: 300, resetsAtMs: Date.now() + 2 * hour + 15 * 60_000 }),
+          quotaWindow("seven_day_fable", "Weekly (Fable)", 12, { windowMinutes: 10_080, resetsAtMs: Date.now() + 50 * hour }),
+        ]);
+        listed = [
+          account("claude", undefined, "stephen.golban@example.com", { name: "Personal", quota: limits, quotaAtMs: Date.now(), inUse: true }),
+          account("claude", "acct-work", "work.person@corp.example.io", {
+            name: "work.person@corp.example.io",
+            quota: snapshot("claude", [quotaWindow("five_hour", "5-hour", 61, { windowMinutes: 300 }), quotaWindow("seven_day", "Weekly", 93, { windowMinutes: 10_080 })]),
+            quotaAtMs: Date.now(),
+            inUse: false,
+          }),
+          account("claude", "acct-side", "side@example.org", { name: "Side project", inUse: false }),
+          account("claude", "acct-out", "m@proton.me", { status: agentStatus("claude", { email: "m@proton.me", loggedIn: false, plan: null }), inUse: false }),
+        ];
+        useApp.setState({ accounts: { accounts: listed, warnings: [] } });
+      },
+      async () => {
+        seen.kinds = rows();
+        seen.kindsOpen = openRows();
+        // The eye shows the email and doesn't toggle the row.
+        const eye = accountRow(0)?.querySelector('[data-slot="account-line"] button');
+        if (eye) await fixtureClick(eye);
+        await pause(150);
+        seen.afterEye = { open: openRows(), line: text(accountRow(0)?.querySelector('[data-slot="account-line"]')) };
+        // A press on a closed row's name opens it; the first stays open.
+        const title = accountRow(1)?.querySelector('[data-slot="account-title"]');
+        if (title) await fixtureClick(title);
+        await pause(150);
+        seen.twoOpen = { open: openRows(), expanded: rows().map((row) => row.expanded), limits: rows()[1]?.limits };
+        // The keyboard: Enter on the row's toggle closes it, Space opens it again.
+        accountRow(0)?.querySelector<HTMLButtonElement>('[data-slot="account-toggle"]')?.focus();
+        seen.toggleFocused = document.activeElement?.getAttribute("data-slot");
+        seen.toggleNested = all('[data-slot="account-toggle"] button, [data-slot="account-toggle"] input').length;
+        await fixtureInput({ type: "key", key: "Enter" });
+        await pause(150);
+        seen.afterEnter = openRows();
+        await fixtureInput({ type: "key", key: " " });
+        await pause(150);
+        seen.afterSpace = openRows();
+        // Use picks the open second account and leaves it open.
+        const use = all<HTMLButtonElement>("button", accountRow(1)).find((element) => text(element) === "Use");
+        if (use) await fixtureClick(use);
+        await pause(200);
+        seen.afterUseClick = { open: openRows(), manual: useApp.getState().settings.manualAccounts };
+        // Each row's ⋯ menu, none of them toggling it.
+        seen.menus = [];
+        for (const index of [0, 1, 3]) {
+          (seen.menus as unknown[]).push(await menuOf(index));
+          await escape();
+        }
+        seen.afterMenus = openRows();
+      },
+      async () => {
+        // Renaming this computer's login, then clearing it back to its email, then a cancelled edit.
+        seen.renamed = await rename(async () => {
+          await pressKey("Backspace", "Personal".length)();
+          await fixtureInput({ type: "type", text: "Home" });
+          await pressKey("Enter")();
+        });
+        seen.cleared = await rename(async () => {
+          await pressKey("Backspace", "Personal".length)();
+          await pressKey("Enter")();
+        });
+        seen.cancelled = await rename(async () => {
+          await fixtureInput({ type: "type", text: "X" });
+          await pressKey("Escape")();
+        });
         // Back to the agents, then Codex's page.
         button("Providers", pageRoot())?.click();
       },
@@ -457,7 +581,7 @@ function Fixture() {
       await wait(400);
       for (const step of steps) {
         if (stopped) return;
-        step();
+        await step();
         await wait(250);
       }
     })();

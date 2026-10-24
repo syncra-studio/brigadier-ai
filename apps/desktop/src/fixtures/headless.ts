@@ -454,13 +454,14 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
   return serialized;
 }
 
-/** CDP's description of a key the keyboard sends: Enter, Escape, Tab, the arrows, a digit or a letter. */
+/** CDP's description of a key the keyboard sends: Enter, Escape, Tab, the arrows, Space, a digit or a letter. */
 function keyEvent(key: string): { key: string; code: string; windowsVirtualKeyCode: number; text?: string | undefined } {
   const named: Record<string, [number, string?]> = {
     Enter: [13, "\r"], Escape: [27], Tab: [9], Backspace: [8], ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40],
   };
   const found = named[key];
   if (found) return { key, code: key, windowsVirtualKeyCode: found[0], text: found[1] };
+  if (key === " ") return { key, code: "Space", windowsVirtualKeyCode: 32, text: key };
   if (/^[0-9]$/.test(key)) return { key, code: `Digit${key}`, windowsVirtualKeyCode: key.charCodeAt(0), text: key };
   if (/^[a-z]$/i.test(key)) return { key, code: `Key${key.toUpperCase()}`, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0), text: key };
   throw new Error(`fixtureInput doesn't know the key ${JSON.stringify(key)}`);

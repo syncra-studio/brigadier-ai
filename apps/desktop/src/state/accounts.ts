@@ -65,12 +65,22 @@ export async function removeAccount(id: string): Promise<void> {
   await request({ method: "removeAccount", id });
 }
 
-/** Renames the extra account `id`. */
-export function renameAccount(id: string, name: string): Promise<unknown> {
-  return editSettings((settings) => ({
-    ...settings,
-    accounts: settings.accounts.map((entry) => (entry.id === id ? { ...entry, name } : entry)),
-  }));
+/**
+ * Renames `provider`'s extra account `id`, or its own login (`id` absent); an empty name sends
+ * the own login back to its email.
+ */
+export function renameAccount(provider: ProviderKind, id: string | undefined, name: string): Promise<unknown> {
+  return editSettings((settings) =>
+    id === undefined
+      ? {
+          ...settings,
+          ownAccountNames: [
+            ...settings.ownAccountNames.filter((entry) => entry.provider !== provider),
+            ...(name.trim() ? [{ provider, name: name.trim() }] : []),
+          ],
+        }
+      : { ...settings, accounts: settings.accounts.map((entry) => (entry.id === id ? { ...entry, name } : entry)) },
+  );
 }
 
 /**
@@ -106,8 +116,9 @@ export function setSwitchAccounts(provider: ProviderKind, on: boolean): Promise<
 
 /** What an account is called: its name, else who is signed in; "This computer's login" for the own one. */
 export function accountLabel(view: AccountView): string {
+  if (view.name) return view.name;
   if (view.account.account === undefined) return "This computer's login";
-  return view.name || view.status?.email || "New account";
+  return view.status?.email || "New account";
 }
 
 /** Who a signed-in account is: its email (any case) in its organization; `null` until known. */

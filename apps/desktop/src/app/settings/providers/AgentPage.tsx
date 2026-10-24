@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/components/controls";
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
-import { ProviderAccounts, useRevealedEmails } from "@/app/settings/providers/AccountRows";
+import { ProviderAccounts, useOpenRows, useRevealedEmails } from "@/app/settings/providers/AccountRows";
 import { OVERVIEW_ROWS } from "@/app/settings/providers/AgentsOverview";
 import { CheckAgainButton, PlanChip } from "@/app/settings/providers/parts";
 import { AgentModels } from "@/app/settings/providers/AgentModels";
@@ -123,6 +123,7 @@ export function AgentPage({
   const switching = useAction();
   // Its own: going back to the agents hides the emails again.
   const revealed = useRevealedEmails();
+  const opened = useOpenRows();
   const checkedAtMs = overview?.checkedAtMs ?? null;
   return (
     <div data-slot="agent-page" className="flex flex-col gap-10">
@@ -147,7 +148,7 @@ export function AgentPage({
               onCheckedChange={(next) => switching.run(() => setSwitchAccounts(provider, next))}
             />
           </SettingsRow>
-          <ProviderAccounts page provider={provider} views={accounts} now={now} revealed={revealed} />
+          <ProviderAccounts provider={provider} views={accounts} now={now} revealed={revealed} opened={opened} />
         </SettingsCard>
       </SettingsSection>
       {on && <AgentModels provider={provider} overview={overview} merged={merged} />}
