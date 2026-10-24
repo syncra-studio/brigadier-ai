@@ -2596,7 +2596,15 @@ impl SessionManager {
                 // A Chat acts as a session (S28): the same tools and the user's own setup.
                 ConversationKind::Chat => ToolSet::Thread,
             },
-            skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
+            skill_plugins: computer
+                .iter()
+                .map(|kit| kit.plugin.clone())
+                .chain(if tab_checkout.is_none() {
+                    self.optional_skill_plugins(&conv.id, None)
+                } else {
+                    Vec::new()
+                })
+                .collect(),
             // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
             installed_skills: match tab_checkout {
                 Some(_) => Vec::new(),

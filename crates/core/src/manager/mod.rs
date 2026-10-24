@@ -35,6 +35,7 @@ mod codex_children;
 mod computer_host;
 mod models;
 mod open_in_app;
+mod optional_skills;
 mod terminal_run;
 pub use computer_host::ComputerNews;
 mod computer_use;

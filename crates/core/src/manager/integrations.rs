@@ -686,18 +686,16 @@ impl SessionManager {
             None => Vec::new(),
         };
         let project = repo.as_ref().and(project);
+        let data_dir = self.data_dir.clone();
         super::blocking(move || {
             let switches = Switches {
                 settings: &settings,
                 project: project.as_ref(),
             };
-            Ok(settings_view(
-                &registry,
-                repo.as_deref(),
-                &others,
-                &switches,
-                &auth,
-            ))
+            let mut view = settings_view(&registry, repo.as_deref(), &others, &switches, &auth);
+            view.skills
+                .extend(super::optional_skills::catalog(&data_dir, &settings));
+            Ok(view)
         })
         .await
     }

@@ -13,7 +13,7 @@ struct Fake(PathBuf);
 impl Fake {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "20261022-0805-take-over-5-sessions-w181-config-{}",
+            "20261022-0805-take-over-5-sessions-w189-config-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(root.join("chat")).unwrap();
@@ -275,6 +275,92 @@ async fn chat_config(kind: ProviderKind) {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Optional skills use the existing per-process loading path, never the CLI's global folders.
+#[tokio::test]
+async fn optional_skill_roots_reach_only_the_selected_cli_session() {
+    for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+        let fake = Fake::new();
+        let provider = fake.provider(kind);
+        let mut plugins = Vec::new();
+        for name in ["retro", "writing-for-agents"] {
+            let plugin = fake.0.join("optional-skills").join(name);
+            let skill = plugin.join("skills").join(name);
+            std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(
+                plugin.join(".claude-plugin/plugin.json"),
+                json!({"name": name}).to_string(),
+            )
+            .unwrap();
+            std::fs::write(
+                skill.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Test\n---\n"),
+            )
+            .unwrap();
+            plugins.push(plugin);
+        }
+        for enabled in [false, true] {
+            std::fs::write(fake.0.join("capture.jsonl"), "").unwrap();
+            let mut spec = fake.chat(Access::AcceptEdits, false);
+            if enabled {
+                spec.skill_plugins = plugins.clone();
+            }
+            let started = provider.start(spec, Arc::new(Kept)).await.unwrap();
+            if kind == ProviderKind::Codex {
+                started
+                    .session
+                    .send(TurnInput::text("/retro"))
+                    .await
+                    .unwrap();
+            }
+            started.session.close().await;
+            let captured: Vec<Value> = std::fs::read_to_string(fake.0.join("capture.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            match kind {
+                ProviderKind::Claude => {
+                    let args = captured[0]["argv"].as_array().unwrap();
+                    let loaded: Vec<_> = args
+                        .windows(2)
+                        .filter(|pair| pair[0] == "--plugin-dir")
+                        .map(|pair| pair[1].as_str().unwrap().to_owned())
+                        .collect();
+                    let expected: Vec<_> = if enabled {
+                        plugins.iter().map(|p| p.display().to_string()).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(loaded, expected);
+                }
+                ProviderKind::Codex => {
+                    let roots = captured
+                        .iter()
+                        .find(|m| m["method"] == "skills/extraRoots/set");
+                    if enabled {
+                        let expected: Vec<_> = plugins
+                            .iter()
+                            .map(|p| p.join("skills").display().to_string())
+                            .collect();
+                        assert_eq!(roots.unwrap()["params"]["extraRoots"], json!(expected));
+                    } else {
+                        assert!(roots.is_none());
+                    }
+                }
+            }
+            for global in [
+                ".claude/skills/retro",
+                ".agents/skills/retro",
+                ".codex/skills/retro",
+                ".codex/skills/writing-for-agents",
+            ] {
+                assert!(!fake.0.join(global).exists(), "{global}");
             }
         }
     }
