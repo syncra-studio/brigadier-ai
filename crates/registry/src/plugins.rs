@@ -541,6 +541,39 @@ pub(crate) fn claude(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
     plugins
 }
 
+/// Claude's plugins installed for every project (or placed in the user's skills folder) that
+/// its user settings switch off.
+pub(crate) fn claude_off(roots: &Roots) -> Vec<Plugin> {
+    let switches = claude_switches(&[roots.claude_dir.join("settings.json")]);
+    let mut plugins = Vec::new();
+    for install in claude_installs(roots) {
+        if install.project.is_some() || claude_on(&switches, &install.id, &install.root) {
+            continue;
+        }
+        let fallback = split_id(&install.id).map_or(install.id.as_str(), |(name, _)| name);
+        plugins.push(Plugin {
+            agent: Agent::Claude,
+            name: named(&install.root, Agent::Claude, fallback),
+            project: None,
+            id: install.id,
+            root: install.root,
+        });
+    }
+    for (name, root) in skills_folder_plugins(&roots.claude_dir.join("skills")) {
+        let id = format!("{name}@skills-dir");
+        if !claude_on(&switches, &id, &root) {
+            plugins.push(Plugin {
+                agent: Agent::Claude,
+                id,
+                name,
+                root,
+                project: None,
+            });
+        }
+    }
+    plugins
+}
+
 /// How Codex orders two versions of a plugin: by semver when both are, else as text.
 fn compare_versions(left: &str, right: &str) -> Ordering {
     let parse = |version: &str| -> Option<(Vec<u64>, Option<String>)> {

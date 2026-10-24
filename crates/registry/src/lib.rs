@@ -330,6 +330,20 @@ pub struct Catalog {
     /// The user's Codex servers the read project's own `.codex/config.toml` switches off
     /// (`[mcp_servers.<name>] enabled = false`), when Codex trusts the project.
     pub codex_off_here: Vec<String>,
+    /// What the user's own setup has but switches off for every project.
+    pub off: SwitchedOff,
+}
+
+/// Items an agent has but switches off for every project: none of a catalog's other lists hold
+/// them, as no session loads them, yet they can be switched on again.
+#[derive(Debug, Clone, Default)]
+pub struct SwitchedOff {
+    /// Codex's own servers set `enabled = false`, and the servers of the plugins below.
+    pub servers: Vec<Server>,
+    /// The skills of the plugins below.
+    pub skills: Vec<Skill>,
+    /// Installed plugins switched off in the user's scope.
+    pub plugins: Vec<Plugin>,
 }
 
 impl Catalog {
@@ -359,6 +373,7 @@ impl Catalog {
                 .unwrap_or_default(),
             plugins: Vec::new(),
             codex_off_here: Vec::new(),
+            off: SwitchedOff::default(),
         };
         skills::add_user(&mut catalog.skills, roots);
         let mut plugins = plugins::claude(roots, None);
@@ -366,7 +381,30 @@ impl Catalog {
         for plugin in plugins {
             catalog.add_plugin(roots, plugin, codex.as_ref());
         }
+        catalog.off = Self::switched_off(roots, codex.as_ref());
         catalog
+    }
+
+    fn switched_off(roots: &Roots, codex: Option<&toml::Table>) -> SwitchedOff {
+        let mut off = SwitchedOff::default();
+        // Its problems are the page's once it is on.
+        let mut problems = Vec::new();
+        if let Some(codex) = codex {
+            off.servers = servers::toml_servers_off(codex, roots);
+        }
+        let mut plugins = plugins::claude_off(roots);
+        plugins.extend(
+            plugins::codex_switched(roots, codex, None)
+                .into_iter()
+                .filter_map(|(plugin, on)| (!on).then_some(plugin)),
+        );
+        for plugin in plugins {
+            skills::add_plugin(&mut off.skills, &plugin);
+            off.servers
+                .extend(servers::plugin(roots, &plugin, codex, &mut problems));
+            off.plugins.push(plugin);
+        }
+        off
     }
 
     fn add_project(&mut self, roots: &Roots, project: &Path) {

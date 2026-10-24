@@ -227,3 +227,73 @@ fn a_plugins_skills_are_one_item_with_their_count() {
     );
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+fn an_agents_own_item_switched_off_everywhere_stays_as_an_off_row() {
+    let home = home("off-rows");
+    let project = home.join("p");
+    std::fs::create_dir_all(&project).unwrap();
+    // Codex: its own server and another marketplace's plugin, both off for every project.
+    let kit = home.join(".codex/plugins/cache/market/kit/1.0.0");
+    write(&kit.join(".codex-plugin/plugin.json"), r#"{"name": "kit"}"#);
+    write(
+        &kit.join("skills/tidy/SKILL.md"),
+        "---\nname: tidy\ndescription: Tidies.\n---\n",
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        &format!(
+            "[mcp_servers.pencil]\ncommand = \"pencil-mcp\"\nenabled = false\n\n\
+             [plugins.\"kit@market\"]\nenabled = false\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    );
+    // Claude Code: another marketplace's plugin, installed and off for every project.
+    let deck = home.join(".claude/plugins/cache/market/deck/1.0.0");
+    write(
+        &deck.join(".claude-plugin/plugin.json"),
+        r#"{"name": "deck"}"#,
+    );
+    write(
+        &deck.join("skills/slides/SKILL.md"),
+        "---\nname: slides\ndescription: Slides.\n---\n",
+    );
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &serde_json::json!({"version": 2, "plugins": {"deck@market": [
+            {"scope": "user", "installPath": deck, "version": "1.0.0"}
+        ]}})
+        .to_string(),
+    );
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"deck@market": false}}"#,
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let user = Catalog::read(&roots, None);
+    let projects = vec![ProjectCatalog {
+        id: "p".to_owned(),
+        name: "p".to_owned(),
+        path: project.clone(),
+        catalog: Catalog::read(&roots, Some(&project)),
+    }];
+    for focus in [None, Some(project.as_path())] {
+        let view = build(&user, &projects, &[], &Unknown, focus);
+        let pencil = item(&view, "server:pencil");
+        assert_eq!(
+            states(pencil),
+            [AgentItemState::Missing, AgentItemState::Off]
+        );
+        assert!(pencil.switchable && !pencil.everywhere);
+        assert_eq!(pencil.detail, "pencil-mcp");
+        assert_eq!(
+            states(item(&view, "plugin:kit")),
+            [AgentItemState::Missing, AgentItemState::Off]
+        );
+        let deck = item(&view, "plugin:deck");
+        assert_eq!(states(deck), [AgentItemState::Off, AgentItemState::Missing]);
+        assert_eq!((deck.description.as_str(), deck.skills), ("Slides.", 1));
+    }
+    let _ = std::fs::remove_dir_all(home);
+}

@@ -293,6 +293,60 @@ fn off_everywhere_also_turns_it_off_where_a_project_switches_it_on_over_every_pr
 }
 
 #[test]
+fn an_agents_own_item_off_everywhere_can_be_switched_on_again() {
+    let fx = Fixture::new("on-again", None, None);
+    let kit = fx.home.join(".codex/plugins/cache/market/kit/1.0.0");
+    write(&kit.join(".codex-plugin/plugin.json"), r#"{"name": "kit"}"#);
+    write(
+        &fx.home.join(".codex/config.toml"),
+        &format!(
+            "[mcp_servers.pencil]\ncommand = \"pencil-mcp\"\nenabled = false\n\n\
+             [plugins.\"kit@market\"]\nenabled = false\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            fx.project.display()
+        ),
+    );
+    let projects = [fx.project.clone()];
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &|_, _| {},
+    };
+    assert_eq!(
+        plugin_id_of(&ctx, Agent::Codex, "kit").as_deref(),
+        Some("kit@market")
+    );
+    assert_eq!(
+        lines(
+            &plugin_plan(&ctx, adapter(Agent::Codex), "kit@market", None, true, false)
+                .unwrap()
+                .unwrap()
+        ),
+        [format!("user plugins.kit@market.enabled = {ON:?}")]
+    );
+    for project in [None, Some(fx.project.as_path())] {
+        assert!(has_server(
+            &ctx.read(project),
+            adapter(Agent::Codex),
+            "pencil"
+        ));
+        assert!(!has_server(
+            &ctx.read(project),
+            adapter(Agent::Claude),
+            "pencil"
+        ));
+    }
+    // Its Remove takes it too.
+    assert_eq!(
+        server_places(&ctx, "pencil"),
+        Ok(vec![(Agent::Codex, Place::Everywhere)])
+    );
+}
+
+#[test]
 fn remove_also_takes_an_install_a_project_has_of_its_own() {
     let fx = Fixture::new("remove-local", None, None);
     let dir = fx.library.entry("tidy").unwrap().dir;

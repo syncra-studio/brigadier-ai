@@ -404,6 +404,34 @@ fn json_servers(
     servers
 }
 
+/// The user's own Codex servers set `enabled = false`, read as they'd be once on.
+pub(crate) fn toml_servers_off(config: &toml::Table, roots: &Roots) -> Vec<Server> {
+    let off: toml::Table = config
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, entry)| {
+            let mut entry = entry.as_table()?.clone();
+            (entry.remove("enabled").and_then(|on| on.as_bool()) == Some(false))
+                .then(|| (name.clone(), toml::Value::Table(entry)))
+        })
+        .collect();
+    if off.is_empty() {
+        return Vec::new();
+    }
+    let mut config = toml::Table::new();
+    config.insert("mcp_servers".to_owned(), toml::Value::Table(off));
+    toml_servers(
+        &config,
+        Source::CodexUser,
+        None,
+        &roots.codex_home.join("config.toml"),
+        roots,
+        &mut Vec::new(),
+    )
+}
+
 /// `mcp_servers` of a Codex config. `layer`: a project's, with the folder of the layer, which
 /// its servers start in by default.
 fn toml_servers(

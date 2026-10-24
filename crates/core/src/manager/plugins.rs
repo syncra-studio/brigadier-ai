@@ -13,7 +13,7 @@ pub mod ops;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::{AgentAdapter, Listed, adapters};
+use brigadier_registry::adapter::{AgentAdapter, Listed, adapters, owner};
 use brigadier_registry::library::{Entry, Library, MARKETPLACE};
 use brigadier_registry::{Agent, Catalog, Server, Session, Skill, SkillRoot, Source, Transport};
 use serde::{Deserialize, Serialize};
@@ -403,21 +403,6 @@ fn gather(
     project: Option<&Path>,
     agents: &[&'static dyn AgentAdapter],
 ) {
-    let entry = |key: Key, items: &mut Vec<(Key, Presence)>| -> usize {
-        match items.iter().position(|(known, _)| *known == key) {
-            Some(at) => at,
-            None => {
-                items.push((
-                    key,
-                    Presence {
-                        switchable: true,
-                        ..Presence::default()
-                    },
-                ));
-                items.len() - 1
-            }
-        }
-    };
     for server in &catalog.servers {
         let Some(key) = server_key(server) else {
             if project.is_none() {
@@ -503,31 +488,9 @@ fn gather(
         }
     }
     for skill in &catalog.skills {
-        let Some(key) = skill_key(skill) else {
+        let Some(presence) = skill_row(items, skill) else {
             continue;
         };
-        let library = key.kind == KeyKind::Library;
-        let plugin = (key.kind == KeyKind::Plugin)
-            .then(|| skill.plugin())
-            .flatten();
-        let at = entry(key, items);
-        let presence = &mut items[at].1;
-        if presence.kind.is_none() || !library {
-            presence.kind = Some(PluginKind::Skill);
-        }
-        push(&mut presence.skills, skill.name.clone());
-        if presence.description.is_empty() {
-            presence.description = plugin
-                .and_then(|plugin| plugin.description())
-                .unwrap_or_else(|| skill.description.clone());
-        }
-        if presence.detail.is_empty() {
-            presence.detail = plugin
-                .map_or(&skill.dir, |plugin| &plugin.root)
-                .display()
-                .to_string();
-        }
-        push(&mut presence.files, skill.skill_md().display().to_string());
         let plugin_only = skill.plugin().is_some();
         for adapter in agents {
             let agent = adapter.agent();
@@ -539,6 +502,76 @@ fn gather(
             }
         }
     }
+    if project.is_some() {
+        return;
+    }
+    // What an agent has but switches off for every project: an off row it can be switched on
+    // from again.
+    for server in &catalog.off.servers {
+        let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
+            continue;
+        };
+        let at = entry(key, items);
+        let presence = &mut items[at].1;
+        presence.kind = Some(PluginKind::Server);
+        if presence.detail.is_empty() {
+            (presence.detail, presence.remote) = detail(&server.transport);
+        }
+        push(&mut presence.files, server.file.display().to_string());
+        push(&mut presence.anywhere, agent);
+    }
+    for skill in &catalog.off.skills {
+        if let Some(plugin) = skill.plugin()
+            && let Some(presence) = skill_row(items, skill)
+        {
+            push(&mut presence.anywhere, plugin.agent);
+        }
+    }
+}
+
+/// The row `key` names in `items`, added when new.
+fn entry(key: Key, items: &mut Vec<(Key, Presence)>) -> usize {
+    match items.iter().position(|(known, _)| *known == key) {
+        Some(at) => at,
+        None => {
+            items.push((
+                key,
+                Presence {
+                    switchable: true,
+                    ..Presence::default()
+                },
+            ));
+            items.len() - 1
+        }
+    }
+}
+
+/// The row `skill` is part of, with what the skill tells of it; `None` for one never shown.
+fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> Option<&'a mut Presence> {
+    let key = skill_key(skill)?;
+    let library = key.kind == KeyKind::Library;
+    let plugin = (key.kind == KeyKind::Plugin)
+        .then(|| skill.plugin())
+        .flatten();
+    let at = entry(key, items);
+    let presence = &mut items[at].1;
+    if presence.kind.is_none() || !library {
+        presence.kind = Some(PluginKind::Skill);
+    }
+    push(&mut presence.skills, skill.name.clone());
+    if presence.description.is_empty() {
+        presence.description = plugin
+            .and_then(|plugin| plugin.description())
+            .unwrap_or_else(|| skill.description.clone());
+    }
+    if presence.detail.is_empty() {
+        presence.detail = plugin
+            .map_or(&skill.dir, |plugin| &plugin.root)
+            .display()
+            .to_string();
+    }
+    push(&mut presence.files, skill.skill_md().display().to_string());
+    Some(presence)
 }
 
 /// The page, from the user's catalog and each trusted project's; `focus` is the project the

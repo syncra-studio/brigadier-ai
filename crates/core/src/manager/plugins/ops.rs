@@ -229,14 +229,17 @@ fn kept_on_in(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str, project: &Pat
         || (plugin_on(&catalog, agent, id, false) && adapter.switched_on_in(project, id))
 }
 
-/// `agent`'s id for the plugin named `name` (another marketplace's), wherever it has it.
+/// `agent`'s id for the plugin named `name` (another marketplace's), wherever it has it, on or
+/// off.
 fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<String> {
     std::iter::once(None)
         .chain(ctx.projects.iter().map(|path| Some(path.as_path())))
         .find_map(|project| {
-            ctx.read(project)
+            let catalog = ctx.read(project);
+            catalog
                 .plugins
                 .into_iter()
+                .chain(catalog.off.plugins)
                 .find(|plugin| plugin.agent == agent && plugin.name == name)
                 .map(|plugin| plugin.id)
         })
@@ -316,6 +319,15 @@ fn plugin_plan(
     Ok(Some(steps))
 }
 
+/// Whether `adapter`'s agent has its own server `name` (not a plugin's), on or off.
+fn has_server(catalog: &Catalog, adapter: &dyn AgentAdapter, name: &str) -> bool {
+    catalog
+        .servers
+        .iter()
+        .chain(&catalog.off.servers)
+        .any(|server| server.name == name && server.plugin.is_none() && adapter.owns(server.source))
+}
+
 const USE_EVERYWHERE_FIRST: &str =
     "Use everywhere first: then every agent can turn it on or off per project.";
 
@@ -348,10 +360,7 @@ pub(crate) fn switch(
             let place = project.map_or(Place::Everywhere, just_me);
             let catalog = ctx.read(project);
             ctx.each(only, |adapter| {
-                let has = catalog.servers.iter().any(|server| {
-                    server.name == name && server.plugin.is_none() && adapter.owns(server.source)
-                });
-                if !has {
+                if !has_server(&catalog, adapter, &name) {
                     return Ok(None);
                 }
                 adapter
@@ -1181,6 +1190,35 @@ fn server_names_of(ctx: &Ctx<'_>, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Where each agent has its own server `name` (not a plugin's), on or off: what Remove takes.
+fn server_places(ctx: &Ctx<'_>, name: &str) -> Result<Vec<(Agent, Place)>, String> {
+    let mut places: Vec<(Agent, Place)> = Vec::new();
+    for project in std::iter::once(None).chain(ctx.projects.iter().map(|p| Some(p.as_path()))) {
+        let catalog = ctx.read(project);
+        for server in catalog.servers.into_iter().chain(catalog.off.servers) {
+            if server.name != name || server.plugin.is_some() {
+                continue;
+            }
+            if server.source == Source::ClaudeProject {
+                return Err(format!(
+                    "{name} is shared with your team in {}: remove it there.",
+                    server.file.display()
+                ));
+            }
+            if let Some(agent) = owner(server.source) {
+                push(
+                    &mut places,
+                    (
+                        agent,
+                        server.project.as_deref().map_or(Place::Everywhere, just_me),
+                    ),
+                );
+            }
+        }
+    }
+    Ok(places)
+}
+
 /// Removes item `key` from every agent and project: through each agent's own commands.
 pub(crate) fn remove(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
     match target(key)? {
@@ -1197,31 +1235,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
             Ok(())
         }
         Target::Server(name) => {
-            let mut places: Vec<(Agent, Place)> = Vec::new();
-            for project in
-                std::iter::once(None).chain(ctx.projects.iter().map(|p| Some(p.as_path())))
-            {
-                for server in ctx.read(project).servers {
-                    if server.name != name || server.plugin.is_some() {
-                        continue;
-                    }
-                    if server.source == Source::ClaudeProject {
-                        return Err(format!(
-                            "{name} is shared with your team in {}: remove it there.",
-                            server.file.display()
-                        ));
-                    }
-                    if let Some(agent) = owner(server.source) {
-                        push(
-                            &mut places,
-                            (
-                                agent,
-                                server.project.as_deref().map_or(Place::Everywhere, just_me),
-                            ),
-                        );
-                    }
-                }
-            }
+            let places = server_places(ctx, &name)?;
             ctx.each(None, |adapter| {
                 let mut steps = Vec::new();
                 for (_, place) in places.iter().filter(|(agent, _)| *agent == adapter.agent()) {
