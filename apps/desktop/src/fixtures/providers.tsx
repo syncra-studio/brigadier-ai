@@ -11,7 +11,8 @@ import { account, snapshot, status as agentStatus, window as quotaWindow } from 
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
 import { accounts, overviews, projects, usageView } from "@/fixtures/providersData";
-import type { AgentConnect, ProviderOverview, Request } from "@/ipc/generated";
+import type { AgentConnect, OrderReason, ProviderOverview, Request } from "@/ipc/generated";
+import { accountLabel, oneRowPerAccount } from "@/state/accounts";
 import { openSettings } from "@/state/actions";
 import { applyConnectEvents } from "@/state/connect";
 import { useApp } from "@/state/store";
@@ -85,18 +86,32 @@ const picks = ["/opt/elsewhere/claude", "/opt/homebrew/bin/claude"];
 /** The accounts the daemon answers with; a step adds this computer's login again. */
 let listed = accounts;
 
-// Each limit resets: 5-hour ones in 3h, the rest in 1d 23h.
+// Each limit resets: 5-hour ones in 3h, the rest in 1d 23h. Each account has its routing place
+// and why, as the engine sends them, for the page to leave unsaid.
 const at = Date.now();
-listed = accounts.map((view) => ({
-  ...view,
-  quota: view.quota && {
-    ...view.quota,
-    windows: view.quota.windows.map((window) => ({
-      ...window,
-      resetsAtMs: at + (window.windowMinutes === 300 ? 179.5 : 2850.5) * 60_000,
-    })),
-  },
-}));
+const reasons: OrderReason[] = [
+  { kind: "nearerLimit", window: "Weekly", usedPercent: 93 },
+  { kind: "resetsSooner", resetsAtMs: at + 3_600_000 },
+  { kind: "added" },
+  { kind: "last" },
+];
+const places = new Map<string, number>();
+listed = accounts.map((view) => {
+  const place = (places.get(view.account.provider) ?? 0) + 1;
+  places.set(view.account.provider, place);
+  return {
+    ...view,
+    place,
+    reason: reasons[(place - 1) % reasons.length]!,
+    quota: view.quota && {
+      ...view.quota,
+      windows: view.quota.windows.map((window) => ({
+        ...window,
+        resetsAtMs: at + (window.windowMinutes === 300 ? 179.5 : 2850.5) * 60_000,
+      })),
+    },
+  };
+});
 useApp.setState({ accounts: { accounts: listed, warnings: [] } });
 
 // A newer Claude Code is out.
@@ -203,10 +218,17 @@ const escape = async () => {
   await fixtureInput({ type: "key", key: "Escape" });
   await pause(150);
 };
-const orderRows = () => all('[data-slot="account-row"]').map((row) => ({
-  name: text(row.querySelector('[data-slot="account-title"]')),
-  order: text(row.querySelector('[data-slot="account-order"]')),
-}));
+/** The rows' titles in page order, each account's routing place after merging, and anything that reads as the order. */
+const orderRows = () => ({
+  rows: titles(),
+  places: oneRowPerAccount(listed).map(({ view }) => [accountLabel(view), view.place]),
+  ...orderShown(),
+});
+/** Whatever on the account rows says their routing order. */
+const orderShown = () => ({
+  orderSlots: all('[data-slot="account-order"]').length,
+  rowTexts: all('[data-slot="account-row"]').map(text),
+});
 const locationRow = () => document.querySelector('[data-slot="agent-location"]') ?? document;
 /** Every card's look, and the first switch that is on's, for the look drive. */
 const cards = () => all('[data-slot="settings-card"]').map(surface);
@@ -282,8 +304,8 @@ function Fixture() {
         openClaude();
         await pause(300);
         seen.merged = orderRows();
-        // The engine now puts golban first despite its later reset: the page follows its
-        // order, and collapsing hostpapa's duplicate leaves no gap in the places.
+        // The engine now puts golban first despite its later reset: the page keeps this
+        // computer's login first, and collapsing hostpapa's duplicate leaves no gap in the places.
         listed = [
           { ...hostpapa, place: 2, reason: { kind: "added" }, inUse: false },
           { ...golban, place: 1, reason: { kind: "nearerLimit", window: "Weekly", usedPercent: 95 }, inUse: true },
@@ -437,6 +459,7 @@ function Fixture() {
         seen.updateEnabled = button("Update")?.disabled === false;
         seen.location = text(document.querySelector('[data-slot="agent-location"]'));
         seen.rows = rows();
+        Object.assign(seen, orderShown());
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
         seen.models = all('[data-slot="provider-model"]').map(text);
         // Reveal the second account's email only.

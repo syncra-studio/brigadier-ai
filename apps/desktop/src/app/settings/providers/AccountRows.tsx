@@ -13,7 +13,7 @@ import {
 } from "@/components/overlays";
 import { ChevronDown, ChevronRight, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
 import { UsageBar } from "@/components/shared";
-import type { AccountView, OrderReason, ProviderKind, QuotaWindow } from "@/ipc/generated";
+import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown, formatTime } from "@/lib/format";
@@ -88,8 +88,8 @@ export function signInFinished(
 }
 
 /**
- * One agent's accounts on its Settings › Providers page, inside a card the caller draws,
- * in routing order, ending in a link that adds another and shows its sign-in.
+ * One agent's accounts on its Settings › Providers page, inside a card the caller draws (the
+ * computer's own login first), ending in a link that adds another and shows its sign-in.
  */
 export function ProviderAccounts({
   provider,
@@ -151,7 +151,7 @@ export function ProviderAccounts({
       (view) =>
         !(active?.fresh && view.account.account === active.id && view.status?.loggedIn !== true),
     ),
-  ).toSorted((a, b) => (a.view.place ?? Infinity) - (b.view.place ?? Infinity));
+  );
   const anySignedIn = shown.some(({ view }) => view.status?.loggedIn === true);
 
   const close = () => {
@@ -303,7 +303,6 @@ function AccountRow({
   // Only an account with limits read opens (signed out, or usage not read yet: nothing to show).
   const opens = windows.length > 0;
   const shown = opens && open;
-  const order = signedIn ? orderLine(view.place, view.reason, now) : null;
 
   const eye = hidden && (
     <Button
@@ -449,7 +448,6 @@ function AccountRow({
               </Fragment>
             ))}
           </span>
-          {order && <span data-slot="account-order" className={cn(ROW_LINE, "truncate")}>{order}</span>}
           {view.error && <span className="text-destructive text-xs">{view.error}</span>}
           <ErrorLine error={action.error} />
         </div>
@@ -486,32 +484,6 @@ function AccountRow({
       )}
     </div>
   );
-}
-
-const PLACES = ["First", "Second", "Third"];
-
-/** Where an account stands in the engine's routing order, and why (D23). */
-export function orderLine(place: number | null, reason: OrderReason | null, now: number): string | null {
-  if (reason === null) return null;
-  const nth = place === null ? null : (PLACES[place - 1] ?? `${place}th`);
-  switch (reason.kind) {
-    case "picked":
-      return "Picked with Use: work goes here first";
-    case "resetsSooner":
-      return `${nth} · weekly limit resets soonest, in ${formatCountdown(reason.resetsAtMs, now)}`;
-    case "nearerLimit":
-      return `${nth} · nearest its ${reason.window.toLowerCase()} limit, ${Math.round(reason.usedPercent)}% used`;
-    case "added":
-      return `${nth} · added earlier`;
-    case "last":
-      return place === 1 ? "First" : `${nth} · after the others`;
-    case "atLimit":
-      return reason.readyAtMs === undefined
-        ? "At its limit: waits for its reset"
-        : `At its limit: back in ${formatCountdown(reason.readyAtMs, now)}`;
-    case "signedOut":
-      return null;
-  }
 }
 
 /** A closed row's figure: its fullest limit's name, a short bar and the share used. */

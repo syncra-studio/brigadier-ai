@@ -9,6 +9,17 @@ import { renderFixtureLive } from "@/fixtures/headless";
 const day = (rows: { limits: string[] }[]) =>
   rows.map((row) => ({ ...row, limits: row.limits.map((limit) => limit.replace(/Resets (?!in ).+$/, "Resets <day time>").replace(/(Resets in \d+h) \d+m$/, "$1 <min>")) }));
 
+/**
+ * The user asked for no "First", "Second", "nearest its weekly limit, 93% used" on the accounts:
+ * no order slot on any row, and no row reads as the routing order.
+ */
+const noOrderLine = (seen: Record<string, unknown>) => {
+  assert.equal(seen.orderSlots, 0);
+  for (const row of seen.rowTexts as string[]) {
+    assert.doesNotMatch(row, /First ·|Second ·|Third ·|nearest its|resets soonest|after the others/);
+  }
+};
+
 // The real page in Chromium over a faked daemon: the agents with how each stands and its
 // busiest limit, a row's switch that doesn't open it, an agent's page (Update when a newer CLI is
 // out, Location's Change keeping only a real binary, every limit with when it resets, the models),
@@ -85,6 +96,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
       inUse: false,
     },
   ]);
+  // Every account here has a routing place and why, and the page shows neither.
+  noOrderLine(seen);
   assert.equal(seen.eyes, 3);
   assert.deepEqual(seen.models, [
     "Opus 5.5opus  ·  defaultFrontier · Best for writing code, reviewing changes and resolving conflicts",
@@ -194,19 +207,17 @@ const view = (name: string, email: string): AccountView => ({
   reason: null,
 });
 
-test("account rows keep First after merging a login and follow routing order without gaps", { timeout: 60000 }, async (t) => {
+// A login merged with its added twin keeps the earlier routing place and the places have no gap;
+// the rows stay this computer's login first whatever the routing order, and never say it.
+test("account rows keep the login first, merge its twin's place without gaps, and show no order", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "providers.html?drive=order", "providers-result", 30000);
-  const seen = JSON.parse(dump) as Record<string, unknown>;
-  assert.deepEqual(seen.merged, [
-    { name: "hostpapa", order: "First · added earlier" },
-    { name: "golban", order: "Second · after the others" },
-  ]);
-  assert.deepEqual(seen.routed, [
-    { name: "golban", order: "First · nearest its weekly limit, 95% used" },
-    { name: "hostpapa", order: "Second · added earlier" },
-    { name: "Limited", order: "At its limit: waits for its reset" },
-    { name: "Signed out", order: "" },
-  ]);
+  const seen = JSON.parse(dump) as Record<string, Record<string, unknown>>;
+  assert.deepEqual(seen.merged!.rows, ["hostpapa", "golban"]);
+  assert.deepEqual(seen.merged!.places, [["hostpapa", 1], ["golban", 2]]);
+  noOrderLine(seen.merged!);
+  assert.deepEqual(seen.routed!.rows, ["hostpapa", "golban", "Limited", "Signed out"]);
+  assert.deepEqual(seen.routed!.places, [["hostpapa", 2], ["golban", 1], ["Limited", null], ["Signed out", null]]);
+  noOrderLine(seen.routed!);
 });
 
 // Renaming never shows an email the row hides: the editor starts empty for an account named by
