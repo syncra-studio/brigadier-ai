@@ -28,6 +28,20 @@ from scoring import definite_rejection, invoice_decision, recall_rows
 spec = importlib.util.spec_from_file_location("live_smoke", SRC / "tools/live-smoke/smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
+# The daemon binds `<data>/run/brigadierd.sock` only within 100 bytes (MAX_SOCKET_PATH in
+# crates/sandbox/src/paths.rs); a longer path moves the socket where smoke.Ipc never looks.
+SOCKET_TAIL = "/data/run/brigadierd.sock"
+MAX_SOCKET_PATH = 100
+
+
+def scratch_root(prefix, tmp=None):
+    """A fresh scratch root under /tmp whose daemon socket path fits, the prefix cut if needed."""
+    tmp = Path("/tmp").resolve() if tmp is None else tmp
+    suffix = "-" + secrets.token_hex(3)
+    room = MAX_SOCKET_PATH - len(str(tmp)) - 1 - len(SOCKET_TAIL) - len(suffix)
+    return tmp / (prefix[:room] + suffix)
+
+
 ITEMS = {
     "rule": ("standing rule applied", [r"Since 0\.5:"]),
     "exception": ("correction applied in exporters", [r"Exporter since 0\.5:"]),
@@ -87,7 +101,7 @@ class Battery:
         self.args = args
         from evidence import purge
         purge()
-        self.root = Path("/tmp").resolve() / (args.scratch_prefix + "-" + secrets.token_hex(3))
+        self.root = scratch_root(args.scratch_prefix)
         self.root.mkdir()
         self.data = self.root / "data"
         self.repo = self.root / "repo"

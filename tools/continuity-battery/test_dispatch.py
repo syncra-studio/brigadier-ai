@@ -173,6 +173,47 @@ class Presets(unittest.TestCase):
                 experiment.main(["--provider", "claude", "--arms", "native@codex-default",
                                  "--dry-run", "--report", str(report)])
 
+    def test_every_cell_scratch_root_keeps_the_daemon_socket_where_ipc_looks(self):
+        # Pilot run 40109608115: the `-codex-default` ids made the socket path 102/107 bytes, so
+        # the daemon bound its /tmp fallback and every P1 long native cell timed out at startup.
+        cells = [cell for preset in ("stage0", "pilot") for cell in dispatch.plan(preset)["matrix"]["include"]]
+        for tmp in (Path("/tmp"), Path("/private/tmp")):
+            for cell in cells:
+                cmd = dispatch.command(cell, Path("/debug/brigadierd"), Path("/public"))
+                prefix = cmd[cmd.index("--scratch-prefix") + 1]
+                root = battery.scratch_root(prefix, tmp)
+                self.assertLessEqual(len(str(root) + battery.SOCKET_TAIL), battery.MAX_SOCKET_PATH, cell["id"])
+                self.assertEqual(root.parent, tmp)
+                self.assertTrue(prefix.startswith(root.name[:-7]))
+        short = battery.scratch_root("continuity-battery", Path("/tmp"))
+        self.assertRegex(short.name, r"^continuity-battery-[0-9a-f]{6}$")
+
+    def test_debug_daemon_answers_on_a_long_cell_scratch_root(self):
+        import shutil
+        import subprocess
+        if not (battery.SRC / "target/debug/brigadierd").is_file():
+            self.skipTest("needs a debug daemon")
+        prefix = "continuity-experiment-p1-codex-recall-long-native-bare-codex-default-1"
+        root = battery.scratch_root(prefix)
+        data = root / "data"
+        data.mkdir(parents=True)
+        env = {k: os.environ[k] for k in ("HOME", "PATH") if k in os.environ}
+        proc = subprocess.Popen([str(battery.SRC / "target/debug/brigadierd"), "--foreground", "--data-dir", str(data)],
+                                env={**env, "BRIGADIER_DATA_DIR": str(data), "BRIGADIER_IDLE_EXIT_SECS": "30"},
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            ipc, deadline, catalog = battery.smoke.Ipc(str(data)), time.monotonic() + 60, None
+            while catalog is None and time.monotonic() < deadline and proc.poll() is None:
+                try:
+                    catalog = ipc.call({"method": "getCatalog"}, timeout=3)
+                except (OSError, RuntimeError, ConnectionError):
+                    time.sleep(0.5)
+            self.assertIsNotNone(catalog)
+        finally:
+            proc.terminate()
+            proc.wait(15)
+            shutil.rmtree(root)
+
     def test_missing_credentials_skip_without_subprocess(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as scratch, patch("dispatch.subprocess.run") as launch:
             cell = dispatch.plan("stage0")["matrix"]["include"][0]
