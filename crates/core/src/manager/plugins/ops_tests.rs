@@ -276,6 +276,7 @@ fn off_everywhere_also_turns_it_off_where_a_project_switches_it_on_over_every_pr
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     assert_eq!(
         lines(&removal(&ctx, adapter(Agent::Codex), "tidy@brigadier")),
@@ -314,6 +315,7 @@ fn an_agents_own_item_off_everywhere_can_be_switched_on_again() {
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     assert_eq!(
         plugin_id_of(&ctx, Agent::Codex, "kit").as_deref(),
