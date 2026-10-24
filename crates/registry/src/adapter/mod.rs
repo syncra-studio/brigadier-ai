@@ -192,6 +192,13 @@ pub trait AgentAdapter: Send + Sync {
     /// Whether plugin `id` is installed for every project (on or off there).
     fn installed(&self, roots: &Roots, id: &str) -> bool;
 
+    /// Where plugin `id` has an install of its own for one project only, which
+    /// [`Self::remove_plugin`] at that place takes away. None by default: the CLI installs for
+    /// every project and only switches it per project.
+    fn installed_in_projects(&self, _roots: &Roots, _id: &str) -> Vec<Place> {
+        Vec::new()
+    }
+
     /// Reads local marketplace `name` again, when the CLI keeps a copy of it.
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall>;
 

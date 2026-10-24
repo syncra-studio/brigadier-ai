@@ -316,6 +316,8 @@ struct Install {
     root: PathBuf,
     /// A `project` or `local` install's project (or, in an older record, its own folder).
     project: Option<PathBuf>,
+    /// A `project` install: the form the project commits.
+    shared: bool,
 }
 
 /// Whether Claude Code has plugin `id` installed for every project (its user scope), on or off.
@@ -323,6 +325,16 @@ pub(crate) fn claude_installed(roots: &Roots, id: &str) -> bool {
     claude_installs(roots)
         .iter()
         .any(|install| install.id == id && install.project.is_none())
+}
+
+/// Where Claude Code has plugin `id` installed for one project only: each project's folder,
+/// and whether it is a `project` (shared) install rather than a `local` one.
+pub(crate) fn claude_installed_in_projects(roots: &Roots, id: &str) -> Vec<(PathBuf, bool)> {
+    claude_installs(roots)
+        .into_iter()
+        .filter(|install| install.id == id)
+        .filter_map(|install| Some((install.project?, install.shared)))
+        .collect()
 }
 
 /// Whether Codex has plugin `id` installed (its cache holds a version), on or off.
@@ -361,7 +373,8 @@ fn claude_installs(roots: &Roots) -> Vec<Install> {
                 continue;
             };
             let root = stored_path(&roots.home, path);
-            let project = match entry.get("scope").and_then(Value::as_str) {
+            let scope = entry.get("scope").and_then(Value::as_str);
+            let project = match scope {
                 // An older record without `projectPath`: the project holding the install.
                 Some("project" | "local") => Some(
                     entry
@@ -384,6 +397,7 @@ fn claude_installs(roots: &Roots) -> Vec<Install> {
                 id: id.clone(),
                 root,
                 project,
+                shared: scope == Some("project"),
             });
         }
     }

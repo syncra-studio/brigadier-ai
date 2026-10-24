@@ -1071,6 +1071,13 @@ fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Vec<Step> {
             );
         }
     }
+    // An install of a project's own goes too: turned off, it would stay behind as that
+    // project's item. Only where the folder still is, for the CLI runs in it.
+    for place in adapter.installed_in_projects(ctx.roots, id) {
+        if matches!(&place, Place::Project { path, .. } if path.is_dir()) {
+            steps.extend(adapter.remove_plugin(id, &place).unwrap_or_default());
+        }
+    }
     if adapter.installed(ctx.roots, id) {
         steps.extend(
             adapter

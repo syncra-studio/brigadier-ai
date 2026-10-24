@@ -242,6 +242,37 @@ fn off_everywhere_also_turns_it_off_where_a_project_turned_it_on() {
 }
 
 #[test]
+fn remove_also_takes_an_install_a_project_has_of_its_own() {
+    let fx = Fixture::new("remove-local", None, None);
+    let dir = fx.library.entry("tidy").unwrap().dir;
+    write(
+        &fx.home.join(".claude/plugins/installed_plugins.json"),
+        &serde_json::json!({"version": 2, "plugins": {"tidy@brigadier": [
+            {"scope": "local", "projectPath": fx.project, "installPath": dir, "version": "1.0.0"}
+        ]}})
+        .to_string(),
+    );
+    let projects = [fx.project.clone()];
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &|_, _| {},
+    };
+    let steps = removal(&ctx, adapter(Agent::Claude), "tidy@brigadier");
+    assert_eq!(
+        lines(&steps).last().unwrap(),
+        "claude plugin uninstall tidy@brigadier --scope local --json"
+    );
+    let Some(Step::Run(call)) = steps.last() else {
+        panic!("{steps:?}");
+    };
+    assert_eq!(call.cwd.as_deref(), Some(fx.project.as_path()));
+}
+
+#[test]
 fn an_agents_own_skill_or_another_apps_server_goes_through_use_everywhere() {
     let fx = Fixture::new("own", None, None);
     let projects = [fx.project.clone()];

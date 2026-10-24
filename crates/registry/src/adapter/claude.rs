@@ -90,6 +90,13 @@ impl AgentAdapter for Claude {
         crate::plugins::claude_installed(roots, id)
     }
 
+    fn installed_in_projects(&self, roots: &Roots, id: &str) -> Vec<Place> {
+        crate::plugins::claude_installed_in_projects(roots, id)
+            .into_iter()
+            .map(|(path, shared)| Place::Project { path, shared })
+            .collect()
+    }
+
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall> {
         Some(CliCall::new(PROGRAM, &["plugin", "marketplace", "update"]).arg(name))
     }
