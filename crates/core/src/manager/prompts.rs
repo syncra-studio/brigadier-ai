@@ -35,9 +35,11 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     text
 }
 
-/// The standing instructions' line on workers. A worker goes without it: `brigadier start`
-/// refuses a worker's own workers, and it has no brigade skill.
-pub(crate) const WORKERS_LINE: &str = "You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.";
+/// The standing instructions' line on orchestrating (run2-D23, D24, D27, D43): what the session
+/// does itself, what goes to its workers, and how it replies. A worker goes without it:
+/// `brigadier start` refuses a worker's own workers, it has no brigade skill, and it keeps
+/// full reports (run2-D27).
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -167,7 +169,7 @@ macro_rules! brigadier_calls {
 macro_rules! chat_thread {
     () => {
         concat!(
-            "This Chat is a thread without a project: it works in its own folder (your working folder), with your CLI's own shell and tools at the level the user chose. It may run workers of its own through `brigadier start` when the job calls for them, in a repository the user names (`--repo <path>`) or in a folder of their own; the brigade skill says how.
+            "This Chat is a thread without a project: it works in its own folder (your working folder), with your CLI's own shell and tools at the level the user chose. It runs workers of its own through `brigadier start`, in a repository the user names (`--repo <path>`) or in a folder of their own; the brigade skill says how.
 - ",
             clarify_rule!(),
             " ",
@@ -437,6 +439,17 @@ mod tests {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
+        // The session orchestrates and replies short; no subagent split (run2-D23, D24, D27,
+        // D43). The line goes to sessions and Chats only ([`WORKERS_LINE`]).
+        for words in [
+            "You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test.",
+            "Bigger work, builds, tests and research go to workers",
+            "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
+        ] {
+            assert!(WORKERS_LINE.contains(words), "{words}");
+        }
+        assert!(!STANDING_INSTRUCTIONS.contains("subagents"));
+        assert!(!STANDING_INSTRUCTIONS.contains("when the job calls for them"));
         // One entry per thing settled, never a progress log (the w123 bench: Codex logged 3.6
         // entries per small task under "the moment something is settled").
         for words in [

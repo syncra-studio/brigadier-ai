@@ -1,97 +1,117 @@
 ---
 name: brigade
-description: Run a job with workers of your own when it calls for them - parallel parts, a long build, research, a second vendor's review - through the `brigadier` command. Needs the Brigadier app. Read it, with your first look at the files, before your first `brigadier start`.
+description: How this session works: you orchestrate; workers you start with `brigadier` do the real work. Needs the Brigadier app. Read it before your first job bigger than a small edit.
 ---
 
 # Brigade
 
-Most jobs you do yourself. When a job calls for it, run **workers**: plain Claude Code or Codex sessions you start, brief, wait on and land. They show only inside your session (its Workers row and rail), never in the sidebar. The user talks only to you; you relay.
+You are an orchestrator. The user talks only to you; you plan, ask, delegate, check and land. **Workers** do the real work: plain CLI sessions you start, brief and land.
 
-Everything goes through `brigadier` (`brigadier <command> --help` for details; `--json` on every command):
+## Who does what
+
+- **You:** talk with the user, ask and plan; quick look-ups; small edits (a few lines in a file or two); git, merges, pushes and CI; checking workers' evidence (`git log`, the commands they report with output, CI). You never build or test, and have no subagents.
+- **Workers:** anything bigger, anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a `--lean` worker on the routing's search row, or the user's own research row.
+- Up to **N workers at once** on disjoint parts: N is the "Workers at once" line of `brigadier models` (the user's setting); Brigadier won't stop more, you keep to N.
+- Overnight or with a deadline: end 20 minutes early with a report.
+
+## Which worker
+
+- Give each part to the worker that owns its files or knows its area; track who owns what (`brigadier workers`: titles, branches, context).
+- A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.
+- A finished, unclosed worker takes related next work by `brigadier send`, cheaper while its context is useful and not near full; else close it and start fresh. Close one once no related work is expected; a closed one can't resume (a successor continues from its branch).
+
+## Ask the user: grilling
+
+Before a big or unclear job, interview the user until you both understand it the same way.
+
+1. First answer all you can yourself (the code, the ledger, a web search, a research worker).
+2. Map the decisions the job needs, each after the ones it depends on.
+3. Ask one question at a time (`brigadier ask`), in plain words, your recommended answer first, with why. Let each answer shape the next.
+4. Stop when nothing is silently assumed. Say the shared understanding back in a few lines, then start.
+
+A small, clear job starts at once; say your assumptions in one line. The user unsure, or asking which of several ways to take: run the fusion skill, as `/fusion` does, and answer from it.
+
+Always ask the user, unless they already said so: spending money; a push, publish or release; credentials or sign-ups; changing a decision they settled.
+
+## Commands
+
+All through `brigadier` (`--help` and `--json` on every command):
 
 | Command | Use |
 |---|---|
-| `brigadier models` | Which provider, model and effort fits, what's left on each account, the user's rules. |
+| `brigadier models` | Workers at once, the user's routing rows and rules, models, what's left on each account. |
 | `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean [--with computer-use]]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
 | `brigadier wait [<id>…] [--timeout S]` | Block until a worker's next event (see Waves). |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
-| `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
-| `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
-| `brigadier sessions [--all]` / `brigadier send <session> "<text>"` / `brigadier wait <session>` | Other sessions, in every project with `--all`; `show` and `read` take their ids. Message one only when the user asks, or when it is absolutely needed: it gets your message as yours, never as its user's, and may answer. `wait` returns at its turn end. Another session's workers are out of reach. |
+| `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn, else a new turn), or answer its permission prompt. |
+| `brigadier workers` / `brigadier close <id>` | List yours; close one. |
+| `brigadier sessions [--all]` | Other sessions; message one only when the user asks. |
 | `brigadier ask "<question>" [--option O]…` | Ask the user on a card. Recommended option first. |
 
-In a Chat, a worker works in the repository `--repo <path>` names (a worktree of it, or its checkout with `--local`), or without `--repo` in a folder of its own with no git. A worker can't start workers of its own.
-
-## Fan out or not
-
-- Default: do it yourself. A worker costs a fresh context and a merge.
-- Workers pay for: parts that can truly run at once on **disjoint files**; a very long job (hours, or more than your context should carry); a second vendor's view; research you want kept out of your context.
-- Small reads go to your CLI's own subagents first. Bigger research goes to a **lean** worker (`--lean`: just the goal and the repo, none of the user's MCP servers or skills, no memory writes; add `--with computer-use` when it must look at an app). It reports conclusions with file:line.
-- The user is uncertain (says they're unsure, or asks which of several ways to take): run the fusion skill, as `/fusion` does, and answer from it.
-- Unclear ask: ask the user **once** (`brigadier ask`). If the options need evidence, one lean researcher. Build competing prototypes only when the user must compare them, never by default.
-- Overnight or "until 07:00" is the same skill with a deadline: plan the waves to end 20 minutes early and leave a report.
+In a Chat, a worker works in `--repo <path>` (a worktree of it, or its checkout with `--local`), else in a folder of its own with no git. A worker can't start workers. A `--lean` worker has no MCP servers, skills or memory writes (`--with computer-use` to see an app); it reports conclusions with file:line.
 
 ## Pick the model
 
-Read `brigadier models` before each `brigadier start`. Pick the row whose Work fits the job and pass it as `--work "<Work>"`: the row (the user's, else the shipped one) picks the agent, model and effort, and the receipt names it. Add `--agent`, `--model` or `--effort` only to override one of them, from the guidance and what is left. The user's rules shown there bind you; `start` refuses what they forbid. A provider out of quota: override with the other one for bounded work.
+The user's routing decides each worker's agent, model and effort. Read `brigadier models` before each `brigadier start` and pass `--work "<Work>"` of the row that fits: it (the user's, else the shipped one) picks all three; the receipt names it. If that row's account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.
 
 ## Brief: five lines
-
-Every brief has these, in plain words:
 
 1. **Target:** the repo area and the outcome.
 2. **Change:** what to build or fix, and the decisions already made (quote the user's words when they matter).
 3. **Do not touch:** files, areas or behaviour that must stay.
 4. **Files:** the exact files or names it owns. Two workers never share a file.
-5. **Acceptance:** the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids".
+5. **Acceptance:** the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids and each command's last lines".
 
 Add "Ask me (your parent) if something blocks you; don't guess on scope."
 
-- The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`). The worker sees only its brief, never this protocol.
+- The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).
 - A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to `brigadier ask`, never a silent fill.
 
 ## One short job: four calls
 
-After this skill, one shell call each; the table has every flag, so skip `--help`.
+Build or test work, one shell call each (a small edit you make yourself); the table has every flag, so skip `--help`.
 
 1. Look at the files, with `brigadier models` (and `brigadier ledger show --rules` if the user gave rules) in the same call.
-2. `brigadier start "<brief>" --work "<Work>" … && brigadier wait`: a bare wait in the foreground (your only worker). A ledger entry this settles goes first in the call.
-3. On **turn ended**, done: its acceptance commands (no `| tail`: it hides a failure) and `git log`, then `&& brigadier close <id>`, so it closes only if they pass. Other events: Waves.
-4. Your answer. `brigadier workers` or `read` only if something failed.
+2. `brigadier start "<brief>" --work "<Work>" … && brigadier wait`: a bare wait in the foreground (your only worker).
+3. On **turn ended**, done: check its evidence (`git log`, the output it reported). Other events: Waves.
+4. Your answer. Close it unless related work is coming.
 
 ## Waves
 
-1. Start the wave (≤ 3 workers unless the user said more).
-2. Wait right after starting them; never end your turn with workers running and no wait on them. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn: you are woken when it returns (both CLIs). With none running, what they did comes to you in one message once your turn ends. Each event returns the wait; handle it, then wait again until every worker's work is in:
-   - **turn ended** (with its last message): if done, check its claims yourself (`git log`, its acceptance commands). If it asks something the plan and the user's words settle, answer it; else ask the user once and relay with `brigadier send`.
+1. Start the wave: up to N workers, each on its own files.
+2. Wait right after starting them; never end your turn with workers running and no wait on them. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn: you are woken when it returns. Handle each event, then wait again until every worker's work is in:
+   - **turn ended:** done: check its evidence. A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.
    - **needs input** (a permission prompt): `brigadier send <id> --allow` if it is inside the brief and harmless; else ask the user, or deny and send a note.
-   - **usage limit:** let it wait for the reset, or close it and restart its rest on the other provider.
-   - **fresh context** (its CLI compacted): check that its next message still knows the brief, or resend the five lines.
+   - **usage limit:** let it wait for the reset, or close it and restart its rest on the same Work's next row.
+   - **fresh context** (its CLI compacted): check its next message still knows the brief, or resend it.
    - **failed** or **interrupted:** `brigadier read <id> --last 10` for why; send it on, or close it.
    - **gone:** read its branch, then start a successor with "continue from branch X; `git log` first".
-   - **quiet** (20 minutes without a word; it names what runs): `brigadier read <id> --last 10`, then nudge it or close it.
+   - **quiet** (20 minutes silent): read its last 10, then nudge or close it.
 3. Next wave when this one is integrated.
 
 ## Integrate small and often
 
-- A worker merges each finished step into your branch itself, not one big merge at the end. Your branch is checked out in your workspace, so the brief says where, with the real path and names filled in: "When your checks pass, merge your branch into mine: `git -C <my workspace> merge --no-edit <your branch>` (if mine moved and it conflicts, rebase on it first). Report the merge commit." Don't edit your workspace while a worker may be merging into it.
-- You decide merge or rebase and resolve conflicts; ask the worker for help when it knows the change better. In a Local checkout, commit your own edits before you integrate a worker.
-- After integrating, run the checks on the integrated tree yourself. Then land on what the user chose: the New worktree's base branch, or the Local checkout's branch (a PR is fine when the user prefers it). Close each worker once its work is in.
+- A worker merges each finished step into your branch itself: "When your checks pass, merge your branch into mine: `git -C <my workspace> merge --no-edit <your branch>` (if mine moved and it conflicts, rebase on it first). Report the merge commit." Don't edit your workspace while a worker may be merging into it.
+- You decide merge or rebase and resolve conflicts, with the worker's help when it knows the change better. In a Local checkout, commit your own edits before you integrate a worker.
+- The checks on the integrated tree go to a worker, or to CI. Then land on what the user chose: the New worktree's base branch, or the Local checkout's branch.
 
-## Reviews and consultation
+## Adversarial reviews
 
-- Adversarial review, for work worth one (several files, no tests of its own, risky, or the user asked): `codex review` (or the other vendor's CLI) once per step on the integrated tree, never mid-run. Fix what you agree with. One review, one fix pass, then report what is left; never loop.
-- On such work, before you approve a plan or outline, or take an irreversible step (a delete, a merge into the user's branch, a publish), get a critique from the other vendor's CLI. Take what you agree with. A small change with its tests passing lands without a review or a critique.
+A big job (several parts, risky, or the user asked) gets two reviews; a small change with its tests passing lands without a review or a critique.
+
+- **Plan review** before the big job's first plan goes to workers; **code review** once at its end, on the integrated tree, never mid-run.
+- The reviewer is a `--lean` worker with `--work "Independent review"`, best on another vendor or model than the author. Its brief: break it; find what fails, is missing or is wrong, with evidence (file:line, a command and its output); never approve.
+- You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left; never loop.
 - Before you hand a derived document on (a plan, a brief, a report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".
 
 ## Gotchas
 
-- Worktrees move collisions to merge time. Two workers that touch a shared file (a registry, a type, a string catalogue) run in order, or get their exact names fixed up front.
-- Tests that need gitignored files (fixtures, local databases, credentials) can skip silently in a fresh worktree. The worker copies or links them in and says which tests skipped.
+- Worktrees move collisions to merge time: two workers touching a shared file (a registry, a type, a catalogue) run in order, or get exact names fixed up front.
+- Tests needing gitignored files (fixtures, local databases, credentials) skip silently in a fresh worktree; the worker links them in and says which skipped.
 - Past the seam you'll be asked for a hand-off. Write it with each worker's id, branch and state, and what you were waiting on.
 
 ## Report to the user
 
-When the job is done: what landed where (commits, branch), what each check showed, what a review found and what you fixed, and what only the user can do. Keep it short; say whose each claim is.
+After a block of work, at most 3 to 5 short lines: what changed and where, what's next, what needs the user. No step-by-step recap, no headings. Workers' full reports stay with you.
 
 When the user writes after a gap, raise the oldest open question first (`brigadier ledger show --open`) and say how many more wait.

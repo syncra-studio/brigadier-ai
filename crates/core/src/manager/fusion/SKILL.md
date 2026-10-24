@@ -10,8 +10,8 @@ Use it when the user types `/fusion <question>`, or when they are uncertain: the
 ## Consult
 
 1. Gather the context yourself first: the files that bear on the question (file:line), and the ledger's rules and decisions that touch it (`brigadier ledger show --rules`, `brigadier ledger show --open`).
-2. Run `brigadier models`. Start one consult per installed CLI with quota left, each through its own row: `fusion-claude`, `fusion-codex` (another CLI: `fusion-<agent>`). The row picks the strongest model and effort the user's rules allow. If that model is out of quota or refused, pass the strongest one left with `--model`.
-3. Start them together, lean, with the same brief:
+2. Run `brigadier models`. Start one consult per installed CLI with quota left, each through its own row: `fusion-claude`, `fusion-codex` (another CLI: `fusion-<agent>`). The row (the user's routing, else the shipped one) picks agent, model and effort. If its account is out of quota, take the same Work's next row the rules allow; with none, skip that CLI and say so.
+3. Start them lean, with the same brief, together while "Workers at once" (in `brigadier models`) allows, else one after another:
    `brigadier start "<brief>" --lean --work fusion-claude --title "Fusion · <model>"`
    Run each `brigadier` command as it is, with nothing piped after it (`| tail`): at Accept edits Claude Code asks before such a command.
    The brief has:
@@ -24,12 +24,6 @@ Use it when the user types `/fusion <question>`, or when they are uncertain: the
 
 ## Answer
 
-Write one answer yourself, as your own reply:
-
-- **Recommendation:** the call.
-- **Agreed:** where the models agreed.
-- **Differed:** where they differed, which side you take and why.
-- **Would change the call:** what fact or result would flip it.
-- **Consulted:** the models, by name.
+Write one answer yourself, as your own reply, in 3 to 5 short lines with no headings: the call and why; where the models agreed and where they differed, and which side you take; what fact or result would flip it; the models consulted, by name.
 
 You judge; never count votes. If a consult failed or ran out of quota, say so, and answer from the other plus your own reading.

@@ -60,11 +60,10 @@ async fn every_session_and_chat_on_both_clis_starts_with_the_skill() {
             .find(|(_, spec)| spec.cwd == chat_dir)
             .expect("the Chat started");
         assert_eq!(installed(&chat.1), SKILL);
-        // The instructions point at it; how workers run is its to say.
+        // The instructions make the session an orchestrator and point at the skill (run2-D23).
         let prompt = thread.1.append_system_prompt.as_deref().unwrap();
-        assert!(prompt.contains(
-            "You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how."
-        ));
+        assert!(prompt.contains(crate::manager::prompts::WORKERS_LINE));
+        assert!(prompt.contains("the brigade skill says how"));
         flow.stop().await;
     }
 }

@@ -146,13 +146,15 @@ mod tests {
         // small job's parent about 9 cost units more than a foreground one.
         assert!(SKILL.contains("One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn"));
         // A short job's parent takes four calls, not five or more (the w152/w154 benches): the
-        // reads in one, start and wait in one, checks and close in one, then the answer.
+        // reads in one, start and wait in one, its evidence in one, then the answer. It checks
+        // evidence and builds nothing itself (run2-D24); a small edit it makes itself (run2-D43).
         for line in [
             "## One short job: four calls",
             "so skip `--help`",
             "`brigadier start \"<brief>\" --work \"<Work>\" … && brigadier wait`",
-            "(no `| tail`: it hides a failure) and `git log`, then `&& brigadier close <id>`, so it closes only if they pass",
-            "`brigadier workers` or `read` only if something failed",
+            "check its evidence (`git log`, the output it reported)",
+            "(a small edit you make yourself)",
+            "Close it unless related work is coming.",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
@@ -178,14 +180,61 @@ mod tests {
             assert!(SKILL.contains(line), "{line}");
         }
         assert!(SKILL.contains("the fusion skill"));
-        // Reviews in proportion (the w123 bench: a two-file job tripled in time under them).
+        // Reviews in proportion (the w123 bench: a two-file job tripled in time under them),
+        // adversarial, on a routed reviewer (run2-D33, D35, D36).
         for line in [
-            "- Default: do it yourself.",
-            "Adversarial review, for work worth one (several files, no tests of its own, risky, or the user asked)",
-            "A small change with its tests passing lands without a review or a critique.",
+            "A big job (several parts, risky, or the user asked) gets two reviews; a small change with its tests passing lands without a review or a critique.",
+            "**Plan review** before the big job's first plan goes to workers; **code review** once at its end",
+            "`--lean` worker with `--work \"Independent review\"`",
+            "Its brief: break it",
+            "note each rejected one with its reason",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
+        // The session orchestrates (run2-D23): it does the talking, look-ups, small edits, git
+        // and checking (run2-D24, D43), without subagents of its own (run2-D43); workers do
+        // builds, tests and research, on the routing's rows (run2-D36).
+        for line in [
+            "You are an orchestrator.",
+            "small edits (a few lines in a file or two); git, merges, pushes and CI; checking workers' evidence",
+            "You never build or test, and have no subagents.",
+            "anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a `--lean` worker on the routing's search row",
+            "The user's routing decides each worker's agent, model and effort.",
+            "the same Work's next row the rules allow; never a model or effort the rows don't name",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
+        assert!(!SKILL.contains("- Default: do it yourself."));
+        assert!(
+            !SKILL.contains("codex review"),
+            "reviews go through routing"
+        );
+        // Up to N workers at once, N from `brigadier models` (run2-D31).
+        assert!(SKILL.contains("N is the \"Workers at once\" line of `brigadier models`"));
+        // Which worker gets what, follow-ups and reuse (run2-D38, D42).
+        for line in [
+            "Give each part to the worker that owns its files or knows its area",
+            "A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.",
+            "A finished, unclosed worker takes related next work by `brigadier send`",
+            "Close one once no related work is expected; a closed one can't resume",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
+        // Grilling is part of the brigade (run2-D32): look-ups first, one question at a time
+        // with a recommendation, the shared understanding said back; workers' questions it
+        // answers itself when it can; what the user always decides.
+        for line in [
+            "## Ask the user: grilling",
+            "First answer all you can yourself (the code, the ledger, a web search, a research worker).",
+            "Ask one question at a time (`brigadier ask`), in plain words, your recommended answer first",
+            "Say the shared understanding back in a few lines, then start.",
+            "answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once",
+            "Always ask the user, unless they already said so: spending money; a push, publish or release; credentials or sign-ups; changing a decision they settled.",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
+        // The reply after a block of work (run2-D27).
+        assert!(SKILL.contains("After a block of work, at most 3 to 5 short lines"));
     }
 
     #[test]
@@ -200,8 +249,14 @@ mod tests {
             "Answer only; change no file.",
             "One cross round.",
             "You judge; never count votes.",
+            // Within the worker count, on the routing's rows, in the short reply (run2-D27,
+            // D31, D36).
+            "together while \"Workers at once\" (in `brigadier models`) allows, else one after another",
+            "take the same Work's next row the rules allow; with none, skip that CLI and say so",
+            "in 3 to 5 short lines with no headings",
         ] {
             assert!(FUSION.contains(line), "{line}");
         }
+        assert!(!FUSION.contains("with `--model`"));
     }
 }

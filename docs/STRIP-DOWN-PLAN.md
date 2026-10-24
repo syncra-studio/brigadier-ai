@@ -39,6 +39,9 @@
 > Amended again on 10-24 with the user's D51 (S39: `brigadier why <file>:<line>`).
 > Amended again on 10-24 with run `20261024-1334-long-session-memory`'s run2-D2…D17: long sessions compact in
 > place behind `BRIGADIER_LONG_SESSIONS`, off by default until the test round passes (G12, S37, §9.5).
+> Amended again on 10-24 with the same run's run2-D23…D43: every session and Chat is an orchestrator, like the
+> Delegator; workers do the real work (§1, Teams, §6, S15). Old-run D43 ("Default: do it yourself") is superseded
+> by run2-D23; run2-D25 and run2-D30 (the session's own subagents) by run2-D43.
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -64,17 +67,22 @@ The user's ask: Brigadier sessions should work exactly like plain Claude Code an
 ## 1. The target, on one page
 
 **A session is a plain CLI.** Each tab runs one Claude Code (`claude -p` stream-json) or Codex (`codex
-app-server`) session, in the project's worktree or its Local checkout. The session does the work itself. It
-runs checks (`tools/full-checks.sh`), reviews (`codex review`), `git merge`, `git push` and `gh` as plain
-commands. They show as ordinary tool rows with their real output and exit code. Its subagents, background tasks,
-permission prompts and memory files are the CLI's own.
+app-server`) session, in the project's worktree or its Local checkout. The session is an orchestrator, like the
+Delegator (run2-D23): it talks with the user, plans, looks things up, makes small edits and runs `git merge`,
+`git push`, `gh` and CI as plain commands; builds, tests, research and bigger work go to its workers, and it
+checks their evidence (run2-D24, run2-D43). Reviews run on a routed reviewer worker, not a hard-coded `codex
+review` (run2-D35, run2-D36). Its commands show as ordinary tool rows with their real output and exit code. Its
+background tasks, permission prompts and memory files are the CLI's own; its CLI's own subagents are off, a
+worker's stay on (run2-D43).
 
 **A session gets exactly what the plain CLI gets (G17).** The project's instructions (CLAUDE.md, AGENTS.md),
 the user's MCP servers, skills, and memory as the user's own settings have it. Brigadier strips none of it by
 default. It trims only its own additions: the short standing instructions (§6), no MCP server of its own, the
 one `brigadier --help` pointer, and the always-installed `/brigade` skill, which costs only its description
 until used (G20). The one thing it turns off is the few CLI tools that cannot work inside a Brigadier tab (S17),
-never anything of the user's. Stripping comes back only with measured evidence on our own tasks (§8, item 13).
+never anything of the user's, and, for sessions and Chats only, the CLI's own subagent tool, through the CLI's
+own switch (Claude's `--disallowedTools`, Codex's `agents.enabled=false`) (run2-D43, user, 2026-10-24: "we
+should disabled subagents for the orchestrator and only allow them for the workers"). Stripping comes back only with measured evidence on our own tasks (§8, item 13).
 The user's `disableAllHooks` applies inside Brigadier too, including to Brigadier's own hooks (S37, §8 item 17)
 (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
 The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
@@ -131,8 +139,31 @@ has no app-internal paths.
 Brigadier ships, G19.Q5) plus the `brigadier` worker commands. **Every session and chat is a brigade (G20).** The
 skill is always installed, and one line of the standing instructions says the session may run workers through
 `brigadier` and points at the skill. No one invokes it and there is no "New brigade" UI. The user talks to the
-session as usual; it uses workers only when the job calls for them. Overnight is the same skill with a deadline.
-The engine has no lead, phase or landing protocol.
+session as usual. The session works like the Delegator, an orchestrator (run2-D23, user, 2026-10-24: "it works
+just like the delegator, how an orchestrator works"; supersedes old-run D43 "Default: do it yourself"):
+- It does the talking, asking and planning, quick look-ups, small edits (a few lines in a file or two), git,
+  merges, pushes and CI, and checks workers' evidence (`git log`, their reported commands and output, CI). It
+  never builds or tests itself; the checks on its integrated tree go to a worker or CI (run2-D24, run2-D43).
+- It has no subagents of its own; workers keep theirs (run2-D43, superseding run2-D25 and run2-D30).
+- Anything bigger, anything needing a build or tests, and research beyond a quick look-up go to workers;
+  research to a `--lean` worker on the routing's search row ("Mechanical changes and search", or the user's own
+  research row) (run2-D24, run2-D36, run2-D43; the row choice is proposed: the shipped rows name no research
+  kind).
+- Up to N workers at once on disjoint parts, N the user's "Workers at once" (Settings › Configuration ›
+  Workers, default 3), read through `brigadier models`; Brigadier refuses no further start (run2-D31, G18).
+- It assigns work deliberately, sends a user's follow-up to the worker that owns that area, and reuses a
+  finished, unclosed worker (`brigadier send`) while its context is useful and not near full, which `brigadier
+  workers` shows; a closed worker is not resumed (run2-D38, run2-D42).
+- Grilling is part of the skill: before a big or unclear job it first answers what the code or a web search can,
+  then asks the user one question at a time with a recommended answer, and says the shared understanding back
+  before work starts. It answers its workers' questions itself when the code or a web search settle them, else
+  asks the user; the user always decides spending money, a push or publish they didn't ask for, credentials,
+  and changes to their settled decisions (run2-D32; the always-ask list is proposed, from the Delegator's
+  rules).
+- After a block of work it replies in at most 3–5 short lines: what changed, what's next, what needs the user;
+  workers keep full reports, which only the session reads (run2-D27).
+Every session and normal chat brigades, with no option; side chats stay as they are, with no workers (run2-D26).
+Overnight is the same skill with a deadline. The engine has no lead, phase or landing protocol.
 A Chat is a brigade too and acts almost exactly as a normal session: it starts workers, and its CLI has its own
 shell with the Chat's session folder as cwd, with no `brigadier`-only gate (S28) (user, 2026-10-23: "a chat is
 always a brigade").
@@ -171,7 +202,10 @@ forbids. The shipped default of that file is neutral and forbids nothing; the us
 never Fable, effort ≤ high) live in the user's own file (S33) (user, 2026-10-23, w95 item 16).
 Settings › Routing is the editor of that same file, with the user's preferences; `brigadier start` and the
 skill pass the model and effort those rules name (S32) (user, 2026-10-23: "user should've been able to apply
-his rules"). The old task router and its task rerouting go. Account auto-switch stays, ordered smartly, and
+his rules"). Every worker, reviewer and fusion consult the session starts takes the whole routing choice
+(provider, model and effort) of its Work's row; out of quota, it takes the same Work's next row the rules
+allow, all three fields kept (proposed), never a free override (run2-D36, run2-D39). A worker's own subagents
+are held to the rules by the existing allowlist (`M/models.rs`). The old task router and its task rerouting go. Account auto-switch stays, ordered smartly, and
 "Switch to another agent automatically" comes back: when every account of a provider is out, a running session
 seams to another CLI (S38) (user, 2026-10-23, D23: "if all the claude quota is done, it should fallback to
 another provider if enabled").
@@ -684,6 +718,9 @@ and `run`.
   - Codex: drop `multi_agent`, `multi_agent_v2`, `goals` and `sleep_tool` from `THREAD_FEATURES`
     (`P/codex/mod.rs:131`) and `agents.enabled=false` (:144) for threads. Codex can't hold a subagent to a model
     list; its subagents run Codex models only.
+  - Amended by run2-D43 (10-24): a session's and a Chat's thread starts with its CLI's subagent tool off
+    again (Claude `--disallowedTools Agent,Task`, Codex `-c agents.enabled=false`); workers keep theirs.
+    `Monitor`, `TaskStop`, goals and the sleep tool stay on.
 - **Files:** `P/claude/mod.rs`, `P/codex/mod.rs`, their provider tests.
 - **Done when:**
   - Provider tests assert the thread's tool and feature flags on both CLIs.
@@ -1030,21 +1067,24 @@ and `run`.
     - A worker branches from the parent's current branch (`brigadier start`'s default `--base`).
     - The parent decides merge or rebase and resolves conflicts, asking the worker for help when it knows the
       change better.
-    - The parent integrates, runs its checks on the integrated tree, then merges into what the user chose: the
-      New worktree's base branch, or the Local checkout's branch chosen from the rail.
-  - Research and review guidance (G23). All of it is guidance; nothing is a gate:
-    - Research goes to lean workers (`brigadier start --lean`, S13). Small reads go to the CLI's own subagents
-      first.
+    - The parent integrates; the checks on the integrated tree run in a worker or CI, never in the parent
+      itself (run2-D24); then it merges into what the user chose: the New worktree's base branch, or the Local
+      checkout's branch chosen from the rail.
+  - The orchestrator default, worker reuse, grilling and the short reply as in "Teams" above (run2-D23…D43).
+  - Research and review guidance (G23, as amended by run2-D32…D43). All of it is guidance; nothing is a gate:
+    - Research goes to lean workers (`brigadier start --lean`, S13) on the routing's search row; the session
+      makes only quick look-ups itself (run2-D43).
     - When the user is uncertain, help them: a model fusion gives the best advice or answer, through `/fusion`
       or the thread's own judgement (S36) (user, 2026-10-23: "if the user is uncertain - we help him").
       One lean researcher when the options need evidence. Builders only when prototypes must be compared,
       never by default.
-    - Adversarial review stays, in proportion: `codex review` per step, and the verifier per phase, for work
-      worth one (several files, no tests of its own, risky, or the user asked).
-    - Adversarial consultation on such work before approving a plan or outline, or taking an irreversible step
-      (a delete, a merge into the user's branch, a publish): a critique from the other vendor's CLI; take what
-      you agree with. A small change with its tests passing lands without a review or a critique (the w123
-      bench, 10-23: on a two-file job these rules tripled a Codex thread's time).
+    - Adversarial reviews, like the Delegator's: a big job's first plan gets a plan review before it goes to
+      workers, and the big job a code review once at its end on the integrated tree (run2-D33). The reviewer
+      sets out to break it, with evidence, never to approve; it is a `--lean` worker started with `--work
+      "Independent review"`, best on another vendor or model than the author; the session fixes the valid
+      findings through workers and notes each rejected one with its reason (run2-D35, run2-D36). A small change
+      with its tests passing lands without a review or a critique (the w123 bench, 10-23: on a two-file job
+      these rules tripled a Codex thread's time). "Asking once" (G23) gives way to grilling (run2-D32).
   - A Chat starts workers like any session; a worker of a Chat runs in a folder of its own under the Chat's
     session folder unless the Chat names a repo (S28) (user, 2026-10-23: "a chat is always a brigade").
     A worker can't start workers; it uses its CLI's own subagents (user, 2026-10-23: "workers cant start
@@ -1824,24 +1864,26 @@ Brigadier removes none of it; a `--lean` research worker (S13) is the thread's o
 holds only what every turn of every session needs; text that matters only at a seam travels in the seam
 message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Open kinds, absolute paths and the
 "cites entry ids" line were added on 10-23 (S22b, `research/CONTINUITY.md` §3.1–§3.6) (user, 2026-10-23: "find a fix for this").
-A worker gets the file without its last line: `brigadier start` refuses a worker's own workers, and it has no
-brigade skill (the w152 bench, 10-23).
+A worker gets the file without its last line, the orchestrator line: `brigadier start` refuses a worker's own
+workers, it has no brigade skill (the w152 bench, 10-23), and it keeps full reports (run2-D27). That line makes
+the session an orchestrator with the short reply, with no subagent split (run2-D23, run2-D24, run2-D27,
+run2-D43).
 D63, D58: appended standing text keeps `$NAME` path placeholders and explains shell expansion; every named variable is exported by the session, so the text is identical across sessions.
 
 ```
-This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
-Your session folder is $BRIGADIER_SESSION_DIR. Scratch files go in $TMPDIR (inside it), never in the repo.
-Keep a ledger at $BRIGADIER_LEDGER. `brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time; `brigadier ledger show` reads it back. Write one entry per thing settled (a rule or decision, an open item opened or closed) when it happens, batched with your other tool calls. Never a progress log: not the request restated, a passing check or your own change; a task that settled nothing needs no entry.
-Each entry says its kind and its source (which message, command or file). Kinds:
-- Rule from the user: their exact words, which message, scope (this request / session / project); add "supersedes …", never delete.
+This is a plain Claude Code / Codex session inside Brigadier.
+Your session folder is $BRIGADIER_SESSION_DIR. Scratch goes in $TMPDIR, never the repo.
+Keep a ledger at $BRIGADIER_LEDGER. `brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time; `show` reads it. Write one entry per thing settled (a rule or decision, an open item opened or closed) when it happens, batched with your other tool calls. Never a progress log: not the request restated, a passing check or your own change; a task that settled nothing needs no entry.
+Each entry says its kind and source (message, command, file). Kinds:
+- Rule from the user: exact words, which message, scope (request, session, project); add "supersedes …".
 - Decision: the user's words and what they answered (the option's text, not just "A"), or yours marked "I decided"; keep the sentence that defines it, and the reason.
 - Exact identifier (hash, absolute path:line, number with units, id) · Failed check (command, exact error line, fixed or not) · Ruled out (what, why).
 - Open: a promise, or a question waiting on the user; `brigadier ledger close <id>` when it is done.
-- Learned from reading: file:line and a one-line finding, never a copy.
+- Learned: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
 A plan or brief built from the ledger cites entry ids; mark lines of your own "proposed". Tell the user each "I decided" that changes what they asked.
-For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `brigadier ask`.
-You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.
+Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `brigadier ask`.
+You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.
 ```
 
 **Seam text (not standing).** S22 sends the first part as the seam nudge; the successor's bootstrap carries the
