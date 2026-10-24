@@ -2646,27 +2646,29 @@ while True: time.sleep(0.03)
         let platform = flow.manager.runtime.platform().clone();
         let parent_file = flow.repo.join("parent.pid");
         let detached_file = flow.repo.join("detached.pid");
+        let reaped_file = flow.repo.join("parent.reaped");
         let mut spec = flow.manager.runtime.cli_env().spec(Path::new("python3"));
         // The leader reaps its child, so an exited parent leaves no zombie behind.
         spec.args = vec![
             "-c".into(),
             r#"
 import os, sys, time
-if os.fork() == 0:
+parent = os.fork()
+if parent == 0:
     if os.fork() == 0:
         os.setsid()
         with open(sys.argv[2], 'w') as f: f.write(str(os.getpid()))
     else:
         with open(sys.argv[1], 'w') as f: f.write(str(os.getpid()))
     while True: time.sleep(0.03)
-while True:
-    try: os.waitpid(-1, os.WNOHANG)
-    except ChildProcessError: pass
-    time.sleep(0.03)
+os.waitpid(parent, 0)
+with open(sys.argv[3], 'w') as f: f.write('reaped')
+while True: time.sleep(0.03)
 "#
             .into(),
             parent_file.as_os_str().to_owned(),
             detached_file.as_os_str().to_owned(),
+            reaped_file.as_os_str().to_owned(),
         ];
         /// Kills what the test started however it ends: the grandchild loops forever. Only
         /// a process that still is the one it was, so a reused PID is left alone.
@@ -2740,8 +2742,10 @@ while True:
         assert!(!stopped(detached));
         // The leader lives on, but nothing leads from it to the detached process any more.
         platform.processes().terminate(parent.pid).unwrap();
-        eventually("the intermediate parent to exit", || {
-            !crate::machine::still(&*platform, parent)
+        // A failed identity read also makes `still` false. Wait for the leader's waitpid
+        // instead, so the next pause cannot catch the parent still exiting or unreaped.
+        eventually("the intermediate parent to be reaped", || {
+            reaped_file.exists()
         })
         .await;
         flow.manager.signal_preview(&live, true).await.unwrap();
