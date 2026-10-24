@@ -32,6 +32,7 @@ use super::conversation::{Cli, ConvLive};
 use super::workers::thread_temp_owner;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent, Environment, PermissionLevel, Setup};
+use crate::work::{ApprovalSubject, CardState};
 use crate::{Error, Result};
 
 /// Where the thread works: a checkout of the session's repository.
@@ -242,6 +243,11 @@ impl SessionManager {
         cli: &Arc<Cli>,
         mut request: ApprovalRequest,
     ) {
+        if self.raised_to_full(&conv.id, cli) {
+            self.answer_thread(conv, cli, request, ApprovalDecision::Allow, Decider::Policy)
+                .await;
+            return;
+        }
         let workspace = cli
             .launch
             .as_ref()
@@ -255,6 +261,68 @@ impl SessionManager {
         }
     }
 
+    /// Whether the session went to Full access while `cli` runs at a lower level. Its mode is
+    /// fixed when it starts, and it starts again at Full access only between turns
+    /// ([`Self::retire_moved_thread`]); until then what it asks goes, as Full access lets it.
+    fn raised_to_full(&self, id: &ConversationId, cli: &Cli) -> bool {
+        cli.launch
+            .as_ref()
+            .is_some_and(|launch| launch.permission != PermissionLevel::Full)
+            && self.permission(id) == PermissionLevel::Full
+    }
+
+    /// The session went to Full access: the requests its thread's CLI is waiting on go, as
+    /// those it asks from now on do ([`Self::raised_to_full`]).
+    pub(crate) async fn allow_waiting_at_full(&self, id: &ConversationId) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        let Some(cli) = conv.live_cli().await else {
+            return;
+        };
+        if !self.raised_to_full(id, &cli) {
+            return;
+        }
+        let board = match self.core.board(id).await {
+            Ok(board) => board,
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not read the waiting requests");
+                return;
+            }
+        };
+        for approval in board.approvals.values() {
+            let ApprovalSubject::Cli { request } = &approval.subject else {
+                continue;
+            };
+            if approval.state != CardState::Pending
+                || approval.task_id.is_some()
+                || request.id.starts_with(super::cards::OWN_APPROVAL)
+            {
+                continue;
+            }
+            if !self
+                .answer_thread(
+                    &conv,
+                    &cli,
+                    request.clone(),
+                    ApprovalDecision::Allow,
+                    Decider::Policy,
+                )
+                .await
+            {
+                continue;
+            }
+            self.settle_approval(
+                approval,
+                CardState::Allowed {
+                    by: Decider::Policy,
+                    similar: false,
+                },
+            )
+            .await;
+        }
+    }
+
     /// The user's card for the thread CLI's request, while that CLI runs.
     async fn ask_user_for_thread(&self, conv: &ConvLive, cli: &Cli, request: ApprovalRequest) {
         if let Err(err) = self.open_cli_card(cli, &conv.id, None, request).await {
@@ -262,7 +330,7 @@ impl SessionManager {
         }
     }
 
-    /// Gives the thread's CLI Brigadier's answer to its request.
+    /// Gives the thread's CLI Brigadier's answer to its request; whether it took it.
     async fn answer_thread(
         &self,
         conv: &Arc<ConvLive>,
@@ -270,17 +338,18 @@ impl SessionManager {
         request: ApprovalRequest,
         decision: ApprovalDecision,
         decider: Decider,
-    ) {
+    ) -> bool {
         if let Err(err) = cli
             .session
             .answer(request.id.clone(), decision.clone())
             .await
         {
             tracing::warn!(conversation = %conv.id, error = %err, "could not answer an approval");
-            return;
+            return false;
         }
         self.log_resolution(&conv.id, cli.provider, request.id, decision, decider)
             .await;
+        true
     }
 
     /// Passes the user's answer to the thread's CLI; "Allow … for this session" also allows

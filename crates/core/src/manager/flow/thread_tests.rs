@@ -203,6 +203,73 @@ async fn under_ask_a_cli_permission_prompt_is_a_card_and_its_answer_continues_th
     }
 }
 
+/// Raised to Full access mid-turn, on both CLIs: the running CLI keeps the mode it started
+/// with until the turn ends, so the request it is waiting on goes at once, and what it asks
+/// after goes without a card, as Full access would let it.
+#[tokio::test]
+async fn raised_to_full_mid_turn_what_the_thread_asks_goes() {
+    for thread in [ProviderKind::Claude, ProviderKind::Codex] {
+        let answered: Arc<Mutex<Vec<Option<ApprovalDecision>>>> = Arc::default();
+        let log = answered.clone();
+        let flow = Flow::start(
+            "thread-raised",
+            Options {
+                permission: PermissionLevel::AcceptEdits,
+                thread,
+                ..Options::default()
+            },
+            script(move |turn| {
+                let log = log.clone();
+                async move {
+                    let first = turn.ask_approval("curl https://example.com", "curl").await;
+                    log.lock().unwrap().push(first);
+                    let second = turn.ask_approval("curl https://example.org", "curl").await;
+                    log.lock().unwrap().push(second);
+                    Reply::text("Fetched both.")
+                }
+            }),
+        )
+        .await;
+        flow.say("Fetch both.").await;
+        let board = flow
+            .until("the thread's card", |board| {
+                board
+                    .approvals
+                    .values()
+                    .any(|approval| approval.state == CardState::Pending)
+            })
+            .await;
+        let card = board
+            .approvals
+            .values()
+            .find(|approval| approval.state == CardState::Pending)
+            .unwrap()
+            .id
+            .clone();
+        set_level(&flow, PermissionLevel::Full).await;
+        let board = flow.settled().await;
+        assert_eq!(
+            *answered.lock().unwrap(),
+            vec![Some(ApprovalDecision::Allow), Some(ApprovalDecision::Allow)],
+            "{thread:?}"
+        );
+        assert_eq!(
+            board.approvals[&card].state,
+            CardState::Allowed {
+                by: brigadier_providers::Decider::Policy,
+                similar: false
+            }
+        );
+        // The second request opened no card.
+        assert_eq!(board.approvals.len(), 1, "{thread:?}");
+        assert_eq!(
+            flow.thread_specs()[0].1.access,
+            PermissionLevel::AcceptEdits.access()
+        );
+        flow.stop().await;
+    }
+}
+
 /// The user's Deny with no reason still tells the thread why (an empty one fails its whole
 /// turn at the API), and the thread goes on to say it was declined: the request ends Done
 /// with an answer, never Failed.

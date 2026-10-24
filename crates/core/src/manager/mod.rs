@@ -916,7 +916,10 @@ impl SessionManager {
             }
             return self.core.set_setup(id, setup).await;
         }
-        self.core.set_setup(id, setup).await
+        let conversation = self.core.set_setup(id.clone(), setup).await?;
+        // Raised to Full access mid-turn: what its thread waits on goes now.
+        self.allow_waiting_at_full(&id).await;
+        Ok(conversation)
     }
 
     /// Logged in and not refusing work: no limit, or one whose reset has passed (the quota
