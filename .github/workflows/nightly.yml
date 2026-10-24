@@ -40,10 +40,11 @@ env:
 jobs:
   continuity:
     name: Continuity report
-    if: github.ref == 'refs/heads/main'
+    # Paused 10-24 by the user while sessions move to the orchestrator design; set repo variable NIGHTLY_CONTINUITY=on to resume.
+    if: github.ref == 'refs/heads/main' && vars.NIGHTLY_CONTINUITY == 'on'
     uses: ./.github/workflows/continuity-battery.yml
     with:
-      arms: seam,plain,zed,summary # D72: remove summary after tonight's comparison.
+      arms: seam,plain,zed
     permissions:
       contents: read
       actions: read
