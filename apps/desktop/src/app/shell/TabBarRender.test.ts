@@ -22,6 +22,8 @@ test("a session's chat is a tab alone and among others, measured, with widths ke
   // 6 px.
   assert.equal(seen.plusAfterLast, 6, "+ comes right after the last tab");
   assert.ok(Number(seen.plusFarFromContext) > 100, "+ is no longer at the end");
+  assert.equal(seen.roomAtClose, true, "two tabs leave room in the wide bar");
+  assert.equal(seen.plusAfterClose, 6, "with room in the bar, + follows the last tab at once after a close");
   // In px: 32 tall, corners of 10, 13 text.
   assert.deepEqual(seen.measure, { height: 32, radius: 10, font: 13 });
   assert.equal(seen.activeShadow, true);

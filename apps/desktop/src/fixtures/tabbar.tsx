@@ -111,6 +111,18 @@ function Fixture() {
       const tab = getComputedStyle(last);
       seen.measure = { height: parseFloat(tab.height), radius: parseFloat(tab.borderTopLeftRadius), font: parseFloat(tab.fontSize) };
       seen.activeShadow = tab.boxShadow !== "none";
+      newTab().click();
+      // Wide enough that two tabs leave room in the bar.
+      document.querySelector("main")!.classList.replace("w-narrowest-window", "w-screen");
+    });
+    at(1100, () => {
+      // With room left in the bar, a close holds nothing: "+" follows the last tab at once.
+      seen.roomAtClose = bar().querySelector("[data-bar-divider]")!.hasAttribute("data-hidden");
+      contentTabs().at(-1)!.querySelector<HTMLButtonElement>('button[aria-label^="Close"]')!.click();
+    });
+    at(1250, () => {
+      seen.plusAfterClose = Math.round(box(newTab())!.left - box(contentTabs().at(-1)!)!.right);
+      document.querySelector("main")!.classList.replace("w-screen", "w-narrowest-window");
       for (const kind of ["browser", "terminal", "sideChat"] as const) newSessionTab(id, kind, "/fixture");
     });
     at(1300, () => {

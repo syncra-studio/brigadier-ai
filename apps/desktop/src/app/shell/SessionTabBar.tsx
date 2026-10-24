@@ -168,11 +168,16 @@ export function SessionTabBar({
     return () => observer.disconnect();
   }, [gap]);
 
+  // A close holds the tabs' widths only while they fill the bar: at their full width the next
+  // tab's × slides under the pointer anyway, and "+" follows the last tab at once.
+  const holdWidths = () => {
+    if (full) lock.hold(tabs.length + 1);
+  };
   // On the button's release: the webview may never send `auxclick`.
   const middleClose = (tab: string) => (event: ReactMouseEvent) => {
     if (event.button !== 1) return;
     event.preventDefault();
-    lock.hold(tabs.length + 1);
+    holdWidths();
     closeTab(id, tab);
   };
   const newTab = (
@@ -276,7 +281,7 @@ export function SessionTabBar({
                   handlers={handlers}
                   onMouseUp={middleClose(tab.id)}
                   onClose={() => {
-                    lock.hold(tabs.length + 1);
+                    holdWidths();
                     closeTab(id, tab.id);
                   }}
                 />
