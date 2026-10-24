@@ -671,12 +671,13 @@ async fn claude_overflowing(name: &str, overflows: u32, message: &'static str) -
     let inputs: Inputs = Arc::default();
     let left = Arc::new(std::sync::atomic::AtomicU32::new(overflows));
     let base = claude_thread(inputs.clone());
+    let seen = inputs.clone();
     let options = options(ProviderKind::Claude);
     let mut flow = Flow::start(
         name,
         options,
         script(move |turn| {
-            let (base, left) = (base.clone(), left.clone());
+            let (base, left, seen) = (base.clone(), left.clone(), seen.clone());
             async move {
                 let over = without_handoff(&turn.input).contains("Overflow.")
                     && left
@@ -687,6 +688,9 @@ async fn claude_overflowing(name: &str, overflows: u32, message: &'static str) -
                         )
                         .is_ok();
                 if over {
+                    seen.lock()
+                        .unwrap()
+                        .push((turn.provider, turn.input.clone()));
                     turn.emit(ProviderEvent::Error {
                         error: brigadier_providers::ProviderError {
                             kind: if message.starts_with("Prompt") {
@@ -715,36 +719,64 @@ async fn claude_overflowing(name: &str, overflows: u32, message: &'static str) -
 }
 
 #[tokio::test]
-async fn a_context_too_long_compacts_first_and_the_session_goes_on_when_that_recovers() {
+async fn a_context_too_long_compacts_and_goes_again_by_itself_when_that_recovers() {
     let (flow, inputs) =
         claude_overflowing("long-claude-too-long-once", 1, "Prompt is too long").await;
     flow.say("Overflow.").await;
-    flow.idle().await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while given(&inputs, "Overflow.") < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the request again, with no word from the user");
+    let board = flow.settled().await;
     flow.idle().await;
     assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
-    flow.say("After.").await;
-    flow.idle().await;
+    assert_eq!(given(&inputs, "Overflow."), 2);
+    // The request went through: nothing failed, nothing to tell.
     assert!(
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, input)| input.contains("After."))
+        board
+            .requests
+            .values()
+            .all(|request| matches!(request.state, crate::work::RequestState::Done)),
+        "{:?}",
+        board.requests
     );
+    assert!(notices(&flow).await.is_empty());
     assert_eq!(read_seam(&record(&flow)).generation, 1);
     flow.stop().await;
 }
 
 #[tokio::test]
 async fn a_context_still_too_long_after_compacting_goes_on_in_a_fresh_session() {
-    let (flow, _) = claude_overflowing("long-claude-too-long-twice", 2, "Prompt is too long").await;
-    flow.say("Overflow.").await;
-    flow.idle().await;
-    flow.idle().await;
-    assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+    let (flow, inputs) =
+        claude_overflowing("long-claude-too-long-twice", 2, "Prompt is too long").await;
     flow.say("Overflow.").await;
     until_successor(&flow).await;
+    assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+    // Tried twice in the session, then the successor takes the request on from its hand-off.
+    assert_eq!(given(&inputs, "Overflow."), 2);
+    let board = flow.settled().await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| !matches!(request.state, crate::work::RequestState::Failed { .. })),
+        "{:?}",
+        board.requests
+    );
     flow.stop().await;
+}
+
+/// How many inputs held `needle`, outside hand-offs.
+fn given(inputs: &Inputs, needle: &str) -> usize {
+    inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, input)| without_handoff(input).contains(needle))
+        .count()
 }
 
 #[tokio::test]

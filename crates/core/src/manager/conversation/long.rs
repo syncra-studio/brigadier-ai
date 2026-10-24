@@ -28,6 +28,9 @@ pub(super) struct LongLive {
     /// Its context was too long for a turn and a compaction is to bring it back under: a
     /// second time before a turn completes, the seam takes over (review item 5).
     pub recovering: bool,
+    /// The request whose turn was too long for the context: it goes again by itself once
+    /// the compaction is done, as plain Claude Code's reactive compaction retries it.
+    pub retry_request: Option<String>,
 }
 
 /// Claude's stop when its auto-compaction refills the context three times in a row
@@ -386,12 +389,24 @@ impl SessionManager {
                 .long_fallback(conv, cli, "its compaction kept refilling its context")
                 .await;
         }
-        let first = !std::mem::replace(&mut conv.state.lock().await.long.recovering, true);
-        if first {
-            conv.state.lock().await.long.compact_due = true;
+        let mut state = conv.state.lock().await;
+        if !std::mem::replace(&mut state.long.recovering, true) {
+            state.long.compact_due = true;
+            state.long.retry_request = state.request.clone();
         } else {
+            drop(state);
             self.seam_too_long(conv).await;
         }
+    }
+
+    /// The too-long turn ended: its messages go again, first after the compaction, and its
+    /// error is no notice (nothing is asked of the user).
+    pub(super) fn long_retry(state: &mut ConvState) {
+        state.long.retry_request = None;
+        state.unshown_error = None;
+        let mut pending = std::mem::take(&mut state.in_turn);
+        pending.append(&mut state.pending);
+        state.pending = pending;
     }
 
     /// The rare fallback (run2-D10): the session goes on in a fresh one at its seam, which

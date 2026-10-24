@@ -4409,8 +4409,15 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
-            // The generation died in this turn: its request goes on in the successor.
-            let ended = ended.filter(|_| served.is_none() || state.seam.carried_request != served);
+            // The generation died in this turn: its request goes on in the successor. A long
+            // session's request too long for its context goes again after a compaction.
+            let ended = ended.filter(|_| {
+                served.is_none()
+                    || (state.seam.carried_request != served && state.long.retry_request != served)
+            });
+            if served.is_some() && state.long.retry_request == served {
+                Self::long_retry(&mut state);
+            }
             // Codex commands still running keep this request working until each ended and
             // the thread heard of it; once none runs, the request is free of them.
             if state.lingering.is_empty() {
