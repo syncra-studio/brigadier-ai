@@ -237,6 +237,19 @@ mod tests {
         assert!(SKILL.contains("After a block of work, at most 3 to 5 short lines"));
     }
 
+    /// Codex parses a skill's frontmatter as YAML and skips a skill it can't parse: a plain
+    /// value with ": " or " #" in it is not YAML.
+    #[test]
+    fn both_skills_frontmatter_is_plain_yaml() {
+        for skill in [SKILL, FUSION] {
+            let head = skill.split("\n---\n").next().unwrap();
+            for line in head.lines().skip(1) {
+                let (_, value) = line.split_once(": ").unwrap();
+                assert!(!value.contains(": ") && !value.contains(" #"), "{line}");
+            }
+        }
+    }
+
     #[test]
     fn the_fusion_skill_consults_each_cli_through_its_own_row() {
         assert!(FUSION.starts_with("---\nname: fusion\ndescription: "));
