@@ -37,6 +37,8 @@
 > Amended again on 10-23 with the user's D22 (S32: model-fit rows and Refresh) and D23 (S38: the account
 > auto-switch order and the provider fallback).
 > Amended again on 10-24 with the user's D51 (S39: `brigadier why <file>:<line>`).
+> Amended again on 10-24 with run `20261024-1334-long-session-memory`'s run2-D2…D17: long sessions compact in
+> place behind `BRIGADIER_LONG_SESSIONS`, off by default until the test round passes (G12, S37, §9.5).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -232,11 +234,13 @@ compacts in place (switch on, below; run2-D2).
     (`tools/continuity-battery/arms.py`): `native-bare` adds nothing; `native` or `restore-only` puts the
     decisions back; `instructions-only` steers Claude's `/compact`; `native-full` does both;
     `native+checkpoint` and `native-full+checkpoint` add the checkpoint. An empty or unknown value is off. It
-    applies to a session's thread on Claude and Codex only; everything else keeps seams.
+    applies to a session's thread on Claude and Codex only; everything else keeps seams (run2-D13).
   - **Codex (P1, run2-D2, run2-D6).** No size seams. The 872k window override goes. Brigadier sets
-    `model_auto_compact_token_limit` only when `BRIGADIER_SEAM_TOKENS` is set explicitly. Codex compacts by
-    itself at its own point (≈245k on a 272k-window model). Brigadier reads the compaction from the completed
-    `contextCompaction` item. The thread shows the CLI's own "Compacted" divider.
+    `model_auto_compact_token_limit` only when `BRIGADIER_SEAM_TOKENS` is set explicitly (run2-D16), and a
+    user's own `model_auto_compact_token_limit` wins (G17). Codex compacts by itself at its own point (≈245k
+    on a 272k-window model). The battery's candidate arms always set a shared point (`--tokens`, 200k by
+    default), so there Codex compacts at that point, not at its own. Brigadier reads the compaction from the
+    completed `contextCompaction` item. The thread shows the CLI's own "Compacted" divider.
   - **Claude (P2, run2-D5, run2-D7, run2-D12).** At a turn end past the point (≈200k), Brigadier's next turn
     is `/compact` with keep-instructions: open items; decisions in the user's words with their ledger ids;
     failed commands with their error lines; checked claims; files changed; the last test and its command; the
@@ -244,9 +248,10 @@ compacts in place (switch on, below; run2-D2).
     secret (D71). Only the `instructions` arms send them.
     - No PreCompact refuse hook and no `DISABLE_AUTO_COMPACT`.
     - `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is the point + 50k: the backstop for a turn that runs on. Claude
-      compacts ≈20k below its window, so at ≈230k.
+      compacts ≈20k below its window, so at ≈230k (**extrapolated** from a 100k-window measurement; not run
+      at 250k).
     - A user's own window or `autoCompactEnabled: false` wins: Brigadier sets no backstop, and its own
-      `/compact` at the point still runs (G17).
+      `/compact` at the point still runs (G17, run2-D16).
     - `idleCompaction: false` stays (run2-D12).
   - **Decisions put back whole (run2-D8, S22b).** After every compaction, the ledger's open items, rules and
     decisions go back word for word.
@@ -255,17 +260,20 @@ compacts in place (switch on, below; run2-D2).
     - **Codex:** one `thread/inject_items` note, marked `brigadier-restore <compaction-id> <fingerprint>`.
     - **Receipts.** Brigadier reads the CLI's own file: Claude's hook attachments after the
       `compact_boundary`, the Codex rollout's note naming the compaction. Every active entry must arrive whole,
-      exactly once. The state is kept in `record/long.json`, so a retry or a restart checks the file instead of
-      sending again (tested: answer lost, receipt lost, restart).
-    - **What the user sees:** the divider only. A notice shows only on failure (D13). With Claude's hooks off
-      in the user's settings, a one-time notice says so. The ledger is unchanged (D28: append-only).
+      exactly once: the entries that went back after that compaction, not a decision written since. The state
+      is kept in `record/long.json`, so a retry or a restart checks the file instead of sending again (tested:
+      answer lost, receipt lost, restart).
+    - **What the user sees:** the divider only. A notice shows only on failure, naming why (D13 of the
+      take-over run, run2-D16). With Claude's hooks off in the user's settings, a one-time notice says so
+      (run2-D16; an exception to S37's silent degradation). The ledger is unchanged (D28: append-only).
   - **Checkpoint (P2b, run2-D9), in the `+checkpoint` arms.** `brigadier checkpoint set <text>` and
     `brigadier checkpoint show`. A separate, replaceable record (`record/checkpoint.md`, history in
     `checkpoints.jsonl`), not the ledger (D28), at most 8,000 characters. It holds the goal; open requests with
     their Brain item ids and the exact `brigadier brain read <session> --item <id>`; important command results
     by item id; files changed; the last test and its command; the next step; skills in use. It needs the
     Brain's read by id (P7).
-    - **Codex:** past the point (≈200k, so before Codex's own), Brigadier asks for it in a turn of its own,
+    - **Codex:** past the point (≈200k, so before Codex's own; battery arms only: compacting before
+      run2-D6's point needs the user's yes before it ships), Brigadier asks for it in a turn of its own,
       hidden in the thread like `/compact`, then calls `thread/compact/start`. No user message joins the ask or slips in between: it waits
       until the compaction ends. A checkpoint written goes back inside the decisions note, and the receipt
       checks it whole. None written: Codex compacts anyway, and the checkpoint is marked missing. Codex
@@ -280,15 +288,16 @@ compacts in place (switch on, below; run2-D2).
     - Claude stops with "Autocompact is thrashing";
     - the decisions can't be put back whole;
     - the context stays above half the point after compacting (**proposed**; the threshold waits on the test
-      round).
+      round). Claude only for now: Codex reports no size after compacting.
 
     On `prompt_too_long`, the CLI compacts first and the failed request goes again once, by itself. A second
     failure starts a fresh session that carries the request. The seam's hand-off gets P3's repairs: the
     lookup instruction, tool-evidence pointers and the working state. Moves to another CLI (D46) and quota
     fallback across CLIs (D23, D25) still use the seam. Account and model switches resume the same session
     (D14).
-  - **Not built: a higher Codex output cap (P5, run2-D11).** On Codex 0.164.0, `tool_output_token_limit`
-    changed nothing on gpt-6-luna with code-mode `exec`. Revisit when a Codex version honours it.
+  - **Not built: a higher Codex output cap (P5, run2-D11, run2-D17).** On Codex 0.164.0,
+    `tool_output_token_limit` changed nothing on gpt-6-luna with code-mode `exec`. Revisit when a Codex
+    version honours it.
 
 **Brain (G14).** The Brain is a pull-only search over the project's records:
 - every session's ledger;
@@ -1628,7 +1637,9 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
 - **Hookless gaps:** [#539](https://github.com/syncra-studio/brigadier-ai/issues/539). A later stream event cannot
   rewrite the model's Bash result into Brigadier's custom digest/`out-*` alias, block an already completed turn,
   or veto recovery compaction. The CLI's own saved output remains readable. `DISABLE_AUTO_COMPACT=1`, idle
-  compaction off and the usage-driven seam stay; a real compaction is reported as such, never as a refused
+  compaction off and the usage-driven seam stay (switch off; with `BRIGADIER_LONG_SESSIONS` on, see G12: no
+  `DISABLE_AUTO_COMPACT`, no size seam, idle compaction still off, run2-D12, and a one-time notice that the
+  decisions aren't put back, run2-D16); a real compaction is reported as such, never as a refused
   hook. A note fork with hooks off uses the CLI's empty built-in tool list and strict empty MCP config: still
   read-only, but the changed tool schema loses its shared cache prefix. These gaps degrade silently; no hook
   replacement or request to enable hooks.
@@ -2145,10 +2156,10 @@ sessions with token economy. Each has a measurable bar against the best rival to
     judgement, 2026-10-23: the research's saving is one uncached read per cold return; plain Claude Code never
     restarts on a cold cache; S24 stays dropped; the nightly battery reports cold-return cost, never gates).
     **Done:** each scripted task still passes its test command.
-  - **Decisions survive** (CONTINUITY §3.7) (user, 2026-10-23: "find a fix for this"): after three seams, ≥ 9 of 10
-    planted items applied without being asked where they apply; a brief derived from them has 0 contradictions and
-    0 additions not marked "proposed"; every open item is raised again. The plain CLI with its own compaction is
-    the comparison.
+  - **Decisions survive** (CONTINUITY §3.7) (user, 2026-10-23: "find a fix for this"): after three compactions
+    (switch on) or three seams (switch off), ≥ 9 of 10 planted items applied without being asked where they
+    apply; a brief derived from them has 0 contradictions and 0 additions not marked "proposed"; every open
+    item is raised again. The plain CLI with its own compaction is the comparison.
 - **Steps** (they extend S17–S27 and add no stage):
   1. **L1** (into S18): `brigadier transcript search|read` over the lineage's CLI files, `tool-results/` and
      rollouts included, no database copy. Files: `crates/brain/src/transcript*`, `crates/cli`. Done: fixture
