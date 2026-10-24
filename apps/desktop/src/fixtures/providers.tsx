@@ -304,8 +304,8 @@ function Fixture() {
         openClaude();
         await pause(300);
         seen.merged = orderRows();
-        // The engine now puts golban first despite its later reset: the page keeps this
-        // computer's login first, and collapsing hostpapa's duplicate leaves no gap in the places.
+        // The engine now puts golban first despite its later reset: the page follows its
+        // order, and collapsing hostpapa's duplicate leaves no gap in the places.
         listed = [
           { ...hostpapa, place: 2, reason: { kind: "added" }, inUse: false },
           { ...golban, place: 1, reason: { kind: "nearerLimit", window: "Weekly", usedPercent: 95 }, inUse: true },

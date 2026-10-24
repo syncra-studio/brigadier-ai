@@ -208,14 +208,14 @@ const view = (name: string, email: string): AccountView => ({
 });
 
 // A login merged with its added twin keeps the earlier routing place and the places have no gap;
-// the rows stay this computer's login first whatever the routing order, and never say it.
-test("account rows keep the login first, merge its twin's place without gaps, and show no order", { timeout: 60000 }, async (t) => {
+// the rows follow routing order, and never say it.
+test("account rows keep First after merging a login and follow routing order without gaps, and show no order", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "providers.html?drive=order", "providers-result", 30000);
   const seen = JSON.parse(dump) as Record<string, Record<string, unknown>>;
   assert.deepEqual(seen.merged!.rows, ["hostpapa", "golban"]);
   assert.deepEqual(seen.merged!.places, [["hostpapa", 1], ["golban", 2]]);
   noOrderLine(seen.merged!);
-  assert.deepEqual(seen.routed!.rows, ["hostpapa", "golban", "Limited", "Signed out"]);
+  assert.deepEqual(seen.routed!.rows, ["golban", "hostpapa", "Limited", "Signed out"]);
   assert.deepEqual(seen.routed!.places, [["hostpapa", 2], ["golban", 1], ["Limited", null], ["Signed out", null]]);
   noOrderLine(seen.routed!);
 });

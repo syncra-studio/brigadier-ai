@@ -88,8 +88,8 @@ export function signInFinished(
 }
 
 /**
- * One agent's accounts on its Settings › Providers page, inside a card the caller draws (the
- * computer's own login first), ending in a link that adds another and shows its sign-in.
+ * One agent's accounts on its Settings › Providers page, inside a card the caller draws,
+ * in routing order, ending in a link that adds another and shows its sign-in.
  */
 export function ProviderAccounts({
   provider,
@@ -151,7 +151,7 @@ export function ProviderAccounts({
       (view) =>
         !(active?.fresh && view.account.account === active.id && view.status?.loggedIn !== true),
     ),
-  );
+  ).toSorted((a, b) => (a.view.place ?? Infinity) - (b.view.place ?? Infinity));
   const anySignedIn = shown.some(({ view }) => view.status?.loggedIn === true);
 
   const close = () => {
