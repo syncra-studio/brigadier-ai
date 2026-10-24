@@ -20,3 +20,13 @@ export function trackPageHidden(doc: VisibilityDocument = document): void {
   sync();
   doc.addEventListener("visibilitychange", sync);
 }
+
+/**
+ * Whether anyone can see the page now. A card's entrance animation is decided as it mounts: one
+ * started while nobody can see the page is held at its first frame (WebKit runs no animations
+ * then) and plays only once the window shows again, so a card that came meanwhile would sit
+ * there invisible, taking its room, for the animation's length when the user comes back.
+ */
+export function pageShown(doc: Pick<VisibilityDocument, "hidden"> = document): boolean {
+  return !doc.hidden;
+}

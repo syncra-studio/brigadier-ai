@@ -28,6 +28,8 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
+import { pageShown } from "@/lib/pageHidden";
+import { cn } from "@/lib/utils";
 import { answerCard } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -488,13 +490,15 @@ export function ApprovalAction({
  */
 export function ApprovalSlot({ ids, onReply }: { ids: readonly string[]; onReply: () => void }) {
   const [index, setIndex] = useState(0);
+  // One that came while nobody could see the window is simply there when it shows again.
+  const [opens] = useState(pageShown);
   const at = Math.min(index, ids.length - 1);
   const id = ids[at];
   if (id === undefined) return null;
   return (
     <div
       data-slot="approval-slot"
-      className="bg-composer rounded-composer shadow-hairline animate-rail-open relative w-full backdrop-blur-lg motion-reduce:animate-none"
+      className={cn("bg-composer rounded-composer shadow-hairline relative w-full backdrop-blur-lg", opens && "animate-rail-open motion-reduce:animate-none")}
     >
       <ApprovalAction
         key={id}

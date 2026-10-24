@@ -1,5 +1,6 @@
 import { type ComponentProps, createContext, type FC, type ReactNode, useContext, useState } from "react";
 
+import { pageShown } from "@/lib/pageHidden";
 import { startupScreenGone } from "@/lib/splash";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +42,8 @@ export const ComposerRail: FC<ComponentProps<"div">> = ({ className, ...props })
  * user, which at the rail's bottom shows its whole frame a small gap above the composer instead
  * of tucking under it. Items open to their height as they appear; those already there under the
  * startup screen are simply there, or the composer would rise as the app fades in (#469), and so
- * are those a conversation has as it is switched to, or its cards would close and open again.
+ * are those a conversation has as it is switched to, or its cards would close and open again,
+ * and those that came while nobody could see the window (see `pageShown`).
  */
 export const ComposerRailItem: FC<{
   variant?: "controls" | "card" | "decision";
@@ -51,7 +53,7 @@ export const ComposerRailItem: FC<{
 }> = ({ variant = "card", label, className, children }) => {
   const railShown = useContext(RailShown);
   const [opens] = useState(
-    () => startupScreenGone() && (railShown === null || performance.now() - railShown > SETTLE_MS),
+    () => startupScreenGone() && pageShown() && (railShown === null || performance.now() - railShown > SETTLE_MS),
   );
   return (
     <section

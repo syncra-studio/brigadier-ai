@@ -4,6 +4,8 @@ import { openPermissionsHelp } from "@/app/shell/SetupPickers";
 import { Button, TooltipIconButton } from "@/components/controls";
 import { ShieldExclamation, X } from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
+import { pageShown } from "@/lib/pageHidden";
+import { cn } from "@/lib/utils";
 import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
@@ -23,6 +25,8 @@ const closedNotices = new Set<string>();
 export function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
+  // One that came while nobody could see the window is simply there when it shows again.
+  const [opens] = useState(pageShown);
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
@@ -35,7 +39,7 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
     <section
       aria-label="Full access is on"
       data-slot="full-access-notice"
-      className="@container/notice animate-rail-open bg-rail border-foreground/10 rounded-composer mb-2 border px-notice-x py-notice-y text-notice motion-reduce:animate-none"
+      className={cn("@container/notice bg-rail border-foreground/10 rounded-composer mb-2 border px-notice-x py-notice-y text-notice", opens && "animate-rail-open motion-reduce:animate-none")}
     >
       {/* Narrow, the buttons go under the text, so the text keeps the width to read. */}
       <div className="flex flex-col gap-notice-gap @lg/notice:flex-row @lg/notice:items-center @lg/notice:gap-notice-gap-wide">
