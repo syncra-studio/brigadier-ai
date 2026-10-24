@@ -300,6 +300,10 @@ impl SessionManager {
             {
                 continue;
             }
+            // Lowered again meanwhile: the rest wait for the user.
+            if !self.raised_to_full(id, &cli) {
+                return;
+            }
             if !self
                 .answer_thread(
                     &conv,
