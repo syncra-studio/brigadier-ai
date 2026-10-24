@@ -71,7 +71,7 @@ const ask = (request) => new Promise((resolve) => {
   pending.set(id, resolve);
   send({ type: 'request', id, request });
 });
-send({ type: 'hello', token: readFileSync(tokenPath, 'utf8').trim(), protocol: 17, client: { name: 'live-refresh-probe', pid: process.pid } });
+send({ type: 'hello', token: readFileSync(tokenPath, 'utf8').trim(), protocol: 18, client: { name: 'live-refresh-probe', pid: process.pid } });
 const added = await ask({ method: 'addProject', path: repo, name: '', init: false });
 if (added.status !== 'ok') throw new Error(JSON.stringify(added));
 const projectId = added.value.project.id;

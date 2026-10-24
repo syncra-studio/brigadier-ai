@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 
-use crate::protocol::{ClientFrame, ErrorCode, IpcError, Outcome, ServerFrame};
+use crate::protocol::{ClientFrame, ErrorCode, IpcError, Outcome, Response, ServerFrame};
 use crate::{Error, MAX_FRAME_BYTES};
 
 /// A complete authenticated frame: either a client message or its parse-error response.
@@ -66,6 +66,50 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
         Ok(Some(rejected(id, "request", error)))
     }
 
+    /// Reads a daemon frame, joining consecutive parts of a large thread response. Reading
+    /// this future must not be cancelled between parts, just as with `read` between bytes.
+    pub async fn read_server(&mut self) -> Result<Option<ServerFrame>, Error> {
+        let Some(frame) = self.read::<ServerFrame>().await? else {
+            return Ok(None);
+        };
+        let ServerFrame::ThreadViewPart {
+            id,
+            mut json,
+            mut last,
+        } = frame
+        else {
+            return Ok(Some(frame));
+        };
+        while !last {
+            match self.read::<ServerFrame>().await? {
+                Some(ServerFrame::ThreadViewPart {
+                    id: next,
+                    json: part,
+                    last: end,
+                }) if next == id => {
+                    json.push_str(&part);
+                    last = end;
+                }
+                _ => return Err(invalid_parts()),
+            }
+        }
+        let frame: ServerFrame = serde_json::from_str(&json)?;
+        match &frame {
+            ServerFrame::Response {
+                id: response_id,
+                result: Outcome::Ok { value },
+            } if *response_id == id
+                && matches!(
+                    value.as_ref(),
+                    Response::ThreadView { .. } | Response::WorkerThread { .. }
+                ) =>
+            {
+                Ok(Some(frame))
+            }
+            _ => Err(invalid_parts()),
+        }
+    }
+
     /// The next frame, or `None` when the peer closed the connection between frames.
     pub async fn read<T: DeserializeOwned>(&mut self) -> Result<Option<T>, Error> {
         let mut len = [0u8; 4];
@@ -101,6 +145,40 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
         }
     }
 
+    /// Sends a response, splitting a thread view only when its serialized frame exceeds
+    /// the wire limit. Parts stay consecutive on this writer, including the final flush.
+    pub async fn write_response(&mut self, id: u32, result: Outcome) -> Result<(), Error> {
+        let thread = matches!(&result, Outcome::Ok { value }
+            if matches!(value.as_ref(), Response::ThreadView { .. } | Response::WorkerThread { .. }));
+        let frame = ServerFrame::Response { id, result };
+        if !thread {
+            return self.write(&frame).await;
+        }
+        let json = serde_json::to_string(&frame)?;
+        if json.len() <= MAX_FRAME_BYTES {
+            self.write_json(json.as_bytes()).await?;
+            return self.flush().await;
+        }
+        let mut rest = json.as_str();
+        while !rest.is_empty() {
+            // JSON escaping expands a byte at most sixfold; 1 MiB leaves ample room for
+            // the part's envelope, even for control characters. Never split UTF-8.
+            let mut end = rest.len().min(1024 * 1024);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            let (part, tail) = rest.split_at(end);
+            self.write_buffered(&ServerFrame::ThreadViewPart {
+                id,
+                json: part.to_owned(),
+                last: tail.is_empty(),
+            })
+            .await?;
+            rest = tail;
+        }
+        self.flush().await
+    }
+
     /// Writes and flushes one frame.
     pub async fn write<T: Serialize>(&mut self, frame: &T) -> Result<(), Error> {
         self.write_buffered(frame).await?;
@@ -110,13 +188,17 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     /// Writes one frame without flushing, for sending several frames in a row.
     pub async fn write_buffered<T: Serialize>(&mut self, frame: &T) -> Result<(), Error> {
         let bytes = serde_json::to_vec(frame)?;
+        self.write_json(&bytes).await
+    }
+
+    async fn write_json(&mut self, bytes: &[u8]) -> Result<(), Error> {
         if bytes.len() > MAX_FRAME_BYTES {
             return Err(Error::FrameTooLarge(bytes.len()));
         }
         self.inner
             .write_all(&(bytes.len() as u32).to_be_bytes())
             .await?;
-        self.inner.write_all(&bytes).await?;
+        self.inner.write_all(bytes).await?;
         Ok(())
     }
 
@@ -124,6 +206,10 @@ impl<W: AsyncWrite + Unpin> FrameWriter<W> {
         self.inner.flush().await?;
         Ok(())
     }
+}
+
+fn invalid_parts() -> Error {
+    Error::Protocol("incomplete or invalid thread response parts")
 }
 
 fn rejected(id: u32, field: &str, error: impl std::fmt::Display) -> ClientRead {
@@ -143,6 +229,61 @@ mod client_tests {
     use super::*;
     use crate::protocol::{Request, Response};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn incomplete_or_mismatched_thread_parts_are_rejected() {
+        for next in [None, Some(2)] {
+            let (send, recv) = tokio::io::duplex(8192);
+            let mut writer = FrameWriter::new(send);
+            writer
+                .write(&ServerFrame::ThreadViewPart {
+                    id: 1,
+                    json: "{\"type\":\"response\", ".into(),
+                    last: false,
+                })
+                .await
+                .unwrap();
+            if let Some(id) = next {
+                writer
+                    .write(&ServerFrame::ThreadViewPart {
+                        id,
+                        json: "}".into(),
+                        last: true,
+                    })
+                    .await
+                    .unwrap();
+            }
+            drop(writer);
+            assert!(FrameReader::new(recv).read_server().await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_responses_keep_their_wire_form() {
+        let view = brigadier_core::thread_view::ThreadView {
+            entries: vec![],
+            turns: vec![],
+            background: vec![],
+            mcp: vec![],
+            workers: vec![],
+            seams: vec![],
+        };
+        let (send, recv) = tokio::io::duplex(8192);
+        let mut writer = FrameWriter::new(send);
+        writer
+            .write_response(
+                7,
+                Outcome::Ok {
+                    value: Box::new(Response::ThreadView { view }),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            FrameReader::new(recv).read::<ServerFrame>().await.unwrap(),
+            Some(ServerFrame::Response { id: 7, .. })
+        ));
+    }
 
     /// The daemon uses this reader after authentication. Errors are written back as regular
     /// response frames, and a valid request on the same byte stream still goes through.

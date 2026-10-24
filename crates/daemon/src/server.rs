@@ -727,10 +727,7 @@ impl Session {
         outcome: Result<Response, IpcError>,
     ) -> anyhow::Result<()> {
         self.writer
-            .write(&ServerFrame::Response {
-                id,
-                result: Outcome::from(outcome),
-            })
+            .write_response(id, Outcome::from(outcome))
             .await?;
         Ok(())
     }
@@ -2866,6 +2863,101 @@ mod tests {
         ] {
             assert!(answered_beside(&request), "{request:?} is answered beside");
         }
+    }
+
+    /// A Codex rollout can hold a single output larger than the wire limit (#527). The
+    /// daemon sends it as bounded parts, and the desktop's reader recovers every byte and
+    /// reads another response on the same connection instead of reconnecting.
+    #[tokio::test]
+    async fn a_rollout_over_the_frame_limit_opens_and_keeps_the_connection() {
+        use brigadier_ipc::frame::{FrameReader, FrameWriter};
+        use brigadier_providers::{ProviderEvent, ProviderKind, session_file};
+        let path = std::env::temp_dir().join(format!(
+            "20261022-0805-take-over-5-sessions-w181-rollout-{}.jsonl",
+            std::process::id()
+        ));
+        let output = "雪\n\"\\".repeat(brigadier_ipc::MAX_FRAME_BYTES / 6 + 1);
+        assert!(output.len() > brigadier_ipc::MAX_FRAME_BYTES);
+        let rollout = serde_json::json!({
+            "type": "event_msg",
+            "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "id": "large-command",
+                "command": ["cat", "large.log"], "status": "completed",
+                "exit_code": 0, "aggregated_output": output
+            }}
+        });
+        std::fs::write(&path, rollout.to_string()).unwrap();
+        let entries = session_file::read(ProviderKind::Codex, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(entries.len(), 1);
+        let view = brigadier_core::thread_view::ThreadView {
+            entries,
+            turns: vec![],
+            background: vec![],
+            mcp: vec![],
+            workers: vec![],
+            seams: vec![],
+        };
+        let frame = ServerFrame::Response {
+            id: 7,
+            result: Outcome::Ok {
+                value: Box::new(Response::ThreadView { view }),
+            },
+        };
+        assert!(serde_json::to_vec(&frame).unwrap().len() > brigadier_ipc::MAX_FRAME_BYTES);
+        assert!(
+            matches!(
+                FrameWriter::new(tokio::io::sink()).write(&frame).await,
+                Err(brigadier_ipc::Error::FrameTooLarge(_))
+            ),
+            "the old single-frame path cannot send this view"
+        );
+        let ServerFrame::Response { id, result } = frame else {
+            unreachable!()
+        };
+        let (send, recv) = tokio::io::duplex(64 * 1024);
+        let sending = async {
+            let mut writer = FrameWriter::new(send);
+            writer.write_response(id, result).await.unwrap();
+            writer
+                .write_response(
+                    8,
+                    Outcome::Ok {
+                        value: Box::new(Response::Shutdown),
+                    },
+                )
+                .await
+                .unwrap();
+        };
+        let receiving = async {
+            let mut reader = FrameReader::new(recv);
+            let Some(ServerFrame::Response {
+                id: 7,
+                result: Outcome::Ok { value },
+            }) = reader.read_server().await.unwrap()
+            else {
+                panic!("the full thread must open");
+            };
+            let Response::ThreadView { view } = *value else {
+                panic!("expected thread view")
+            };
+            let ProviderEvent::Command {
+                output: Some(actual),
+                ..
+            } = &view.entries[0].event
+            else {
+                panic!("expected command output")
+            };
+            assert_eq!(actual, &output);
+            assert!(
+                matches!(
+                    reader.read_server().await.unwrap(),
+                    Some(ServerFrame::Response { id: 8, .. })
+                ),
+                "the same connection remains usable"
+            );
+        };
+        tokio::join!(sending, receiving);
     }
 
     /// Every await of `handle_request` goes through [`heap`]: an unoptimized build keeps all

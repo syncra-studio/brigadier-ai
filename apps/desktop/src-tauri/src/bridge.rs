@@ -467,6 +467,7 @@ impl Bridge {
             ServerFrame::AppCall { call } => self.emit(BridgeEvent::AppCall { call }),
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
+            ServerFrame::ThreadViewPart { .. } => return Some("unjoined thread response".into()),
         }
         None
     }
@@ -812,7 +813,7 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
 
 async fn read_frames(mut reader: Reader, frames: mpsc::Sender<Result<ServerFrame, String>>) {
     loop {
-        let frame = match reader.read::<ServerFrame>().await {
+        let frame = match reader.read_server().await {
             Ok(Some(frame)) => Ok(frame),
             Ok(None) => return,
             Err(err) => Err(format!("read failed: {err}")),

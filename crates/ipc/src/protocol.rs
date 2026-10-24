@@ -38,7 +38,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1994,6 +1994,13 @@ pub enum ServerFrame {
     Response {
         id: u32,
         result: Outcome,
+    },
+    /// Consecutive pieces of an oversized thread response's JSON. The reader joins them
+    /// into one `Response` before delivering it; ordinary responses keep their wire form.
+    ThreadViewPart {
+        id: u32,
+        json: String,
+        last: bool,
     },
     Event {
         event: EventEnvelope,
