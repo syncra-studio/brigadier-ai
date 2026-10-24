@@ -650,7 +650,7 @@ impl SessionManager {
                 Some((
                     task.id.clone(),
                     PathBuf::from(workspace.worktree.as_ref()?),
-                    parent_branch.clone()?,
+                    workspace.target.clone().or_else(|| parent_branch.clone())?,
                 ))
             })
             .collect();

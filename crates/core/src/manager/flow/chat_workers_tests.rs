@@ -424,3 +424,60 @@ async fn a_chats_folder_worker_is_closed_after_archive_and_restore() {
     assert!(task.plain.as_ref().unwrap().closed, "{task:#?}");
     flow.stop().await;
 }
+
+/// #541: a Chat has no checkout branch; each repository worker carries its own base.
+#[tokio::test]
+async fn a_chats_repo_worker_shows_committed_changes_against_its_chosen_base() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    turn.write("worker.txt", "one\ntwo\n");
+                    turn.git(&["add", "worker.txt"]);
+                    turn.git(&["commit", "-m", "Add worker file"]);
+                    return Reply::text("Committed.");
+                }
+                let Some(repo) = turn.input.strip_prefix("Work in ") else {
+                    return Reply::text("ok");
+                };
+                let answer = brigadier(
+                    &turn,
+                    started(Some(repo), false, Some("worker-base"), "Write."),
+                )
+                .await;
+                wait_for(&turn, &[id_of(&answer).as_str()], 1).await;
+                let listed = brigadier(&turn, CliRequest::Workers).await;
+                answers.lock().unwrap().insert("workers".into(), listed);
+                Reply::text("Done.")
+            })
+        })
+    };
+    let flow = Flow::start("chat-worker-diff", Options::default(), script).await;
+    super::git(&flow.repo, &["branch", "worker-base", "main"]);
+    // The checked-out branch has unrelated work that must not count as the worker's.
+    std::fs::write(flow.repo.join("unrelated.txt"), "elsewhere\n").unwrap();
+    super::git(&flow.repo, &["add", "unrelated.txt"]);
+    super::git(&flow.repo, &["commit", "-m", "Advance checkout"]);
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, &format!("Work in {}", flow.repo.display()))
+        .await;
+    answered(&flow, &chat).await;
+    let diffs = flow.manager.worker_diffs(&chat).await.unwrap();
+    assert_eq!(diffs.len(), 1, "{diffs:?}");
+    assert_eq!(diffs[0].stat.insertions, 2);
+    assert_eq!(diffs[0].stat.deletions, 0);
+    let rows = flow.manager.worker_rows_of(&chat, true).await.unwrap();
+    assert_eq!(rows[0].diff.as_ref().unwrap().insertions, 2);
+    assert_eq!(rows[0].diff.as_ref().unwrap().deletions, 0);
+    assert_eq!(rows[0].ahead, 1);
+    let listed = answers.lock().unwrap()["workers"].clone();
+    assert_eq!(
+        listed["workers"][0]["changes"]["insertions"], 2,
+        "{listed:#}"
+    );
+    assert_eq!(listed["workers"][0]["changes"]["deletions"], 0);
+    flow.stop().await;
+}

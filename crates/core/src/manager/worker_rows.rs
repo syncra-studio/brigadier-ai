@@ -398,7 +398,7 @@ impl SessionManager {
             .collect())
     }
 
-    /// Reads each worker's work against session branch `parent` in git: its +/− (what it
+    /// Reads each worker's work against its recorded base branch in git: its +/− (what it
     /// changed, committed or not), its commits ahead and whether they all merged. A worker whose
     /// worktree is gone (closed) is read from the session's checkout `parent_checkout`, which
     /// shares its branches: its commits ahead and whether they merged, with no +/−.
@@ -408,10 +408,7 @@ impl SessionManager {
         parent: Option<String>,
         parent_checkout: Option<PathBuf>,
     ) {
-        let Some(parent) = parent else {
-            return;
-        };
-        let checkouts: Vec<(TaskId, PathBuf, Option<String>, Option<String>)> = tasks
+        let checkouts: Vec<_> = tasks
             .values()
             .filter(|task| !task.state.is_final() || task.plain.is_some())
             .filter_map(|task| {
@@ -421,6 +418,12 @@ impl SessionManager {
                     PathBuf::from(workspace.worktree.as_ref()?),
                     workspace.branch.clone(),
                     workspace.base.clone(),
+                    workspace.target.clone().or_else(|| parent.clone())?,
+                    task.plain
+                        .as_ref()
+                        .and_then(|plain| plain.repo.clone())
+                        .map(PathBuf::from)
+                        .or_else(|| parent_checkout.clone()),
                 ))
             })
             .collect();
@@ -431,10 +434,10 @@ impl SessionManager {
         let read = blocking(move || {
             Ok(checkouts
                 .into_iter()
-                .map(|(task, path, branch, start)| {
+                .map(|(task, path, branch, start, parent, fallback)| {
                     let (repo, own) = match git.open(&path) {
                         Ok(repo) => (repo, true),
-                        Err(_) => match parent_checkout.as_ref().map(|dir| git.open(dir)) {
+                        Err(_) => match fallback.as_ref().map(|dir| git.open(dir)) {
                             Some(Ok(repo)) if !path.exists() => (repo, false),
                             _ => return (task, None),
                         },
