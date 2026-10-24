@@ -214,19 +214,13 @@ fn a_new_item_is_installed_and_a_known_one_updated() {
     };
     for adapter in adapters() {
         let first = library
-            .sync(adapter, &entry, &Place::Everywhere, false, false)
+            .sync(adapter, &entry, &Place::Everywhere, false)
             .unwrap();
-        assert_eq!(first.len(), 2, "{}", adapter.label());
+        assert!(first.len() >= 2, "{}", adapter.label());
         assert!(matches!(&first[0], Step::Run(call) if call.args.contains(&"/lib".to_owned())));
     }
     let claude = library
-        .sync(
-            adapter(Agent::Claude),
-            &entry,
-            &Place::Everywhere,
-            true,
-            true,
-        )
+        .sync(adapter(Agent::Claude), &entry, &Place::Everywhere, true)
         .unwrap();
     let args: Vec<Vec<String>> = claude
         .iter()
@@ -235,8 +229,9 @@ fn a_new_item_is_installed_and_a_known_one_updated() {
             _ => Vec::new(),
         })
         .collect();
-    assert_eq!(args[0], ["plugin", "marketplace", "update", "brigadier"]);
-    assert_eq!(args[1][..3], ["plugin", "update", "x@brigadier"]);
+    assert_eq!(args[0], ["plugin", "marketplace", "add", "/lib"]);
+    assert_eq!(args[1], ["plugin", "marketplace", "update", "brigadier"]);
+    assert_eq!(args[2][..3], ["plugin", "update", "x@brigadier"]);
 }
 
 #[test]
@@ -402,13 +397,16 @@ fn both_clis_list_a_library_skill_and_server() {
         .pack("marker", &item, Some(&skill), &[], false, &kept)
         .unwrap();
     for adapter in adapters() {
-        let mut known = false;
         for entry in [&packed_server.entry, &packed_skill.entry] {
             let steps = library
-                .sync(adapter, entry, &Place::Everywhere, known, false)
+                .sync(adapter, entry, &Place::Everywhere, false)
                 .unwrap();
             run_all(adapter, &roots, &steps, &vars);
-            known = true;
+            assert!(
+                adapter.installed(&roots, &entry.id()),
+                "{}",
+                adapter.label()
+            );
         }
         let (command, args) = library
             .server_command(&packed_server.entry, adapter.agent())

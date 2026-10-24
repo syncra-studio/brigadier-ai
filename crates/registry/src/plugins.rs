@@ -318,6 +318,28 @@ struct Install {
     project: Option<PathBuf>,
 }
 
+/// Whether Claude Code has plugin `id` installed for every project (its user scope), on or off.
+pub(crate) fn claude_installed(roots: &Roots, id: &str) -> bool {
+    claude_installs(roots)
+        .iter()
+        .any(|install| install.id == id && install.project.is_none())
+}
+
+/// Whether Codex has plugin `id` installed (its cache holds a version), on or off.
+pub(crate) fn codex_installed(roots: &Roots, id: &str) -> bool {
+    split_id(id).is_some_and(|(plugin, marketplace)| {
+        active_version(
+            &roots
+                .codex_home
+                .join("plugins")
+                .join("cache")
+                .join(marketplace)
+                .join(plugin),
+        )
+        .is_some()
+    })
+}
+
 fn claude_installs(roots: &Roots) -> Vec<Install> {
     let Some(installed) = read_json(
         &roots

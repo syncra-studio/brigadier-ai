@@ -88,6 +88,10 @@ impl AgentAdapter for Codex {
         CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
     }
 
+    fn installed(&self, roots: &Roots, id: &str) -> bool {
+        crate::plugins::codex_installed(roots, id)
+    }
+
     fn refresh_marketplace(&self, _: &str) -> Option<CliCall> {
         // It reads a local marketplace as it is.
         None

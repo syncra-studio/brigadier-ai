@@ -141,6 +141,9 @@ pub trait AgentAdapter: Send + Sync {
     /// Adds a local marketplace (a folder) to the CLI.
     fn add_marketplace(&self, dir: &Path) -> CliCall;
 
+    /// Whether plugin `id` is installed for every project (on or off there).
+    fn installed(&self, roots: &Roots, id: &str) -> bool;
+
     /// Reads local marketplace `name` again, when the CLI keeps a copy of it.
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall>;
 

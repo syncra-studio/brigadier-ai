@@ -82,6 +82,10 @@ impl AgentAdapter for Claude {
         CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
     }
 
+    fn installed(&self, roots: &Roots, id: &str) -> bool {
+        crate::plugins::claude_installed(roots, id)
+    }
+
     fn refresh_marketplace(&self, name: &str) -> Option<CliCall> {
         Some(CliCall::new(PROGRAM, &["plugin", "marketplace", "update"]).arg(name))
     }

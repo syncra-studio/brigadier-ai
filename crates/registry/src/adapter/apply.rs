@@ -132,8 +132,9 @@ fn run(call: &CliCall, env: &[(String, String)]) -> Result<String, ApplyError> {
     let output = cmd
         .output()
         .map_err(|err| spawn_error(call.program, &err))?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.success() || already_so(&stdout) {
+        return Ok(stdout);
     }
     let words = stderr_line(&String::from_utf8_lossy(&output.stderr))
         .or_else(|| stderr_line(&String::from_utf8_lossy(&output.stdout)));
@@ -144,6 +145,16 @@ fn run(call: &CliCall, env: &[(String, String)]) -> Result<String, ApplyError> {
             .map_or_else(|| "a signal".to_owned(), |code| format!("code {code}"));
         format!("`{}` stopped with {code}.", command(call))
     })))
+}
+
+/// A `--json` answer saying nothing needed doing (Claude Code's `alreadyInGoalState`: enabling
+/// a plugin that is on already): what was asked for holds.
+fn already_so(stdout: &str) -> bool {
+    stdout.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line).is_ok_and(|answer| {
+            answer.get("alreadyInGoalState") == Some(&serde_json::Value::Bool(true))
+        })
+    })
 }
 
 /// The line of a CLI's output that says why it failed: its `error` line, else its last.

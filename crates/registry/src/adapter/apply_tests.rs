@@ -386,6 +386,7 @@ fn stub(dir: &Path) -> Vec<(String, String)> {
         "#!/bin/sh\n\
          if [ \"$1\" = fail ]; then echo 'warming up' >&2; echo 'error: it broke' >&2; echo 'Usage: stub' >&2; exit 3; fi\n\
          if [ \"$1\" = mark ]; then touch ran; fi\n\
+         if [ \"$1\" = again ]; then echo '{\"outcome\":\"failed\",\"alreadyInGoalState\":true}'; exit 1; fi\n\
          echo \"args=$* cwd=$(pwd) home=$CODEX_HOME\"\n",
     )
     .unwrap();
@@ -440,6 +441,16 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
     )
     .unwrap_err();
     assert_eq!(err, ApplyError::Cli("error: it broke".to_owned()));
+
+    // Asked for what already holds (a plugin on already): done, not failed.
+    apply(
+        codex,
+        &roots,
+        &catalog,
+        &[Step::Run(call(&["again"], &dir))],
+        &env,
+    )
+    .unwrap();
 
     // A step that needs a terminal stops the plan before anything runs.
     let mut login = call(&["mcp", "login", "s"], &dir);

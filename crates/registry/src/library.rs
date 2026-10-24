@@ -396,28 +396,32 @@ impl Library {
         )
     }
 
-    /// The steps that bring `entry` to `adapter`'s agent at `place`: the marketplace added (or
-    /// refreshed), then the plugin installed, or updated when `installed`.
+    /// The steps that bring `entry` to `adapter`'s agent at `place`: the marketplace added
+    /// (adding it again is harmless) and read again, then the plugin installed, or updated
+    /// when `installed`.
     pub fn sync(
         &self,
         adapter: &dyn AgentAdapter,
         entry: &Entry,
         place: &Place,
-        market_known: bool,
         installed: bool,
     ) -> Result<Vec<Step>, Unsupported> {
-        let mut steps = Vec::new();
-        if !market_known {
-            steps.push(Step::Run(adapter.add_marketplace(&self.root)));
-        } else if let Some(refresh) = adapter.refresh_marketplace(MARKETPLACE) {
-            steps.push(Step::Run(refresh));
-        }
+        let mut steps = self.market_steps(adapter);
         steps.extend(if installed {
             adapter.update_plugin(&entry.id(), place)?
         } else {
             adapter.install_plugin(&entry.id(), place)?
         });
         Ok(steps)
+    }
+
+    /// The marketplace added to `adapter`'s agent (again is harmless), and read again.
+    pub fn market_steps(&self, adapter: &dyn AgentAdapter) -> Vec<Step> {
+        let mut steps = vec![Step::Run(adapter.add_marketplace(&self.root))];
+        if let Some(refresh) = adapter.refresh_marketplace(MARKETPLACE) {
+            steps.push(Step::Run(refresh));
+        }
+        steps
     }
 
     /// How `agent`'s copy of `entry`'s server starts: its command and args (stdio only).
