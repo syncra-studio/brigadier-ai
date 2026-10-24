@@ -1242,9 +1242,8 @@ pub enum ToolSet {
     /// A tab chat's, which reads its session's files: as [`Self::Review`], and Codex keeps its
     /// image generation, as a Chat does, and both have a Chat's shell for `brigadier`.
     TabChat,
-    /// A session's thread (THREAD-PLAN.md Q1): reading, searching, running commands, editing
-    /// and the web, with no sub-agents and nothing that runs in the background. Codex: its
-    /// usual tools less sub-agents.
+    /// A session's or Chat's thread, the orchestrator: the CLI's usual tools, its background
+    /// tasks too, less its sub-agents, which its workers keep (run2-D43).
     Thread,
 }
 

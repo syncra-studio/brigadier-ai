@@ -673,13 +673,14 @@ fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> Sub
 
 /// The built-in tools a session runs without (`--disallowedTools`): a worker's lean start
 /// leaves some out, and sub-agents that could run on a model the task may not use are not
-/// started at all.
+/// started at all. A session's or Chat's thread, the orchestrator, has no sub-agents of its own
+/// (run2-D43); its workers keep theirs.
 fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
     let mut denied: Vec<&str> = Vec::new();
     if spec.tools.user_setup() {
         denied.push(TAB_DENIED_TOOLS);
     }
-    if *sub_agents == SubAgents::Off {
+    if *sub_agents == SubAgents::Off || spec.tools == ToolSet::Thread {
         denied.push(SUB_AGENT_TOOLS);
     }
     (!denied.is_empty()).then(|| denied.join(","))
@@ -3071,11 +3072,12 @@ for line in sys.stdin:
                     .find(|pair| pair[0] == flag)
                     .map(|pair| pair[1].clone())
             };
-            // The CLI's own tools, less only the ones dead in a tab (S17).
+            // The CLI's own tools, less the ones dead in a tab (S17) and its sub-agents: the
+            // orchestrator has none of its own (run2-D43).
             assert_eq!(after("--tools"), None);
             assert_eq!(
-                after("--disallowedTools").as_deref(),
-                Some(TAB_DENIED_TOOLS)
+                after("--disallowedTools"),
+                Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"))
             );
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(
@@ -3333,10 +3335,12 @@ for line in sys.stdin:
                 allowed_models: None,
                 ..spec(cwd, &[])
             };
-            assert_eq!(
-                denied_tools(&session, &SubAgents::Any).as_deref(),
-                Some(TAB_DENIED_TOOLS)
-            );
+            // A thread, the orchestrator, also goes without its sub-agents (run2-D43).
+            let denied = match tools {
+                ToolSet::Thread => format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"),
+                _ => TAB_DENIED_TOOLS.to_owned(),
+            };
+            assert_eq!(denied_tools(&session, &SubAgents::Any), Some(denied));
             let args = Claude::session_args(
                 &session,
                 cwd,
@@ -3793,11 +3797,12 @@ for line in sys.stdin:
                 .position(|arg| arg == name)
                 .map(|at| args[at + 1].clone())
         };
-        // The CLI's own tools, sub-agents among them; only those dead in a tab are denied.
+        // The CLI's own tools, less those dead in a tab and the sub-agents a thread goes
+        // without (run2-D43).
         assert_eq!(flag("--tools"), None, "{args:?}");
         assert_eq!(
-            flag("--disallowedTools").as_deref(),
-            Some(TAB_DENIED_TOOLS),
+            flag("--disallowedTools"),
+            Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}")),
             "{args:?}"
         );
         let settings: Value = serde_json::from_str(&flag("--settings").unwrap()).unwrap();
@@ -3809,6 +3814,24 @@ for line in sys.stdin:
             ..spec(cwd.path(), &[])
         };
         assert_eq!(sub_agents(&raw, cwd.path(), None), SubAgents::Any);
+    }
+
+    /// A session's or Chat's thread, the orchestrator, runs without its Agent tool; a worker
+    /// keeps it (run2-D43).
+    #[test]
+    fn a_thread_has_no_sub_agents_and_a_worker_keeps_them() {
+        let cwd = Temp::new();
+        let worker = SessionSpec {
+            allowed_models: None,
+            ..spec(cwd.path(), &[])
+        };
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            ..worker.clone()
+        };
+        let denied = |spec: &SessionSpec| denied_tools(spec, &sub_agents(spec, cwd.path(), None));
+        assert!(denied(&thread).is_some_and(|tools| tools.contains(SUB_AGENT_TOOLS)));
+        assert!(!denied(&worker).is_some_and(|tools| tools.contains(SUB_AGENT_TOOLS)));
     }
 
     #[test]
