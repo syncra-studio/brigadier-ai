@@ -5,7 +5,6 @@ import { ActivityItems } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
 import { BlockError } from "@/app/conversation/BlockError";
 import { CompactionBlock } from "@/app/conversation/CompactionBlock";
-import { SeamDivider } from "@/app/conversation/SeamRows";
 import { ContinuedFrom } from "@/app/conversation/ContinuedFrom";
 import { JoinedAnswer } from "@/app/conversation/JoinedAnswer";
 import { JoinedAnswerActions } from "@/app/conversation/JoinedAnswerActions";
@@ -345,9 +344,6 @@ export const RequestBlock: FC = () => {
         .map((compaction) => (
           <CompactionBlock key={compaction.id} compaction={compaction} />
         ))}
-      {meta.seams.map((seam) => (
-        <SeamDivider key={seam.n} seam={seam} />
-      ))}
     </MessagePrimitive.Root>
   );
 };

@@ -7,7 +7,7 @@ import { type BlockCard, isImageStep, type SequenceEntry as Entry } from "@/app/
 import { CompactionRow } from "@/app/conversation/CompactionRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { ReplyText } from "@/app/conversation/ReplyText";
-import { NudgeRow, TaskNoticeRow } from "@/app/conversation/SeamRows";
+import { TaskNoticeRow } from "@/app/conversation/SeamRows";
 import { cardBody } from "@/app/conversation/threadCode";
 import { SteerBubble } from "@/app/conversation/SteerBubble";
 import { TimeSeparator } from "@/components/conversation";
@@ -83,7 +83,7 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "nudge":
-      return <NudgeRow />;
+      return null;
     case "taskNotice":
       return <TaskNoticeRow text={entry.text} />;
     case "row":

@@ -765,8 +765,6 @@ export function blockShows(block: Block): boolean {
     block.orchestratorSteps.length > 0 ||
     block.thinking.length > 0 ||
     block.compactions.length > 0 ||
-    block.seams.length > 0 ||
-    block.nudges.length > 0 ||
     block.taskNotices.length > 0 ||
     block.state !== "done"
   );

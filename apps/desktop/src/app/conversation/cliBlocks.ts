@@ -25,6 +25,11 @@ import { sessionImageRef } from "@/state/cliThread";
 import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
 
+/** Internal continuation markers, also recognized with an older daemon or incomplete seam metadata. */
+const NUDGE_MARK = "[Brigadier] A fresh session will continue this work.";
+const HANDOFF_MARK = "[Brigadier hand-off ";
+const HANDOFF_END = "[End of the hand-off]";
+
 /** How Brigadier's checkpoint request starts (`long_sessions/checkpoint.rs` ASK_MARK). */
 const CHECKPOINT_MARK = "[Brigadier · checkpoint]";
 
@@ -437,6 +442,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
   let block: Block | null = null;
+  const internal = new Set<Block>();
+  let maintenance = false;
   const seams = view.seams ?? [];
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
   // A successor that started by itself: its first message is Brigadier's word to carry on.
@@ -453,11 +460,26 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   const framed = (request: string) => lastTaken.has(request.slice(-8));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
-    const { event } = entry;
+    let { event } = entry;
+    if (event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK)) {
+      const end = event.text.lastIndexOf(HANDOFF_END);
+      if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
+    }
     // Brigadier's one message at a seam is its line in the turn, never a bubble of the user's;
     // sent as a turn of its own, that turn has no user message, as a successor's that carried on.
     const asked = event.type === "message" && event.role === "user" ? event : null;
-    const own = !!asked && carried.has(asked.itemId);
+    const own = !!asked && (carried.has(asked.itemId) || asked.text === "Carry on from the hand-off note.");
+    if (asked) {
+      maintenance = nudges.has(asked.itemId) || asked.text.trimStart().startsWith(NUDGE_MARK) || asked.text.trimStart().startsWith(HANDOFF_MARK);
+      if (maintenance && startsTurn(entry)) {
+        if (block) settle(block, view.turns[blocks.length - 1]);
+        block = emptyBlock(asked.itemId, entry.atMs ?? 0, []);
+        blocks.push(block);
+        internal.add(block);
+        times.push([[position, entry.atMs ?? 0]]);
+      }
+    }
+    if (maintenance) return;
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && workerNotices(asked.text);
     const queued = asked && queuedId(asked.text);
@@ -581,7 +603,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (next < 0 || !before) continue;
     before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
   }
-  return blocks;
+  return blocks.filter((each) => !internal.has(each));
 }
 
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */

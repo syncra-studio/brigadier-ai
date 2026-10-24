@@ -467,7 +467,7 @@ test("a call's kind, detail and exit read as the engine's", () => {
   assert.equal(exitOf("fine"), undefined);
 });
 
-test("a seam: Brigadier's message is its line in the turn, and the divider stands before the successor's first turn", () => {
+test("hand-off maintenance prompts and replies stay out of the conversation, with or without seam metadata", () => {
   const seam = { n: 1, open: false, at: "u3", carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null, movedTo: null };
   const steered: ThreadView = {
     entries: [
@@ -482,7 +482,8 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
   const [first, second] = cliBlocks(steered, "conv");
   assert.ok(first && second);
   assert.deepEqual(first.steers, []);
-  assert.deepEqual(first.nudges, [1]);
+  assert.deepEqual(first.nudges, []);
+  assert.deepEqual(first.texts, [], "the hand-off reply is internal too");
   assert.deepEqual(first.seams, [{ n: 1, note: seam.note, start: seam.start, death: null, movedTo: null }]);
   assert.deepEqual(second.seams, []);
 
@@ -503,7 +504,6 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
     [
       ["u1", "message", [], []],
-      ["n1", null, [2], ["it ended its turn without writing one"]],
     ],
   );
   // A successor that carried on by itself: its first turn has no user bubble, under the divider.
@@ -518,10 +518,15 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
   assert.deepEqual(
     carried.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.length]),
     [
-      ["u1", "message", [1], 1],
+      ["u1", "message", [], 1],
       ["u3", null, [], 0],
     ],
   );
+  const withoutMetadata = cliBlocks({ ...own, seams: [] }, "conv");
+  assert.deepEqual(withoutMetadata.map((block) => block.key), ["u1"]);
+  assert.deepEqual(withoutMetadata[0]?.texts.map((text) => text.text), ["Big."]);
+  const rawStart = cliBlocks({ entries: [user("start", "\n\n[Brigadier hand-off 2 · conv]\n[End of the hand-off] quoted inside history\n" + "internal\n".repeat(9000) + "[End of the hand-off]\n\nCarry on from the hand-off note.", 2000)], turns: [turn("start", 2000, null, null)] }, "conv");
+  assert.equal(rawStart[0]?.user, null, "the raw bootstrap never becomes a chat bubble");
   // While the thread writes its note, no divider yet.
   assert.deepEqual(cliBlocks({ ...own, seams: [{ ...seam, open: true, at: null }] }, "conv").flatMap((block) => block.seams), []);
 });

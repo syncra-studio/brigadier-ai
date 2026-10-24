@@ -221,7 +221,11 @@ impl TailBudget {
         let hot = usize::try_from(self.hot_tokens.filter(|n| *n > 0)?).ok()?;
         let window = usize::try_from(self.target_window.filter(|n| *n > 0)?).ok()?;
         // The bootstrap's existing approximation is four UTF-8 bytes per token.
-        Some(hot.saturating_mul(4).min(window.saturating_mul(2)))
+        Some(
+            hot.saturating_mul(4)
+                .min(window.saturating_mul(2))
+                .min(128_000),
+        )
     }
 
     fn bytes(&self, sections: usize) -> usize {
@@ -285,7 +289,10 @@ pub(crate) fn start_path(record: &Path, n: u32) -> PathBuf {
 /// The one message of seam `note`'s (§6's seam text, first part).
 pub(crate) fn nudge(note: &Path) -> String {
     format!(
-        "{NUDGE_MARK} Finish the step you are on, at a boundary you choose; don't start new \
+        "{NUDGE_MARK} This is internal maintenance: do not narrate it or send a hand-off \
+         status to the user. Keep the note concise; reference transcript entries instead of \
+         copying transcripts or command outputs. Finish the step you are on, at a boundary you \
+         choose; don't start new \
          work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close or carry \
          each open item by id, and check your last steps kept each rule; write any slip as a \
          Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
@@ -321,7 +328,9 @@ pub(crate) fn handoff_line(n: u32, key: &str) -> String {
 /// §6's successor lines, for the successor that starts generation `generation`.
 fn successor_lines(generation: u32) -> String {
     format!(
-        "You continue an earlier session. The open items, rules and decisions below are verbatim \
+        "Resume the user's work without announcing this internal continuation, ledger \
+         operations, or hand-off files. You continue an earlier session. The open items, rules and \
+         decisions below are verbatim \
          and authoritative; so are the note and last exchanges.\nFirst add one ledger entry: \
          \"Took over gen {generation} · open <ids> · applies next: <id> (how), …\". If a question \
          waits on the user, raise the oldest one in this reply.\nFor anything else from before, \
@@ -377,7 +386,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .iter()
         .map(|item| {
             item.as_ref()
-                .is_some_and(|(_, text)| text.starts_with(NUDGE_MARK))
+                .is_some_and(|(_, text)| text.trim_start().starts_with(NUDGE_MARK))
         })
         .collect();
     let read = |from: usize, to: usize| format!("`brigadier brain read {} {from} {to}`", boot.key);
@@ -405,7 +414,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| user_text(entry).is_some_and(|text| !text.starts_with(NUDGE_MARK)))
+        .filter(|(_, entry)| {
+            user_text(entry).is_some_and(|text| !text.trim_start().starts_with(NUDGE_MARK))
+        })
         .map(|(at, _)| at)
         .collect();
 
@@ -550,8 +561,6 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             }
             let max = if message {
                 usize::MAX
-            } else if expanded {
-                budget
             } else {
                 LATEST_TOOL_BYTES
             };
@@ -581,7 +590,14 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         if shown[at] || boot.entries[at].parent.is_some() {
             continue;
         }
-        let Some(mut text) = item(at, if expanded { budget } else { ITEM_BYTES }) else {
+        let Some(mut text) = item(
+            at,
+            if expanded {
+                budget.min(ITEM_BYTES)
+            } else {
+                ITEM_BYTES
+            },
+        ) else {
             continue;
         };
         // An expanded tail cuts the item to what is left, its header and cut line included.
@@ -714,7 +730,7 @@ fn said_by_user(entry: &FileEntry) -> bool {
             role: Role::User,
             text,
             ..
-        } if entry.parent.is_none() && !text.starts_with(NUDGE_MARK) => {
+        } if entry.parent.is_none() && !text.trim_start().starts_with(NUDGE_MARK) => {
             let own = without_handoff(text).trim();
             !own.is_empty() && own != CARRY_ON && !own.starts_with(HANDOFF_MARK)
         }
@@ -791,11 +807,11 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
         else {
             continue;
         };
-        if text.starts_with(NUDGE_MARK) {
+        if text.trim_start().starts_with(NUDGE_MARK) {
             nudge = Some(item_id.clone());
             continue;
         }
-        let Some(rest) = text.strip_prefix(HANDOFF_MARK) else {
+        let Some(rest) = text.trim_start().strip_prefix(HANDOFF_MARK) else {
             continue;
         };
         let n = rest
@@ -823,12 +839,46 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
 
 /// `text` without the hand-off a successor's first message starts with.
 pub(crate) fn without_handoff(text: &str) -> &str {
-    match text.strip_prefix(HANDOFF_MARK) {
+    match text.trim_start().strip_prefix(HANDOFF_MARK) {
         Some(rest) => rest
-            .find(HANDOFF_END)
+            .rfind(HANDOFF_END)
             .map_or(text, |end| rest[end + HANDOFF_END.len()..].trim_start()),
         None => text,
     }
+}
+
+/// Maintenance prompts and their replies stay in the CLI records, never in the chat view.
+pub(crate) fn hide_internal(view: &mut crate::thread_view::ThreadView) {
+    let mut hidden = std::collections::HashSet::new();
+    let mut maintenance = false;
+    let mut standalone = false;
+    view.entries.retain(|entry| {
+        if entry.parent.is_none()
+            && let ProviderEvent::Message {
+                item_id,
+                role: Role::User,
+                text,
+            } = &entry.event
+        {
+            maintenance = text.trim_start().starts_with(NUDGE_MARK)
+                || text.trim_start().starts_with(HANDOFF_MARK);
+            standalone = maintenance && !entry.steer;
+            if maintenance {
+                hidden.insert(item_id.clone());
+                return false;
+            }
+        }
+        if maintenance {
+            // A steered nudge still ends the real user's turn. Keep that end, not the
+            // maintenance reply or its tool calls. Standalone maintenance has no chat turn.
+            return !standalone
+                && entry.parent.is_none()
+                && matches!(entry.event, ProviderEvent::TurnCompleted { .. });
+        }
+        true
+    });
+    view.turns
+        .retain(|turn| !hidden.contains(&turn.user_message));
 }
 
 #[cfg(test)]

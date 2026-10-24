@@ -132,12 +132,9 @@ fn the_handoff_comes_in_its_order() {
         text.find(needle)
             .unwrap_or_else(|| panic!("{needle} missing"))
     };
-    assert!(text.starts_with(
-        "[Brigadier hand-off 2 · abcd1234]\nYou continue an earlier session. The open items, \
-         rules and decisions below are verbatim and authoritative; so are the note and last \
-         exchanges.\nFirst add one ledger entry: \"Took over gen 3 · open <ids> · applies next: \
-         <id> (how), …\". If a question waits on the user, raise the oldest one in this reply.\n"
-    ));
+    assert!(text.starts_with("[Brigadier hand-off 2 · abcd1234]\nResume the user's work"));
+    assert!(text.contains("without announcing this internal continuation"));
+    assert!(text.contains("Took over gen 3 · open <ids>"));
     assert!(at("## Map") < at("## Open items, verbatim and whole"));
     assert!(at("## Open items") < at("## Rules and decisions, verbatim and whole"));
     assert!(at("## Rules and decisions") < at("## Hand-off note"));
@@ -473,7 +470,10 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         message(
             "u1",
             Role::User,
-            &format!("{}\nmap{HANDOFF_END}\n\nnext", handoff_line(1, "k")),
+            &format!(
+                "\n\n{}\nquoted {HANDOFF_END}\nmap{HANDOFF_END}\n\nnext",
+                handoff_line(1, "k")
+            ),
         ),
         message(
             "u2",
@@ -493,6 +493,34 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         unreachable!()
     };
     assert_eq!(text, "next");
+    for steer in [false, true] {
+        let mut prompt = message("maintenance", Role::User, &nudge(&note_path(record, 3)));
+        prompt.steer = steer;
+        let mut view = crate::thread_view::view(
+            vec![std::sync::Arc::new(vec![
+                message("real", Role::User, "Fix it"),
+                message("answer", Role::Assistant, "Working on the fix"),
+                prompt,
+                message(
+                    "internal-reply",
+                    Role::Assistant,
+                    "Hand-off written. Ledger audited. Stopped.",
+                ),
+                message("next", Role::User, "More work"),
+                message("resumed", Role::Assistant, "The fix is ready"),
+            ])],
+            None,
+            &[],
+        );
+        hide_internal(&mut view);
+        let ids: Vec<_> = view
+            .entries
+            .iter()
+            .filter_map(|entry| brigadier_providers::session_file::item_id(&entry.event))
+            .collect();
+        assert_eq!(ids, ["real", "answer", "next", "resumed"]);
+        assert_eq!(view.turns.len(), 2);
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -628,8 +656,8 @@ fn d49_tail_budget_uses_reason_hot_context_and_target_cap() {
                 TAIL_BYTES
             );
         } else {
-            assert_eq!(budget(Some(90_000), Some(200_000)).bytes(10_000), 350_000);
-            assert_eq!(budget(Some(90_000), Some(100_000)).bytes(10_000), 190_000);
+            assert_eq!(budget(Some(90_000), Some(200_000)).bytes(10_000), 118_000);
+            assert_eq!(budget(Some(90_000), Some(100_000)).bytes(10_000), 118_000);
             assert_eq!(budget(Some(90_000), Some(100_000)).bytes(250_000), 0);
         }
     }
@@ -687,7 +715,7 @@ fn expanded_tail_keeps_the_sections_first_and_whole_and_omissions_readable() {
                     || spans(&text).iter().any(|(a, b)| (*a..=*b).contains(&at))
             );
         }
-        assert!(text.len() <= 400_000 + 2_000);
+        assert!(text.len() <= 128_000 + 8_000, "{}", text.len());
     }
 }
 
