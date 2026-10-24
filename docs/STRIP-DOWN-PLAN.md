@@ -238,8 +238,9 @@ compacts in place (switch on, below; run2-D2).
   - **Codex (P1, run2-D2, run2-D6).** No size seams. The 872k window override goes. Brigadier sets
     `model_auto_compact_token_limit` only when `BRIGADIER_SEAM_TOKENS` is set explicitly (run2-D16), and a
     user's own `model_auto_compact_token_limit` wins (G17). Codex compacts by itself at its own point (≈245k
-    on a 272k-window model). The battery's candidate arms always set a shared point (`--tokens`, 200k by
-    default), so there Codex compacts at that point, not at its own. Brigadier reads the compaction from the
+    on a 272k-window model). The battery's candidate arms use a shared point (`--tokens`, 200k by
+    default), except the pilot's P1 Codex long `@codex-default` variants, which omit the override and
+    test Codex's own point (run2-D18). Brigadier reads the compaction from the
     completed `contextCompaction` item. The thread shows the CLI's own "Compacted" divider.
   - **Claude (P2, run2-D5, run2-D7, run2-D12).** At a turn end past the point (≈200k), Brigadier's next turn
     is `/compact` with keep-instructions: open items; decisions in the user's words with their ledger ids;

@@ -54,7 +54,7 @@ def summary_row(run):
     violations = {f"{score['group']}.{key}": value for score in result.get("depth_scores", [])
                   for key, value in score["decision_violations"].items()}
     return {"source": result["source"], "daemon_sha256": result["daemon_sha256"],
-            "threshold": run.args.tokens, "turns": run.args.turns, "model": run.args.model,
+            "threshold": None if run.args.arm in arms.CODEX_DEFAULT_ARMS else run.args.tokens, "turns": run.args.turns, "model": run.args.model,
             "provider": run.args.provider, "profile": run.args.profile, "arm": run.args.arm,
             "seed": run.args.seed, "lineage": run.args.lineage,
             "status": result.get("status", "incomplete" if run.errors or not rows else "complete"),
@@ -134,6 +134,8 @@ def main(argv=None):
     args.arms = list(dict.fromkeys(args.arms.split(",")))
     if any(arm not in arms.ARMS for arm in args.arms) or not args.arms:
         p.error("unknown arm")
+    if any(arm in arms.CODEX_DEFAULT_ARMS for arm in args.arms) and args.provider != "codex":
+        p.error("@codex-default arms require --provider codex")
     if args.tokens < 100000 or args.tokens > 1000000:
         p.error("shared threshold must be 100000..1000000 (Claude CLI's supported range)")
     if args.repetitions < 1:

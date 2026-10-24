@@ -559,6 +559,8 @@ def prepare_economics(result):
 def arm_markdown(result):
     lines = ["", f"Arm status: {result.get('status', 'observed')}" +
              (": " + result["reason"] if result.get("reason") else ""), ""]
+    if result.get("arm", "").endswith("@codex-default"):
+        lines += ["Codex compaction point: CLI default (no shared override).", ""]
     if result.get("arm") == "zed":
         lines += [f"Zed text compactions: {result.get('zed_compactions', 0)}; "
                   f"native compactions: {result.get('compactions', 'unavailable')}.",

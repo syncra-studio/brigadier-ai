@@ -8,9 +8,11 @@ from summary import SummaryBattery
 
 # Phase B integration point: change this one constant if the build names its switch differently.
 LONG_SESSION_SWITCH = "BRIGADIER_LONG_SESSIONS"
+CODEX_DEFAULT_ARMS = {f"{arm}@codex-default": arm for arm in ("native-bare", "native", "plain")}
 CANDIDATES = ("native-bare", "native", "native-full", "restore-only", "instructions-only",
-              "native+checkpoint", "native-full+checkpoint", "seam-repaired")
-ARMS = ("seam", "plain", "plain@200k", "zed", "summary", *CANDIDATES)
+              "native+checkpoint", "native-full+checkpoint", "seam-repaired",
+              *(arm for arm, base in CODEX_DEFAULT_ARMS.items() if base != "plain"))
+ARMS = ("seam", "plain", "plain@200k", "plain@codex-default", "zed", "summary", *CANDIDATES)
 
 
 def supports_switch(daemon, capability=LONG_SESSION_SWITCH):
@@ -35,7 +37,11 @@ class CandidateBattery(Battery):
         super().setup()
 
     def configure_environment(self, env):
-        env[LONG_SESSION_SWITCH] = self.args.arm
+        env[LONG_SESSION_SWITCH] = CODEX_DEFAULT_ARMS.get(self.args.arm, self.args.arm)
+        if self.args.arm in CODEX_DEFAULT_ARMS:
+            # Battery.start installs the seam point first. Native Codex must receive
+            # no explicit point so the real daemon leaves its CLI default alone.
+            env.pop("BRIGADIER_SEAM_TOKENS", None)
         return env
 
     def generations(self):
@@ -56,12 +62,15 @@ class SharedPlainBattery(PlainBattery):
 
 
 def transport(arm):
+    arm = CODEX_DEFAULT_ARMS.get(arm, arm)
     return {"seam": Battery, "plain": SharedPlainBattery, "plain@200k": SharedPlainBattery,
             "zed": ZedBattery, "summary": SummaryBattery}.get(arm, CandidateBattery)
 
 
 def configure(args, parser, legacy_tokens):
     """Explicit fair options never alter an existing nightly invocation."""
+    if args.arm in CODEX_DEFAULT_ARMS and args.provider != "codex":
+        parser.error("@codex-default arms require --provider codex")
     args.fair = args.fair or args.arm not in ("seam", "plain", "zed", "summary")
     args.shared_transition = args.fair
     args.tokens = args.tokens if args.tokens is not None else (200000 if args.fair else legacy_tokens)

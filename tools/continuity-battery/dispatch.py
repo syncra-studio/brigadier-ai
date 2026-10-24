@@ -50,7 +50,7 @@ def plan(preset="none", profile="work", requested_arms="plain@200k,native", prov
                 add("stage0", provider, short, ["seam", "plain@200k"], 1, (1.25, 2.5))
     elif preset == "pilot":
         add("p1", "codex", "updates-short", ["seam", "native-bare", "native", "plain"], 4)
-        add("p1", "codex", "recall-long", ["native-bare", "native", "plain"], 2)
+        add("p1", "codex", "recall-long", ["native-bare@codex-default", "native@codex-default", "plain@codex-default"], 2)
         add("p2", "claude", "work", ["plain@200k", "native-bare", "native-full", "seam"], 2)
         for provider in PROVIDERS:
             # §3's P3 table budgets this block at approximately $50 total (24 arm-runs).
@@ -90,6 +90,8 @@ def markdown(planned):
              "Custom cells reuse the nearest provider/profile estimate; Codex work and Claude legacy long are extrapolations.", "",
              "Presets fix all cells; custom profile/arms/providers/repetitions inputs are ignored for a preset. "
              "P5 output-cap arms are excluded (run2-D17). All comparisons are pilots.", "",
+             "P1 Codex long arms labelled `@codex-default` use Codex's own compaction point, "
+             "with no shared override (run2-D18). Other cells keep their existing thresholds.", "",
              "| Block | Provider | Profile | Arms | Repetitions | Arm-runs | List USD |",
              "|---|---|---|---|---:|---:|---:|"]
     for group in planned["groups"]:

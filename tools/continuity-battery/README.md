@@ -419,7 +419,8 @@ Dispatch inputs added alongside the existing `arms` and `zed_long` inputs:
   run with `--fair --tokens 200000`, nine/90 fillers and 1,200/3,500 ballast words.
 - `arms`: the existing comma-separated input also accepts `plain@200k`, `native-bare`,
   `native`, `native-full`, `restore-only`, `instructions-only`, `native+checkpoint`,
-  `native-full+checkpoint`, and the test-only `seam-repaired` on the experiment path.
+  `native-full+checkpoint`, the Codex-only `native-bare@codex-default`,
+  `native@codex-default`, `plain@codex-default`, and the test-only `seam-repaired` on the experiment path.
   Its existing default (`seam,plain,zed`) is unchanged.
 - `providers`: `claude`, `codex`, or `both` (default).
 - `repetitions`: positive integer, default 1. Custom matrices cannot exceed 256 arm-runs.
@@ -433,11 +434,18 @@ Preset matrices (one arm-run means one arm in one independent lineage):
 |---|---|---|---|---:|---:|
 | stage0 | both | recall-short and updates-short | seam, plain@200k | 1 | 8 |
 | pilot/P1 | Codex | updates-short | seam, native-bare, native, plain | 4 | 16 |
-| pilot/P1 | Codex | recall-long | native-bare, native, plain | 2 | 6 |
+| pilot/P1 | Codex | recall-long | native-bare@codex-default, native@codex-default, plain@codex-default | 2 | 6 |
 | pilot/P2 | Claude | work | plain@200k, native-bare, native-full, seam | 2 | 8 |
 | pilot/P3 | both | recall-short | seam, seam-repaired | 6 | 24 |
 | pilot/endurance | Claude | endurance | plain@200k, native-full | 1 | 2 |
 | pilot/endurance | Codex | endurance | plain@200k, native | 1 | 2 |
+
+The P1 Codex long variants use Codex's own compaction point (run2-D18): the
+Brigadier arms omit `BRIGADIER_SEAM_TOKENS`, and plain installs no
+`model_auto_compact_token_limit`. The suffix appears in cell ids and reports; the
+real daemon still receives the base mode (`native-bare` or `native`). Fair lookup
+access and the fixed filler schedule remain enabled. All other cells keep their
+existing thresholds, including the seam arms' 200k point.
 
 Stage 0 uses the proposal's **$10–20** short-profile budget envelope. The pilot is **58
 arm-runs**, **$462.80–572.80** list equivalent; the assumed +10% judge and +20% failed-run

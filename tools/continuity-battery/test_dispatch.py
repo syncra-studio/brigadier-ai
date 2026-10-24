@@ -1,4 +1,5 @@
 """Dispatch matrices and plan-only safety; no CLIs, daemons or model calls."""
+import argparse
 from collections import Counter
 import contextlib
 import io
@@ -7,16 +8,19 @@ import os
 import re
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import arms
 import battery
+import codex_transport
+import experiment
 import updates
 import dispatch
 
-PREFIX = "20261024-1334-long-session-memory-w17-test-"
+PREFIX = "20261024-1334-long-session-memory-w18-test-"
 
 
 class Presets(unittest.TestCase):
@@ -37,7 +41,7 @@ class Presets(unittest.TestCase):
         planned = dispatch.plan("pilot")
         expected = {
             ("p1", "codex", "updates-short"): ({"seam", "native-bare", "native", "plain"}, 4),
-            ("p1", "codex", "recall-long"): ({"native-bare", "native", "plain"}, 2),
+            ("p1", "codex", "recall-long"): ({"native-bare@codex-default", "native@codex-default", "plain@codex-default"}, 2),
             ("p2", "claude", "work"): ({"plain@200k", "native-bare", "native-full", "seam"}, 2),
             ("p3", "claude", "recall-short"): ({"seam", "seam-repaired"}, 6),
             ("p3", "codex", "recall-short"): ({"seam", "seam-repaired"}, 6),
@@ -104,6 +108,70 @@ class Presets(unittest.TestCase):
                 self.assertEqual(cmd[cmd.index("--min-fillers") + 1], expected)
                 self.assertEqual(cmd[cmd.index("--max-fillers") + 1], expected)
                 self.assertEqual(Path(cmd[2]).name, "updates.py" if cell["profile"].startswith("updates") else "battery.py")
+
+    def test_p1_long_variants_reach_real_native_modes_without_shared_point(self):
+        planned = dispatch.plan("pilot")
+        cells = [cell for cell in planned["matrix"]["include"] if cell["arm"] in arms.CODEX_DEFAULT_ARMS]
+        self.assertEqual(len(cells), 6)
+        for cell in cells:
+            self.assertEqual((cell["block"], cell["provider"], cell["profile"]), ("p1", "codex", "recall-long"))
+            self.assertIn("codex-default", cell["id"])
+            cmd = dispatch.command(cell, Path("/debug/brigadierd"), Path("/public"))
+            self.assertEqual(cmd[cmd.index("--arm") + 1], cell["arm"])
+            args = SimpleNamespace(arm=cell["arm"], provider="codex", fair=True, tokens=200000)
+            arms.configure(args, argparse.ArgumentParser(), 43750)
+            # Fair access still selects app-server and the common lookup archive.
+            self.assertTrue(args.shared_transition)
+            vehicle = arms.transport(args.arm)
+            run = object.__new__(vehicle)
+            run.args = args
+            if vehicle is arms.CandidateBattery:
+                with tempfile.TemporaryDirectory(prefix=PREFIX) as scratch:
+                    run.root = run.data = Path(scratch)
+                    run.processes, run.wait = [], Mock(return_value=True)
+                    args.daemon, args.timeout = "/debug/brigadierd", 100
+                    with patch("battery.subprocess.Popen") as launch:
+                        run.start()
+                    env = launch.call_args.kwargs["env"]
+                    self.assertNotIn("BRIGADIER_SEAM_TOKENS", env)
+                    self.assertEqual(env[arms.LONG_SESSION_SWITCH], arms.CODEX_DEFAULT_ARMS[args.arm])
+            else:
+                self.assertIs(vehicle, arms.SharedPlainBattery)
+                run.repo, run.deadline = Path("/tmp"), time.monotonic() + 10
+                run.processes, run.environment = [], lambda: {}
+                with patch("codex_transport.subprocess.Popen", return_value=Mock(stdout=io.StringIO(""))) as launch, \
+                        patch.object(codex_transport.Client, "call"), patch.object(codex_transport.Client, "write"):
+                    codex_transport.Client(run)
+                self.assertEqual(launch.call_args.args[0], ["codex", "app-server", "-c", 'model_reasoning_effort="high"'])
+                with patch("codex_transport.send", return_value={"answer": "fixture"}) as send:
+                    self.assertEqual(run.send("probe", "prompt"), {"answer": "fixture"})
+                send.assert_called_once_with(run, "probe", "prompt", None)
+            self.assertIn("CLI default (no shared override)", "\n".join(battery.arm_markdown({"arm": args.arm})))
+        self.assertIn("native@codex-default", dispatch.markdown(planned))
+
+    def test_other_candidate_and_seam_thresholds_stay_shared(self):
+        for arm in ("native-bare", "native", "native-full", "seam-repaired", "seam"):
+            run = object.__new__(arms.transport(arm))
+            run.args = SimpleNamespace(arm=arm)
+            env = run.configure_environment({"BRIGADIER_SEAM_TOKENS": "200000"})
+            self.assertEqual(env["BRIGADIER_SEAM_TOKENS"], "200000")
+            if arm != "seam":
+                self.assertEqual(env[arms.LONG_SESSION_SWITCH], arm)
+
+    def test_codex_default_variants_require_codex_and_work_dry_runs_accept_them(self):
+        for arm in arms.CODEX_DEFAULT_ARMS:
+            args = SimpleNamespace(arm=arm, provider="claude", fair=True, tokens=200000)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                arms.configure(args, argparse.ArgumentParser(), 43750)
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as scratch:
+            report = Path(scratch) / "plan.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(experiment.main(["--provider", "codex", "--arms", ",".join(arms.CODEX_DEFAULT_ARMS),
+                                                  "--dry-run", "--report", str(report)]), 0)
+            self.assertEqual(json.loads(report.read_text())["arms"], list(arms.CODEX_DEFAULT_ARMS))
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                experiment.main(["--provider", "claude", "--arms", "native@codex-default",
+                                 "--dry-run", "--report", str(report)])
 
     def test_missing_credentials_skip_without_subprocess(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as scratch, patch("dispatch.subprocess.run") as launch:
