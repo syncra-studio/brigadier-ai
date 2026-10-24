@@ -308,7 +308,7 @@ impl McpLogins {
                 continue;
             }
             self.set_state(id, index, AgentSignInState::Starting);
-            let call = adapter.login(&step.server);
+            let call = adapter.login(&step.server, target.project.as_deref());
             let opened = |link: &str| {
                 let mut open = None;
                 self.update(id, |run| {
@@ -394,7 +394,7 @@ impl McpLogins {
                 .iter()
                 .filter(|entry| adapter.is_server(&entry.name, &target.server, plugin))
             {
-                let call = adapter.logout(&entry.name);
+                let call = adapter.logout(&entry.name, target.project.as_deref());
                 let (binary, env) = clis.command(adapter)?;
                 capture(&binary, &call, &env, LIST_TIMEOUT)?;
             }

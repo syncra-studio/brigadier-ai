@@ -67,7 +67,7 @@ fn claude_keeps_one_project_with_its_own_scopes() {
     );
     // No per-project off for the user's own servers: the Library first (D9).
     assert!(claude.set_server("pencil", &project(), false).is_err());
-    assert!(claude.login("plugin:x:s").needs_terminal);
+    assert!(claude.login("plugin:x:s", None).needs_terminal);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn codex_keeps_one_project_in_the_projects_own_file() {
         &steps[0],
         Step::ProjectFile { edit, .. } if edit.key == ["mcp_servers", "pencil", "enabled"]
     ));
-    assert!(!codex.login("linear").needs_terminal);
+    assert!(!codex.login("linear", None).needs_terminal);
 }
 
 #[test]
@@ -144,15 +144,21 @@ fn each_cli_signs_in_on_its_own_list_and_prints_the_page() {
     let claude = adapter(Agent::Claude);
     let codex = adapter(Agent::Codex);
     assert_eq!(
-        claude.login("plugin:x:s").args,
+        claude.login("plugin:x:s", None).args,
         ["mcp", "login", "plugin:x:s", "--no-browser"]
     );
     assert_eq!(
-        codex.login("linear").args,
+        codex.login("linear", None).args,
         ["mcp", "login", "linear", "--no-browser"]
     );
-    assert_eq!(claude.logout("linear").args, ["mcp", "logout", "linear"]);
-    assert_eq!(codex.logout("linear").args, ["mcp", "logout", "linear"]);
+    assert_eq!(
+        claude.logout("linear", None).args,
+        ["mcp", "logout", "linear"]
+    );
+    assert_eq!(
+        codex.logout("linear", None).args,
+        ["mcp", "logout", "linear"]
+    );
 
     // Claude Code 2.1.310's own words, colours and all.
     let listed = claude.parse_servers(

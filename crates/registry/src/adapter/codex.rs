@@ -170,23 +170,22 @@ impl AgentAdapter for Codex {
         Ok(vec![edit(place, enabled("mcp_servers", name), Some(on))])
     }
 
-    fn login(&self, name: &str) -> CliCall {
+    fn login(&self, name: &str, project: Option<&Path>) -> CliCall {
         // It waits for the browser's callback while its input stays open.
         CliCall::new(PROGRAM, &["mcp", "login"])
             .arg(name)
             .arg("--no-browser")
+            .in_project(project)
     }
 
-    fn logout(&self, name: &str) -> CliCall {
-        CliCall::new(PROGRAM, &["mcp", "logout"]).arg(name)
+    fn logout(&self, name: &str, project: Option<&Path>) -> CliCall {
+        CliCall::new(PROGRAM, &["mcp", "logout"])
+            .arg(name)
+            .in_project(project)
     }
 
     fn list_servers(&self, project: Option<&Path>) -> CliCall {
-        let call = CliCall::new(PROGRAM, &["mcp", "list", "--json"]);
-        match project {
-            Some(dir) => call.in_dir(dir),
-            None => call,
-        }
+        CliCall::new(PROGRAM, &["mcp", "list", "--json"]).in_project(project)
     }
 
     /// Through `codex app-server`'s `config/value/write`; a removal takes the tables it would

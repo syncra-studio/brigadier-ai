@@ -170,26 +170,25 @@ impl AgentAdapter for Claude {
         ))
     }
 
-    fn login(&self, name: &str) -> CliCall {
+    fn login(&self, name: &str, project: Option<&Path>) -> CliCall {
         // Without a terminal it stops at once (research P4).
         CliCall {
             needs_terminal: true,
             ..CliCall::new(PROGRAM, &["mcp", "login"])
                 .arg(name)
                 .arg("--no-browser")
+                .in_project(project)
         }
     }
 
-    fn logout(&self, name: &str) -> CliCall {
-        CliCall::new(PROGRAM, &["mcp", "logout"]).arg(name)
+    fn logout(&self, name: &str, project: Option<&Path>) -> CliCall {
+        CliCall::new(PROGRAM, &["mcp", "logout"])
+            .arg(name)
+            .in_project(project)
     }
 
     fn list_servers(&self, project: Option<&Path>) -> CliCall {
-        let call = CliCall::new(PROGRAM, &["mcp", "list"]);
-        match project {
-            Some(dir) => call.in_dir(dir),
-            None => call,
-        }
+        CliCall::new(PROGRAM, &["mcp", "list"]).in_project(project)
     }
 
     /// One line a server: `<name>: <command or address> - <status>`, the status

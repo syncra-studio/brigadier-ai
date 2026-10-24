@@ -278,6 +278,58 @@ fn a_login_that_fails_says_why_in_the_clis_words() {
     assert_eq!(progress.agents.len(), 1);
 }
 
+/// A server only a project configures: each CLI lists, signs in to and signs out of it only
+/// when run in that project's folder.
+#[cfg(unix)]
+#[test]
+fn a_project_servers_sign_in_and_out_run_in_that_project() {
+    let fake = fake::fake("project");
+    let project = fake.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join(".here"), "").unwrap();
+    // Claude needs a terminal for its login; neither knows `srv` outside the project.
+    let script = |listed: &str, agent: &str| {
+        format!(
+            "#!/bin/sh
+[ -f .here ] || {{ echo 'No MCP server named srv' >&2; exit 1; }}
+             case \"$1 $2\" in
+\"mcp list\") if [ -f \"$STATE/{agent}-in\" ]; then echo '{}'; else echo '{listed}'; fi ;;
+             \"mcp login\") echo 'http://127.0.0.1:1/authorize?response_type=code'; touch \"$STATE/{agent}-in\" ;;
+             \"mcp logout\") rm -f \"$STATE/{agent}-in\"; touch \"$STATE/{agent}-out\" ;;
+esac
+",
+            listed.replace("Needs authentication", "Connected").replace("not_logged_in", "o_auth"),
+        )
+    };
+    std::fs::write(
+        fake.dir.join("claude"),
+        script(
+            "srv: http://127.0.0.1:1/mcp (HTTP) - ! Needs authentication",
+            "claude",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        fake.dir.join("codex"),
+        script(r#"[{"name":"srv","auth_status":"not_logged_in"}]"#, "codex"),
+    )
+    .unwrap();
+    let logins = Arc::new(McpLogins::default());
+    let target = Target {
+        server: "srv".into(),
+        plugin: None,
+        project: Some(project.clone()),
+    };
+    let id = logins.start(fake.clis.clone(), target.clone(), Arc::new(|_: &str| {}));
+    let progress = fake::wait(&logins, &id, |p| p.finished);
+    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_eq!(progress.agents.len(), 2, "{progress:?}");
+    assert!(fake.dir.join("claude-in").exists() && fake.dir.join("codex-in").exists());
+
+    logins.sign_out(&fake.clis, &target).unwrap();
+    assert!(fake.dir.join("claude-out").exists() && fake.dir.join("codex-out").exists());
+}
+
 /// The real CLIs, signed in to a loopback OAuth server from one call, then used signed in.
 /// Run with `--ignored`. Claude keeps its sign-in in the login Keychain under the throwaway
 /// config folder's own item, which the test deletes after.

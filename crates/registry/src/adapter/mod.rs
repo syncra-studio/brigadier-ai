@@ -87,6 +87,14 @@ impl CliCall {
         self.cwd = Some(dir.to_owned());
         self
     }
+
+    /// In `project`'s folder, when there is one.
+    fn in_project(self, project: Option<&Path>) -> Self {
+        match project {
+            Some(dir) => self.in_dir(dir),
+            None => self,
+        }
+    }
 }
 
 /// One edit of a key in a TOML config the CLI reads, keeping everything else in it as it was.
@@ -230,12 +238,14 @@ pub trait AgentAdapter: Send + Sync {
     /// Turns the user's own MCP server `name` (not a plugin's) on or off at `place`.
     fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported>;
 
-    /// Signs the CLI in to the server it lists as `name` (the name its own list reports). It
-    /// prints the sign-in page's address rather than opening a browser: Brigadier opens it.
-    fn login(&self, name: &str) -> CliCall;
+    /// Signs the CLI in to the server it lists as `name` (the name its own list reports) in
+    /// `project` (or anywhere), where [`Self::list_servers`] found it. It prints the sign-in
+    /// page's address rather than opening a browser: Brigadier opens it.
+    fn login(&self, name: &str, project: Option<&Path>) -> CliCall;
 
-    /// Forgets the CLI's own sign-in to the server it lists as `name`.
-    fn logout(&self, name: &str) -> CliCall;
+    /// Forgets the CLI's own sign-in to the server it lists as `name` in `project` (or
+    /// anywhere).
+    fn logout(&self, name: &str, project: Option<&Path>) -> CliCall;
 
     /// Lists the MCP servers the CLI loads in `project` (or anywhere), as it reports them.
     fn list_servers(&self, project: Option<&Path>) -> CliCall;
