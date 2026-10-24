@@ -180,6 +180,8 @@ mod tests {
             assert!(SKILL.contains(line), "{line}");
         }
         assert!(SKILL.contains("the fusion skill"));
+        // Deciding (run2-D40): the session judges a message queued while it works.
+        assert!(SKILL.contains("judge it soon with `brigadier queue <id>`"));
         // Reviews in proportion (the w123 bench: a two-file job tripled in time under them),
         // adversarial, on a routed reviewer (run2-D33, D35, D36).
         for line in [
