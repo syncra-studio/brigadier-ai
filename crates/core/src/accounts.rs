@@ -191,28 +191,28 @@ fn can_take(
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// What decides a ready account's place: the day its weekly window resets (counted from now;
-/// unknown last), then how much is left in its tightest window (5-hour or weekly; unknown
-/// counts as full).
+/// What decides a ready account's place: when its weekly window resets (past resets count
+/// as now; unknown last), then how much is left in its tightest window (5-hour or weekly;
+/// unknown counts as full).
 fn rank(candidate: &Candidate, model: Option<&str>, now: i64) -> (Option<i64>, f64) {
-    let day = candidate
+    let reset = candidate
         .quota
         .as_ref()
         .and_then(|quota| weekly_reset(quota, model))
-        .map(|at| (at - now).max(0) / DAY_MS);
+        .map(|at| at.max(now));
     let left = candidate
         .quota
         .as_ref()
         .and_then(|quota| headroom(quota, model))
         .unwrap_or(100.0);
-    (day, left)
+    (reset, left)
 }
 
 /// The accounts that can take work, in the order work goes to them (switching on, D23): the
-/// one whose weekly window resets on the soonest day first, since its quota is lost first;
-/// within a day, the one nearest its limit (least left in its tightest window, 5-hour or
-/// weekly), so it drains while the other stays whole; then the earliest added. An unknown
-/// reset sorts last.
+/// soonest weekly reset group first, since its quota is lost first. Each group spans 24 hours
+/// from its earliest reset. Within a group, the one nearest its limit (least left in its
+/// tightest window, 5-hour or weekly), so it drains while the other stays whole; then the
+/// earliest added. An unknown reset sorts last.
 pub fn smart_order(
     settings: &Settings,
     provider: ProviderKind,
@@ -221,23 +221,53 @@ pub fn smart_order(
     avoid: &[AccountRef],
     now: i64,
 ) -> Vec<AccountRef> {
+    ranked_order(settings, provider, model, candidates, avoid, now)
+        .into_iter()
+        .map(|(_, candidate)| candidate.account.clone())
+        .collect()
+}
+
+/// Keep each account's reset group so the page explains the same ordering as selection.
+fn ranked_order<'a>(
+    settings: &Settings,
+    provider: ProviderKind,
+    model: Option<&str>,
+    candidates: &'a [Candidate],
+    avoid: &[AccountRef],
+    now: i64,
+) -> Vec<(usize, &'a Candidate)> {
     let mut ready: Vec<&Candidate> = candidates
         .iter()
         .filter(|candidate| can_take(candidate, provider, model, avoid))
         .collect();
-    ready.sort_by(|a, b| {
-        let ((a_day, a_left), (b_day, b_left)) = (rank(a, model, now), rank(b, model, now));
-        a_day
-            .is_none()
-            .cmp(&b_day.is_none())
-            .then_with(|| a_day.cmp(&b_day))
-            .then_with(|| a_left.total_cmp(&b_left))
+    ready.sort_by_key(|candidate| {
+        let (reset, _) = rank(candidate, model, now);
+        (reset.is_none(), reset)
+    });
+    let mut start = None;
+    let mut group = 0;
+    let mut grouped: Vec<_> = ready
+        .into_iter()
+        .map(|candidate| {
+            let (reset, _) = rank(candidate, model, now);
+            if let Some(first) = start
+                && reset.is_none_or(|at: i64| at.saturating_sub(first) > DAY_MS)
+            {
+                group += 1;
+                start = reset;
+            } else if start.is_none() {
+                start = reset;
+            }
+            (group, candidate)
+        })
+        .collect();
+    grouped.sort_by(|(a_group, a), (b_group, b)| {
+        a_group
+            .cmp(b_group)
+            .then_with(|| rank(a, model, now).1.total_cmp(&rank(b, model, now).1))
             .then_with(|| added(settings, &a.account).cmp(&added(settings, &b.account)))
     });
-    ready
-        .into_iter()
-        .map(|candidate| candidate.account.clone())
-        .collect()
+    grouped
 }
 
 /// Why an account stands where it does in [`order`].
@@ -250,9 +280,9 @@ pub fn smart_order(
 pub enum OrderReason {
     /// Picked with Use (switching off): work goes here while it can take it.
     Picked,
-    /// Its weekly window resets on an earlier day than the next one's: its quota is lost first.
+    /// Its weekly window is in an earlier reset group than the next one's: its quota is lost first.
     ResetsSooner { resets_at_ms: i64 },
-    /// Its weekly window resets the same day as the next one's, and it has less left in its
+    /// Its weekly window is in the same reset group as the next one's, and it has less left in its
     /// tightest window (`window`, the window's label): it drains first.
     NearerLimit { window: String, used_percent: f64 },
     /// Level with the next one: it was added first.
@@ -288,7 +318,11 @@ pub fn order(
     candidates: &[Candidate],
     now: i64,
 ) -> Vec<AccountOrder> {
-    let mut accounts = smart_order(settings, provider, model, candidates, &[], now);
+    let ranked = ranked_order(settings, provider, model, candidates, &[], now);
+    let mut accounts: Vec<_> = ranked
+        .iter()
+        .map(|(_, candidate)| candidate.account.clone())
+        .collect();
     let picked = !settings.switches_accounts(provider);
     let default = default_account(settings, provider);
     if picked && let Some(at) = accounts.iter().position(|account| *account == default) {
@@ -296,9 +330,9 @@ pub fn order(
         accounts.insert(0, first);
     }
     let find = |account: &AccountRef| {
-        candidates
+        ranked
             .iter()
-            .find(|candidate| candidate.account == *account)
+            .find(|(_, candidate)| candidate.account == *account)
     };
     let count = accounts.len();
     let mut placed: Vec<AccountOrder> = accounts
@@ -312,7 +346,9 @@ pub fn order(
             } else {
                 let (this, next) = (find(account), find(&accounts[at + 1]));
                 match (this, next) {
-                    (Some(this), Some(next)) => ahead(this, next, model, now),
+                    (Some((this_group, this)), Some((next_group, next))) => {
+                        ahead(this, next, model, now, this_group == next_group)
+                    }
                     _ => OrderReason::Added,
                 }
             };
@@ -348,10 +384,14 @@ pub fn order(
 }
 
 /// Why `this` goes before `next` in [`smart_order`].
-fn ahead(this: &Candidate, next: &Candidate, model: Option<&str>, now: i64) -> OrderReason {
-    let ((this_day, this_left), (next_day, _)) = (rank(this, model, now), rank(next, model, now));
-    if let Some(day) = this_day
-        && next_day.is_none_or(|next| day < next)
+fn ahead(
+    this: &Candidate,
+    next: &Candidate,
+    model: Option<&str>,
+    now: i64,
+    same_group: bool,
+) -> OrderReason {
+    if !same_group
         && let Some(at) = this
             .quota
             .as_ref()
@@ -359,7 +399,7 @@ fn ahead(this: &Candidate, next: &Candidate, model: Option<&str>, now: i64) -> O
     {
         return OrderReason::ResetsSooner { resets_at_ms: at };
     }
-    let (_, next_left) = rank(next, model, now);
+    let ((_, this_left), (_, next_left)) = (rank(this, model, now), rank(next, model, now));
     if this_left < next_left
         && let Some(window) = this.quota.as_ref().and_then(|quota| tightest(quota, model))
     {
@@ -621,12 +661,81 @@ mod tests {
             weekly(Some("home"), 40.0, Some(21)),
         ];
         assert_eq!(pick(&settings(None, true), &tied), Some("work".into()));
-        // A day later is later, however near its limit.
+        // More than a day later is later, however near its limit.
         let days = [
-            weekly(None, 90.0, Some(30)),
+            weekly(None, 90.0, Some(45)),
             weekly(Some("work"), 10.0, Some(20)),
         ];
         assert_eq!(pick(&settings(None, true), &days), Some("work".into()));
+    }
+
+    #[test]
+    fn golban_at_95_percent_precedes_hostpapa_at_1_percent_with_resets_three_hours_apart() {
+        let mut golban = weekly(Some("golban"), 0.0, Some(4 * 24 + 2));
+        golban.quota.as_mut().unwrap().windows[1].used_percent = 95.0;
+        let mut hostpapa = weekly(None, 0.0, Some(3 * 24 + 23));
+        hostpapa.quota.as_mut().unwrap().windows[1].used_percent = 1.0;
+        let all = [hostpapa, golban];
+        let settings = settings(None, true);
+        for now in [0, 3_600_000, 5 * 3_600_000] {
+            assert_eq!(
+                ready(&settings, ProviderKind::Claude, None, &all, &[], now),
+                Some(all[1].account.clone())
+            );
+            let order = order(&settings, ProviderKind::Claude, None, &all, now);
+            assert_eq!(order[0].account, all[1].account);
+            assert_eq!(
+                order[0].reason,
+                OrderReason::NearerLimit {
+                    window: "Weekly".into(),
+                    used_percent: 95.0,
+                }
+            );
+            assert_eq!(order[1].account, all[0].account);
+        }
+    }
+
+    #[test]
+    fn a_weekly_reset_more_than_a_day_sooner_precedes_a_nearer_limit() {
+        let all = [
+            weekly(None, 1.0, Some(95)),
+            weekly(Some("work"), 95.0, Some(120)),
+        ];
+        let order = order(&settings(None, true), ProviderKind::Claude, None, &all, 0);
+        assert_eq!(order[0].account, all[0].account);
+        assert_eq!(
+            order[0].reason,
+            OrderReason::ResetsSooner {
+                resets_at_ms: 95 * 3_600_000
+            }
+        );
+    }
+
+    #[test]
+    fn reset_groups_span_24_hours_from_the_first_reset_without_chaining() {
+        // All adjacent resets are within a day, but 48h belongs to a later group than 20h.
+        // The boundary is inclusive: 44h still joins the group starting at 20h.
+        let all = [
+            weekly(None, 40.0, Some(20)),
+            weekly(Some("work"), 20.0, Some(44)),
+            weekly(Some("home"), 90.0, Some(48)),
+        ];
+        let settings = settings(None, true);
+        let expected = vec![
+            all[0].account.clone(),
+            all[1].account.clone(),
+            all[2].account.clone(),
+        ];
+        for candidates in [all.to_vec(), all.iter().rev().cloned().collect()] {
+            assert_eq!(
+                smart_order(&settings, ProviderKind::Claude, None, &candidates, &[], 0),
+                expected
+            );
+            let order = order(&settings, ProviderKind::Claude, None, &candidates, 0);
+            assert!(matches!(order[0].reason, OrderReason::NearerLimit { .. }));
+            // These two are only 4h apart; the group identity decides the explanation.
+            assert!(matches!(order[1].reason, OrderReason::ResetsSooner { .. }));
+        }
     }
 
     #[test]
@@ -760,7 +869,7 @@ mod tests {
         let all = [
             codex(None, 99.5, 5),
             codex(Some("work"), 10.0, 30),
-            codex(Some("home"), 10.0, 20),
+            codex(Some("home"), 10.0, 5),
         ];
         assert_eq!(pick(&settings(None, true), &all), Some("home".into()));
         // A weekly window Codex reports as `primary` is read by its length: the week, not a

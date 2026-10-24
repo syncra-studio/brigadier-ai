@@ -133,7 +133,8 @@ export type AccountRowView = { view: AccountView; ownLogin: boolean };
 /**
  * One row per account. When this computer's login is signed in to an account also added here,
  * the two are one row in the login's place: the added account's, saying it is this computer's
- * login, in use (and the default) when either is.
+ * login, in use (and the default) when either is. Keep the earlier routing place of the two,
+ * then number the visible ready accounts consecutively for each provider.
  */
 export function oneRowPerAccount(views: readonly AccountView[]): AccountRowView[] {
   const twins = new Map<AccountView, AccountView>();
@@ -150,11 +151,22 @@ export function oneRowPerAccount(views: readonly AccountView[]): AccountRowView[
     if (twin) twins.set(own, twin);
   }
   const merged = new Set(twins.values());
-  return views.flatMap((view) => {
+  const rows = views.flatMap((view) => {
     if (merged.has(view)) return [];
     const twin = twins.get(view);
     if (!twin) return [{ view, ownLogin: view.account.account === undefined }];
-    return [{ view: { ...twin, default: twin.default || view.default, inUse: twin.inUse || view.inUse }, ownLogin: true }];
+    const earlier = view.place !== null && (twin.place === null || view.place < twin.place) ? view : twin;
+    return [{ view: { ...twin, default: twin.default || view.default, inUse: twin.inUse || view.inUse, place: earlier.place, reason: earlier.reason }, ownLogin: true }];
+  });
+  const places = new Map<AccountView, number>();
+  for (const provider of new Set(rows.map(({ view }) => view.account.provider))) {
+    const ready = rows.filter(({ view }) => view.account.provider === provider && view.place !== null);
+    ready.sort((a, b) => (a.view.place ?? Infinity) - (b.view.place ?? Infinity));
+    ready.forEach(({ view }, index) => places.set(view, index + 1));
+  }
+  return rows.map((row) => row.view.place === null ? row : {
+    ...row,
+    view: { ...row.view, place: places.get(row.view) ?? null },
   });
 }
 

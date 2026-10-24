@@ -192,6 +192,21 @@ const view = (name: string, email: string): AccountView => ({
   reason: null,
 });
 
+test("account rows keep First after merging a login and follow routing order without gaps", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "providers.html?drive=order", "providers-result", 30000);
+  const seen = JSON.parse(dump) as Record<string, unknown>;
+  assert.deepEqual(seen.merged, [
+    { name: "hostpapa", order: "First · added earlier" },
+    { name: "golban", order: "Second · after the others" },
+  ]);
+  assert.deepEqual(seen.routed, [
+    { name: "golban", order: "First · nearest its weekly limit, 95% used" },
+    { name: "hostpapa", order: "Second · added earlier" },
+    { name: "Limited", order: "At its limit: waits for its reset" },
+    { name: "Signed out", order: "" },
+  ]);
+});
+
 // Renaming never shows an email the row hides: the editor starts empty for an account named by
 // its email unless that row is revealed, and never starts from the signed-in email.
 test("an account's name and editor keep its email masked unless its row is revealed", async () => {

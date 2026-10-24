@@ -785,12 +785,18 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     );
     assert_eq!(published_in_use(&flow).await, vec![Some("acct-c".into())]);
 
-    // Its switch on again hands the choice back to the order: the week that ends on the
-    // soonest day, among those that can take work.
+    // Its switch on again hands the choice back to the order: these resets are 23 hours
+    // apart, so the account nearer its weekly limit keeps taking work.
     let mut settings = flow.core.settings();
     settings.manual_accounts.clear();
     flow.core.update_settings(settings).await.unwrap();
     flow.manager.runtime.sync_accounts().await;
+    assert_eq!(
+        in_use(&flow).await,
+        (vec![Some("acct-c".into())], Some(20.0))
+    );
+    // A reset more than a day later gives way to the earlier weekly window.
+    report_weekly(&flow, Some("acct-c"), 20.0, 62).await;
     assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
 
     // The own login renamed is published by its name (its switch untouched); cleared, it goes

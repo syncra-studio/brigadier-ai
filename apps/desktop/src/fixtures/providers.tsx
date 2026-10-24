@@ -203,6 +203,10 @@ const escape = async () => {
   await fixtureInput({ type: "key", key: "Escape" });
   await pause(150);
 };
+const orderRows = () => all('[data-slot="account-row"]').map((row) => ({
+  name: text(row.querySelector('[data-slot="account-title"]')),
+  order: text(row.querySelector('[data-slot="account-order"]')),
+}));
 const locationRow = () => document.querySelector('[data-slot="agent-location"]') ?? document;
 /** Every card's look, and the first switch that is on's, for the look drive. */
 const cards = () => all('[data-slot="settings-card"]').map(surface);
@@ -265,6 +269,35 @@ function Fixture() {
     }
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
+    if (params.get("drive") === "order") {
+      void (async () => {
+        const own = listed.find((view) => view.account.provider === "claude" && view.account.account === undefined)!;
+        const extra = listed.find((view) => view.account.account === "acct-work")!;
+        const hostpapa: typeof own = { ...own, name: "hostpapa", place: 1, reason: { kind: "added" } };
+        const twin: typeof own = { ...hostpapa, account: { provider: "claude", account: "hostpapa" }, place: 2 };
+        const golban: typeof own = { ...extra, name: "golban", place: 3, reason: { kind: "last" } };
+        listed = [hostpapa, golban, twin];
+        useApp.setState({ accounts: { accounts: listed, warnings: [] } });
+        await pause(300);
+        openClaude();
+        await pause(300);
+        seen.merged = orderRows();
+        // The engine now puts golban first despite its later reset: the page follows its
+        // order, and collapsing hostpapa's duplicate leaves no gap in the places.
+        listed = [
+          { ...hostpapa, place: 2, reason: { kind: "added" }, inUse: false },
+          { ...golban, place: 1, reason: { kind: "nearerLimit", window: "Weekly", usedPercent: 95 }, inUse: true },
+          { ...twin, place: 3, reason: { kind: "last" }, inUse: false },
+          { ...extra, account: { provider: "claude", account: "limited" }, name: "Limited", status: { ...extra.status!, email: "" }, place: null, reason: { kind: "atLimit" } },
+          { ...extra, account: { provider: "claude", account: "signed-out" }, name: "Signed out", status: null, place: null, reason: { kind: "signedOut" } },
+        ];
+        useApp.setState({ accounts: { accounts: listed, warnings: [] } });
+        await pause(300);
+        seen.routed = orderRows();
+        setResult(JSON.stringify(seen));
+      })();
+      return;
+    }
     if (look) {
       void (async () => {
         openSettings("general");

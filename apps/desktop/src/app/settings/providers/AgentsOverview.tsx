@@ -31,7 +31,7 @@ export const OVERVIEW_ROWS = {
   switchAccounts: {
     label: "Switch accounts automatically",
     description:
-      "Work goes first to the account whose weekly limit resets soonest, then to the one nearest its limit, so quota is used before it resets. Use picks one account and turns this off. Either way, work moves to another account when its account hits its limit.",
+      "Accounts are grouped by weekly resets within 24 hours of the earliest reset in each group. Work goes to the earliest group first, then to the account nearest its 5-hour or weekly limit. Use picks one account and turns this off. Either way, work moves to another account when its account hits its limit.",
   },
   notSetUp: "Agents Brigadier can run that aren't installed yet",
 } as const;
