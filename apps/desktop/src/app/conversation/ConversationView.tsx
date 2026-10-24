@@ -482,9 +482,9 @@ export function ConversationView({
   const full = useMemo(
     () =>
       conversationId
-        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest ?? EMPTY_DIGEST, { state: run, error: runError })
+        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest ?? EMPTY_DIGEST, { state: run, error: runError }, session)
         : cliThreadTree(EMPTY_VIEW, "", [], {}, pending, EMPTY_DIGEST, { state: run, error: runError }),
-    [cliView, conversationId, thread.items, thread.fullText, digest, pending, run, runError],
+    [cliView, conversationId, thread.items, thread.fullText, digest, pending, run, runError, session],
   );
   // A long thread shows its newest turns; the older ones wait behind "N earlier messages", until
   // shown (then for the app's run, so the thread reopens where it was left).

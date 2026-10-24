@@ -393,9 +393,10 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
 /**
  * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
  * (`board`). A subagent's own items (`parent`) are not drawn: the thread shows its Agent call's
- * row, as it does for a Claude subagent's work.
+ * row, as it does for a Claude subagent's work. `session`: the thread is a session's, where
+ * Brigadier compacts a long one itself.
  */
-export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest): Block[] {
+export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest, session = false): Block[] {
   const blocks: Block[] = [];
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
@@ -416,7 +417,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep.
     // Its checkpoint request before Codex compacts is Brigadier's too (run2-D9).
-    const compacting = !!asked && (/^\/compact(\s|$)/.test(asked.text) || asked.text.includes(CHECKPOINT_MARK));
+    // Brigadier's own turn carries no request of the user's: what the user sent shows as ever.
+    const brigadiers = startsTurn(entry) && view.turns[blocks.length]?.requests.length === 0;
+    const compacting =
+      !!asked && session && brigadiers && (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK));
     if (asked && (own || compacting || news || nudges.has(asked.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
@@ -556,8 +560,9 @@ export function cliThreadTree(
   pending: readonly PendingMessage[],
   board: BoardDigest,
   run: RunNow,
+  session = false,
 ): ThreadTree {
-  const blocks = cliBlocks(view, conversationId, board);
+  const blocks = cliBlocks(view, conversationId, board, session);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
   // shows it as it was sent, its pasted chips, mentions and attachments with it.
   const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));

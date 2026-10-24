@@ -196,6 +196,8 @@ test("a long session's /compact is never a bubble: its turn shows the compaction
       turns: [turn("u1", 1000, 2000, "done"), turn("u2", 3000, 4000, "done"), turn("u3", 5000, 6000, "done")],
     },
     "conv",
+    undefined,
+    true,
   );
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.compactions.length]),
@@ -218,6 +220,8 @@ test("a long session's checkpoint request is never a bubble either", () => {
       turns: [turn("u1", 1000, 2000, "done"), turn("u2", 3000, 4000, "done"), turn("u3", 5000, 6000, "done")],
     },
     "conv",
+    undefined,
+    true,
   );
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges]),
@@ -227,6 +231,26 @@ test("a long session's checkpoint request is never a bubble either", () => {
       ["u3", "message", []],
     ],
   );
+});
+
+test("what the user sent shows as ever, /compact and Brigadier's marks too; so does a chat's /compact", () => {
+  const entries = [
+    user("u1", "/compact keep the API notes", 1000),
+    user("u2", "What does [Brigadier · checkpoint] mean?", 3000),
+    user("u3", "[Brigadier · checkpoint] pasted from the log", 5000),
+  ];
+  const asked = (id: string, startedAt: number) => ({ ...turn(id, startedAt, startedAt + 1000, "done"), requests: [`r-${id}`] });
+  const sent = cliBlocks({ entries, turns: [asked("u1", 1000), asked("u2", 3000), asked("u3", 5000)] }, "conv", undefined, true);
+  assert.deepEqual(
+    sent.map((block) => [block.key, block.user?.kind ?? null]),
+    [
+      ["u1", "message"],
+      ["u2", "message"],
+      ["u3", "message"],
+    ],
+  );
+  const chat = cliBlocks({ entries: [user("u1", "/compact", 1000)], turns: [turn("u1", 1000, 2000, "done")] }, "conv");
+  assert.deepEqual(chat.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"]]);
 });
 
 test("a background job's end Claude took up shows the CLI's notice line before its reply, in view once the work folds", () => {
