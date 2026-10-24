@@ -109,6 +109,8 @@ def metrics(result):
 
 
 def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=False):
+    from evidence import purge
+    purge()
     output.mkdir(parents=True, exist_ok=True)
     report = {"provider": provider, "status": "complete", "reason": None, "arms": []}
     if not live:

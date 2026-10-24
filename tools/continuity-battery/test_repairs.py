@@ -58,3 +58,50 @@ class ScoringRepairs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrivateEvidenceRepair(unittest.TestCase):
+    def test_fix3_private_bundle_survives_cleanup_expires_and_never_exports(self):
+        from types import SimpleNamespace
+        import evidence
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as scratch:
+            root = Path(scratch)
+            owned = root / "scratch"
+            owned.mkdir()
+            repo = owned / "repo"
+            repo.mkdir()
+            (repo / "checkpoint.json").write_text('{"private":"checkpoint"}')
+            native = owned / "native.jsonl"
+            native.write_text('{"private":"transcript"}\n')
+            (owned / "daemon.log").write_text("private daemon event")
+            run = SimpleNamespace(root=owned, repo=repo, record=lambda: repo, native_files=[str(native)],
+                                  args=SimpleNamespace(provider="claude"), result={"steps": ["private answer"]})
+            store = root / "private-store"
+            directory = evidence.retain(run, store=store)
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((directory / "evidence.json").stat().st_mode & 0o777, 0o600)
+            self.assertTrue((directory / "record/checkpoint.json").is_file())
+            native.unlink()
+            self.assertIn("transcript", (directory / "native-0.jsonl").read_text())
+            manifest = json.loads((directory / "manifest.json").read_text())
+            self.assertEqual(manifest["expires_at"] - manifest["created_at"], 7 * 86400)
+            self.assertEqual(evidence.purge(store, manifest["expires_at"] - 1), [])
+            public = root / "public.md"
+            battery.write_report(run.result, "safe report", public)
+            self.assertNotIn("private", public.with_suffix(".json").read_text())
+            foreign = store / "evidence-not-ours"
+            foreign.mkdir()
+            self.assertEqual(evidence.purge(store, manifest["expires_at"]), [directory.name])
+            self.assertTrue(foreign.exists())
+
+    def test_fix3_lookup_hits_and_ttl_calls_are_retained(self):
+        import evidence
+        rows = [{"type": "assistant", "message": {"id": "a", "model": "fixture",
+                 "usage": {"input_tokens": 20, "cache_creation": {"ephemeral_1h_input_tokens": 10}},
+                 "content": [{"type": "tool_use", "id": "lookup", "input": {
+                     "command": "brigadier brain read --id xyz"}}]}},
+                {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "lookup",
+                                                               "content": "needed FACT-123"}]}}]
+        self.assertEqual(evidence.calls(rows * 2, "claude")[0]["usage"]["cache_creation"]["ephemeral_1h_input_tokens"], 10)
+        self.assertEqual(len(evidence.calls(rows * 2, "claude")), 1)
+        self.assertEqual(evidence.lookups(rows, "claude", {"fact": "FACT-123"})[0]["hits"], ["fact"])

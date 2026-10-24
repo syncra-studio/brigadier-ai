@@ -79,6 +79,8 @@ def grade(answer, expected, action):
 class Battery:
     def __init__(self, args):
         self.args = args
+        from evidence import purge
+        purge()
         self.root = Path("/tmp").resolve() / (args.scratch_prefix + "-" + secrets.token_hex(3))
         self.root.mkdir()
         self.data = self.root / "data"
@@ -414,6 +416,11 @@ class Battery:
                 "SELECT * FROM turn_usage WHERE conversation_id=? ORDER BY at_ms", (self.conversation,))]
 
     def cleanup(self):
+        from evidence import retain
+        try:
+            self.evidence_directory = retain(self)
+        except Exception as error:
+            self.errors.append("capture: private evidence: " + str(error))
         self.deadline = max(self.deadline, time.monotonic() + 120)
         try:
             if self.proc and self.proc.poll() is None:
@@ -457,8 +464,11 @@ class Battery:
         self.result["cleanup"] = self.cleanup_notes
         prepare_economics(self.result)
         # Evidence is intentionally private; only the concise text report is committed.
+        from evidence import private_json
+        if getattr(self, "evidence_directory", None):
+            private_json(self.evidence_directory / "evidence.json", self.result)
         if self.args.evidence:
-            Path(self.args.evidence).write_text(json.dumps(self.result, indent=2))
+            private_json(self.args.evidence, self.result)
         if not trusted:
             shutil.rmtree(self.root)
 
@@ -578,26 +588,18 @@ def is_lookup(event):
 
 
 def native_calls(entries):
-    """Read only this run's recorded native files; deduplicate streaming message fragments."""
+    """Per-call native usage, including TTL, deduplicated by the native message id."""
+    from evidence import calls, records
     sessions = {}
     for entry in entries:
         event = entry["entry"].get("event") or {}
         if event.get("type") != "sessionStarted" or not event.get("file"):
             continue
-        calls = {}
+        provider = entry["entry"].get("provider", "claude")
         try:
-            for line in native_path(event["file"], entry["entry"].get("provider", "claude")).read_text().splitlines():
-                row = json.loads(line)
-                message = row.get("message") or {}
-                if row.get("type") == "assistant" and message.get("id") and message.get("usage"):
-                    previous = calls.get(message["id"], {})
-                    calls[message["id"]] = {"usage": message["usage"], "timestamp": row.get("timestamp"),
-                                            "tools": sorted(set(previous.get("tools", []) + [
-                                                c.get("name") for c in message.get("content", [])
-                                                if c.get("type") == "tool_use" and c.get("name")]))}
-            sessions[event["nativeId"]] = list(calls.values())
+            sessions[event.get("nativeId", event["file"])] = calls(records(native_path(event["file"], provider)), provider)
         except (OSError, ValueError):
-            sessions[event["nativeId"]] = []
+            sessions[event.get("nativeId", event["file"])] = []
     return sessions
 
 
