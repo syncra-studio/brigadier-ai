@@ -166,10 +166,29 @@ export async function loadThreadView(conversationId: string): Promise<void> {
   }
 }
 
-/** News waiting for the next microtask: a streaming turn says a delta at a time. */
+/**
+ * News waiting for the next frame: a streaming turn says a delta at a time, each its own task in
+ * the WebView, and several sessions stream at once. A frame draws what came since the last one
+ * once, not once per delta. A hidden window draws no frames: there it waits a moment instead.
+ */
 let queued: ThreadNews[] = [];
+let frame = 0;
+let timer: ReturnType<typeof setTimeout> | null = null;
+const NEWS_WAIT_MS = 100;
+
+function scheduleNews(): void {
+  // Outside a page (the unit tests) there are no frames: the news goes on at once.
+  const page = typeof document !== "undefined" && typeof requestAnimationFrame === "function";
+  if (page && !document.hidden) frame = requestAnimationFrame(flushNews);
+  // A frame that doesn't come (a window hidden meanwhile) doesn't hold the news back.
+  timer = setTimeout(flushNews, page ? NEWS_WAIT_MS : 0);
+}
 
 function flushNews(): void {
+  if (frame) cancelAnimationFrame(frame);
+  if (timer !== null) clearTimeout(timer);
+  frame = 0;
+  timer = null;
   const batch = queued;
   queued = [];
   const { views } = useCliThread.getState();
@@ -201,7 +220,7 @@ function flushNews(): void {
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
 export function applyThreadNews(news: ThreadNews): void {
   queued.push(news);
-  if (queued.length === 1) queueMicrotask(flushNews);
+  if (queued.length === 1) scheduleNews();
 }
 
 /**

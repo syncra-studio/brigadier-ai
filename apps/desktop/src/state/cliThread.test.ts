@@ -102,3 +102,32 @@ test("a thread is read once, follows the stream, and is read again when its turn
     useCliThread.setState({ views: {} });
   }
 });
+
+test("in a page, what streamed between two frames is drawn once, at the frame", async () => {
+  const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
+  const frames: (() => void)[] = [];
+  page.document = { hidden: false };
+  page.requestAnimationFrame = (draw: () => void) => frames.push(draw);
+  page.cancelAnimationFrame = () => {};
+  const view: ThreadView = { entries: [at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1)], turns: [] };
+  useCliThread.setState({ views: { framed: view } });
+  let updates = 0;
+  const stop = useCliThread.subscribe(() => (updates += 1));
+  try {
+    // Each delta its own task, as the WebView hands them over.
+    for (const [index, text] of ["One", " two", " three"].entries()) {
+      applyThreadNews({ conversationId: "framed", entries: [at({ type: "messageDelta", itemId: "m", text }, 2 + index)] });
+      await settle();
+    }
+    assert.equal(updates, 0);
+    assert.equal(frames.length, 1);
+    frames[0]?.();
+    assert.equal(updates, 1);
+    assert.deepEqual(useCliThread.getState().views["framed"]?.entries.at(-1)?.event, { type: "messageDelta", itemId: "m", text: "One two three" });
+  } finally {
+    stop();
+    delete page.document;
+    delete page.requestAnimationFrame;
+    delete page.cancelAnimationFrame;
+  }
+});
