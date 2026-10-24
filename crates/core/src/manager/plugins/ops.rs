@@ -109,6 +109,9 @@ pub(crate) struct Ctx<'a> {
     pub projects: &'a [PathBuf],
     /// Tells the page how each agent's part goes.
     pub report: &'a (dyn Fn(Agent, PluginStep) + Sync),
+    /// Each agent's CLI as sessions run it (the user's choice included); `None`: its name on
+    /// PATH.
+    pub binary: &'a (dyn Fn(Agent) -> Option<PathBuf> + Sync),
 }
 
 /// Where values (env, headers) are kept: the Keychain, through `brigadier secret`.
@@ -130,9 +133,17 @@ impl Ctx<'_> {
         if steps.is_empty() {
             return Ok(());
         }
-        apply(adapter, self.roots, &self.read(None), steps, self.env)
-            .map(|_| ())
-            .map_err(|err| err.to_string())
+        let binary = (self.binary)(adapter.agent());
+        apply(
+            adapter,
+            self.roots,
+            &self.read(None),
+            steps,
+            self.env,
+            binary.as_deref(),
+        )
+        .map(|_| ())
+        .map_err(|err| err.to_string())
     }
 
     /// Runs `plan` for each agent (or only `only`), telling the page how each goes; whether

@@ -132,6 +132,8 @@ pub(crate) struct Setup {
     pub library: Library,
     pub cli: PathBuf,
     pub projects: Vec<PathBuf>,
+    /// Each agent's CLI as sessions run it.
+    pub binary: Arc<dyn Fn(Agent) -> Option<PathBuf> + Send + Sync>,
 }
 
 /// Starts `action`; its job's id.
@@ -172,6 +174,7 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
             secrets: &secrets,
             projects: &setup.projects,
             report: &report,
+            binary: &*setup.binary,
         };
         let (result, warning): (Result<Vec<String>, String>, Option<String>) = match &action {
             Action::Switch {

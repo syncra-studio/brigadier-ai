@@ -229,7 +229,14 @@ fn plugin_on(project: &Path, shared: bool) -> Result<Applied, ApplyError> {
         shared,
     };
     let steps = codex.set_plugin("x@lib", &place, true).unwrap();
-    apply(codex, &roots(project), &trusting(&[project]), &steps, &[])
+    apply(
+        codex,
+        &roots(project),
+        &trusting(&[project]),
+        &steps,
+        &[],
+        None,
+    )
 }
 
 fn exclude_of(repo: &Path) -> String {
@@ -360,7 +367,7 @@ fn an_untrusted_project_is_refused_and_a_plain_folder_needs_no_exclude() {
         shared: false,
     };
     let steps = codex.set_plugin("x@lib", &place, true).unwrap();
-    let err = apply(codex, &roots(&dir), &trusting(&[]), &steps, &[]).unwrap_err();
+    let err = apply(codex, &roots(&dir), &trusting(&[]), &steps, &[], None).unwrap_err();
     assert_eq!(err, ApplyError::Untrusted("Codex"));
     assert_eq!(
         err.to_string(),
@@ -425,6 +432,7 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
         &catalog,
         &[Step::Run(call(&["plugin", "add", "x@lib"], &dir))],
         &env,
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -442,6 +450,7 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
         &catalog,
         &[Step::Run(call(&["fail"], &dir))],
         &env,
+        None,
     )
     .unwrap_err();
     assert_eq!(err, ApplyError::Cli("error: it broke".to_owned()));
@@ -453,6 +462,7 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
         &catalog,
         &[Step::Run(call(&["again"], &dir))],
         &env,
+        None,
     )
     .unwrap();
 
@@ -465,6 +475,7 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
         &catalog,
         &[Step::Run(call(&["mark"], &dir)), Step::Run(login)],
         &env,
+        None,
     )
     .unwrap_err();
     assert_eq!(
@@ -477,7 +488,7 @@ fn a_run_step_runs_the_cli_with_its_folder_and_home() {
         program: "brigadier-apply-no-such-cli",
         ..call(&[], &dir)
     };
-    let err = apply(codex, &roots, &catalog, &[Step::Run(missing)], &env).unwrap_err();
+    let err = apply(codex, &roots, &catalog, &[Step::Run(missing)], &env, None).unwrap_err();
     assert!(err.to_string().contains("couldn't find"), "{err}");
 }
 
@@ -494,6 +505,7 @@ fn an_agent_without_a_config_writer_refuses_a_user_config_step() {
             true,
         ))],
         &[],
+        None,
     )
     .unwrap_err();
     assert!(matches!(err, ApplyError::Failed(_)), "{err:?}");
@@ -512,7 +524,7 @@ fn codex_writes_the_user_config_through_its_own_writer() {
     let catalog = Catalog::default();
 
     let on = [Step::UserConfig(set(&["plugins", "x@y", "enabled"], false))];
-    apply(codex, &roots, &catalog, &on, &[]).unwrap();
+    apply(codex, &roots, &catalog, &on, &[], None).unwrap();
     let written = std::fs::read_to_string(&config).unwrap();
     println!("after the write:\n{written}");
     assert!(written.starts_with("# mine\nmodel = \"o3\"\n"), "{written}");
@@ -522,7 +534,7 @@ fn codex_writes_the_user_config_through_its_own_writer() {
     );
 
     let off = [Step::UserConfig(unset(&["plugins", "x@y", "enabled"]))];
-    apply(codex, &roots, &catalog, &off, &[]).unwrap();
+    apply(codex, &roots, &catalog, &off, &[], None).unwrap();
     let removed = std::fs::read_to_string(&config).unwrap();
     println!("after the removal:\n{removed}");
     assert!(!removed.contains("x@y"), "{removed}");
@@ -546,8 +558,61 @@ fn a_project_file_it_cannot_edit_stops_the_plan_first() {
         },
     ];
     let codex = adapter(Agent::Codex);
-    let err = apply(codex, &roots(&dir), &trusting(&[&dir]), &steps, &env).unwrap_err();
+    let err = apply(codex, &roots(&dir), &trusting(&[&dir]), &steps, &env, None).unwrap_err();
     assert!(err.to_string().contains("isn't valid TOML"), "{err}");
     assert!(!dir.join("ran").exists());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "broken = [\n");
+}
+
+/// The agent's CLI by the path sessions use (chosen in Settings, or where its installer put
+/// it), not its bare name on PATH: for its commands and for its config writer.
+#[test]
+#[cfg(unix)]
+fn the_agents_own_cli_runs_from_its_resolved_path() {
+    let dir = fixture("resolved");
+    let chosen = dir.join("elsewhere").join("my-codex");
+    std::fs::create_dir_all(chosen.parent().unwrap()).unwrap();
+    std::fs::write(
+        &chosen,
+        "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/ran\"\necho chosen\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&chosen, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // No `codex` on this PATH.
+    let env = vec![("PATH".to_owned(), "/usr/bin:/bin".to_owned())];
+    let codex = adapter(Agent::Codex);
+    let roots = roots(&dir);
+
+    let applied = apply(
+        codex,
+        &roots,
+        &Catalog::default(),
+        &[Step::Run(codex.add_marketplace(&dir))],
+        &env,
+        Some(&chosen),
+    )
+    .unwrap();
+    assert_eq!(applied.output, ["chosen\n"]);
+
+    // Its config writer too (the stand-in answers nothing, so the write itself fails).
+    let _ = apply(
+        codex,
+        &roots,
+        &Catalog::default(),
+        &[Step::UserConfig(set(
+            &["plugins", "x@lib", "enabled"],
+            true,
+        ))],
+        &env,
+        Some(&chosen),
+    );
+    let ran = std::fs::read_to_string(dir.join("elsewhere").join("ran")).unwrap();
+    assert_eq!(
+        ran.lines().collect::<Vec<_>>(),
+        [
+            format!("plugin marketplace add {}", dir.display()),
+            "app-server".to_owned()
+        ]
+    );
 }

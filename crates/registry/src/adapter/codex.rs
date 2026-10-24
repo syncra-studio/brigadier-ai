@@ -194,6 +194,7 @@ impl AgentAdapter for Codex {
         &self,
         roots: &Roots,
         env: &[(String, String)],
+        program: &Path,
         edit: &TomlEdit,
     ) -> Result<(), ApplyError> {
         let (key, value) = match &edit.value {
@@ -211,7 +212,7 @@ impl AgentAdapter for Codex {
                 )
             }
         };
-        app_server::write_value(PROGRAM, env, &apply::key_path(&key), value)
+        app_server::write_value(program, env, &apply::key_path(&key), value)
     }
 
     /// A JSON array of servers, `auth_status` `not_logged_in` for one that needs a sign-in

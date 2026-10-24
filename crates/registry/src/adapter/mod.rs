@@ -257,15 +257,16 @@ pub trait AgentAdapter: Send + Sync {
     /// (its name, without the marketplace) when it comes with one.
     fn is_server(&self, listed: &str, server: &str, plugin: Option<&str>) -> bool;
 
-    /// Writes `edit` in the user's own config through the CLI's own config writer, run with
-    /// `env`. Only an agent whose plans hold [`Step::UserConfig`] has one.
+    /// Writes `edit` in the user's own config through the CLI's own config writer, run as
+    /// `program` with `env`. Only an agent whose plans hold [`Step::UserConfig`] has one.
     fn write_user_config(
         &self,
         roots: &Roots,
         env: &[(String, String)],
+        program: &Path,
         edit: &TomlEdit,
     ) -> Result<(), ApplyError> {
-        let _ = (roots, env, edit);
+        let _ = (roots, env, program, edit);
         Err(ApplyError::Failed(format!(
             "Brigadier has no way to change {}'s own settings.",
             self.label()

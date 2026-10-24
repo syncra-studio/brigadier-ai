@@ -2,6 +2,7 @@
 //! JSON-RPC). It writes only the user's config; it refuses a project's file.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -19,7 +20,7 @@ const EXIT: Duration = Duration::from_secs(5);
 /// Writes `value` at `key_path` (`plugins."x@lib".enabled`) in the user's config through
 /// `program app-server`; a JSON `null` removes the key (or table).
 pub(super) fn write_value(
-    program: &str,
+    program: &Path,
     env: &[(String, String)],
     key_path: &str,
     value: Value,
@@ -39,7 +40,7 @@ struct Server {
 }
 
 impl Server {
-    fn start(program: &str, env: &[(String, String)]) -> Result<Self, ApplyError> {
+    fn start(program: &Path, env: &[(String, String)]) -> Result<Self, ApplyError> {
         let mut child = Command::new(program)
             .arg("app-server")
             .envs(env.iter().map(|(key, value)| (key, value)))
@@ -47,7 +48,7 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| super::apply::spawn_error(program, &err))?;
+            .map_err(|err| super::apply::spawn_error(&program.display().to_string(), &err))?;
         let stdin = child.stdin.take();
         let (tx, lines) = mpsc::channel();
         if let Some(stdout) = child.stdout.take() {

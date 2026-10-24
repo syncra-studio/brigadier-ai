@@ -854,6 +854,7 @@ impl super::SessionManager {
                 registry: self.registry(),
                 library: self.library(),
                 cli: self.brigadier_cli(),
+                binary: self.clis().binary,
                 projects: self
                     .plugin_projects()
                     .into_iter()

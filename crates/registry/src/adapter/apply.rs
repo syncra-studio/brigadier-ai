@@ -60,24 +60,36 @@ pub struct Applied {
 
 /// Carries out `steps`, planned by `adapter`. `env` is the environment the CLIs run with (the
 /// login shell's); the adapter's [`AgentAdapter::home_env`] for `roots` is added to it.
-/// `catalog` says which projects the agent trusts.
+/// `binary` is the agent's CLI as sessions run it (the one chosen in Settings, or found where
+/// its installer puts it); `None` looks its name up on `env`'s PATH. `catalog` says which
+/// projects the agent trusts.
 pub fn apply(
     adapter: &dyn AgentAdapter,
     roots: &Roots,
     catalog: &Catalog,
     steps: &[Step],
     env: &[(String, String)],
+    binary: Option<&Path>,
 ) -> Result<Applied, ApplyError> {
     let mut env = env.to_vec();
     env.extend(adapter.home_env(roots));
     for step in steps {
         check(adapter, catalog, step, &env)?;
     }
+    let program = binary.unwrap_or_else(|| Path::new(adapter.program()));
     let mut applied = Applied::default();
     for step in steps {
         match step {
-            Step::Run(call) => applied.output.push(run(call, &env)?),
-            Step::UserConfig(edit) => adapter.write_user_config(roots, &env, edit)?,
+            Step::Run(call) => {
+                // The adapter's own CLI is the resolved one; anything else is looked up.
+                let binary = if call.program == adapter.program() {
+                    program
+                } else {
+                    Path::new(call.program)
+                };
+                applied.output.push(run(call, binary, &env)?);
+            }
+            Step::UserConfig(edit) => adapter.write_user_config(roots, &env, program, edit)?,
             Step::ProjectFile { file, edit, shared } => project_file(file, edit, *shared, &env)?,
         }
     }
@@ -120,9 +132,9 @@ fn command(call: &CliCall) -> String {
         .join(" ")
 }
 
-/// Runs the CLI's command; its output, or its own words on why it failed.
-fn run(call: &CliCall, env: &[(String, String)]) -> Result<String, ApplyError> {
-    let mut cmd = Command::new(call.program);
+/// Runs the CLI's command with `binary`; its output, or its own words on why it failed.
+fn run(call: &CliCall, binary: &Path, env: &[(String, String)]) -> Result<String, ApplyError> {
+    let mut cmd = Command::new(binary);
     cmd.args(&call.args)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null());

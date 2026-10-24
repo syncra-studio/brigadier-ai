@@ -137,6 +137,7 @@ impl Fixture {
             secrets: &self.secrets,
             projects: &projects,
             report: &|_, _| {},
+            binary: &|_| None,
         };
         plugin_plan(&ctx, adapter(agent), "tidy@brigadier", project, on, true).unwrap()
     }
@@ -260,6 +261,7 @@ fn remove_also_takes_an_install_a_project_has_of_its_own() {
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     let steps = removal(&ctx, adapter(Agent::Claude), "tidy@brigadier");
     assert_eq!(
@@ -283,6 +285,7 @@ fn an_agents_own_skill_or_another_apps_server_goes_through_use_everywhere() {
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     for key in ["skill:grill", "other:desktop:figma"] {
         assert_eq!(
@@ -344,6 +347,7 @@ fn use_everywhere_refuses_what_the_team_shares_and_keeps_everything_as_it_was() 
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     let err = use_everywhere(&ctx, "server:pg").unwrap_err();
     assert!(err.contains("shared with your team"), "{err}");
@@ -382,6 +386,7 @@ fn an_original_server_is_saved_without_its_values_and_put_back_with_them() {
         secrets: &fx.secrets,
         projects: &projects,
         report: &|_, _| {},
+        binary: &|_| None,
     };
     // Codex's project file: written by Brigadier (D8), the value back in it as it was.
     original.restore(&ctx).unwrap();
@@ -469,6 +474,7 @@ fn both_clis_follow_the_page() {
         secrets: &secrets,
         projects: &projects,
         report: &report,
+        binary: &|_| None,
     };
     let lists_skill = |project: &Path, plugin: &str| -> Vec<Agent> {
         let mut agents: Vec<Agent> = Catalog::read(&roots, Some(project))
@@ -781,6 +787,7 @@ fn plain_clis_have_what_the_page_shows() {
         secrets: &secrets,
         projects: &projects,
         report: &report,
+        binary: &|_| None,
     };
     let no_failures = || assert_eq!(failures.lock().unwrap().as_slice(), [] as [String; 0]);
     let server = |name: &str| {
