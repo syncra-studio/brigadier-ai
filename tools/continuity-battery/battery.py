@@ -353,7 +353,7 @@ class Battery:
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12] for j in range(self.args.ballast))
             self.send(f"ballast-{i:02}", f"Ignore this inert fixture batch {i}; reply only 'batch {i} read'.\n" + ballast)
             # The seam's note is written asynchronously; allow it to finish.
-            if self.args.arm == "seam":
+            if self.args.arm in ("seam", "seam-repaired"):
                 self.wait(lambda: "handoff note written" in (self.root / "daemon.log").read_text(errors="replace") or
                           self.generations() > before, 3)
         self.result["size_seams_before_faults"] = self.generations()
@@ -551,7 +551,7 @@ def prepare_economics(result):
         result["roles"] = {"parent": unavailable}
     result["economics"] = combine(result["roles"].values())
     result["list_price_usd"] = result["economics"]["list_price_usd"]
-    result["native_compaction_in_seam"] = (result.get("arm") == "seam" and (result.get("compactions") or 0) > 0)
+    result["native_compaction_in_seam"] = (result.get("arm") in ("seam", "seam-repaired") and (result.get("compactions") or 0) > 0)
     result["run_kind"] = "fault-recovery" if any(not s.get("skipped") for s in result.get("seams", [])) else "continuity"
     return result
 

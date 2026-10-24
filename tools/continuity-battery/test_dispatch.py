@@ -8,9 +8,12 @@ import re
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import arms
+import battery
+import updates
 import dispatch
 
 PREFIX = "20261024-1334-long-session-memory-w17-test-"
@@ -141,6 +144,22 @@ class Presets(unittest.TestCase):
             summary = json.loads((output / "summary.json").read_text())
             self.assertEqual(len(summary["runs"]), 4)
             self.assertEqual(sum(run["status"] == "not_run" for run in summary["runs"]), 1)
+
+    def test_repaired_seam_keeps_legacy_settling_and_compaction_warning(self):
+        for scenario in (battery.Battery, updates.Updates):
+            for arm in ("seam", "seam-repaired", "plain"):
+                with self.subTest(scenario=scenario.__name__, arm=arm), tempfile.TemporaryDirectory(prefix=PREFIX) as scratch:
+                    run = SimpleNamespace(repo=Path(scratch), root=Path(scratch), result={},
+                        args=SimpleNamespace(arm=arm, fair=True, max_fillers=1, min_fillers=1, ballast=0),
+                        expected={"tool_only": "FIXTURE-TICKET", "absent_ledger": "FIXTURE-ITEM", "large_failure": "FIXTURE-DIAGNOSTIC"},
+                        setup=Mock(), send=Mock(return_value={"answer": "{}"}), generations=lambda: 0, wait=Mock())
+                    scenario.run(run)
+                    self.assertEqual(run.wait.call_count, 0 if arm == "plain" else 1)
+                    if arm != "plain":
+                        self.assertEqual(run.wait.call_args.args[1], 3)
+                    result = {"arm": arm, "compactions": 1}
+                    battery.prepare_economics(result)
+                    self.assertEqual(result["native_compaction_in_seam"], arm != "plain")
 
     def test_seam_repaired_uses_real_switch_and_counts_seams(self):
         run = object.__new__(arms.CandidateBattery)

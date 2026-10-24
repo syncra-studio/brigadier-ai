@@ -94,7 +94,7 @@ class Updates(battery.Battery):
             ballast = " ".join(hashlib.sha256(f"updates-{i}-{j}".encode()).hexdigest()[:12]
                                for j in range(self.args.ballast))
             self.send(f"ballast-{i:02}", f"Ignore this inert fixture batch {i}; reply only 'batch {i} read'.\n" + ballast)
-            if self.args.arm == "seam":
+            if self.args.arm in ("seam", "seam-repaired"):
                 self.wait(lambda: self.generations() > before, 3)
         self.result["seams_before_checks"] = self.generations()
         status = self.send("status", "Where are we? Mention anything still owed or unresolved, using its exact identifier.")["answer"]
