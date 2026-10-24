@@ -50,6 +50,15 @@ impl Plugin {
         self.project.is_none() || self.project.as_deref() == project
     }
 
+    /// Its manifest's description, when it has one.
+    pub fn description(&self) -> Option<String> {
+        self.manifest()
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|text| !text.is_empty())
+    }
+
     /// How its agent shows its skill `name`.
     pub fn skill_name(&self, name: &str) -> String {
         format!("{}:{name}", self.name)

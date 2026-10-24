@@ -106,6 +106,8 @@ pub struct PluginItemView {
     pub files: Vec<String>,
     /// For another app's: the app ("Claude Desktop").
     pub found_in: Option<String>,
+    /// How many skills it holds (a plugin's are one item); none for a server.
+    pub skills: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -311,9 +313,10 @@ fn skill_key(skill: &Skill) -> Option<Key> {
                 kind: KeyKind::Library,
                 name: name.to_owned(),
             },
+            // A plugin's skills are one item: its agent switches the plugin.
             None => Key {
                 kind: KeyKind::Plugin,
-                name: format!("{}/{}", plugin.name, skill.name),
+                name: plugin.name.clone(),
             },
         },
         None => Key {
@@ -343,6 +346,8 @@ struct Presence {
     server_id: Option<String>,
     /// Sources that hold it: whether every agent with it can switch it per project.
     switchable: bool,
+    /// The skills it holds, by name.
+    skills: Vec<String>,
     problem: Option<String>,
 }
 
@@ -448,6 +453,7 @@ fn gather(
                         server_id: None,
                         files: vec![server.file.display().to_string()],
                         found_in: Some(server.source.label().to_owned()),
+                        skills: 0,
                     });
                 }
             }
@@ -501,16 +507,25 @@ fn gather(
             continue;
         };
         let library = key.kind == KeyKind::Library;
+        let plugin = (key.kind == KeyKind::Plugin)
+            .then(|| skill.plugin())
+            .flatten();
         let at = entry(key, items);
         let presence = &mut items[at].1;
         if presence.kind.is_none() || !library {
             presence.kind = Some(PluginKind::Skill);
         }
+        push(&mut presence.skills, skill.name.clone());
         if presence.description.is_empty() {
-            presence.description = skill.description.clone();
+            presence.description = plugin
+                .and_then(|plugin| plugin.description())
+                .unwrap_or_else(|| skill.description.clone());
         }
         if presence.detail.is_empty() {
-            presence.detail = skill.dir.display().to_string();
+            presence.detail = plugin
+                .map_or(&skill.dir, |plugin| &plugin.root)
+                .display()
+                .to_string();
         }
         push(&mut presence.files, skill.skill_md().display().to_string());
         let plugin_only = skill.plugin().is_some();
@@ -703,6 +718,7 @@ pub(crate) fn build(
                 server_id: presence.server_id,
                 files: presence.files,
                 found_in: None,
+                skills: u32::try_from(presence.skills.len()).unwrap_or(u32::MAX),
             })
         })
         .collect();

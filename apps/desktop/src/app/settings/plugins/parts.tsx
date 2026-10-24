@@ -96,7 +96,7 @@ export function PluginRow({ view, item, line, dim = false, chips = [], lit, end,
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="truncate text-label font-medium">{item.name}</span>
-          <span className="text-foreground/50 shrink-0 text-xs">{kindLine(item)}</span>
+          <span data-slot="row-kind" className="text-foreground/50 shrink-0 text-xs">{kindLine(item)}</span>
         </span>
         <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone])}>{line.text}</span>
       </span>
@@ -120,8 +120,10 @@ export function PluginRow({ view, item, line, dim = false, chips = [], lit, end,
 
 /** "MCP server", "Plugin · 9 skills", "MCP server · in Claude Desktop". */
 function kindLine(item: PluginItemView): string {
-  const kind = item.key.startsWith("plugin:") && item.kind === "skill" ? "Plugin" : KIND_LABEL[item.kind];
-  return item.foundIn ? `${kind} · in ${item.foundIn}` : kind;
+  const plugin = item.key.startsWith("plugin:") && item.kind === "skill";
+  const kind = plugin ? "Plugin" : KIND_LABEL[item.kind];
+  if (item.foundIn) return `${kind} · in ${item.foundIn}`;
+  return plugin && item.skills > 0 ? `${kind} · ${item.skills} ${item.skills === 1 ? "skill" : "skills"}` : kind;
 }
 
 /** A card that folds open: its title and line, then what it holds. */

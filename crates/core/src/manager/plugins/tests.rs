@@ -185,3 +185,45 @@ fn the_page_shows_where_each_item_is_on_for_each_agent() {
     );
     let _ = std::fs::remove_dir_all(home);
 }
+
+#[test]
+fn a_plugins_skills_are_one_item_with_their_count() {
+    let home = home("plugin-row");
+    let root = home.join(".claude/plugins/cache/acme/kit/1.0.0");
+    write(
+        &root.join(".claude-plugin/plugin.json"),
+        r#"{"name": "kit", "description": "Images and video."}"#,
+    );
+    for skill in ["draw", "film"] {
+        write(
+            &root.join(format!("skills/{skill}/SKILL.md")),
+            &format!("---\nname: {skill}\ndescription: {skill} things.\n---\n"),
+        );
+    }
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &serde_json::json!({"version": 2, "plugins": {"kit@acme": [
+            {"scope": "user", "installPath": root, "version": "1.0.0"}
+        ]}})
+        .to_string(),
+    );
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"kit@acme": true}}"#,
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let view = build(&Catalog::read(&roots, None), &[], &[], &Unknown, None);
+    let kit = item(&view, "plugin:kit");
+    assert_eq!(
+        (kit.kind, kit.name.as_str(), kit.skills),
+        (PluginKind::Skill, "kit", 2)
+    );
+    assert_eq!(kit.description, "Images and video.");
+    assert!(
+        !view
+            .items
+            .iter()
+            .any(|item| item.key.starts_with("plugin:kit/"))
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

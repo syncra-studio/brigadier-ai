@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type RowSeen = { name: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; switch: string | null; button: string | null };
+type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; switch: string | null; button: string | null };
 type SectionSeen = { title: string; description: string; count: string; rows: RowSeen[] };
 type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[] };
 type Seen = {
@@ -82,6 +82,8 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   const skills = section(l2, "Every project").rows;
   assert.deepEqual(names(skills), ["higgsfield", "impeccable", "hallmark", "use-railway", "grill-me"]);
   assert.match(l2.sections.flatMap((entry) => entry.rows).find((entry) => entry.name === "higgsfield")!.line, /Images, video/);
+  // A plugin's skills are one row, with their count.
+  assert.deepEqual([row(skills, "higgsfield").kind, row(skills, "impeccable").kind], ["Plugin · 9 skills", "Skill"]);
   assert.deepEqual([row(skills, "grill-me").line, row(skills, "grill-me").tone], ["Only Claude Code has it. See Needs attention.", "warning"]);
   assert.deepEqual(names(section(l2, "Only in some projects").rows), ["delegator"]);
 

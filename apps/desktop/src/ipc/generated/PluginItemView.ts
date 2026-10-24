@@ -69,4 +69,8 @@ files: Array<string>,
 /**
  * For another app's: the app ("Claude Desktop").
  */
-foundIn: string | null, };
+foundIn: string | null, 
+/**
+ * How many skills it holds (a plugin's are one item); none for a server.
+ */
+skills: number, };

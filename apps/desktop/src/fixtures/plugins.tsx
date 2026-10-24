@@ -63,6 +63,8 @@ type Spec = {
   /** Each agent's state where it is on, when not Ready. */
   special?: Record<string, AgentItemState>;
   attention?: PluginAttention;
+  /** A plugin's skill count. */
+  skills?: number;
   foundIn?: string;
 };
 
@@ -86,7 +88,7 @@ function startingItems(signIns: number): Spec[] {
     },
     { key: "server:playwright", kind: "server", name: "playwright", description: "Drives a browser.", detail: "npx @playwright/mcp@latest", everywhere: false },
     { key: "lib:postgres", kind: "server", name: "postgres", description: "Your local brigadier database.", detail: "npx @modelcontextprotocol/server-postgres", library: true, everywhere: false, onIn: [BRIGADIER] },
-    { key: "plugin:higgsfield/higgsfield", kind: "skill", name: "higgsfield", description: "Images, video, brand kits and websites.", detail: "~/.claude/plugins/higgsfield", everywhere: true },
+    { key: "plugin:higgsfield", kind: "skill", name: "higgsfield", skills: 9, description: "Images, video, brand kits and websites.", detail: "~/.claude/plugins/higgsfield", everywhere: true },
     { key: "skill:impeccable", kind: "skill", name: "impeccable", description: "Designs, critiques and polishes interfaces.", detail: "~/.agents/skills/impeccable", everywhere: true },
     { key: "skill:hallmark", kind: "skill", name: "hallmark", description: "Keeps new pages free of generic AI styling.", detail: "~/.agents/skills/hallmark", everywhere: true, offIn: [BRIGADIER] },
     { key: "skill:use-railway", kind: "skill", name: "use-railway", description: "Deploys and runs things on Railway.", detail: "~/.agents/skills/use-railway", everywhere: true, offIn: [STEADY] },
@@ -120,7 +122,7 @@ function view(projectId: string | null): PluginsView {
         agent,
         state: spec.only && !spec.only.includes(agent) ? { type: "missing" } : spec.special?.[agent] && (on || spec.special[agent]!.type === "working") ? spec.special[agent]! : on ? { type: "ready" } : { type: "off" },
       })),
-      attention: spec.attention ?? null, switchable: spec.switchable ?? true, updateAvailable: false, canUndo: false, serverId: spec.remote ? `claude:user:${spec.name}` : null, files: [`${HOME}/.claude.json`], foundIn: spec.foundIn ?? null,
+      attention: spec.attention ?? null, switchable: spec.switchable ?? true, updateAvailable: false, canUndo: false, serverId: spec.remote ? `claude:user:${spec.name}` : null, files: [`${HOME}/.claude.json`], foundIn: spec.foundIn ?? null, skills: spec.skills ?? (spec.kind === "skill" ? 1 : 0),
     };
   };
   if (empty) return { agents, projects, items: [], elsewhere: [] };
@@ -245,6 +247,7 @@ function rowsOf(root: ParentNode) {
     const line = row.querySelector('[data-slot="row-line"]');
     return {
       name: text(row.querySelector(".font-medium")),
+      kind: text(row.querySelector('[data-slot="row-kind"]')),
       line: text(line),
       tone: line?.getAttribute("data-tone") ?? null,
       off: row.hasAttribute("data-off"),
