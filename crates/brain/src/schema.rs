@@ -285,6 +285,11 @@ fn migrations() -> Migrations<'static> {
                   ('index', 'skeleton', 'report', 'orchestrator', 'user');",
         )
         .comment("retired background-pass origins read as the skeleton pass"),
+        M::up("ALTER TABLE records ADD COLUMN item_id TEXT;
+               ALTER TABLE records ADD COLUMN tool TEXT;
+               DELETE FROM records WHERE source IN ('transcript', 'tool-output');
+               DELETE FROM record_files;")
+        .comment("exact CLI item references; reindex existing files on next search"),
     ])
 }
 

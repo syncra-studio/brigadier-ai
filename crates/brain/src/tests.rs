@@ -1158,6 +1158,8 @@ fn record_file(session: &str, source: RecordSource, path: &str, stamp: &str) -> 
 
 fn record_entry(position: i64, role: &str, text: &str) -> RecordEntry {
     RecordEntry {
+        item_id: None,
+        tool: None,
         position,
         role: role.into(),
         at_ms: Some(position),
@@ -1299,6 +1301,8 @@ fn a_cited_hash_stays_with_its_entry_through_a_move_to_the_archive() {
     let brain = TestBrain::new();
     let line = "- Learned from reading: src/a.rs:3 the parser skips blank lines";
     let cited = |hash: &str| RecordEntry {
+        item_id: None,
+        tool: None,
         cited: Some(Cited {
             path: "/repo/src/a.rs".into(),
             line: Some(3),
@@ -1360,4 +1364,37 @@ fn an_edit_changes_the_text_in_place_with_no_history() {
         brain.edit(&id, "x".into(), String::new()),
         Err(Error::NotFound(_))
     ));
+}
+
+#[test]
+fn record_search_filters_before_limiting_and_orders_by_time_before_rank() {
+    let brain = TestBrain::new();
+    let mut older = record_entry(0, "tool", "needle");
+    older.item_id = Some("old-output".into());
+    older.tool = Some("Bash".into());
+    older.at_ms = Some(10);
+    let mut newer = record_entry(1, "tool", &format!("{} needle", "padding ".repeat(1000)));
+    newer.item_id = Some("new-output".into());
+    newer.tool = Some("exec_command".into());
+    newer.at_ms = Some(20);
+    let user = RecordEntry {
+        role: "user".into(),
+        item_id: Some("user".into()),
+        at_ms: Some(30),
+        ..record_entry(2, "user", "needle")
+    };
+    brain
+        .sync_records(
+            record_file("s1", RecordSource::Transcript, "/r/s1/lineage.json", "a"),
+            vec![older, newer, user],
+        )
+        .unwrap();
+    let hits = brain
+        .search_records_filtered("needle", None, 1, Some("tool"), None)
+        .unwrap();
+    assert_eq!(hits[0].item_id.as_deref(), Some("new-output"));
+    let hits = brain
+        .search_records_filtered("needle", None, 1, Some("tool"), Some("Bash"))
+        .unwrap();
+    assert_eq!(hits[0].item_id.as_deref(), Some("old-output"));
 }

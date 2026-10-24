@@ -629,6 +629,10 @@ pub struct RecordFile {
 /// One entry of a record file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordEntry {
+    /// Stable exact CLI item reference, independent of transcript positions.
+    pub item_id: Option<String>,
+    /// CLI tool name for a call or its output.
+    pub tool: Option<String>,
     /// The transcript item's number, or the file's line (from 1).
     pub position: i64,
     /// `user`, `assistant`, `command`, `tool`, `output`; a ledger line's `ledger`.
@@ -641,6 +645,12 @@ pub struct RecordEntry {
 /// A records search result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordHit {
+    /// Explicit later ledger closure or replacement, filled by the caller.
+    pub ended: Option<String>,
+    /// Stable exact CLI item reference, independent of transcript positions.
+    pub item_id: Option<String>,
+    /// CLI tool name for a call or its output.
+    pub tool: Option<String>,
     pub session: String,
     pub source: RecordSource,
     pub path: String,
@@ -649,6 +659,9 @@ pub struct RecordHit {
     pub at_ms: Option<i64>,
     /// The matching passage, with some context (at most about 600 bytes).
     pub snippet: String,
+    /// UTF-8 bytes omitted around this snippet.
+    pub bytes_before: usize,
+    pub bytes_after: usize,
     /// The entry's first line (a command or call), which the snippet may not reach.
     pub lead: String,
     /// The file it cites, with the hash taken when it was indexed.
@@ -1284,7 +1297,7 @@ impl Brain {
         self.write(move |tx, _| records::sync(tx, &file, &entries))
     }
 
-    /// Full-text search over the records, best matches first (then the most recent): every
+    /// Full-text search over the records, newest matches first: every
     /// session's, or only `session`'s and its workers'.
     pub fn search_records(
         &self,
@@ -1292,7 +1305,19 @@ impl Brain {
         session: Option<&str>,
         limit: u32,
     ) -> Result<Vec<RecordHit>> {
-        self.read(|conn| records::search(conn, query, session, limit))
+        self.read(|conn| records::search(conn, query, session, limit, None, None))
+    }
+
+    /// Newest matching items first, optionally filtered by origin and tool.
+    pub fn search_records_filtered(
+        &self,
+        query: &str,
+        session: Option<&str>,
+        limit: u32,
+        role: Option<&str>,
+        tool: Option<&str>,
+    ) -> Result<Vec<RecordHit>> {
+        self.read(|conn| records::search(conn, query, session, limit, role, tool))
     }
 
     /// Drops what was indexed from a conversation's records, its workers' too.

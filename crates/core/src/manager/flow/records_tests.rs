@@ -298,11 +298,11 @@ async fn the_brain_finds_what_the_records_hold_and_reads_them_back_verbatim() {
     // The predecessor's generation, then the second: positions count across both.
     let first = text(&found, "first");
     assert!(
-        first.contains(&format!("[{short} · #1 · assistant")) && first.contains(FIRST_GEN),
+        first.contains(&format!("[{short} · assistant")) && first.contains(FIRST_GEN),
         "{first}"
     );
     let second = text(&found, "second");
-    assert!(second.contains(&format!("[{short} · #")), "{second}");
+    assert!(second.contains(&format!("[{short} · ")), "{second}");
     assert!(!second.contains("#1 ·"), "{second}");
     let saved = text(&found, "saved");
     assert!(
@@ -312,7 +312,7 @@ async fn the_brain_finds_what_the_records_hold_and_reads_them_back_verbatim() {
     assert!(saved.contains(SAVED), "{saved}");
     let worker = text(&found, "worker");
     assert!(
-        worker.contains(&format!("[{short}/1-abcd1234 · #")) && worker.contains(WORKER),
+        worker.contains(&format!("[{short}/1-abcd1234 · ")) && worker.contains(WORKER),
         "{worker}"
     );
     let ledger = text(&found, "ledger");
@@ -346,22 +346,27 @@ async fn the_brain_finds_what_the_records_hold_and_reads_them_back_verbatim() {
         hit.contains("whole output, saved at") && hit.contains(KEPT),
         "{hit}"
     );
-    let at = hit
-        .split(&format!("[{short} · #"))
+    let id = hit
+        .split("[item ")
         .nth(1)
-        .and_then(|rest| rest.split(' ').next())
         .unwrap()
-        .to_owned();
+        .split_whitespace()
+        .next()
+        .unwrap();
     assert_eq!(text(&found, "forged"), "Nothing in the records matches.");
     let span = ask(json!([
-        ["kept", "transcript", "read", {"session": short, "from": at.parse::<i64>().unwrap(), "to": at.parse::<i64>().unwrap() + 1}],
+        ["kept", "transcript", "read", {"session": short, "item": id}],
+        ["legacy", "transcript", "read", {"session": short, "from": 5, "to": 6}],
     ]))
     .await;
-    let span = text(&span, "kept");
-    assert!(span.contains(&kept), "the whole kept output, verbatim");
     assert!(
-        span.contains("out-0000dead") && !span.contains(FORGED),
-        "{span}"
+        text(&span, "kept").contains(&kept),
+        "the exact kept output, verbatim"
+    );
+    let legacy = text(&span, "legacy");
+    assert!(
+        legacy.contains("out-0000dead") && !legacy.contains(FORGED),
+        "{legacy}"
     );
     // The file the ledger entry cites changes: its pointer reads as stale.
     write(&cited, "fn a() {}\nfn b() { todo!() }\n");
@@ -399,7 +404,7 @@ async fn the_brain_finds_what_the_records_hold_and_reads_them_back_verbatim() {
     // The blob both sessions' outputs are kept in is found for each.
     let shared = text(&later, "shared");
     assert!(
-        shared.contains(&format!("[{short}/2-bcde2345 · #"))
+        shared.contains(&format!("[{short}/2-bcde2345 · "))
             && shared.contains("whole output, saved at")
             && !shared.contains(" · saved by "),
         "{shared}"

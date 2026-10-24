@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-10-22T10:00:00Z","uuid":"u1","message":{"role":"user","content":"Keep the café setting verbatim.\n"}}
+{"type":"assistant","timestamp":"2026-10-22T10:01:00Z","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Checking now."}]}}
+{"type":"assistant","timestamp":"2026-10-22T10:02:00Z","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"same-call","name":"Bash","input":{"command":"make check"}}]}}
+{"type":"user","timestamp":"2026-10-22T10:03:00Z","uuid":"r1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"same-call","content":"<persisted-output>\nFull output saved to: SAVED_PATH\nPreview: failed\n</persisted-output>","is_error":true}]},"toolUseResult":{"stdout":"failed","stderr":"error","persistedOutputPath":"SAVED_PATH"}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-22T10:04:00Z"}

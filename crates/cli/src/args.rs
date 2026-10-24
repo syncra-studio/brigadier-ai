@@ -671,20 +671,46 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             Tool::Ledger
         }
         "brain" | "transcript" => {
+            put("role", flag("role"));
+            put("tool", flag("tool"));
             if action == "read" {
-                let [session, from, to] = words.as_slice() else {
-                    return Err(error("read takes <session> <from> <to>"));
-                };
                 let position = |what: &str, word: &str| {
                     word.trim_start_matches('#')
                         .parse::<u32>()
                         .map(|n| json!(n))
                         .map_err(|_| error(&format!("<{what}> is a position, from 0: {word:?}")))
                 };
-                put("session", Some(json!(session)));
-                put("from", Some(position("from", from)?));
-                put("to", Some(position("to", to)?));
+                match words.as_slice() {
+                    [session, from, to] if args.flag("item").is_none() => {
+                        put("session", Some(json!(session)));
+                        put("from", Some(position("from", from)?));
+                        put("to", Some(position("to", to)?));
+                    }
+                    [session]
+                        if args.flag("item").is_some()
+                            || args.flag("role").is_some()
+                            || args.flag("tool").is_some() =>
+                    {
+                        put("session", Some(json!(session)));
+                        put("item", flag("item"));
+                    }
+                    _ => {
+                        return Err(error(
+                            "read takes <session> <from> <to>, or <session> --item <id> (or --role/--tool)",
+                        ));
+                    }
+                }
+                if let Some(offset) = args.flag("offset") {
+                    let offset = offset
+                        .parse::<u32>()
+                        .map_err(|_| error("--offset must be a whole number, from 0"))?;
+                    put("offset", Some(json!(offset)));
+                }
+                put("limit", number("limit"));
             } else {
+                if args.flag("item").is_some() || args.flag("offset").is_some() {
+                    return Err(error("--item and --offset are for read"));
+                }
                 if text.trim().is_empty() {
                     return Err(error("missing <query>"));
                 }
@@ -1291,5 +1317,43 @@ mod tests {
             parse(["send", "ab12", "--", "--help"]),
             Ok(Invocation::Run { .. })
         ));
+    }
+    #[test]
+    fn exact_record_flags_are_parsed_and_documented() {
+        assert_eq!(
+            tool(&[
+                "brain", "read", "s1", "--item", "i-abc", "--role", "tool", "--tool", "Bash",
+                "--offset", "0", "--limit", "25"
+            ])
+            .2,
+            json!({"session":"s1", "item":"i-abc", "role":"tool", "tool":"Bash", "offset":0, "limit":25})
+        );
+        assert_eq!(
+            tool(&["transcript", "read", "s1", "--role", "user"]).2,
+            json!({"session":"s1","role":"user"})
+        );
+        assert_eq!(
+            tool(&[
+                "brain",
+                "search",
+                "needle",
+                "--role",
+                "tool",
+                "--tool",
+                "exec_command"
+            ])
+            .2,
+            json!({"query":"needle","role":"tool","tool":"exec_command"})
+        );
+        assert!(
+            fails(&["brain", "read", "s1", "--item", "x", "--offset", "bad"])
+                .contains("whole number")
+        );
+        assert!(fails(&["brain", "search", "needle", "--offset", "3"]).contains("for read"));
+        assert!(fails(&["brain", "read", "s1", "0", "3", "--item", "x"]).contains("read takes"));
+        let help = crate::commands::command_help(crate::commands::find("brain").unwrap());
+        for flag in ["--item", "--role", "--tool", "--offset", "--limit"] {
+            assert!(help.contains(flag), "{help}");
+        }
     }
 }

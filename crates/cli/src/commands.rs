@@ -535,14 +535,18 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "brain",
         summary: "Search the project's records: every session's transcript, ledger and notes.",
-        details: "`search <query…>` finds the best-matching entries of the records the \
+        details: "`search <query…>` finds the newest matching entries of the records the \
                   project's sessions keep: their CLI transcripts across every fresh context \
                   (with the whole outputs the CLI saved), their workers', their ledgers, \
                   ledger archives and hand-off notes. Each hit names its session, its \
-                  position or file and line, and a text window; a ledger entry learned from \
+                  item id or file and line, and a text window; a ledger entry learned from \
                   reading points at the file it cites, marked STALE once that file changed. \
                   `read <session> <from> <to>` gives that session's transcript items from \
-                  <from> to <to> (at most 50) verbatim, a saved output whole.",
+                  <from> to <to> (at most 50) verbatim, a saved output whole. \
+                  `read <session> --item <id>` reads one exact message, call or output. \
+                  Filters also allow `read <session> --role tool --tool Bash`. \
+                  Offset and limit apply separately to each item; excerpts report omitted bytes. \
+                  A byte boundary within a UTF-8 character advances to its end.",
         args: &[
             action(&["search", "read"], "What to do."),
             flag(
@@ -553,11 +557,28 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "limit",
                 "N",
-                "search: at most this many hits (8 by default).",
+                "search: max hits (default 8); read: max UTF-8 bytes per item.",
+            ),
+            flag("item", "ID", "read: exact item id printed by search."),
+            choice(
+                "role",
+                "ROLE",
+                &["user", "assistant", "tool"],
+                "Filter by item origin.",
+            ),
+            flag(
+                "tool",
+                "NAME",
+                "Filter by exact CLI tool name (for example Bash or exec_command).",
+            ),
+            flag(
+                "offset",
+                "BYTES",
+                "read: UTF-8 byte offset per item, from 0 (default 0).",
             ),
             rest(
                 "args",
-                "search: what to look for; read: <session> <from> <to>.",
+                "search: query; read: <session> --item <id>, or <session> <from> <to>.",
                 false,
             ),
         ],
@@ -577,11 +598,28 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "limit",
                 "N",
-                "search: at most this many hits (8 by default).",
+                "search: max hits (default 8); read: max UTF-8 bytes per item.",
+            ),
+            flag("item", "ID", "read: exact item id printed by search."),
+            choice(
+                "role",
+                "ROLE",
+                &["user", "assistant", "tool"],
+                "Filter by item origin.",
+            ),
+            flag(
+                "tool",
+                "NAME",
+                "Filter by exact CLI tool name (for example Bash or exec_command).",
+            ),
+            flag(
+                "offset",
+                "BYTES",
+                "read: UTF-8 byte offset per item, from 0 (default 0).",
             ),
             rest(
                 "args",
-                "search: words to look for; read: <session> <from> <to>.",
+                "search: query; read: <session> --item <id>, or <session> <from> <to>.",
                 false,
             ),
         ],

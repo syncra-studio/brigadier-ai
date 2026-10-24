@@ -204,6 +204,8 @@ async fn retention(delete_directly: bool) {
                                 stamp: "1".into(),
                             },
                             vec![RecordEntry {
+                                item_id: None,
+                                tool: None,
                                 position: 1,
                                 role: "ledger".into(),
                                 at_ms: Some(crate::now_ms()),

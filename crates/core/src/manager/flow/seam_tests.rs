@@ -225,8 +225,9 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
                 None,
                 crate::manager::records::RecordRead {
                     session: key.clone(),
-                    from,
-                    to,
+                    from: Some(from),
+                    to: Some(to),
+                    ..Default::default()
                 },
             )
             .await

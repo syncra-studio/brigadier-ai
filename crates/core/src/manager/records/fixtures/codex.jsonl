@@ -1,0 +1,8 @@
+{"type":"session_meta","payload":{"id":"codex-session"}}
+{"type":"response_item","timestamp":"2026-10-22T11:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Keep the café setting verbatim.\n"}]}}
+{"type":"response_item","timestamp":"2026-10-22T11:01:00Z","payload":{"type":"function_call","call_id":"same-call","name":"exec_command","arguments":"{\"cmd\":\"make check\"}"}}
+{"type":"response_item","timestamp":"2026-10-22T11:02:00Z","payload":{"type":"function_call_output","call_id":"same-call","output":"Process exited with code 2\nfailedneedle: café\n\n"}}
+{"type":"compacted","timestamp":"2026-10-22T11:03:00Z","payload":{"message":"Compacted","replacement_history":[]}}
+{"type":"response_item","timestamp":"2026-10-22T11:04:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checking now."}]}}
+{"type":"response_item","timestamp":"2026-10-22T11:05:00Z","payload":{"type":"custom_tool_call","call_id":"custom1","name":"apply_patch","input":"*** patch ***"}}
+{"type":"response_item","timestamp":"2026-10-22T11:06:00Z","payload":{"type":"custom_tool_call_output","call_id":"custom1","output":"patch failed"}}

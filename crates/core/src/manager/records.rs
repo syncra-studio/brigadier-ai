@@ -13,6 +13,8 @@
 //! A ledger entry "Learned from reading: <path>:<line> …" is a pointer, not a copy: the file it
 //! cites is hashed when the entry is first indexed, and a hit reads as stale once it changed.
 
+mod items;
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -47,15 +49,31 @@ pub(crate) struct RecordSearch {
     pub session: Option<String>,
     #[serde(default)]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 /// `brigadier brain read` and `transcript read`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RecordRead {
     pub session: String,
-    pub from: i64,
-    pub to: i64,
+    #[serde(default)]
+    pub from: Option<i64>,
+    #[serde(default)]
+    pub to: Option<i64>,
+    #[serde(default)]
+    pub item: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 /// One session's records: a session's folder, or a worker's in it.
@@ -152,6 +170,7 @@ impl SessionManager {
         own: Option<String>,
         args: RecordSearch,
     ) -> Result<String> {
+        validate_role(args.role.as_deref())?;
         let started = Instant::now();
         let (project, brain) = self.records_brain(conversation).await?;
         let sessions = self.record_sessions(&project);
@@ -185,10 +204,19 @@ impl SessionManager {
                 sync_session(&brain, session)?;
             }
             let mut hits = brain
-                .search_records(&query, scope.as_deref(), limit)
+                .search_records_filtered(
+                    &query,
+                    scope.as_deref(),
+                    limit,
+                    args.role.as_deref(),
+                    args.tool.as_deref(),
+                )
                 .map_err(super::brains::brain_error)?;
             for hit in &mut hits {
                 mark_stale(hit);
+                if let Some(session) = synced.iter().find(|session| session.key == hit.session) {
+                    mark_ended(hit, session);
+                }
             }
             Ok(hits)
         })
@@ -221,7 +249,7 @@ impl SessionManager {
             .into_iter()
             .find(|session| session.key == key)
             .ok_or_else(|| Error::Invalid(format!("no session {}", args.session)))?;
-        blocking(move || read_span(&session, args.from, args.to)).await
+        blocking(move || read_items(&session, &args)).await
     }
 }
 
@@ -254,43 +282,72 @@ pub(crate) fn sync_session(brain: &Brain, session: &RecordSession) -> Result<()>
         stamp,
     };
     let lineage = session.record.join("lineage.json");
-    if let Some((stamp, files)) = transcript_stamp(&session.record) {
+    if let Some((base_stamp, _)) = transcript_stamp(&session.record) {
+        let held = brain.record_paths(&session.key).map_err(error)?;
+        let output_stamp = |paths: Vec<String>| {
+            let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
+            let mut stamp = base_stamp.clone();
+            for path in paths {
+                stamp.push_str(&format!(
+                    ";{}={}",
+                    path,
+                    file_stamp(Path::new(&path)).unwrap_or_default()
+                ));
+            }
+            stamp
+        };
+        let stamp = output_stamp(
+            held.iter()
+                .filter(|(_, source)| *source == RecordSource::ToolOutput)
+                .map(|(path, _)| path.split(SAVED_BY).next().unwrap_or(path).to_owned())
+                .collect(),
+        );
         let path = lineage.display().to_string();
         if brain.record_stamp(&path).map_err(error)?.as_deref() != Some(stamp.as_str()) {
-            let entries = transcript(&files);
+            let entries = items::read(session);
+            // Saved output files can appear or grow after the transcript reference was written.
+            let stamp = output_stamp(
+                entries
+                    .iter()
+                    .filter_map(|item| item.saved.clone())
+                    .collect(),
+            );
+            let live_saved: std::collections::HashSet<_> = entries
+                .iter()
+                .filter_map(|item| {
+                    Some(saved_key(
+                        item.saved.as_deref()?,
+                        &format!("{}:{}", session.key, item.id),
+                    ))
+                })
+                .collect();
+            for (path, source) in held {
+                if source == RecordSource::ToolOutput && !live_saved.contains(&path) {
+                    brain.forget_record_file(&path).map_err(error)?;
+                }
+            }
             let mut indexed = Vec::new();
-            for (position, entry) in entries.iter().enumerate() {
-                let Some((role, text, saved)) = entry_text(entry, &session.blobs) else {
-                    continue;
+            for (position, item) in entries.into_iter().enumerate() {
+                let entry = RecordEntry {
+                    item_id: Some(item.id.clone()),
+                    tool: item.tool,
+                    position: position as i64,
+                    role: item.role,
+                    at_ms: item.at_ms,
+                    text: item.text,
+                    cited: None,
                 };
-                let position = position as i64;
-                if let Some(saved) = saved
-                    && let Some(saved_stamp) = file_stamp(Path::new(&saved))
-                    && let key = saved_key(&saved, &session.key)
-                    && brain.record_stamp(&key).map_err(error)?.as_deref()
-                        != Some(saved_stamp.as_str())
-                    && let Some(whole) = saved_text(&saved, &session.blobs)
-                {
+                if let Some(saved) = item.saved {
+                    let key = saved_key(&saved, &format!("{}:{}", session.key, item.id));
                     brain
                         .sync_records(
-                            file(RecordSource::ToolOutput, Path::new(&key), saved_stamp),
-                            vec![RecordEntry {
-                                position,
-                                role: "output".into(),
-                                at_ms: entry.at_ms,
-                                text: whole,
-                                cited: None,
-                            }],
+                            file(RecordSource::ToolOutput, Path::new(&key), stamp.clone()),
+                            vec![entry],
                         )
                         .map_err(error)?;
+                } else {
+                    indexed.push(entry);
                 }
-                indexed.push(RecordEntry {
-                    position,
-                    role: role.into(),
-                    at_ms: entry.at_ms,
-                    text,
-                    cited: None,
-                });
             }
             brain
                 .sync_records(file(RecordSource::Transcript, &lineage, stamp), indexed)
@@ -542,6 +599,8 @@ fn note_entries(text: &str, roots: &[PathBuf]) -> Vec<RecordEntry> {
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(n, line)| RecordEntry {
+            item_id: None,
+            tool: None,
             position: n as i64 + 1,
             role: "ledger".into(),
             at_ms: None,
@@ -615,6 +674,39 @@ fn mark_stale(hit: &mut RecordHit) {
     }
 }
 
+/// Only explicit ledger IDs carry a reliable reversal relation. Do not guess whether a
+/// later decision contradicts arbitrary user words or tool evidence.
+fn mark_ended(hit: &mut RecordHit, session: &RecordSession) {
+    use super::cli_ledger::{Ended, Ledger};
+    if !matches!(
+        hit.source,
+        RecordSource::Ledger | RecordSource::LedgerArchive
+    ) {
+        return;
+    }
+    let Ok(ledger) = Ledger::read(&session.record) else {
+        return;
+    };
+    let entry = ledger.entries.iter().find(|entry| {
+        session.record.join(entry.file.name()) == Path::new(&hit.path)
+            && (entry.line..=entry.last_line).contains(&(hit.position as usize))
+    });
+    let Some(ended) = entry
+        .and_then(|entry| entry.id)
+        .and_then(|id| ledger.ended(id))
+    else {
+        return;
+    };
+    let (label, by) = match ended {
+        Ended::Closed { by } => ("CLOSED", by),
+        Ended::Superseded { by } => ("SUPERSEDED", by),
+    };
+    hit.ended = Some(format!(
+        "{label}{}",
+        by.map(|id| format!(" by L{id}")).unwrap_or_default()
+    ));
+}
+
 /// Search hits as the command prints them.
 fn hits_text(hits: &[RecordHit], command: &str) -> String {
     if hits.is_empty() {
@@ -629,10 +721,18 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
             .unwrap_or_default();
         match hit.source {
             RecordSource::Transcript => {
-                transcript.get_or_insert((hit.session.clone(), hit.position));
+                if hit.item_id.is_none() {
+                    transcript.get_or_insert((hit.session.clone(), hit.position));
+                }
                 text.push_str(&format!(
-                    "[{} · #{} · {}{date}]\n",
-                    hit.session, hit.position, hit.role
+                    "[{} · {}{}{}]\n",
+                    hit.session,
+                    hit.item_id
+                        .as_ref()
+                        .map(|_| String::new())
+                        .unwrap_or_else(|| format!("#{} · ", hit.position)),
+                    hit.role,
+                    date
                 ));
                 let snippet = hit.snippet.trim();
                 if !hit.lead.is_empty() && !snippet.contains(hit.lead.trim()) {
@@ -645,11 +745,16 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
                 }
             }
             RecordSource::ToolOutput => {
-                transcript.get_or_insert((hit.session.clone(), hit.position));
+                if hit.item_id.is_none() {
+                    transcript.get_or_insert((hit.session.clone(), hit.position));
+                }
                 text.push_str(&format!(
-                    "[{} · #{} · whole output, saved at {}{date}]\n",
+                    "[{} · {}whole output, saved at {}{date}]\n",
                     hit.session,
-                    hit.position,
+                    hit.item_id
+                        .as_ref()
+                        .map(|_| String::new())
+                        .unwrap_or_else(|| format!("#{} · ", hit.position)),
                     hit.path.split(SAVED_BY).next().unwrap_or(&hit.path)
                 ));
             }
@@ -661,6 +766,9 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
                     hit.path,
                     hit.position
                 ));
+                if let Some(ended) = &hit.ended {
+                    text.push_str(&format!(" · {ended}"));
+                }
                 if let Some(cited) = &hit.cited {
                     let at = cited
                         .line
@@ -677,7 +785,23 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
                 text.push_str("]\n");
             }
         }
-        text.push_str(hit.snippet.trim());
+        if let Some(id) = &hit.item_id {
+            text.push_str(&format!(
+                "[item {id} · origin {}{} · bytes omitted: {} before, {} after]\n",
+                hit.role,
+                hit.tool
+                    .as_ref()
+                    .map(|tool| format!(" · tool {tool}"))
+                    .unwrap_or_default(),
+                hit.bytes_before,
+                hit.bytes_after
+            ));
+            text.push_str(&format!(
+                "`brigadier {command} read {} --item {id}`\n",
+                hit.session
+            ));
+        }
+        text.push_str(&hit.snippet);
         text.push_str("\n\n");
     }
     if let Some((session, position)) = transcript {
@@ -687,7 +811,7 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
             position + 2
         ));
     }
-    text.trim_end().to_owned()
+    text
 }
 
 /// Items `from` to `to` of `session`'s transcript, verbatim: a saved whole output in full.
@@ -738,3 +862,107 @@ pub(crate) fn read_span(session: &RecordSession, from: i64, to: i64) -> Result<S
     }
     Ok(text.trim_end().to_owned())
 }
+
+fn validate_role(role: Option<&str>) -> Result<()> {
+    if role.is_some_and(|role| !matches!(role, "user" | "assistant" | "tool")) {
+        return Err(Error::Invalid(
+            "--role must be user, assistant or tool".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// An exact read never trims source bytes. Limits and offsets are UTF-8 bytes; boundaries
+/// inside a codepoint advance to the next boundary so successive pages do not repeat bytes.
+fn read_items(session: &RecordSession, args: &RecordRead) -> Result<String> {
+    validate_role(args.role.as_deref())?;
+    if args.item.is_none()
+        && args.role.is_none()
+        && args.tool.is_none()
+        && args.offset.is_none()
+        && args.limit.is_none()
+    {
+        return read_span(
+            session,
+            args.from.ok_or_else(|| {
+                Error::Invalid("read takes <session> <from> <to>, or --item <id>".into())
+            })?,
+            args.to.ok_or_else(|| {
+                Error::Invalid("read takes <session> <from> <to>, or --item <id>".into())
+            })?,
+        );
+    }
+    if args.item.is_some() && (args.from.is_some() || args.to.is_some()) {
+        return Err(Error::Invalid(
+            "--item cannot be combined with <from> <to>".into(),
+        ));
+    }
+    if args.limit == Some(0) {
+        return Err(Error::Invalid("--limit must be above 0".into()));
+    }
+    if args.from.is_some() != args.to.is_some()
+        || args
+            .from
+            .is_some_and(|from| from < 0 || args.to.is_some_and(|to| to < from))
+    {
+        return Err(Error::Invalid(
+            "give a valid <from> <to> span, from 0".into(),
+        ));
+    }
+    let items = items::read(session);
+    let selected: Vec<_> = items
+        .iter()
+        .filter(|item| {
+            args.item.as_ref().is_none_or(|id| item.id == *id)
+                && args.role.as_ref().is_none_or(|role| item.role == *role)
+                && args
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| item.tool.as_ref() == Some(tool))
+                && args.from.is_none_or(|from| item.position >= from)
+                && args.to.is_none_or(|to| item.position <= to)
+        })
+        .collect();
+    if selected.is_empty() {
+        return Err(Error::Invalid("no matching item in this session".into()));
+    }
+    let count = selected.len();
+    let mut text = String::new();
+    for item in selected.into_iter().take(READ_MAX as usize) {
+        let offset = args.offset.unwrap_or(0).min(item.text.len());
+        let mut start = offset;
+        while !item.text.is_char_boundary(start) {
+            start += 1;
+        }
+        let mut end = args.limit.map_or(item.text.len(), |limit| {
+            offset.saturating_add(limit).min(item.text.len())
+        });
+        while !item.text.is_char_boundary(end) {
+            end += 1;
+        }
+        text.push_str(&format!(
+            "[item {} · origin {} · {}{} · bytes omitted: {} before, {} after]\n",
+            item.id,
+            item.role,
+            item.kind,
+            item.tool
+                .as_ref()
+                .map(|tool| format!(" · tool {tool}"))
+                .unwrap_or_default(),
+            start,
+            item.text.len() - end
+        ));
+        text.push_str(&item.text[start..end]);
+        text.push('\n');
+    }
+    if count > READ_MAX as usize {
+        text.push_str(&format!(
+            "[{} matching items omitted; narrow the filters or use --item]\n",
+            count - READ_MAX as usize
+        ));
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+mod tests;

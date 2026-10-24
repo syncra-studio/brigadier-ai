@@ -62,8 +62,8 @@ pub(crate) fn sync(tx: &Transaction, file: &RecordFile, entries: &[RecordEntry])
     if from.is_some() {
         let mut insert = tx.prepare_cached(
             "INSERT INTO records (conversation_id, session, source, path, position, role, at_ms, \
-             text, fingerprint, cited_path, cited_line, cited_hash) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             text, fingerprint, cited_path, cited_line, cited_hash, item_id, tool) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )?;
         for (entry, print) in entries[same..].iter().zip(&prints[same..]) {
             let cited = entry.cited.as_ref();
@@ -86,6 +86,8 @@ pub(crate) fn sync(tx: &Transaction, file: &RecordFile, entries: &[RecordEntry])
                 cited.map(|cited| cited.path.as_str()),
                 cited.and_then(|cited| cited.line),
                 hash,
+                entry.item_id,
+                entry.tool,
             ])?;
         }
     }
@@ -118,6 +120,8 @@ fn fingerprint(entry: &RecordEntry) -> String {
     let mut hash = Sha256::new();
     for part in [
         entry.role.as_str(),
+        entry.item_id.as_deref().unwrap_or(""),
+        entry.tool.as_deref().unwrap_or(""),
         entry.text.as_str(),
         entry.cited.as_ref().map_or("", |cited| cited.path.as_str()),
     ] {
@@ -161,13 +165,15 @@ pub(crate) fn forget_file(tx: &Transaction, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// The entries that best match `query`, best first (then the most recent): every session's,
+/// Entries matching `query`, newest first: every session's,
 /// or only `session`'s and its workers' (`<session>/…`).
 pub(crate) fn search(
     conn: &Connection,
     query: &str,
     session: Option<&str>,
     limit: u32,
+    role: Option<&str>,
+    tool: Option<&str>,
 ) -> Result<Vec<RecordHit>> {
     let Some(expression) = retrieve::fts_expression(query) else {
         return Ok(Vec::new());
@@ -176,26 +182,41 @@ pub(crate) fn search(
         "SELECT r.session, r.source, r.path, r.position, r.role, r.at_ms, \
                 highlight(records_fts, 0, char(2), char(3)), \
                 substr(r.text, 1, min(instr(r.text || char(10), char(10)) - 1, ?4)), \
-                r.cited_path, r.cited_line, r.cited_hash \
+                r.cited_path, r.cited_line, r.cited_hash, r.item_id, r.tool \
          FROM records_fts JOIN records r ON r.rid = records_fts.rowid \
          WHERE records_fts MATCH ?1 \
            AND (?2 IS NULL OR r.session = ?2 OR substr(r.session, 1, length(?2) + 1) = ?2 || '/') \
-         ORDER BY bm25(records_fts), r.at_ms DESC LIMIT ?3",
+           AND (?5 IS NULL OR r.role = ?5) \
+           AND (?6 IS NULL OR r.tool = ?6) \
+         ORDER BY r.at_ms DESC, r.position DESC, bm25(records_fts), r.rid DESC LIMIT ?3",
     )?;
     let rows = statement.query_map(
-        params![expression, session, limit.clamp(1, 100), LEAD_CHARS],
+        params![
+            expression,
+            session,
+            limit.clamp(1, 100),
+            LEAD_CHARS,
+            role,
+            tool
+        ],
         |row| {
             let source: String = row.get(1)?;
             let marked: String = row.get(6)?;
             let cited_path: Option<String> = row.get(8)?;
+            let (excerpt, before, after) = snippet(&marked);
             Ok(RecordHit {
+                ended: None,
+                item_id: row.get(11)?,
+                tool: row.get(12)?,
+                bytes_before: before,
+                bytes_after: after,
                 session: row.get(0)?,
                 source: RecordSource::parse(&source),
                 path: row.get(2)?,
                 position: row.get(3)?,
                 role: row.get(4)?,
                 at_ms: row.get(5)?,
-                snippet: snippet(&marked),
+                snippet: excerpt,
                 lead: row.get(7)?,
                 cited: cited_path.map(|path| Cited {
                     path,
@@ -216,14 +237,14 @@ pub(crate) fn count(conn: &Connection) -> Result<u64> {
 
 /// About [`SNIPPET_BYTES`] of `marked` (text with its matches between [`OPEN`] and
 /// [`CLOSE`]) around the first match, cut at word boundaries, without the marks.
-fn snippet(marked: &str) -> String {
+fn snippet(marked: &str) -> (String, usize, usize) {
     let text: String = marked.chars().filter(|c| !is_mark(*c)).collect();
     // Where the first match starts in `text`: the marks before it are one byte each.
     let first = marked.find(OPEN).map_or(0, |at| {
         at - marked[..at].chars().filter(|c| is_mark(*c)).count()
     });
     if text.len() <= SNIPPET_BYTES {
-        return text;
+        return (text, 0, 0);
     }
     // A third of the room before the match, the rest after it.
     let start = first.saturating_sub(SNIPPET_BYTES / 3);
@@ -241,6 +262,9 @@ fn snippet(marked: &str) -> String {
     {
         end = first.min(end) + space;
     }
+    let trimmed = text[start..end].trim();
+    start += text[start..end].len() - text[start..end].trim_start().len();
+    end = start + trimmed.len();
     let mut out = String::with_capacity(end - start + 8);
     if start > 0 {
         out.push('…');
@@ -249,7 +273,7 @@ fn snippet(marked: &str) -> String {
     if end < text.len() {
         out.push('…');
     }
-    out
+    (out, start, text.len() - end)
 }
 
 fn is_mark(c: char) -> bool {
