@@ -4,6 +4,8 @@
 // count. Per phase: frames and their gaps, long tasks, commits, and how often chosen components
 // drew; and where the main thread's time went while it streamed (a CPU profile, by function).
 // The draws are counted in a second run, as counting costs time of its own.
+// With STREAM_LOAD_EXTRA=1 it goes on to typing (this script types into the composer), switching
+// between two long sessions, showing the earlier turns and scrolling.
 // CHROME_BIN=<a Chromium> node scripts/measure-stream-load.mjs [turns] [rate] [scratch dir]
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,6 +17,9 @@ import { build, preview } from 'vite';
 const turns = Number(process.argv[2] ?? 150);
 const rate = Number(process.argv[3] ?? 50);
 const scratch = process.argv[4] ?? `/tmp/stream-load-${process.pid}`;
+const extra = process.env.STREAM_LOAD_EXTRA === '1' ? '&extra=1' : '';
+// STREAM_LOAD_FOCUS=<phase> profiles only that phase of the extra ones.
+const focus = process.env.STREAM_LOAD_FOCUS ?? null;
 const root = fileURLToPath(new URL('..', import.meta.url));
 const outDir = join(scratch, 'dist');
 
@@ -23,7 +28,8 @@ mkdirSync(scratch, { recursive: true });
 
 await build({
   root, configFile: join(root, 'vite.config.ts'), logLevel: 'warn',
-  resolve: { alias: [{ find: /^react-dom\/client$/, replacement: 'react-dom/profiling' }] },
+  // STREAM_LOAD_PLAIN=1 times React's own production build: no commits counted.
+  resolve: { alias: process.env.STREAM_LOAD_PLAIN === '1' ? [] : [{ find: /^react-dom\/client$/, replacement: 'react-dom/profiling' }] },
   build: { outDir, emptyOutDir: true, minify: false, rolldownOptions: { input: { streamLoad: join(root, 'fixtures/stream-load.html') } } },
 });
 const server = await preview({ root, configFile: join(root, 'vite.config.ts'), logLevel: 'warn', build: { outDir }, preview: { port: 0 } });
@@ -100,20 +106,32 @@ async function run(query, profiled) {
     await call('Emulation.setFocusEmulationEnabled', { enabled: true });
     await call('Profiler.enable');
     await call('Profiler.setSamplingInterval', { interval: 200 });
-    await call('Page.navigate', { url: `${server.resolvedUrls.local[0]}fixtures/stream-load.html?drive=1&turns=${turns}&rate=${rate}&${query}` });
+    await call('Page.navigate', { url: `${server.resolvedUrls.local[0]}fixtures/stream-load.html?drive=1&turns=${turns}&rate=${rate}${extra}&${query}` });
     let result = null;
     let profiling = false;
+    let cpu = null;
     const deadline = Date.now() + 180000;
     while (!result && !page.thrown && Date.now() < deadline) {
       // The CPU profile covers both streaming phases.
-      if (profiled && !profiling && (await evaluate('"streaming" in document.documentElement.dataset'))) {
+      if (profiled && !profiling && (await evaluate(focus ? `document.documentElement.dataset.phase === ${JSON.stringify(focus)}` : '"streaming" in document.documentElement.dataset'))) {
         profiling = true;
         await call('Profiler.start');
       }
+      if (focus && profiling && !cpu && (await evaluate(`document.documentElement.dataset.phase !== ${JSON.stringify(focus)}`))) cpu = (await call('Profiler.stop')).profile;
+      if (await evaluate('"typing" in document.documentElement.dataset && !("typed" in document.documentElement.dataset)')) {
+        // Ten keys a second, as a quick typist.
+        for (let key = 0; key < 30; key++) {
+          const letter = String.fromCodePoint(97 + (key % 26));
+          await call('Input.dispatchKeyEvent', { type: 'keyDown', key: letter, code: `Key${letter.toUpperCase()}`, text: letter, windowsVirtualKeyCode: 65 + (key % 26) });
+          await call('Input.dispatchKeyEvent', { type: 'keyUp', key: letter, code: `Key${letter.toUpperCase()}`, windowsVirtualKeyCode: 65 + (key % 26) });
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        await evaluate('document.documentElement.dataset.typed = ""');
+      }
       result = await evaluate('document.getElementById("stream-load-result")?.textContent ?? null');
-      if (!result) await new Promise((r) => setTimeout(r, 200));
+      if (!result) await new Promise((r) => setTimeout(r, focus ? 20 : 200));
     }
-    const cpu = profiling ? (await call('Profiler.stop')).profile : null;
+    if (profiling && !cpu) cpu = (await call('Profiler.stop')).profile;
     socket.close();
     if (!result) throw new Error(page.thrown ?? 'the fixture wrote no result');
     return { result: JSON.parse(result), cpu };
@@ -125,12 +143,13 @@ async function run(query, profiled) {
 try {
   const timed = await run('count=0', true);
   const counted = await run('count=1', false);
-  for (const phase of ['idle', 'stream', 'streamApproval']) timed.result[phase].renders = counted.result[phase].renders;
+  for (const [phase, seen] of Object.entries(counted.result)) if (seen?.renders) timed.result[phase].renders = seen.renders;
   console.log(JSON.stringify(timed.result, null, 2));
   if (timed.cpu) console.log(JSON.stringify(byFunction(timed.cpu), null, 2));
   // STREAM_LOAD_PROFILE=<file> keeps the CPU profile, for DevTools.
   if (timed.cpu && process.env.STREAM_LOAD_PROFILE) writeFileSync(process.env.STREAM_LOAD_PROFILE, JSON.stringify(timed.cpu));
 } finally {
   await new Promise((resolve) => server.httpServer.close(resolve));
-  rmSync(scratch, { recursive: true, force: true });
+  // STREAM_LOAD_KEEP=1 keeps the build, to read the profile's lines against.
+  if (process.env.STREAM_LOAD_KEEP !== '1') rmSync(scratch, { recursive: true, force: true });
 }

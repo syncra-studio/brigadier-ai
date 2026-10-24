@@ -8,7 +8,9 @@
  * React's commits (with a profiling build, see scripts/measure-stream-load.mjs) and how often
  * chosen components drew, to `<pre id="stream-load-result">`. `turns=<n>` sets the thread's
  * length, `rate=<n>` the deltas a second, `phase=<ms>` each phase's length; `count=0` counts no
- * draws (counting costs time of its own).
+ * draws (counting costs time of its own). `extra=1` goes on: typing in the composer while it streams
+ * (the measuring script types, as `data-typing` asks), opening a second long session and
+ * switching between the two, showing the earlier turns, and scrolling the whole thread.
  */
 // First: React DOM finds the counting hook as it loads.
 import { countRenders, renderCounts } from "@/fixtures/renderCounts";
@@ -17,6 +19,7 @@ import { Profiler, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
+import { openConversation } from "@/state/actions";
 import type { Conversation, FileEntry, ProviderEvent, Project, Request, ThreadTurn, ThreadView } from "@/ipc/generated";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { emptyBoard, type ShownApproval, useBoard } from "@/state/board";
@@ -29,6 +32,7 @@ document.documentElement.dataset.platform = "macos";
 localStorage.removeItem("brigadier.sidebarWidth");
 
 const ID = "stream-load";
+const SECOND = "stream-load-2";
 const TURNS = Number(query.get("turns") ?? 150);
 const RATE = Number(query.get("rate") ?? 50);
 const PHASE_MS = Number(query.get("phase") ?? 4000);
@@ -40,13 +44,13 @@ const sentence = (seed: number, length: number) => Array.from({ length }, (_, in
 const output = (turn: number, call: number) => Array.from({ length: 20 }, (_, line) => `line ${line + 1} of call ${call} in turn ${turn}: ${sentence(line, 8)}`).join("\n");
 
 /** A long session as its CLI keeps it: per turn a question, thinking, six commands and an answer. */
-function longView(): ThreadView {
+function longView(asked = "Question"): ThreadView {
   const entries: FileEntry[] = [];
   const turns: ThreadTurn[] = [];
   for (let turn = 0; turn < TURNS; turn++) {
     const at = start + turn * 60_000;
     const user = `u${turn}`;
-    entries.push({ event: { type: "message", itemId: user, role: "user", text: `Question ${turn + 1}: ${sentence(turn, 12)}` }, atMs: at });
+    entries.push({ event: { type: "message", itemId: user, role: "user", text: `${asked} ${turn + 1}: ${sentence(turn, 12)}` }, atMs: at });
     entries.push({ event: { type: "reasoning", itemId: `t${turn}`, text: sentence(turn, 40) }, atMs: at + 1000, updatedAtMs: at + 3000 });
     for (let call = 0; call < 6; call++) {
       entries.push({
@@ -78,6 +82,8 @@ const conversation = (id: string, title: string) => ({
 
 const others = Array.from({ length: OTHERS }, (_, index) => conversation(`other-${index}`, `Other session ${index + 1}`));
 const view = longView();
+// The second long session's view is read when it first opens.
+const secondView = longView("Second question");
 useCliThread.setState({ views: { [ID]: view } });
 useBoard.setState({ board: { ...emptyBoard(ID), loaded: true, run: "running" } });
 useApp.setState((state) => ({
@@ -85,13 +91,13 @@ useApp.setState((state) => ({
   connection: { status: "connected", daemon: null, reason: null },
   settings: { ...state.settings, onboarded: true, introSeen: true },
   projects: { "stream-project": { id: "stream-project", name: "stream-load", createdAtMs: start, repos: [{ path: "/tmp/stream-load", name: "stream-load" }], prefs: {}, trust: [] } as unknown as Project },
-  conversations: Object.fromEntries([conversation(ID, "A long working session"), ...others].map((each) => [each.id, each])),
+  conversations: Object.fromEntries([conversation(ID, "A long working session"), conversation(SECOND, "Another long session"), ...others].map((each) => [each.id, each])),
   threads: { [ID]: { ...emptyThread } },
   selection: { type: "conversation", id: ID },
 }));
 useActivity.setState({
   byConversation: Object.fromEntries(
-    [ID, ...others.map((each) => each.id)].map((id) => [id, fromSnapshot({ conversationId: id, run: "running", turnOpen: true, tasks: [], approvals: [], questions: [] })]),
+    [ID, SECOND, ...others.map((each) => each.id)].map((id) => [id, fromSnapshot({ conversationId: id, run: "running", turnOpen: true, tasks: [], approvals: [], questions: [] })]),
   ),
 });
 useSessionTabs.setState({ sessions: {} });
@@ -100,13 +106,22 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const request = (payload as { request: Request }).request;
   switch (request.method) {
-    case "threadView": return { method: "threadView", view: useCliThread.getState().views[ID] ?? view };
+    case "threadView": return { method: "threadView", view: request.conversationId === SECOND ? secondView : (useCliThread.getState().views[ID] ?? view) };
     case "listMessages": return { method: "listMessages", page: { items: [], hasMore: false } };
-    case "getConversation": return new Promise(() => {});
+    case "getConversation": return { method: "getConversation", view: conversationView(request.id) };
     default: return { method: request.method };
   }
 }, { shouldMockEvents: true });
 mockWindows("main");
+
+/** What the daemon says of a session's chat when it opens: nothing beyond its CLI thread. */
+function conversationView(id: string) {
+  return {
+    conversation: useApp.getState().conversations[id], context: null, messages: { messages: [], hasMore: false },
+    tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [],
+    queue: { items: [], paused: false }, run: "running", runRequest: null, head: null, ratings: {}, streaming: null, notices: [], previews: [], backgroundCleared: [], mcpServers: [], peerMessages: [],
+  };
+}
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -151,6 +166,7 @@ function summary(ms: number) {
     over50: gaps.filter((gap) => gap > 50).length,
     longTasks: meter.longTasks.length,
     longTaskMs: Math.round(meter.longTasks.reduce((sum, each) => sum + each, 0)),
+    longTaskMax: Math.round(Math.max(0, ...meter.longTasks)),
     commits: meter.commits,
     commitMs: Math.round(meter.commitMs),
     renders: renderCounts(),
@@ -210,7 +226,94 @@ async function drive() {
   reset();
   await stream(PHASE_MS);
   seen.streamApproval = { ...summary(PHASE_MS), deltas };
+  if (query.get("extra") === "1") await extra(seen);
   return seen;
+}
+
+/** Resolves once the frame after this one has painted. */
+const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+/** Milliseconds from `action` to the first painted frame where `ready` holds. */
+async function timeTo(action: () => unknown, ready: () => boolean): Promise<number> {
+  const asked = performance.now();
+  await action();
+  for (let tries = 0; tries < 600; tries++) {
+    await painted();
+    const now = performance.now();
+    if (ready()) return Math.round(now - asked);
+  }
+  throw new Error("it never got there");
+}
+
+const viewport = () => document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+/** Whether the open thread shows its newest turn, asked as `asked`. */
+const showing = (asked: string) => () => (viewport()?.textContent ?? "").includes(`${asked} ${TURNS}:`);
+
+/** Typing, switching sessions, showing the earlier turns and scrolling, while it streams. */
+async function extra(seen: Record<string, unknown>) {
+  // The approval answered: the composer is back in its place.
+  useBoard.setState((state) => ({ board: state.board && { ...state.board, approvals: {} } }));
+  useActivity.setState((state) => ({
+    byConversation: { ...state.byConversation, [ID]: fromSnapshot({ conversationId: ID, run: "running", turnOpen: true, tasks: [], approvals: [], questions: [] }) },
+  }));
+  await wait(300);
+  const streaming = stream(PHASE_MS * 4);
+  // Typing: from each key to the frame that shows it.
+  const editor = document.querySelector<HTMLElement>('[data-lexical-editor="true"]');
+  if (!editor) throw new Error("no composer");
+  editor.focus();
+  const keys: number[] = [];
+  const onKey = (event: KeyboardEvent) => {
+    const at = event.timeStamp;
+    void painted().then(() => keys.push(performance.now() - at));
+  };
+  window.addEventListener("keydown", onKey, true);
+  reset();
+  document.documentElement.dataset.phase = "typing";
+  document.documentElement.dataset.typing = "";
+  while (!("typed" in document.documentElement.dataset)) await wait(50);
+  await wait(200);
+  window.removeEventListener("keydown", onKey, true);
+  const sorted = keys.toSorted((a, b) => a - b);
+  seen.typing = {
+    ...summary(PHASE_MS), keys: keys.length,
+    keyP50: Math.round(sorted[Math.floor(sorted.length / 2)] ?? 0), keyP95: Math.round(sorted[Math.floor(sorted.length * 0.95)] ?? 0), keyMax: Math.round(sorted.at(-1) ?? 0),
+    typed: editor.textContent?.length ?? 0,
+  };
+  // Switching: the second session's first opening reads its view; after that both are held.
+  reset();
+  document.documentElement.dataset.phase = "switching";
+  const switches: Record<string, number> = {};
+  switches.openSecond = await timeTo(() => openConversation(SECOND), showing("Second question"));
+  for (let round = 1; round <= 3; round++) {
+    switches[`back${round}`] = await timeTo(() => openConversation(ID), showing("Question"));
+    switches[`again${round}`] = await timeTo(() => openConversation(SECOND), showing("Second question"));
+  }
+  switches.back = await timeTo(() => openConversation(ID), showing("Question"));
+  seen.switching = { ...switches, ...summary(1) };
+  // The earlier turns: all of them shown at once.
+  await wait(500);
+  reset();
+  document.documentElement.dataset.phase = "unfold";
+  const earlier = document.querySelector<HTMLElement>('[data-slot="earlier-turns"]');
+  const unfold = earlier ? await timeTo(() => earlier.click(), () => !document.querySelector('[data-slot="earlier-turns"]')) : null;
+  seen.unfold = { ms: unfold, ...summary(1) };
+  // Scrolling the whole thread to its top, a screen's worth each frame.
+  await wait(500);
+  reset();
+  document.documentElement.dataset.phase = "scroll";
+  const scroller = viewport();
+  if (!scroller) throw new Error("no thread");
+  const scrolledFrom = performance.now();
+  let steps = 0;
+  while (scroller.scrollTop > 0 && performance.now() - scrolledFrom < PHASE_MS) {
+    scroller.scrollTop -= 400;
+    steps += 1;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  const scrolledMs = performance.now() - scrolledFrom;
+  seen.scroll = { ...summary(scrolledMs), steps, height: scroller.scrollHeight, reachedTop: scroller.scrollTop === 0 };
+  await streaming;
 }
 
 function Fixture() {
