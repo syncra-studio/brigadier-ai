@@ -91,7 +91,8 @@ choice per worker, never the user's own sessions.
 D63: every Claude launch uses the CLI’s `--exclude-dynamic-system-prompt-sections`; it and the cache TTL option below are the CLI’s own options, and the facts the model sees are unchanged (G17).
 
 **Brigadier pushes nothing (G1).** A thread receives only:
-- the user's messages;
+- the user's messages; one sent while it works comes at once under a one-line frame naming its queue id, to
+  judge it (run2-D40, "Deciding" below);
 - results of things it started itself, which the CLI already delivers;
 - one message per seam: "write your hand-off" (G12);
 - its workers' events: through the `brigadier wait` it keeps running, else one batched message once its turn
@@ -106,7 +107,9 @@ There are no status nags, no cross-session notices, no mid-task rule changes, no
 - **Thread.** The thread is the CLI's own session file: Claude JSONL, or the Codex rollout. While the CLI runs,
   the UI follows its live stream. Brigadier keeps no copy of the conversation. The UI shows the same items in
   the same order as the CLI. It may draw them more nicely, but it never shows different data, and it never
-  hides or adds anything.
+  hides or adds anything. Amendment (run2-D44, user, 2026-10-24: "all this should happen under the hood, user
+  shouldnt be bothered! Neither should brigadier message bubbles be visible in the conversation"): Brigadier's
+  own frame text is hidden, and a queued message shows once (Deciding, below).
 - **Work block.** A turn runs from the user's message to the CLI's turn-end event. Its steps fold into "Worked
   for Xm", timed from the CLI's own timestamps. The turn's last assistant text shows outside the fold. Stopped,
   failed and interrupted come from the CLI's live result event. The session file doesn't hold them, so
@@ -123,6 +126,7 @@ instructions points at `brigadier --help`. The thread calls it when it wants to:
   message or screen, close.
 - **Message other sessions:** send to and wait on another sidebar session, when the user asks or when it is
   absolutely needed (S30) (user, 2026-10-23: "Sessions should be able to message eachother").
+- **Judge a queued message:** `brigadier queue <id> join|wait|worker <worker-id>|new-session` (run2-D40).
 - **Previews, browser.**
 - **Computer use:** not a subcommand; the vendored driver's own tools sit beside `brigadier` and reach every
   session, Chat and worker while Settings › Computer use is on (S35) (user, 2026-10-23: "fix this!").
@@ -164,6 +168,38 @@ just like the delegator, how an orchestrator works"; supersedes old-run D43 "Def
 - After a block of work it replies in at most 3–5 short lines: what changed, what's next, what needs the user;
   workers keep full reports, which only the session reads (run2-D27).
 Every session and normal chat brigades, with no option; side chats stay as they are, with no workers (run2-D26).
+
+**A message sent while the session works: Deciding (run2-D40).** Back as it was in #437 (027893857, 7a3114dbd),
+rebuilt on the session's own `brigadier` command: no MCP server and no tool server is involved (the old judgment
+went through Brigadier's MCP tool and stopped working when S16c removed that server) (user, 2026-10-24: "sure,
+do it"). A message the user sends while the session's turn runs (queueing on, the queue not paused):
+- **Rail.** It waits in the queue rail with the old Deciding look: a spinner for the glyph, a shimmering
+  "Deciding", and the held note "Read when the current command ends" while a command of the thread's runs
+  (run2-D40). The rail reads the queue item's state, which only the daemon writes (G2).
+- **Delivery.** It reaches the session at once as the user's own message (G1), under one line,
+  `[queued message <id> · judge it: brigadier queue <id> join|wait|worker <id>|new-session; unjudged, it joins
+  this work]`: Claude's stream-json user message, taken at its next step; Codex's `turn/steer`, which never
+  starts a turn for it. With no Codex turn running to take it, it waits plainly (run2-D40, run2-D46).
+- **Judgment.** The session answers with `brigadier queue <id> …` (run2-D40):
+  - `join`: it is the user's message of a request of its own inside the running turn, never sent again;
+  - `wait`: it stays queued and goes on its own turn once nothing works, under
+    `[queued message <id>, now on its own turn]`; the earlier copy is hidden in the thread (proposed: resent
+    rather than a bare pointer, so a compaction can't lose it);
+  - `worker <worker-id>`: Brigadier gives its words to that worker of the session's, as `brigadier send` does
+    (run2-D38), and the rail keeps a one-line "Sent to worker #N" notice the user dismisses (proposed:
+    dismiss-only; attachments go as their paths);
+  - `new-session`: it waits with "Open as a new session" and "Run here", and is never sent until the user picks.
+  - Re-judging a message still queued is allowed (proposed). A worker can't judge; it has no queue.
+- **Unjudged (the earlier default, run2-D40).** After 20 s it joins the working answer; still unjudged when its
+  turn completes, it joins that turn; after a stop, a failure, a limit or a daemon restart it waits for its own
+  turn. A late judgment hears it already joined.
+- **Edit and delete (proposed).** Once the session has it, the rail can't edit it; deleting it tells the session
+  `[queued message <id> withdrawn: the user took it back; leave it]`, and its text stays in the thread where the
+  session read it.
+- **Thread (run2-D44).** The frame lines and the withdrawal line are never drawn. A queued message shows once:
+  in the rail while the session has it there, else where the CLI last took it.
+- **Who gets it.** Sessions and normal Chats (proposed: run2-D46, from run2-D26); side chats and tab chats keep
+  the plain queue. A Steer, or queueing turned off, still sends it straight in.
 Overnight is the same skill with a deadline. The engine has no lead, phase or landing protocol.
 A Chat is a brigade too and acts almost exactly as a normal session: it starts workers, and its CLI has its own
 shell with the Chat's session folder as cwd, with no `brigadier`-only gate (S28) (user, 2026-10-23: "a chat is
@@ -939,6 +975,7 @@ and `run`.
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background, which re-invokes the parent when one ends (S29) (user, 2026-10-23: "The parent should know everything"). |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
   | `brigadier close <id>` | Closes one of the caller's own workers. |
+  | `brigadier queue <id> join\|wait\|worker <worker-id>\|new-session` | The calling session's judgment of a message the user sent while it worked, shown in the rail as Deciding (run2-D40; "Deciding" above). The rail updates from the queue state this writes. |
   | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. Its card always allows a free-text answer next to any options, never options only; the recommended option comes first, so "yes" takes it. |
   | `brigadier models` | Live models, usage and guidance (S13b). |
 

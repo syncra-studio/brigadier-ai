@@ -381,18 +381,21 @@ class Smoke:
                 deferred_after = extra
             if os.path.exists(self.repos["C1"] + "/.smoke/t1.txt") and t1 is None:
                 t1 = open(self.repos["C1"] + "/.smoke/t1.txt").read().strip()
-            if cmd_end and t1 and not v["queue"]["items"] and self.idle("C1"):
+            # One the session offered as a new session waits for the user's pick: not this run's.
+            waiting = [i for i in v["queue"]["items"] if not i.get("offerSession")]
+            if cmd_end and t1 and not waiting and self.idle("C1"):
                 break
             time.sleep(1)
         v = self.view("C1")
         if t1:
             self.expected[self.convs["C1"]].setdefault(root, []).append(t1)
         reqs = {r["id"]: r for r in v["requests"]}
-        # A message sent while the session works waits in the queue for a turn of its own, as in
-        # the plain CLI (nothing judges or routes it); leaving the queue it becomes a message with
-        # a request of its own.
-        check(sc, "the follow-up waits in the queue, never Deciding", follow_out.get("type") == "queued" and not follow_deciding,
-              f"sent as {follow_out.get('type')}" + (", seen Deciding" if follow_deciding else ""))
+        # A message sent while the session works waits in the queue rail, Deciding, and reaches the
+        # session at once under a line naming its queue id; the session judges it with `brigadier
+        # queue` (join, wait, worker, new-session), else it joins the working answer after 20 s
+        # (run2-D40).
+        check(sc, "the follow-up waits in the queue, Deciding", follow_out.get("type") == "queued" and follow_deciding,
+              f"sent as {follow_out.get('type')}" + ("" if follow_deciding else ", never seen Deciding"))
         follow_msg = next((m for m in messages(v) if m["role"] == "user" and follow_code in m["text"]), {})
         follow_id = follow_msg.get("requestId") or follow_msg.get("id")
         if follow_id:
@@ -407,8 +410,13 @@ class Smoke:
                 rid = reqs[rid]["steeredInto"]
                 chain.append(rid)
             return chain
-        check(sc, "the follow-up gets a request of its own", follow_id and root not in joined(follow_id),
-              "no message for it" if not follow_id else f"steeredInto chain {joined(follow_id)}")
+        sent_on = next((s for s in v["queue"].get("sent", []) if follow_code in s["text"]), None)
+        offered = next((i for i in v["queue"]["items"] if i.get("offerSession") and follow_code in i["text"]), None)
+        how = ("sent to worker #%d" % sent_on["workerNumber"] if sent_on else "offered as a new session" if offered
+               else "joined the running request" if follow_id and root in joined(follow_id)
+               else "a request of its own" if follow_id else None)
+        check(sc, "the follow-up is judged: joined, waited, sent to a worker or offered", how,
+              "no message, notice or offer for it", info=how or "")
         check(sc, "the steer goes into the running request", root in joined(steer_id),
               f"steeredInto chain {joined(steer_id) or 'none'}")
         check(sc, "while the command runs, the steer says it is read when the command ends", deferred,
@@ -417,7 +425,8 @@ class Smoke:
         if deferred:
             check(sc, "that state clears once the command ended", not deferred_after, f"still {deferred_after}" if deferred_after else "")
         check(sc, "the steer is answered", assistant_after(v, steer_at, steer_code), f"no answer with {steer_code}")
-        check(sc, "the follow-up is answered", assistant_after(v, cmd_seen, follow_code), f"no answer with {follow_code}")
+        if follow_id:
+            check(sc, "the follow-up is answered", assistant_after(v, cmd_seen, follow_code), f"no answer with {follow_code}")
         check(sc, "the command's real output reaches the user", t1 and assistant_after(v, t0, t1),
               "the command never finished" if not t1 else f"no answer with its output {t1}")
         stuck = [r["preview"][:40] for r in v["requests"] if state_of(r) == "working"]

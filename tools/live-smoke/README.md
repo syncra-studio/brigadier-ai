@@ -31,11 +31,12 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
 
 1. **Long command** (C1). A foreground `sh .smoke/hold.sh 70 && …` command (Claude Code refuses a bare
    foreground `sleep`); once its step runs, a follow-up
-   and then a steer. The follow-up waits in the queue for a request of its own (never
-   Deciding); the steer goes into the
+   and then a steer. The follow-up waits in the queue rail, Deciding, while the session judges
+   it with `brigadier queue` (join, wait, worker, new-session; unjudged, it joins after 20 s),
+   and is judged one of those ways; the steer goes into the
    running request, its state says it is read when the command ends (`heldBy` on the steered
    request or its queued message, naming the command, then cleared), and it is
-   answered; the follow-up is answered; the command's real output reaches the user; every
+   answered; the follow-up, once joined or on its own turn, is answered; the command's real output reaches the user; every
    request ends.
 2. **Background job** (C2, alongside 1). The thread starts `sleep 100 && …` as a background job
    (`--job`: well past the minute after which a command goes on in the background, so its turn
