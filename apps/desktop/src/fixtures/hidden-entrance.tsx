@@ -1,7 +1,8 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: an approval in the
- * composer's place (ApprovalSlot) and a decision card on the composer rail, mounted while the
- * page is hidden and again while it shows, with the page-hidden mark the app sets at startup.
+ * composer's place (ApprovalSlot), a decision card on the composer rail, a decided approval in
+ * the thread (its footer) and a question card's options, mounted while the page is hidden and
+ * again while it shows, with the page-hidden mark the app sets at startup.
  *
  * `?drive=1` writes JSON into `#hidden-entrance-result` (`pageHidden.test.ts` checks it). In a
  * hidden or covered macOS window WebKit runs no animations, so an entrance animation started then
@@ -17,6 +18,8 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ApprovalSlot } from "@/app/conversation/ActionCards";
+import { ApprovalCardView } from "@/app/conversation/cards/ApprovalCardView";
+import { ChoiceCard } from "@/app/conversation/ChoiceCard";
 import { ComposerRail, ComposerRailItem } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import { trackPageHidden } from "@/lib/pageHidden";
@@ -29,7 +32,8 @@ const approval: ShownApproval = {
   id: "ap", conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,
   subject: { type: "cli", request: { id: "ap", kind: "command", tool: "Bash", command: "git push origin main", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: "git push" } },
 };
-useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals: { ap: approval } } });
+const decided: ShownApproval = { ...approval, id: "done", state: { type: "denied", by: "user", message: null }, resolvedAtMs: 0 };
+useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals: { ap: approval, done: decided } } });
 mockIPC((command, payload) => (command === "ipc_request" ? { method: (payload as { request: { method: string } }).request.method } : null));
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -52,6 +56,15 @@ function seen(selector: string) {
   };
 }
 
+/** A question card's options: their entrance animations, and the faintest animated one's opacity. */
+function options() {
+  const card = document.querySelector<HTMLElement>('[data-fixture="choices"]');
+  if (!card) return null;
+  const animations = card.getAnimations({ subtree: true }).length;
+  const animated = [...card.querySelectorAll<HTMLElement>("*")].filter((element) => element.getAnimations().length > 0);
+  return { animations, opacity: String(Math.min(1, ...animated.map((element) => Number(getComputedStyle(element).opacity)))), height: Math.round(card.getBoundingClientRect().height) };
+}
+
 async function drive() {
   // The rail has been there a while, as a conversation's has: what comes now opens.
   await wait(600);
@@ -66,6 +79,8 @@ async function drive() {
     result[hidden ? "hidden" : "shown"] = {
       slot: seen('[data-slot="approval-slot"]'),
       rail: seen('[data-slot="composer-rail-item"]'),
+      footer: seen('[data-slot="approval-card-footer"]'),
+      options: options(),
     };
     mount(null);
     await frame();
@@ -88,6 +103,26 @@ function Fixture() {
     <TooltipProvider>
       <div className="bg-background text-foreground flex w-180 flex-col gap-6 p-6">
         {round !== null && <ApprovalSlot key={round} ids={["ap"]} onReply={() => {}} />}
+        {round !== null && <ApprovalCardView key={`done-${round}`} cardId="done" />}
+        {round !== null && (
+          <div data-fixture="choices">
+            <ChoiceCard
+              key={round}
+              name="question"
+              title="Which branch?"
+              choices={[{ label: "main" }, { label: "next" }]}
+              placeholder="Something else"
+              onChoose={() => {}}
+              onText={() => {}}
+              onSkip={() => {}}
+              onDismiss={() => {}}
+              busy={false}
+              error={null}
+              footer={null}
+              stagger
+            />
+          </div>
+        )}
         <ComposerRail>
           {round !== null && (
             <ComposerRailItem key={round} variant="decision" label="Waiting for you">

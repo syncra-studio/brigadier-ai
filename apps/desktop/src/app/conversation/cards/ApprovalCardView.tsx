@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useState } from "react";
 
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
@@ -14,6 +14,7 @@ import {
   X,
 } from "@/components/icons";
 import type { CardState } from "@/ipc/generated";
+import { pageShown } from "@/lib/pageHidden";
 import { NEVER_PUSHES_NOTE } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { type ShownApproval, useBoard } from "@/state/board";
@@ -177,6 +178,8 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
       ? approval.subject.taskId
       : null,
   );
+  // Decided while nobody could see the window, its footer is simply there (see `pageShown`).
+  const [opens] = useState(pageShown);
   if (!approval) return null;
 
   const shown = describe(approval, actorId, landingId);
@@ -192,7 +195,7 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
       </div>
       <ApprovalCardBody>{shown.body}</ApprovalCardBody>
       {/* As tall as its words: 10 over them, 14 under. */}
-      <div data-slot="approval-card-footer" className="fade-in animate-in text-muted-foreground flex items-center justify-end gap-2 px-4 pt-2.5 pb-3.5 text-xs duration-300">
+      <div data-slot="approval-card-footer" className={cn(opens && "fade-in animate-in duration-300", "text-muted-foreground flex items-center justify-end gap-2 px-4 pt-2.5 pb-3.5 text-xs")}>
         <Resolution state={approval.state} />
       </div>
     </ActionCard>

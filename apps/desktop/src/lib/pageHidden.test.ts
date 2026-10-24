@@ -56,9 +56,10 @@ test("a dialog or popover closed while the page is hidden leaves though no frame
 
 test("a card that comes while the page is hidden is simply there when it shows again", { timeout: 60000 }, async (t) => {
   type Card = { animations: number; opacity: string; height: number } | null;
-  const seen = JSON.parse(await renderFixtureLive(t, "hidden-entrance.html?drive=1", "hidden-entrance-result")) as Record<"hidden" | "shown", { slot: Card; rail: Card }>;
-  // Hidden with no frames: no entrance, so it shows whole the moment the window does.
-  for (const card of [seen.hidden.slot, seen.hidden.rail]) {
+  const seen = JSON.parse(await renderFixtureLive(t, "hidden-entrance.html?drive=1", "hidden-entrance-result")) as Record<"hidden" | "shown", { slot: Card; rail: Card; footer: Card; options: Card }>;
+  // Hidden with no frames: no entrance, so it shows whole the moment the window does. So do a
+  // decided approval's footer in the thread and a question card's options.
+  for (const card of [seen.hidden.slot, seen.hidden.rail, seen.hidden.footer, seen.hidden.options]) {
     assert.ok(card, "the card mounted");
     assert.equal(card.animations, 0);
     assert.equal(card.opacity, "1");
@@ -70,4 +71,6 @@ test("a card that comes while the page is hidden is simply there when it shows a
   assert.equal(seen.shown.slot?.opacity, "0");
   assert.ok((seen.shown.slot?.height ?? 0) > 0);
   assert.equal(seen.shown.rail?.animations, 1);
+  assert.equal(seen.shown.footer?.animations, 1);
+  assert.ok((seen.shown.options?.animations ?? 0) >= 1);
 });

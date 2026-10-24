@@ -13,6 +13,7 @@ import { CardDictate } from "@/app/conversation/CardDictate";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
 import { ActionCard, ActionCardQuestion, ActionFreeText, ActionOption, actionButton, staggered } from "@/components/conversation";
 import type { AnswerInput } from "@/ipc/generated";
+import { pageShown } from "@/lib/pageHidden";
 import { cancelDictation, dictationOwner, registerInserter } from "@/state/dictation";
 
 /** How long a picked answer shows its dot before it goes. */
@@ -107,6 +108,8 @@ export function ChoiceCard({
   const lit = useEffectEvent((index: number | null) => onLit?.(index));
   useEffect(() => lit(highlight), [highlight]);
   const [chosen, setChosen] = useState<number | null>(null);
+  // A card that came while nobody could see the window shows its rows at once (see `pageShown`).
+  const [opens] = useState(pageShown);
   const [typed, setTyped] = useState(initialText);
   // Dictated words go after what is typed, into this card alone: each mounted card (one per
   // question of a round, in each chat open) owns its own dictation.
@@ -199,7 +202,7 @@ export function ChoiceCard({
     }
   };
 
-  const row = (index: number) => staggered(stagger, index);
+  const row = (index: number) => staggered(stagger && opens, index);
   return (
     <ActionCard
       ref={card}
