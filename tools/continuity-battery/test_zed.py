@@ -198,7 +198,7 @@ class ZedTests(unittest.TestCase):
              patch("nightly.subprocess.Popen", FakeProcess):
             nightly.provider_report("claude", Path(folder), "/unused", True, "zed", zed_long=True)
             report = json.loads((Path(folder) / "claude-zed.json").read_text())
-            self.assertEqual([row["status"] for row in report["arms"]], ["skipped"] * 3)
+            self.assertEqual([row["status"] for row in report["arms"]], ["skipped"] * len(nightly.PROFILES))
             self.assertTrue(all("could not fetch" in row["reason"] for row in report["arms"]))
 
     def test_nightly_zed_arm_skips_long_profiles_by_default(self):
@@ -224,8 +224,8 @@ class ZedTests(unittest.TestCase):
             nightly.provider_report("claude", Path(folder), "/unused", True, "zed")
             report = json.loads((Path(folder) / "claude-zed.json").read_text())
             self.assertEqual([(row["block"], row["profile"]) for row in report["arms"]],
-                              [("recall", "short"), ("recall", "long"), ("decisions", "long")])
-            long_rows = [row for row in report["arms"] if row["profile"] == "long"]
+                              [(b, p) for b, p, _, _ in nightly.PROFILES])
+            long_rows = [row for row in report["arms"] if row["profile"] == "long" and row["block"] != "updates"]
             self.assertEqual([row["status"] for row in long_rows], ["skipped", "skipped"])
             self.assertTrue(all(row["reason"] == "zed: short only tonight (long on dispatch)" for row in long_rows))
             short_row = next(row for row in report["arms"] if row["profile"] == "short")

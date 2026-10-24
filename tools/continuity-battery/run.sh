@@ -14,8 +14,8 @@ if [ "${1:-}" = p2 ] || [ "${1:-}" = p3 ]; then
   shift
   exec python3 tools/continuity-battery/budgets.py --daemon "$target_dir/debug/brigadierd" --variant "$variant" "$@"
 fi
-if [ "${1:-}" = decisions ]; then
-  script=decisions.py
+if [ "${1:-}" = decisions ] || [ "${1:-}" = updates ]; then
+  script="$1.py"
   shift
 fi
 exec python3 "tools/continuity-battery/$script" --daemon "$target_dir/debug/brigadierd" "$@"

@@ -16,13 +16,16 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools/bench"))
 from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
-ARMS = ("seam", "plain", "zed")
+ARMS = ("seam", "plain", "zed", "summary")
+PROFILES = (("recall", "short", 9, 1200), ("recall", "long", 90, 3500),
+            ("decisions", "long", 90, 3500), ("updates", "short", 9, 1200),
+            ("updates", "long", 90, 3500))
 
 
 def parse_arms(value):
     arms = tuple(dict.fromkeys(arm.strip() for arm in value.split(",")))
     if not arms or any(arm not in ARMS for arm in arms):
-        raise argparse.ArgumentTypeError("arms must be a comma-separated list of seam, plain, zed")
+        raise argparse.ArgumentTypeError("arms must be a comma-separated list of seam, plain, zed, summary")
     return arms
 
 
@@ -34,6 +37,9 @@ def decision_checks(result):
             return {}
         checks = {f"recall.{key}": row.get("verdict") == "pass" for key, row in items.items()}
         checks.update({f"apply.{key}": row["action"] for key, row in items.items() if row.get("action") is not None})
+        if result.get("block") == "updates":
+            checks.update({f"newest.{key}": row["newest"] for key, row in items.items() if row.get("newest") is not None})
+            checks.update({f"no_stale.{key}": not row["stale"] for key, row in items.items() if row.get("stale") is not None})
         return checks
     t1, t3 = result.get("t1", {}), result.get("t3", {})
     brief = list(t3.get("items", {}).values())
@@ -74,6 +80,8 @@ def metrics(result):
     return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
             "compactions": result.get("compactions"), "zed_compactions": result.get("zed_compactions"),
             "checks": decision_checks(result),
+            "summary_compactions": result.get("summary_compactions"),
+            "update_scores": result.get("update_scores"),
             "budget_scores": result.get("budget_scores"),
             "first_successor_write": result.get("first_successor_write"),
             "extra_bootstrap_estimate": result.get("extra_bootstrap_estimate"),
@@ -91,9 +99,10 @@ def metrics(result):
             "cold_return_cost_usd": sum(row["cost_usd"] for row in cold)
                                     if cold and all(row.get("cost_usd") is not None for row in cold) else None,
             "cold_return_observations": len(cold),
-            "task_passed": all(result.get("t1", {}).get(k) for k in ("jsdoc", "named", "spdx", "padding", "dates"))
-                           if rows else all(row.get("action") is not False for row in result.get("items", {}).values())
-                           if isinstance(result.get("items"), dict) and result["items"] else None}
+            "task_passed": None if result.get("block") == "updates" else (
+                all(result.get("t1", {}).get(k) for k in ("jsdoc", "named", "spdx", "padding", "dates"))
+                if rows else all(row.get("action") is not False for row in result.get("items", {}).values())
+                if isinstance(result.get("items"), dict) and result["items"] else None)}
 
 
 def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=False):
@@ -103,13 +112,12 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
         report.update(status="skipped", reason="needs the user: secrets")
     else:
         # Same scripts in every arm. Short stays bounded; long crosses 400k of inert input.
-        profiles = [("recall", "short", 9, 1200), ("recall", "long", 90, 3500),
-                    ("decisions", "long", 90, 3500)]
+        profiles = list(PROFILES)
         if provider == "claude" and selected_arm in (None, "seam"):
             profiles += [("p2", "short", 18, 0), ("p3", "short", 16, 0)]
         for block, profile, fillers, ballast in profiles:
             for arm in (["seam"] if block in ("p2", "p3") else [selected_arm] if selected_arm else ARMS):
-                if arm == "zed" and not zed_long and (block, profile) != ("recall", "short"):
+                if arm == "zed" and not zed_long and block != "updates" and (block, profile) != ("recall", "short"):
                     report["arms"].append({"block": block, "profile": profile, "arm": arm,
                                             "status": "skipped",
                                             "reason": "zed: short only tonight (long on dispatch)"})
@@ -118,7 +126,7 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
                 with tempfile.TemporaryDirectory(prefix="continuity-nightly-evidence-") as private:
                     evidence = Path(private) / "evidence.json"
                     command = [sys.executable, str(ROOT / "tools/continuity-battery" /
-                               ("decisions.py" if block == "decisions" else "battery.py")),
+                               ("decisions.py" if block == "decisions" else "updates.py" if block == "updates" else "battery.py")),
                                "--daemon", daemon, "--provider", provider, "--arm", arm,
                                "--max-fillers", str(fillers),
                                "--min-fillers", str(fillers), "--ballast", str(ballast),
@@ -153,6 +161,9 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
                         if row["status"] == "complete" and block == "decisions" and any(row.get(k) is None for k in ("applied", "contradictions", "unmarked_additions", "open_items")):
                             row["status"] = "incomplete"
                             row["errors"].append("decision rubric not completely scored")
+                        if row["status"] == "complete" and block == "updates" and row.get("update_scores") is None:
+                            row["status"] = "incomplete"
+                            row["errors"].append("updates rubric not completely scored")
                     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                         row.update(status="incomplete", errors=[str(error)])
                     report["arms"].append(row)
@@ -260,12 +271,18 @@ def markdown(summary):
              "", f"Run: {summary['run_url']}", f"Source: `{summary['source']}`", ""]
     for provider in summary["providers"]:
         lines += [f"## {provider['provider']}", "", provider["status"] + (": " + provider["reason"] if provider.get("reason") else ""), "",
-                  "| Script | Size | Arm | Native compactions | Zed compactions | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Cost USD | Cold return USD |",
-                  "|---|---|---|---:|---:|---:|---:|---|---:|---|---:|---:|"]
+                  "| Script | Size | Arm | Native compactions | Zed compactions | Summary handoffs | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Cost USD | Cold return USD |",
+                  "|---|---|---|---:|---:|---:|---:|---:|---|---:|---|---:|---:|"]
         for row in provider["arms"]:
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
-            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
+            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('summary_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
         for row in provider["arms"]:
+            if row.get("update_scores") is not None:
+                scores = row["update_scores"]
+                lines += ["", f"Updates/{row['profile']} {row['arm']}: recall {scores['recall']}; "
+                          f"newest decision wins {scores['newest_decision_wins']}; "
+                          f"stale-decision mistakes {scores['stale_decision_mistakes']}/{scores['decision_count']}; "
+                          f"open promises raised {scores['open_promises_raised']}/{scores['open_promise_count']}.", ""]
             if row.get("budget_scores") is not None:
                 lines += ["", f"D49 {row['block']}/{row['profile']}: `{json.dumps(row['budget_scores'], sort_keys=True)}`; "
                           f"first successor input/write `{json.dumps(row.get('first_successor_write'))}`; "
@@ -318,7 +335,7 @@ def collect(inputs, output, previous=None, selected_arms=ARMS):
         rows += [{"block": block, "profile": profile, "arm": arm, "status": "not_run",
                   "reason": "not run on this dispatch"}
                  for arm in ARMS if arm not in selected_arms
-                 for block, profile in (("recall", "short"), ("recall", "long"), ("decisions", "long"))]
+                 for block, profile, _, _ in PROFILES]
         providers.append({"provider": provider,
                           "status": "skipped" if covered == set(selected_arms) and all(r["status"] == "skipped" for r in reports)
                                     else "complete" if complete else "incomplete",
