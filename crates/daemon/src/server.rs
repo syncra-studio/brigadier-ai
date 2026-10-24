@@ -2333,6 +2333,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .supervisor
                     .spawn(async move { heap(|| sessions.retry_waiting_work()).await });
             }
+            if before.own_account_names != settings.own_account_names {
+                // An own login renamed shows by its new name at once.
+                let runtime = daemon.runtime.clone();
+                daemon
+                    .supervisor
+                    .spawn(async move { runtime.publish_accounts().await });
+            }
             Response::UpdateSettings {
                 settings: Box::new(settings),
             }

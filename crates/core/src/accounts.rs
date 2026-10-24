@@ -10,7 +10,7 @@ use brigadier_providers::{ProviderKind, QuotaSnapshot, QuotaWindow};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::Settings;
+use crate::model::{OwnAccountName, Settings};
 
 /// [`crate::model::ModelChoice::account`] for the user's own login, chosen over the default.
 pub const OWN: &str = "own";
@@ -94,6 +94,19 @@ pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
         }
     }
     incoming.accounts = accounts;
+    // An own login's name, trimmed; an empty one goes back to the email, and each agent keeps
+    // its first.
+    let mut names: Vec<OwnAccountName> = Vec::new();
+    for entry in std::mem::take(&mut incoming.own_account_names) {
+        let name = entry.name.trim();
+        if !name.is_empty() && !names.iter().any(|kept| kept.provider == entry.provider) {
+            names.push(OwnAccountName {
+                provider: entry.provider,
+                name: name.to_owned(),
+            });
+        }
+    }
+    incoming.own_account_names = names;
     incoming
 }
 
@@ -905,6 +918,31 @@ mod tests {
         own.manual_accounts.clear();
         own.accounts[1].default = false;
         assert_eq!(edited(&after, own).manual_accounts, [ProviderKind::Claude]);
+        // The own login's name: trimmed, one per agent, and cleared back to its email.
+        let mut named = current.clone();
+        named.own_account_names = vec![
+            OwnAccountName {
+                provider: ProviderKind::Claude,
+                name: "  Personal ".into(),
+            },
+            OwnAccountName {
+                provider: ProviderKind::Claude,
+                name: "Second".into(),
+            },
+            OwnAccountName {
+                provider: ProviderKind::Codex,
+                name: "   ".into(),
+            },
+        ];
+        let named = edited(&current, named);
+        assert_eq!(named.own_account_name(ProviderKind::Claude), "Personal");
+        assert_eq!(named.own_account_name(ProviderKind::Codex), "");
+        assert_eq!(named.own_account_names.len(), 1);
+        // Naming the own login is no pick: switching stays on.
+        assert!(named.manual_accounts.is_empty());
+        let mut cleared = named.clone();
+        cleared.own_account_names[0].name = String::new();
+        assert!(edited(&named, cleared).own_account_names.is_empty());
     }
 
     #[test]

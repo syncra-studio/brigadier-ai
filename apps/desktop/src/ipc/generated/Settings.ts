@@ -8,6 +8,7 @@ import type { LinkTarget } from "./LinkTarget";
 import type { ModelChoice } from "./ModelChoice";
 import type { ModelRef } from "./ModelRef";
 import type { NotifyFinished } from "./NotifyFinished";
+import type { OwnAccountName } from "./OwnAccountName";
 import type { PermissionLevel } from "./PermissionLevel";
 import type { ProjectSwitches } from "./ProjectSwitches";
 import type { ProviderKind } from "./ProviderKind";
@@ -149,6 +150,11 @@ accounts: Array<AccountEntry>,
  * account hits its usage limit carries on with the next one.
  */
 manualAccounts: Array<ProviderKind>, 
+/**
+ * The user's names for their own logins (Settings › Providers › an agent's page), one per
+ * agent at most; an agent's own login without one goes by its email.
+ */
+ownAccountNames: Array<OwnAccountName>, 
 /**
  * "Switch to another agent automatically" (S38, D23): when every account of a session's
  * agent is at its limit, the session hands off through a seam to another agent. Off: it

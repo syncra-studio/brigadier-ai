@@ -792,7 +792,57 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     flow.core.update_settings(settings).await.unwrap();
     flow.manager.runtime.sync_accounts().await;
     assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
+
+    // The own login renamed is published by its name (its switch untouched); cleared, it goes
+    // by its email again.
+    let rename = |name: &str| {
+        let before = flow.core.settings();
+        let mut settings = before.clone();
+        settings.own_account_names = vec![crate::model::OwnAccountName {
+            provider: ProviderKind::Claude,
+            name: name.into(),
+        }];
+        crate::accounts::edited(&before, settings)
+    };
+    flow.core
+        .update_settings(rename(" Personal "))
+        .await
+        .unwrap();
+    flow.manager.runtime.publish_accounts().await;
+    assert_eq!(published_names(&flow).await[0], "Personal");
+    assert!(flow.core.settings().manual_accounts.is_empty());
+    flow.core.update_settings(rename("")).await.unwrap();
+    flow.manager.runtime.publish_accounts().await;
+    assert_eq!(published_names(&flow).await[0], "");
     flow.stop().await;
+}
+
+/// The names the last published Settings → Accounts gives Claude's accounts.
+async fn published_names(flow: &Flow) -> Vec<String> {
+    let page = flow
+        .core
+        .store()
+        .read_stream(
+            crate::model::streams::ACCOUNTS.into(),
+            brigadier_store::StreamPage {
+                limit: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    match page
+        .first()
+        .map(|event| crate::sessions::decode(event).unwrap())
+    {
+        Some(DomainEvent::AccountsChecked { accounts }) => accounts
+            .accounts
+            .into_iter()
+            .filter(|view| view.account.provider == ProviderKind::Claude)
+            .map(|view| view.name)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[tokio::test]

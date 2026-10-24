@@ -1001,6 +1001,9 @@ pub struct Settings {
     /// starts on the first of its accounts' order ([`crate::accounts::order`]), and work whose
     /// account hits its usage limit carries on with the next one.
     pub manual_accounts: Vec<ProviderKind>,
+    /// The user's names for their own logins (Settings › Providers › an agent's page), one per
+    /// agent at most; an agent's own login without one goes by its email.
+    pub own_account_names: Vec<OwnAccountName>,
     /// "Switch to another agent automatically" (S38, D23): when every account of a session's
     /// agent is at its limit, the session hands off through a seam to another agent. Off: it
     /// waits for the reset ("Resumes at", Q11).
@@ -1091,7 +1094,8 @@ pub struct QuotaWarning {
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
     pub account: crate::accounts::AccountRef,
-    /// The user's name for an extra account; empty for their own login.
+    /// The user's name for the account (for their own login, from
+    /// [`Settings::own_account_names`]); empty without one.
     pub name: String,
     /// Its provider's default: with switching off, work on that provider runs here.
     pub default: bool,
@@ -1119,6 +1123,14 @@ pub struct AccountView {
     pub place: Option<u32>,
     /// Why it stands there; `None` before its provider's accounts are ordered.
     pub reason: Option<crate::accounts::OrderReason>,
+}
+
+/// The user's name for an agent's own login, the one their terminal uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnAccountName {
+    pub provider: ProviderKind,
+    pub name: String,
 }
 
 /// The binary the user chose for an agent (Settings › Providers › its page › Location).
@@ -1152,6 +1164,14 @@ impl Settings {
         self.accounts
             .iter()
             .find(|account| account.provider == provider && account.default)
+    }
+
+    /// The user's name for `provider`'s own login; empty without one.
+    pub fn own_account_name(&self, provider: ProviderKind) -> &str {
+        self.own_account_names
+            .iter()
+            .find(|entry| entry.provider == provider)
+            .map_or("", |entry| entry.name.as_str())
     }
 
     /// Whether `provider`'s new work picks its account on its own (else it runs on the
@@ -1226,6 +1246,7 @@ impl Default for Settings {
             accounts: Vec::new(),
             legacy_switch_accounts: true,
             manual_accounts: Vec::new(),
+            own_account_names: Vec::new(),
             switch_providers: false,
             dictation_language: String::new(),
             dictation_words: Vec::new(),

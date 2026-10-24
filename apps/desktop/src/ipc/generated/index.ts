@@ -262,6 +262,7 @@ export type { OutputOf } from "./OutputOf";
 export type { OutputSource } from "./OutputSource";
 export type { OvernightRunId } from "./OvernightRunId";
 export type { OverrideTarget } from "./OverrideTarget";
+export type { OwnAccountName } from "./OwnAccountName";
 export type { Page } from "./Page";
 export type { PageContent } from "./PageContent";
 export type { PageSummary } from "./PageSummary";

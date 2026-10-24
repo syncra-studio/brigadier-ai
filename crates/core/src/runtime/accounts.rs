@@ -486,7 +486,7 @@ impl Runtime {
                 quota: self.monitor.current_for(&own, now),
                 quota_at_ms: self.monitor.read_at(&own),
                 default: settings.default_account(kind).is_none(),
-                name: String::new(),
+                name: settings.own_account_name(kind).to_owned(),
                 status: overview
                     .as_ref()
                     .and_then(|overview| overview.status.clone()),
@@ -601,7 +601,7 @@ impl Runtime {
     }
 
     /// Tells the app what Settings → Accounts shows now.
-    pub(super) async fn publish_accounts(&self) {
+    pub async fn publish_accounts(&self) {
         let event = DomainEvent::AccountsChecked {
             accounts: self.accounts_view(),
         };

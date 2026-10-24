@@ -10,7 +10,8 @@ import type { QuotaSnapshot } from "./QuotaSnapshot";
  */
 export type AccountView = { account: AccountRef, 
 /**
- * The user's name for an extra account; empty for their own login.
+ * The user's name for the account (for their own login, from
+ * [`Settings::own_account_names`]); empty without one.
  */
 name: string, 
 /**
