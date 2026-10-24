@@ -689,7 +689,7 @@ mod tests {
 
         fn root(name: &str) -> PathBuf {
             let dir = PathBuf::from(format!(
-                "/tmp/20261024-1114-plugins-redesign-w05-w05c-{name}-{}",
+                "/tmp/brigadier-accounts-live-{name}-{}",
                 std::process::id()
             ));
             let _ = std::fs::remove_dir_all(&dir);
