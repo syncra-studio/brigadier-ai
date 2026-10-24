@@ -1452,6 +1452,12 @@ pub struct NativeCompaction {
     pub restore: Option<RestoreHooks>,
 }
 
+/// The words a note Brigadier puts back after compaction `compaction_id` carries, so its
+/// receipt and a retry find it in the CLI's own file (exactly once, review item 2).
+pub fn restore_mark(compaction_id: &str) -> String {
+    format!("brigadier-restore {compaction_id}")
+}
+
 /// The put-back hooks: slot `k` of `slots` runs `command args… --slot k`, which prints that
 /// slot's slice of the decisions, labelled, under Claude's 10,000-character cap per hook.
 #[derive(Debug, Clone, PartialEq, Eq)]

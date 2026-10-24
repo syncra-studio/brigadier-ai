@@ -19,7 +19,11 @@
 //! Size seams go; the fresh-session seam stays for moves to another CLI (D46), quota fallback to
 //! another provider (D23, D25) and as the rare fallback when compaction fails (run2-D10).
 
-use brigadier_providers::{NativeCompaction, ProviderKind};
+pub(crate) mod restore;
+
+use std::path::Path;
+
+use brigadier_providers::{NativeCompaction, ProviderKind, RestoreHooks};
 
 use super::SessionManager;
 use super::conversation::ConvLive;
@@ -90,11 +94,23 @@ impl SessionManager {
         conv: &ConvLive,
         provider: ProviderKind,
     ) -> Option<NativeCompaction> {
-        self.long_mode(conv, provider)?;
+        let mode = self.long_mode(conv, provider)?;
         let config = self.seam_config();
         Some(match provider {
             ProviderKind::Claude => NativeCompaction {
                 backstop_window: Some(backstop_window(config.tokens)),
+                // The decisions go back after each compaction through hooks (run2-D8).
+                restore: mode.restore.then(|| RestoreHooks {
+                    command: self.config.daemon_exe.clone(),
+                    args: vec![
+                        "hook".into(),
+                        "restore".into(),
+                        "--record".into(),
+                        self.session_dir(&conv.id).record().display().to_string(),
+                    ],
+                    slots: restore::SLOTS,
+                    timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
+                }),
                 ..NativeCompaction::default()
             },
             _ => NativeCompaction {
@@ -103,6 +119,31 @@ impl SessionManager {
             },
         })
     }
+}
+
+/// The ledger's active entries in session record `record`, each whole and in order: its open
+/// items, then its rules and decisions (what a hand-off carries verbatim, S22b).
+pub(crate) fn active_entries(record: &Path) -> Vec<String> {
+    let Ok(ledger) = super::cli_ledger::Ledger::read(record) else {
+        return Vec::new();
+    };
+    ledger
+        .open()
+        .into_iter()
+        .chain(ledger.rules())
+        .map(|entry| entry.text.trim_end().to_owned())
+        .collect()
+}
+
+/// Part `slot` (from 1) of the decisions put back after a compaction, read from session record
+/// `record` as it stands (`brigadierd hook restore`, run2-D8). `None`: nothing for this slot,
+/// or the decisions can't go back whole, which the receipt then finds (the fallback, run2-D10).
+pub fn restore_part(record: &Path, slot: usize) -> Option<String> {
+    let back = restore::restoration(&active_entries(record), &restore::lookup_line());
+    if !back.whole {
+        return None;
+    }
+    back.parts.into_iter().nth(slot.checked_sub(1)?)
 }
 
 /// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point

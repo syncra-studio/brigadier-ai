@@ -138,7 +138,7 @@ pub(crate) struct Envelope {
 }
 
 mod continue_on;
-mod long;
+pub(super) mod long;
 mod seam;
 mod watchdog;
 
@@ -4037,6 +4037,7 @@ impl SessionManager {
                     started_at: now_ms(),
                 };
                 self.note_lineage(&conv.id, entry, conv.private_logs).await;
+                self.long_started(conv, cli).await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -4149,10 +4150,20 @@ impl SessionManager {
             // A long session compacts in place: its thread shows the CLI's own divider.
             ProviderEvent::CompactionStarted { .. }
                 if self.long_mode(conv, cli.provider).is_some() => {}
-            ProviderEvent::CompactionEnded { tokens_after, .. }
-                if self.long_mode(conv, cli.provider).is_some() =>
-            {
-                self.long_compacted(conv, *tokens_after).await;
+            ProviderEvent::CompactionEnded {
+                tokens_after,
+                error,
+                native_id,
+                ..
+            } if self.long_mode(conv, cli.provider).is_some() => {
+                self.long_compacted(
+                    conv,
+                    cli,
+                    *tokens_after,
+                    native_id.as_deref(),
+                    error.is_some(),
+                )
+                .await;
             }
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>

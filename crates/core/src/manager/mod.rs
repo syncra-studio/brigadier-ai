@@ -136,6 +136,7 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub use long_sessions::restore_part;
 pub use mcp_login::{AgentSignIn, AgentSignInState, McpSignInProgress, McpSignInStatus};
 pub use side_chat::BrowserPage;
 pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};

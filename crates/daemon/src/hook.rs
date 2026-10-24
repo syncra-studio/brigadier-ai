@@ -46,8 +46,10 @@ enum Plan {
 /// Runs the hook with the arguments after `hook`.
 pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     // Every path ends here with nothing printed: never break the tool call.
-    if args.next().is_none_or(|event| event != "post-tool-use") {
-        return ExitCode::SUCCESS;
+    match args.next() {
+        Some(event) if event == "post-tool-use" => {}
+        Some(event) if event == "restore" => return restore(args),
+        _ => return ExitCode::SUCCESS,
     }
     let mut data_dir: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
@@ -69,6 +71,45 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         let _ = stdout.flush();
     }
     ExitCode::SUCCESS
+}
+
+/// `hook restore --record <dir> --slot <k>`: a long session's `SessionStart(compact)` hook
+/// prints part `k` of its decisions, read from its record as they stand, for Claude to add to
+/// the compacted context (run2-D8). Nothing for a slot with no part; never fails the session.
+fn restore(mut args: impl Iterator<Item = OsString>) -> ExitCode {
+    let (mut record, mut slot) = (None, None);
+    while let Some(arg) = args.next() {
+        if arg == "--record" {
+            record = args.next().map(PathBuf::from);
+        } else if arg == "--slot" {
+            slot = args.next().and_then(|n| n.to_str()?.parse::<usize>().ok());
+        }
+    }
+    let mut stdin = String::new();
+    let _ = std::io::stdin().read_to_string(&mut stdin);
+    if let Some(printed) = record
+        .zip(slot)
+        .and_then(|(record, slot)| restore_output(&record, slot))
+    {
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(printed.as_bytes());
+        let _ = stdout.flush();
+    }
+    ExitCode::SUCCESS
+}
+
+/// What `hook restore` prints for part `slot` of the decisions in session record `record`.
+fn restore_output(record: &std::path::Path, slot: usize) -> Option<String> {
+    let part = brigadier_core::manager::restore_part(record, slot)?;
+    Some(
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": part,
+            }
+        })
+        .to_string(),
+    )
 }
 
 /// What the hook prints for the event `stdin`, given a way to reach the daemon; `None`: nothing.
@@ -256,6 +297,41 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A long session's put-back hook prints its slot's part of the ledger's active entries,
+    /// as Claude takes a `SessionStart` hook's added context, and nothing for a slot past them.
+    #[test]
+    fn the_restore_hook_prints_its_part_of_the_decisions() {
+        let record =
+            Temp(std::env::temp_dir().join(format!("hook-restore-{}", std::process::id())));
+        std::fs::create_dir_all(&*record).unwrap();
+        std::fs::write(
+            record.join("ledger.md"),
+            "- L1 · 10-24 14:42 · gen 1 · Decision: store it in SQLite\n\
+             - L2 · 10-24 14:43 · gen 1 · Rule: never push to main\n\
+             - L3 · 10-24 14:44 · gen 1 · Note: the build took 4 minutes\n\
+             - L4 · 10-24 14:45 · gen 1 · Open: the flaky login test\n",
+        )
+        .unwrap();
+        let printed: Value = serde_json::from_str(&restore_output(&record, 1).unwrap()).unwrap();
+        assert_eq!(
+            printed["hookSpecificOutput"]["hookEventName"],
+            "SessionStart"
+        );
+        let part = printed["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(
+            part.starts_with("[Brigadier · decisions restored after compaction · part 1 of 1]")
+        );
+        let at = |needle: &str| part.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        // Open items first, then rules and decisions, each whole; the rest stays out.
+        assert!(at("L4 · ") < at("L1 · ") && at("L1 · ") < at("L2 · "));
+        assert!(part.contains("- L1 · 10-24 14:42 · gen 1 · Decision: store it in SQLite"));
+        assert!(!part.contains("L3 · "));
+        assert!(part.contains("brigadier brain search"));
+        assert_eq!(restore_output(&record, 2), None);
     }
 
     fn success(response: Value) -> String {
