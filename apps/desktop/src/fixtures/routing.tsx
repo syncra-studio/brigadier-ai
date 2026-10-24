@@ -145,12 +145,23 @@ const pick = (trigger: string, item: string): (() => void)[] => [
   () => press(button(trigger)),
   () => menuItem(item)?.click(),
 ];
+/** The open model picker's agent row, by its name. */
+const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-agent"]').find((row) => text(row) === name);
+/** The open model picker's model rows: name, then line. */
+const modelRows = () => all('[data-slot="model-picker-model"]').map(text);
+const modelRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-model"]').find((row) => text(row).startsWith(name));
+/** Picks `agent`'s `model` in the model picker `trigger` opens: open, browse the agent, pick. */
+const pickModel = (trigger: string, agent: string, model: string): (() => void)[] => [
+  () => button(trigger)?.click(),
+  () => agentRow(agent)?.click(),
+  () => modelRow(model)?.click(),
+];
 
 /** The steps that show a rule being added, up to `stage`, for screenshots. */
 function ruleSteps(stage: string): (() => void)[] {
   const steps: (() => void)[] = [() => (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click()];
   if (stage === "1") return steps;
-  steps.push(...pick("The model the rule is about", "GPT-6"));
+  steps.push(...pickModel("The model the rule is about", "Codex", "GPT-6"));
   if (stage === "3") steps.push(() => button("Add rule", form() ?? document)?.click());
   return steps;
 }
@@ -218,11 +229,16 @@ function Fixture() {
         },
         () => {
           seen.afterEffort = lastWrite()?.rows.find((row) => row.work === "Architecture and broad changes");
-          press(button("Add model", openKind() ?? document));
+          button("Add model", openKind() ?? document)?.click();
         },
         () => {
-          seen.addModelItems = all('[role="menuitem"]').map(text);
-          menuItem("GPT-6")?.click();
+          seen.addModelAgents = all('[data-slot="model-picker-agent"]').map(text);
+          seen.addModelItems = { claude: modelRows() };
+          agentRow("Codex")?.click();
+        },
+        () => {
+          (seen.addModelItems as Record<string, string[]>).codex = modelRows();
+          modelRow("GPT-6")?.click();
         },
         () => {
           seen.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
@@ -235,6 +251,36 @@ function Fixture() {
         () => {
           seen.afterMove = lastWrite()?.rows.filter((row) => row.work === "Architecture and broad changes").map((row) => row.model);
           press(button("GPT-6: actions"));
+        },
+        // Change model opens the picker beside the menu; the keys stay in it and a pick closes the menu.
+        () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+        () => {
+          const search = document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input');
+          seen.changeModel = {
+            searchFocused: document.activeElement === search,
+            codex: modelRows(),
+          };
+          // ↓ into the models, ← to the agents, ↑ browses Claude Code, then typing searches.
+          for (const key of ["ArrowDown", "ArrowLeft", "ArrowUp", "s"]) {
+            document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+          }
+        },
+        () => {
+          const changeModel = seen.changeModel as Record<string, unknown>;
+          changeModel.typed = document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input')?.value;
+          changeModel.searched = modelRows();
+          document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        },
+        () => {
+          const changeModel = seen.changeModel as Record<string, unknown>;
+          changeModel.afterEscape = { open: Boolean(document.querySelector('[data-slot="model-picker-submenu"]')), typed: document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input')?.value };
+          modelRow("Sonnet 5.5")?.click();
+        },
+        () => {
+          const changeModel = seen.changeModel as Record<string, unknown>;
+          changeModel.menuClosed = !document.querySelector('[role="menu"]');
+          changeModel.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
+          press(button("Sonnet 5.5: actions"));
         },
         () => menuItem("Remove")?.click(),
         () => press(button("Opus 5.5: actions")),
@@ -251,7 +297,7 @@ function Fixture() {
           seen.addDisabled = button("Add rule", form() ?? document)?.disabled;
           seen.headerAddDisabled = (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.disabled;
         },
-        ...pick("The model the rule is about", "Opus 5.5"),
+        ...pickModel("The model the rule is about", "Claude Code", "Opus 5.5"),
         () => {
           seen.clash = note();
           seen.openAfterClash = all('[data-slot="routing-kind"][data-open]').length;
@@ -261,7 +307,7 @@ function Fixture() {
           // The note opens the kind it names in Who does what.
           seen.openedByNote = openKind()?.getAttribute("data-work");
         },
-        ...pick("The model the rule is about", "GPT-6"),
+        ...pickModel("The model the rule is about", "Codex", "GPT-6"),
         () => {
           seen.preview = note();
         },

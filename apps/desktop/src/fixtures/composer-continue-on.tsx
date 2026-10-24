@@ -1,9 +1,9 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a started session's
- * composer on Claude Code, with Codex installed too, IPC mocked (S38c). The model picker's Codex
- * list opens with "Continue on Codex", which asks the daemon to move the session there on the
- * model the rules allow; picking a Codex model asks the same with that model; Claude Code's own
- * list has no such item. What it saw goes as JSON into `<pre id="composer-continue-on-result">`.
+ * composer on Claude Code, with Codex installed too, IPC mocked (S38c). Browsing Codex in the
+ * model picker says a pick continues there, and picking a Codex model asks the daemon to move the
+ * session there on that model; Claude Code's own list says nothing of the kind. Then the picker's
+ * keys: arrows between its columns, typing to search, Escape. What it saw goes as JSON into `<pre id="composer-continue-on-result">`.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -80,46 +80,61 @@ async function until<T>(what: string, find: () => T | null | undefined | false, 
 const key = (target: Element, name: string) =>
   target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
 const trigger = () => document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]");
-const menu = () => document.querySelector<HTMLElement>("[data-slot=model-selector]");
-const provider = (label: string) =>
-  [...document.querySelectorAll<HTMLElement>("[data-slot=model-selector-provider]")].find((row) => row.textContent?.includes(label));
-const sub = () => document.querySelector<HTMLElement>("[data-radix-menu-content][data-side]:not([data-slot=model-selector])");
+const picker = () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]");
+const agent = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-agent]")].find((row) => row.textContent === label);
+const models = () => [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-model]")];
+const line = () => document.querySelector("[data-slot=model-picker-continue]")?.textContent ?? null;
+const focused = () => {
+  const active = document.activeElement as HTMLElement | null;
+  return active?.matches("input") ? `search:${(active as HTMLInputElement).value}` : (active?.textContent ?? null);
+};
 
-/** Opens the picker, then `label`'s list; answers that list's rows. */
-async function openList(label: string): Promise<HTMLElement[]> {
+async function open(): Promise<void> {
   const opener = await until("the picker's trigger", trigger);
   opener.focus();
   key(opener, "Enter");
-  await until("the picker", menu);
-  const row = await until(`the ${label} row`, () => provider(label));
-  row.focus();
-  key(row, "ArrowRight");
-  const list = await until(`the ${label} list`, sub);
-  return [...list.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio]")];
-}
-
-async function closeMenus() {
-  key(menu() ?? document.body, "Escape");
-  await until("the picker closed", () => menu() === null);
+  await until("the picker", picker);
+  await until("the search focused", () => document.activeElement?.matches("[data-slot=model-picker] input"));
 }
 
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
-    const claude = await openList("Claude Code");
-    seen.claude = claude.map((row) => row.textContent);
-    await closeMenus();
+    // Its own agent's list has only models, and no line.
+    await open();
+    seen.claude = { line: line(), models: models().map((row) => row.textContent) };
 
-    const codex = await openList("Codex");
-    seen.codex = codex.map((row) => [row.dataset.slot, row.textContent]);
-    codex[0]!.click();
+    // The other agent's list says a pick continues there; a pick moves the session on that model.
+    agent("Codex")!.click();
+    await until("Codex's models", () => models().some((row) => row.textContent === "GPT-5.5"));
+    seen.codex = { line: line(), models: models().map((row) => row.textContent) };
+    models()[0]!.click();
     await until("the move asked for", () => asked.length === 1);
-    await until("the picker closed", () => menu() === null);
-
-    const again = await openList("Codex");
-    again.find((row) => row.textContent?.includes("GPT-5.5"))!.click();
-    await until("the move on the picked model", () => asked.length === 2);
+    await until("the picker closed", () => picker() === null);
     seen.asked = asked;
+
+    // The keyboard: ↓ from the search to the picked model, ← to its agent, ↓ to the next agent,
+    // → into its models, typing searches, Escape clears the search, then closes.
+    await open();
+    const keys: [string, string | null][] = [];
+    const press = async (name: string) => {
+      key(document.activeElement!, name);
+      await sleep(50);
+      keys.push([name, focused()]);
+    };
+    await press("ArrowDown");
+    await press("ArrowLeft");
+    await press("ArrowDown");
+    seen.browsingLine = line();
+    await press("ArrowRight");
+    await press("g");
+    seen.searched = models().map((row) => row.textContent);
+    await press("Escape");
+    seen.openAfterEscape = picker() !== null;
+    key(document.activeElement!, "Escape");
+    await until("the picker closed", () => picker() === null);
+    seen.keys = keys;
   } catch (error) {
     seen.error = String(error);
   }

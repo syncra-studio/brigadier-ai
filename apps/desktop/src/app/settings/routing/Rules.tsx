@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { BanIcon, Badge, Note, PreferIcon } from "@/app/settings/routing/parts";
-import { TargetItems, useListedModels } from "@/app/settings/routing/pickers";
+import { TargetPicker, useListedModels } from "@/app/settings/routing/pickers";
 import {
   type Draft,
   type DraftEffect,
@@ -21,7 +21,7 @@ import { effortLabel, type ModelGroup, SettingsCard } from "@/components/shared"
 import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
 import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
-import type { ModelRule, ModelRules, OverrideTarget } from "@/ipc/generated";
+import type { ModelRule, ModelRules } from "@/ipc/generated";
 import { saveModelRules } from "@/state/modelRules";
 import { toast } from "@/state/toasts";
 
@@ -187,16 +187,11 @@ function DraftRow({
           ) : (
             <>
               use
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <SettingsSelectTrigger label="The model the rule is about" placeholder={!target}>
-                    {target ? names.target(target) : "Choose a model"}
-                  </SettingsSelectTrigger>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
-                  <TargetItems onPick={(picked: OverrideTarget) => set({ target: picked })} vendors={false} />
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <TargetPicker label="The model the rule is about" onPick={(picked) => set({ target: picked })} vendors={false}>
+                <SettingsSelectTrigger label="The model the rule is about" placeholder={!target}>
+                  {target ? names.target(target) : "Choose a model"}
+                </SettingsSelectTrigger>
+              </TargetPicker>
             </>
           )}
           for

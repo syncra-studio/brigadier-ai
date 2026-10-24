@@ -1,10 +1,9 @@
 import { OrderPlace } from "@/app/settings/routing/OrderPlace";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { TargetItems } from "@/app/settings/routing/pickers";
+import { TargetPicker } from "@/app/settings/routing/pickers";
 import { rowTarget, targetModel } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared";
 import { Button } from "@/components/controls";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/overlays";
 import { Plus } from "@/components/icons";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { GuidanceRow, ModelRule, OverrideTarget } from "@/ipc/generated";
@@ -75,17 +74,12 @@ export function OrderList({
           );
         })}
       </ol>
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button variant="link-blue" size="inline" className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
-            <Plus aria-hidden className="size-3.5" />
-            Add model
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
-          <TargetItems onPick={(target) => onSave([...order, picked(target)])} taken={taken} />
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <TargetPicker label="Add model" onPick={(target) => onSave([...order, picked(target)])} taken={taken}>
+        <Button variant="link-blue" size="inline" className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
+          <Plus aria-hidden className="size-3.5" />
+          Add model
+        </Button>
+      </TargetPicker>
     </div>
   );
 }

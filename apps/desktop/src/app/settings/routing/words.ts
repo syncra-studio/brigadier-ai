@@ -2,6 +2,7 @@ import { findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type {
   GuidanceRow,
   MergedModel,
+  ModelInfo,
   ModelRules,
   OverrideTarget,
   ProviderKind,
@@ -69,10 +70,48 @@ export function workName(work: string): string {
 /** "Opus" from "opus": a family word as a name. */
 export const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
-/** A row's model in a few words: a listed model's name ("Opus 5.5"), a family ("Opus"), or the agent's default ("Codex's default"). */
+/** A model id's version numbers, as the engine reads them: "gpt-6.1-sol" is [6, 1]. */
+const versionOf = (id: string) =>
+  id
+    .split(/[^0-9]+/)
+    .filter((part) => part !== "")
+    .map(Number)
+    .filter((number) => number < 1000);
+
+/** Which of two versions is higher, the way Rust orders them: number by number, a prefix first. */
+function compareVersions(a: readonly number[], b: readonly number[]): number {
+  for (let index = 0; index < Math.min(a.length, b.length); index++) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!;
+  }
+  return a.length - b.length;
+}
+
+/**
+ * The listed model a row's model word runs on, as the engine picks it (`listed_model`): a listed
+ * id or alias as it is; else a family word's newest model, the one of the highest version among
+ * the current models with the word as a part of their id (the last of equals); null when none.
+ */
+export function rowModel(models: readonly ModelInfo[], word: string): ModelInfo | null {
+  const lower = word.toLowerCase();
+  const listed = models.find((model) => model.id.toLowerCase() === lower || model.resolved?.toLowerCase() === lower);
+  if (listed) return listed;
+  let newest: ModelInfo | null = null;
+  for (const model of models) {
+    if (model.legacy || !model.id.split(/[-_ ]/).some((part) => part.toLowerCase() === lower)) continue;
+    if (!newest || compareVersions(versionOf(model.id), versionOf(newest.id)) >= 0) newest = model;
+  }
+  return newest;
+}
+
+/**
+ * A row's model in a few words: the listed model it runs on ("Opus 5.5", a family word's newest
+ * model too), the agent's default ("Codex's default"), or the word as written when nothing listed
+ * matches it ("Opus").
+ */
 export function rowModelName(groups: readonly ModelGroup[], agent: ProviderKind, model: string): string {
   if (model === "default") return `${VENDOR_LABELS[agent]}'s default`;
-  return findModel(groups, { provider: agent, model, effort: null })?.displayName ?? capital(model);
+  const models = groups.find((group) => group.provider === agent)?.models ?? [];
+  return (findModel(groups, { provider: agent, model, effort: null }) ?? rowModel(models, model))?.displayName ?? capital(model);
 }
 
 /** The target a row's model is, for the model menus: a listed id, the CLI's default, or a family. */
@@ -95,13 +134,13 @@ export function targetModel(target: OverrideTarget): string {
   }
 }
 
-/** A model of a rule or a row in a few words: "Opus 5.5", "Newest Opus", "Claude's default". */
+/** A model of a rule or a row in a few words: "Opus 5.5" (a family as its newest model), "Claude's default". */
 export function shortPlaceName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
   switch (target.type) {
     case "vendor":
       return `${VENDOR_LABELS[target.provider]}'s default`;
     case "family":
-      return `Newest ${capital(target.family)}`;
+      return rowModelName(groups, target.provider, target.family);
     case "model":
       return rowModelName(groups, target.provider, target.id);
   }

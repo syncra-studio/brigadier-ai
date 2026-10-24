@@ -7,6 +7,7 @@ export * from "./copy-button";
 export * from "./counts";
 export * from "./empty-state";
 export * from "./labeled-divider";
+export * from "./model-picker";
 export * from "./model-selector";
 export * from "./nav";
 export * from "./progress-line";

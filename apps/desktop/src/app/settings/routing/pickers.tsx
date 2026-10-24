@@ -1,29 +1,24 @@
-import { useEffect, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
-import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/overlays";
 import type { ListedModel } from "@/app/settings/routing/ruleWords";
-import { capital } from "@/app/settings/routing/words";
-import type { OverrideTarget } from "@/ipc/generated";
-import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
+import { rowModel } from "@/app/settings/routing/words";
+import { ModelPicker, type ModelPickerProps } from "@/components/shared";
+import type { ModelInfo, OverrideTarget, ProviderKind } from "@/ipc/generated";
+import { VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups, useModelGroups } from "@/lib/setup";
-import { providerOn } from "@/state/providers";
-import { useApp } from "@/state/store";
 import { loadUsage, useUsage } from "@/state/usage";
 
 /*
- * The models a row or a rule may name, as menu items.
+ * The models a row or a rule may name, in the model picker.
  */
-
-/** Whether two picks name the same model. */
-export function sameTarget(a: OverrideTarget, b: OverrideTarget): boolean {
-  if (a.type !== b.type || a.provider !== b.provider) return false;
-  return a.type === "model" ? a.id === (b as typeof a).id : a.type === "family" ? a.family === (b as typeof a).family : true;
-}
 
 /** The models the agents list now, as the rules judge them: which is each agent's default, at what effort, from its own list. */
 export function useListedModels(): ListedModel[] {
   const models = useUsage((s) => s.view?.models);
   const groups = useModelGroups();
+  useEffect(() => {
+    if (!useUsage.getState().view) void loadUsage();
+  }, []);
   return useMemo(
     () =>
       (models ?? []).map((model) => {
@@ -41,87 +36,63 @@ export function useListedModels(): ListedModel[] {
   );
 }
 
-/** Each provider's family words, from the merged model list (read on opening). */
-export function useFamilies(): { families: Map<string, string[]>; error: string | null } {
-  const models = useUsage((s) => s.view?.models);
-  const error = useUsage((s) => s.error);
-  useEffect(() => {
-    if (!useUsage.getState().view) void loadUsage();
-  }, []);
-  const families = useMemo(() => {
-    const byProvider = new Map<string, string[]>();
-    for (const model of models ?? []) {
-      if (!model.family || model.excluded) continue;
-      const list = byProvider.get(model.provider) ?? [];
-      if (!list.includes(model.family)) list.push(model.family);
-      byProvider.set(model.provider, list);
-    }
-    return byProvider;
-  }, [models]);
-  return { families, error: models ? null : error };
-}
+/** Why a model already in the order can't be added again. */
+const IN_THE_ORDER = "In the order";
+
+/** A model picker's parts for the models a row or a rule may name (`ModelPicker`, or its panel in a menu). */
+type TargetPanel = Pick<ModelPickerProps, "groups" | "checked" | "opensOn" | "onPick" | "agentDefault" | "greyed">;
 
 /**
- * The models a row or a rule may name, as menu items: each available model, the newest of each
- * family and the agent's own default (`vendors` false leaves that out). Those already `taken`
- * are disabled.
+ * The picker for the models a row or a rule may name: each available model, and the agent's own
+ * default (`vendors` false leaves that out). Those already `taken` show greyed, "In the order";
+ * a taken family greys the model it runs on now.
  */
-export function TargetItems({
+export function useTargetPanel({
   onPick,
   taken = [],
   vendors = true,
+  opensOn,
 }: {
   onPick: (target: OverrideTarget) => void;
   taken?: readonly OverrideTarget[];
   vendors?: boolean;
-}) {
-  const { families, error } = useFamilies();
-  // Only what the user made available is offered.
-  const available = useAvailableModelGroups();
-  const availability = useApp((s) => s.settings);
-  const listed = (target: OverrideTarget) => taken.some((other) => sameTarget(other, target));
+  /** The agent it opens on (the first otherwise). */
+  opensOn?: ProviderKind;
+}): TargetPanel {
+  // Only what the user made available is offered; a family resolves on the whole list.
+  const groups = useAvailableModelGroups();
+  const all = useModelGroups();
+  const takes = (provider: ProviderKind, model: ModelInfo | null) =>
+    taken.some((target) => {
+      if (target.provider !== provider) return false;
+      if (target.type === "vendor") return model === null;
+      if (!model) return false;
+      if (target.type === "model") return target.id === model.id;
+      const models = all.find((group) => group.provider === provider)?.models ?? [];
+      return rowModel(models, target.family)?.id === model.id;
+    });
+  return {
+    groups,
+    checked: null,
+    opensOn,
+    agentDefault: vendors ? (provider) => VENDOR_LABELS[provider] : undefined,
+    greyed: (provider, model) => (takes(provider, model) ? IN_THE_ORDER : null),
+    onPick: (provider, model) =>
+      onPick(model ? { type: "model", provider, id: model.id } : { type: "vendor", provider }),
+  };
+}
+
+/** The target picker in its popover, opened from `children` (the trigger, as it is). */
+export function TargetPicker({
+  children,
+  label,
+  align = "start",
+  ...target
+}: Parameters<typeof useTargetPanel>[0] & { children: ReactNode; label: string; align?: "start" | "end" }) {
+  const [open, setOpen] = useState(false);
   return (
-    <>
-      {PROVIDERS.filter((provider) => providerOn(availability, provider)).map((provider, index) => {
-        const group = available.find((entry) => entry.provider === provider);
-        const models = (group?.models ?? []).filter((model) => !model.legacy);
-        const vendor: OverrideTarget = { type: "vendor", provider };
-        return (
-          <div key={provider}>
-            {index > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>{VENDOR_LABELS[provider]}</DropdownMenuLabel>
-            {models.map((model) => {
-              const target: OverrideTarget = { type: "model", provider, id: model.id };
-              return (
-                <DropdownMenuItem key={model.id} disabled={listed(target)} onSelect={() => onPick(target)}>
-                  <span className="truncate">{model.displayName}</span>
-                  <span className="text-muted-foreground ms-auto truncate font-mono text-2xs">{model.id}</span>
-                </DropdownMenuItem>
-              );
-            })}
-            {(families.get(provider) ?? []).map((family) => {
-              const target: OverrideTarget = { type: "family", provider, family };
-              return (
-                <DropdownMenuItem key={family} disabled={listed(target)} onSelect={() => onPick(target)}>
-                  Newest {capital(family)} family
-                  <span className="text-muted-foreground ms-auto text-xs">follows releases</span>
-                </DropdownMenuItem>
-              );
-            })}
-            {vendors && (
-              <DropdownMenuItem disabled={listed(vendor)} onSelect={() => onPick(vendor)}>
-                {VENDOR_LABELS[provider]}'s default
-                <span className="text-muted-foreground ms-auto text-xs">the CLI picks</span>
-              </DropdownMenuItem>
-            )}
-          </div>
-        );
-      })}
-      {error && (
-        <p role="alert" className="text-destructive px-2 py-1.5 text-xs">
-          Couldn't read the model families: {error}
-        </p>
-      )}
-    </>
+    <ModelPicker label={label} open={open} onOpenChange={setOpen} align={align} {...useTargetPanel(target)}>
+      {children}
+    </ModelPicker>
   );
 }

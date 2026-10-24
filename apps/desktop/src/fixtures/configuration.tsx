@@ -65,8 +65,6 @@ const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode
 ];
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const trigger = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-const press = (element: Element | null | undefined) =>
-  element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
 /** The name a screen reader reads: its labelledby elements' labels or words, else its label. */
 const accessibleName = (element: Element | null) => {
   const ids = element?.getAttribute("aria-labelledby")?.split(" ") ?? [];
@@ -78,9 +76,9 @@ const accessibleName = (element: Element | null) => {
 };
 const closeMenu = () =>
   document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-/** The open menu's choices: their name, then the line under it. */
+/** The open menu's or model picker's choices: their name, then the line under it. */
 const menuChoices = () =>
-  all('[role="menuitemradio"], [role="menuitemcheckbox"]').map((item) => {
+  all('[role="menuitemradio"], [role="menuitemcheckbox"], [data-picker-part="models"] [role="option"]').map((item) => {
     const lines = all(":scope > span > span", item).map(text).filter(Boolean);
     return lines.length > 0 ? lines : [text(item)];
   });
@@ -113,7 +111,7 @@ function Fixture() {
     openSettings("configuration");
     const menu = params.get("menu");
     if (menu && MENUS[menu]) {
-      const timer = setTimeout(() => press(trigger(MENUS[menu]!)), 1200);
+      const timer = setTimeout(() => trigger(MENUS[menu]!)?.click(), 1200);
       return () => clearTimeout(timer);
     }
     if (!params.has("drive")) return;
@@ -145,7 +143,7 @@ function Fixture() {
       },
       () => {
         seen.skillShown = [...calls];
-        press(trigger(MENUS.sessions!));
+        trigger(MENUS.sessions!)?.click();
       },
       () => {
         seen.sessionsMenu = menuChoices().slice(0, 2);

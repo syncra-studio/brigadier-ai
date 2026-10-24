@@ -105,11 +105,11 @@ async function drive() {
     document.execCommand("insertText", false, "/model");
     await until("the Model command", () => document.querySelector("[data-slot=composer-commands] [role=option][id$=-model]"));
     key(field, "Enter");
-    const models = await until("the model picker", () => document.querySelector<HTMLElement>("[data-slot=model-selector]"));
+    const models = await until("the model picker", () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]"));
     await sleep(500);
     seen.model = models.isConnected ? models.dataset.state : "gone";
     key(models, "Escape");
-    await until("the model picker to close", () => !document.querySelector("[data-slot=model-selector]"));
+    await until("the model picker to close", () => !document.querySelector("[data-slot=model-picker-popover]"));
     await until("the focus back on the Model pill", () => document.activeElement?.matches("[data-slot=model-selector-trigger]"));
     const pill = document.querySelector<HTMLElement>("[data-slot=permission-picker]")!;
     pill.focus();
@@ -126,7 +126,7 @@ async function drive() {
     await until("the menu to close", () => !menu());
     await sleep(100);
     document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]")!.click();
-    seen.modelPress = (await until("the model picker from a bare click", () => document.querySelector<HTMLElement>("[data-slot=model-selector]"))).dataset.state;
+    seen.modelPress = (await until("the model picker from a bare click", () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]"))).dataset.state;
   } catch (error) {
     seen.error = String(error);
   }

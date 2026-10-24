@@ -55,7 +55,7 @@ async function until(what: string, check: () => boolean, ms = 10_000) {
 const field = () => document.querySelector<HTMLElement>("[data-slot=composer-input] [contenteditable=true]");
 const typed = () => field()?.textContent ?? "";
 const trigger = () => document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]");
-const menu = () => document.querySelector<HTMLElement>("[data-slot=model-selector]");
+const menu = () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]");
 const banner = () => document.querySelector<HTMLElement>("[data-slot=banner]");
 
 async function drive() {
@@ -66,10 +66,10 @@ async function drive() {
     trigger()!.focus();
     trigger()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     await until("the picker", () => menu() !== null);
-    seen.efforts = [...menu()!.querySelectorAll<HTMLElement>("[data-slot=model-selector-effort]")].map((item) => ({
+    seen.efforts = [...menu()!.querySelectorAll<HTMLElement>("[data-slot=model-picker-effort] [role=radio]")].map((item) => ({
       text: item.textContent,
-      disabled: item.hasAttribute("data-disabled"),
-      checked: item.dataset.state === "checked",
+      disabled: item.getAttribute("aria-disabled") === "true",
+      checked: item.dataset.state === "on",
     }));
     menu()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await until("the picker closed", () => menu() === null);

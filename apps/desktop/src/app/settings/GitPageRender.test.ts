@@ -25,7 +25,8 @@ test("git settings: writer model, styles, instructions that save themselves, bra
   assert.equal(seen.boxes, 0, "no instruction box until Custom instructions");
   assert.equal(seen.picked, "Sonnet 5.5Low");
   assert.equal(seen.gone, "Not available now, so Automatic writes them");
-  assert.deepEqual((seen.writerMenu as string[])[0], `Automatic${AUTOMATIC}`);
+  assert.deepEqual((seen.writerAgents as string[])[0], "Automatic");
+  assert.deepEqual(seen.writerMenu, [`Automatic${AUTOMATIC}`]);
   assert.deepEqual(seen.automatic, { trigger: "Automatic", saved: null });
   assert.deepEqual(seen.styles, [
     "Follow this repositoryWritten like the repository’s recent commits.",

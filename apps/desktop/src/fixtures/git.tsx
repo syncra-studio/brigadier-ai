@@ -119,13 +119,10 @@ const openMenu = (label: string): "menu" => {
   trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   return "menu";
 };
-const menuItems = () => all('[role="menu"][data-state="open"] [role^="menuitem"]').map(text);
-const pickMenu = (name: string) =>
-  (
-    all('[role="menu"][data-state="open"] [role^="menuitem"]').find((item) => text(item).startsWith(name)) as
-      | HTMLElement
-      | undefined
-  )?.click();
+/** An open menu's items, or an open model picker's agents then models. */
+const MENU_ITEMS = '[role="menu"][data-state="open"] [role^="menuitem"], [data-slot="model-picker"] [role="option"]';
+const menuItems = () => all(MENU_ITEMS).map(text);
+const pickMenu = (name: string) => all(MENU_ITEMS).find((item) => text(item).startsWith(name))?.click();
 const setValue = (element: HTMLInputElement | HTMLTextAreaElement | null | undefined, value: string) => {
   if (!element) return;
   const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -167,9 +164,14 @@ function Fixture() {
         seen.gone = text(row("Write with")?.querySelector(".text-xs"));
         return openMenu("Write with");
       },
+      // Automatic is first among the picker's agents; it shows its one choice.
       () => {
-        seen.writerMenu = menuItems();
+        seen.writerAgents = all('[data-slot="model-picker-agent"]').map(text);
         pickMenu("Automatic");
+      },
+      () => {
+        seen.writerMenu = all('[data-picker-part="models"] [role="option"]').map(text);
+        document.querySelector<HTMLElement>('[data-slot="model-picker-automatic"]')?.click();
       },
       () => {
         seen.automatic = { trigger: text(button("Write with")), saved: settings().gitWriter };
@@ -252,7 +254,7 @@ function Fixture() {
     ];
     let stopped = false;
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    const menuOpen = () => document.querySelector('[role="menu"][data-state="open"]') !== null;
+    const menuOpen = () => document.querySelector('[role="menu"][data-state="open"], [data-slot="model-picker"]') !== null;
     void (async () => {
       await wait(400);
       for (const step of steps) {

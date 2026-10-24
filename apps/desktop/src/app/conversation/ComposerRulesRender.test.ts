@@ -8,10 +8,11 @@ test("the model picker shows what the rules keep out with the rule's words, neve
   assert.equal(seen.error, undefined, String(seen.error));
   // Left on Max before the rule: the picker is on High.
   assert.equal(seen.trigger, "Opus 5.5High");
+  // A refused effort says the rule to a screen reader too.
   assert.deepEqual(seen.efforts, [
     { text: "Low", disabled: false, checked: false },
     { text: "Medium", disabled: false, checked: false },
-    { text: "HighDefault", disabled: false, checked: true },
+    { text: "High", disabled: false, checked: true },
     { text: "Extra highNever go above High effort", disabled: true, checked: false },
     { text: "MaxNever go above High effort", disabled: true, checked: false },
   ]);

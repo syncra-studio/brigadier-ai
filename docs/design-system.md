@@ -191,6 +191,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Shared app parts | `NavHeader`, `NavSection` | `components/shared/nav.tsx` | `NavHeader`, `NavSection` (with `NavFold`, `NavList`) | |
 | Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |
 | Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
+| Shared app parts | `Model picker`, `Model picker/Automatic`, `Model picker/Routing` | `components/shared/model-picker.tsx` | `ModelPicker`, `ModelPickerPanel` | foundations.pen `HLTDr`, `Dy5IF`, `Kq0Ar` |
 | Shared app parts | `ProgressLine` | `components/shared/progress-line.tsx` | `ProgressLine` | |
 | Shared app parts | `Section` | `components/shared/section.tsx` | `Section` | |
 | Shared app parts | `Button/Soft`, `Button/Soft destructive` | `components/controls/button.tsx` | `Button variant="soft"` / `"soft-destructive"`, `size="sm"` | |
@@ -368,7 +369,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Settings · Routing | `OrderList` | `app/settings/routing/OrderList.tsx` | `OrderList` | foundations.pen `AL8pa` › Order list |
 | Settings · Routing | `Rules`, `Rule row` | `app/settings/routing/Rules.tsx` | `Rules` | foundations.pen `jlV2S`, `QlVJ4` › Rule row |
 | Settings · Routing | `Draft row` | `app/settings/routing/Rules.tsx` | `Rules` | shown inside it; foundations.pen `QlVJ4` › Draft row |
-| Settings · Routing | `TargetItems` | `app/settings/routing/pickers.tsx` | `TargetItems` | foundations.pen `v2biKX` › Target items |
+| Settings · Routing | `Model picker/Routing` | `app/settings/routing/pickers.tsx` | `TargetPicker`, `useTargetPanel` | foundations.pen `Kq0Ar` |
 | Settings · Browser | `DownloadRow` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
 | Settings · Browser | `HistoryDay` | `app/settings/DayGroup.tsx` | `DayGroup` | |
 | Settings · Browser | `VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |

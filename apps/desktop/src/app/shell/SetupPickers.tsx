@@ -360,11 +360,7 @@ export function ConversationModelPicker({
         label="Model"
         refused={refusals.refused}
         // A started session moves to another CLI at a seam, never by a setup change (S38c).
-        continueOn={
-          setup?.type === "session"
-            ? (provider) => action.run(() => continueOn(conversation.id, provider, null))
-            : undefined
-        }
+        continues={setup?.type === "session"}
         onChange={(picked) => {
           // A model whose efforts the rules cap starts at the highest they allow.
           const choice = refusals.allowed(picked);

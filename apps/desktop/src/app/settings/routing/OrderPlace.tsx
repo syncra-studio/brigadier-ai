@@ -1,7 +1,9 @@
-import { TargetItems } from "@/app/settings/routing/pickers";
+import { useRef, useState } from "react";
+
+import { useTargetPanel } from "@/app/settings/routing/pickers";
 import { effortRank } from "@/app/settings/routing/ruleWords";
 import { rowModelName, rowTarget } from "@/app/settings/routing/words";
-import { effortLabel, type ModelGroup } from "@/components/shared";
+import { effortLabel, type ModelGroup, ModelPickerPanel, type ModelPickerHandle } from "@/components/shared";
 import { SettingsSelectTrigger } from "@/components/controls";
 import {
   DropdownMenu,
@@ -63,6 +65,17 @@ export function OrderPlace({
   onRemove: () => void;
 }) {
   const name = rowModelName(groups, row.agent, row.model);
+  const [actions, setActions] = useState(false);
+  const picker = useRef<ModelPickerHandle>(null);
+  const target = useTargetPanel({
+    // A pick closes the whole menu.
+    onPick: (picked) => {
+      setActions(false);
+      onModel(picked);
+    },
+    taken: [rowTarget(groups, row.agent, row.model), ...taken],
+    opensOn: row.agent,
+  });
   return (
     <li data-slot="ranked-place" className={cn("flex h-11 items-center gap-3 rounded-lg", dragging && "bg-foreground/8")}>
       <button
@@ -98,7 +111,7 @@ export function OrderPlace({
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-      <DropdownMenu modal={false}>
+      <DropdownMenu modal={false} open={actions} onOpenChange={setActions}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -112,8 +125,13 @@ export function OrderPlace({
           <DropdownMenuLabel>{name}</DropdownMenuLabel>
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>Change model</DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-h-96 w-xs overflow-y-auto">
-              <TargetItems onPick={onModel} taken={[rowTarget(groups, row.agent, row.model), ...taken]} />
+            <DropdownMenuSubContent
+              data-slot="model-picker-submenu"
+              className="p-1"
+              // Escape clears the picker's search first, then closes the menu.
+              onEscapeKeyDown={(event) => picker.current?.escape() && event.preventDefault()}
+            >
+              <ModelPickerPanel ref={picker} {...target} onClose={() => setActions(false)} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />

@@ -115,6 +115,9 @@
  *               max-w-settings-wide           the Inspector's panes
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
  *               max-h-picker                  a dialog that picks from a list (capped, then it scrolls)
+ *               w-model-picker, w-model-picker-agents, max-h-model-picker-panes  the model picker:
+ *                                             its width, its agents column, its two panes at
+ *                                             their tallest (then each scrolls on its own)
  *               setup-card, setup-agent-card  a setup project or agent card's minimum width in
  *                                             its auto-filled grid
  *               max-w-onboarding              the first-run setup's column
@@ -242,6 +245,10 @@
   --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-picker: min(34rem, calc(100dvh - 6rem));
+  --spacing-model-picker-panes: min(20rem, calc(100dvh - 12rem));
+  /* The model picker (Pen: Model picker): agents on the left, the picked agent's models beside. */
+  --container-model-picker: 35rem;
+  --container-model-picker-agents: 11rem;
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
   --leading-integration: 1.4;
