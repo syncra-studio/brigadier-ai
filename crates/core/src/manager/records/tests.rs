@@ -416,3 +416,60 @@ fn registered_claude_subagents_keep_separate_ids_and_refresh_without_parent_chan
         Some(id.as_str())
     );
 }
+
+#[test]
+fn a_codex_restart_can_append_response_items_to_legacy_records_without_losing_old_ids() {
+    let fixture = Fixture::new();
+    let codex = fixture.root.join("codex.jsonl");
+    std::fs::write(&codex, format!("{}\n", serde_json::json!({"type":"event_msg", "payload":{"type":"item_completed",
+        "item":{"type":"UserMessage", "id":"older-user", "content":[{"type":"text","text":"legacyrestartneedle"}]}}}))).unwrap();
+    let old = items::read(&fixture.session)
+        .into_iter()
+        .find(|item| item.text == "legacyrestartneedle")
+        .unwrap();
+    let brain = fixture.brain();
+    sync_session(&brain, &fixture.session).unwrap();
+    use std::io::Write;
+    writeln!(std::fs::OpenOptions::new().append(true).open(codex).unwrap(), "{}", serde_json::json!({
+        "type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text","text":"canonicalrestartneedle"}]}
+    })).unwrap();
+    sync_session(&brain, &fixture.session).unwrap();
+    assert_eq!(
+        brain
+            .search_records("legacyrestartneedle", None, 10)
+            .unwrap()[0]
+            .item_id
+            .as_ref(),
+        Some(&old.id)
+    );
+    assert_eq!(
+        brain
+            .search_records("canonicalrestartneedle", None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        read_items(&fixture.session, &args(&old.id))
+            .unwrap()
+            .ends_with("legacyrestartneedle\n")
+    );
+}
+
+#[test]
+fn filtered_paging_keeps_the_original_assistant_span_position() {
+    let fixture = Fixture::new();
+    let output = read_items(
+        &fixture.session,
+        &RecordRead {
+            from: Some(1),
+            to: Some(1),
+            role: Some("assistant".into()),
+            limit: Some(8),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(output.contains("origin assistant"));
+    assert!(output.ends_with("Checking\n"), "{output}");
+}

@@ -104,9 +104,6 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                 items.push(item);
             }
         };
-        let canonical_codex = lines
-            .iter()
-            .any(|(_, v)| string(v, "type") == Some("response_item"));
         let mut previous_scope = None;
         for (scope, value) in &lines {
             if previous_scope != scope.as_deref() {
@@ -134,7 +131,26 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                     .or_else(|| string(message, "id"))
                     .map(str::to_owned)
                     .unwrap_or_else(|| anonymous(value, &mut occurrences));
-                let at = positions.get(native.as_str()).copied();
+                let at = positions
+                    .get(native.as_str())
+                    .copied()
+                    .or_else(|| string(message, "id").and_then(|id| positions.get(id).copied()))
+                    .or_else(|| {
+                        let prefix = format!("{}:", string(message, "id")?);
+                        display.iter().enumerate().find_map(|(n, entry)| {
+                            matches!(
+                                &entry.event,
+                                ProviderEvent::Message {
+                                    role: brigadier_providers::Role::Assistant,
+                                    ..
+                                }
+                            )
+                            .then(|| session_file::item_id(&entry.event))
+                            .flatten()
+                            .filter(|id| id.starts_with(&prefix))
+                            .map(|_| position + n as i64)
+                        })
+                    });
                 let native = scoped(scope.as_deref(), &native);
                 let blocks = message.get("content").unwrap_or(&Value::Null);
                 if role == "user"
@@ -289,8 +305,9 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                 }
             }
         }
-        // Older Codex rollouts store finished app-server items instead of response items.
-        if generation.provider == ProviderKind::Codex && !canonical_codex {
+        // Older Codex rollouts store finished app-server items. A resumed file can mix
+        // both encodings; preserve its old IDs when newer response items are appended.
+        if generation.provider == ProviderKind::Codex {
             for entry in &display {
                 let Some(id) = session_file::item_id(&entry.event) else {
                     continue;
