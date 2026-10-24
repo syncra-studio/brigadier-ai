@@ -77,6 +77,36 @@ pub fn read(kind: ProviderKind, path: &Path) -> std::io::Result<Vec<FileEntry>> 
     Ok(merge(Vec::new(), entries))
 }
 
+/// `kind`'s session file at `path` kept read, to read again for only what was added since:
+/// Claude's file and its subagents' are read on from where the last read stopped. Codex's
+/// rollout is read whole each time.
+pub struct Reading(Kept);
+
+enum Kept {
+    Claude(Box<crate::claude::session_file::Reading>),
+    Codex(std::path::PathBuf),
+}
+
+impl Reading {
+    pub fn new(kind: ProviderKind, path: &Path) -> Self {
+        Self(match kind {
+            ProviderKind::Claude => {
+                Kept::Claude(Box::new(crate::claude::session_file::Reading::new(path)))
+            }
+            ProviderKind::Codex => Kept::Codex(path.to_owned()),
+        })
+    }
+
+    /// The thread the file holds now, as [`read`] gives it.
+    pub fn read(&mut self) -> std::io::Result<Vec<FileEntry>> {
+        let entries = match &mut self.0 {
+            Kept::Claude(reading) => reading.read()?,
+            Kept::Codex(path) => crate::codex::rollout::read(path)?,
+        };
+        Ok(merge(Vec::new(), entries))
+    }
+}
+
 /// Where `kind`'s session file recorded at `path` is now. Codex moves a thread's rollout from
 /// `<home>/sessions/<y>/<m>/<d>/` to `<home>/archived_sessions/` when it is archived (Brigadier
 /// archives a thread it closes, so the user's own Codex apps don't list it), and back when
@@ -508,6 +538,156 @@ mod tests {
         std::fs::write(&recorded, "").unwrap();
         assert_eq!(locate(ProviderKind::Codex, &recorded), recorded);
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A Claude session file kept read gives what a whole read gives as it grows: in chunks,
+    /// one ending inside a line, with a subagent appearing later and growing too, and read
+    /// whole again once it is replaced by a shorter file.
+    #[test]
+    fn a_growing_claude_session_file_reads_on_as_a_whole_read_would() {
+        let dir = std::env::temp_dir().join(format!(
+            "session-file-reading-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let path = dir.join("session.jsonl");
+        let subagents = dir.join("session/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let main = std::fs::read(fixture("claude-session.jsonl")).unwrap();
+        let agent = "agent-a4796ccd4e8be31af";
+        let from = fixture("claude-session/subagents");
+        let child = std::fs::read(from.join(format!("{agent}.jsonl"))).unwrap();
+        let meta = std::fs::read(from.join(format!("{agent}.meta.json"))).unwrap();
+        // A cut inside a line, at a plain character (a whole read of a file cut inside a
+        // character fails).
+        let inside = |bytes: &[u8], near: usize| {
+            (near..bytes.len())
+                .find(|&at| bytes[at].is_ascii() && bytes[at] != b'\n' && bytes[at - 1] != b'\n')
+                .unwrap()
+        };
+        let line_end = |bytes: &[u8], near: usize| {
+            near + bytes[near..].iter().position(|&b| b == b'\n').unwrap() + 1
+        };
+        let cuts = [
+            inside(&main, main.len() / 5),
+            line_end(&main, main.len() / 3),
+            inside(&main, main.len() / 2),
+            line_end(&main, main.len() * 2 / 3),
+            main.len(),
+        ];
+        let child_cut = inside(&child, child.len() / 2);
+        let append = |file: &Path, bytes: &[u8]| {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)
+                .unwrap()
+                .write_all(bytes)
+                .unwrap();
+        };
+        let mut reading = Reading::new(ProviderKind::Claude, &path);
+        let mut at = 0;
+        for (step, &cut) in cuts.iter().enumerate() {
+            append(&path, &main[at..cut]);
+            at = cut;
+            match step {
+                // The subagent's meta first, its transcript not yet written.
+                1 => std::fs::write(subagents.join(format!("{agent}.meta.json")), &meta).unwrap(),
+                2 => append(
+                    &subagents.join(format!("{agent}.jsonl")),
+                    &child[..child_cut],
+                ),
+                3 => append(
+                    &subagents.join(format!("{agent}.jsonl")),
+                    &child[child_cut..],
+                ),
+                _ => {}
+            }
+            let whole = read(ProviderKind::Claude, &path).unwrap();
+            assert_eq!(reading.read().unwrap(), whole, "after chunk {step}");
+            assert_eq!(
+                reading.read().unwrap(),
+                whole,
+                "read again after chunk {step}"
+            );
+        }
+        assert!(
+            reading
+                .read()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.parent.is_some()),
+            "the subagent's items are in"
+        );
+        // Replaced by a shorter file: read whole.
+        let shorter = dir.join("shorter.jsonl");
+        std::fs::write(&shorter, &main[..cuts[1]]).unwrap();
+        std::fs::rename(&shorter, &path).unwrap();
+        let whole = read(ProviderKind::Claude, &path).unwrap();
+        assert_eq!(
+            reading.read().unwrap(),
+            whole,
+            "after the file was replaced"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A whole read of a long Claude session file (about 60 MB) against a kept reading's read
+    /// after a few lines were added; prints both.
+    #[test]
+    #[ignore = "writes and times a 60 MB file"]
+    fn time_a_long_session_file_read_whole_and_read_on() {
+        let dir = Path::new("/tmp/dlg-lsm-w30");
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join("long-session.jsonl");
+        let base = std::fs::read_to_string(fixture("claude-session.jsonl")).unwrap();
+        // Each copy's items get their own ids, so the thread holds them all.
+        let copy = |k: usize| {
+            base.replace("toolu_", &format!("toolu_{k}_"))
+                .replace("\"msg_", &format!("\"msg_{k}_"))
+                .replace("\"uuid\":\"", &format!("\"uuid\":\"{k}-"))
+        };
+        // A real session file's copy when one is named (`BRIGADIER_LONG_SESSION=<path>`).
+        let mut text = std::env::var("BRIGADIER_LONG_SESSION")
+            .map(|named| std::fs::read_to_string(named).unwrap())
+            .unwrap_or_default();
+        let mut k = 0;
+        while text.len() < 60_000_000 {
+            text.push_str(&copy(k));
+            k += 1;
+        }
+        std::fs::write(&path, &text).unwrap();
+        let started = std::time::Instant::now();
+        let whole = read(ProviderKind::Claude, &path).unwrap();
+        let whole_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let mut reading = Reading::new(ProviderKind::Claude, &path);
+        reading.read().unwrap();
+        // A turn's few lines.
+        let added: String = copy(k)
+            .lines()
+            .take(4)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(added.as_bytes()).unwrap();
+        }
+        let started = std::time::Instant::now();
+        let on = reading.read().unwrap();
+        let on_ms = started.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "{} bytes, {} items: whole read {whole_ms:.1} ms; read on after {} bytes added {on_ms:.1} ms ({} items)",
+            text.len(),
+            whole.len(),
+            added.len(),
+            on.len()
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// One line for an entry: what it is, then its first words.

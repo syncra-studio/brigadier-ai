@@ -258,8 +258,15 @@ pub(crate) struct LiveTurn {
     pub mcp: Vec<McpServerState>,
 }
 
-/// A session file's items, with the length and change time they were read at.
-type CachedFile = (u64, std::time::SystemTime, Arc<Vec<FileEntry>>);
+/// A session file's items, with the length and change time they were read at, and its
+/// reading, to read only what it adds next.
+struct CachedFile {
+    len: u64,
+    modified: std::time::SystemTime,
+    entries: Arc<Vec<FileEntry>>,
+    /// None while a read of it runs.
+    reading: Option<session_file::Reading>,
+}
 
 /// Session files read, kept while they don't change.
 #[derive(Default)]
@@ -274,17 +281,24 @@ impl FileCache {
         let Some((len, modified)) = stamp else {
             return Arc::default();
         };
-        if let Some((held_len, held_at, entries)) = self.0.lock().unwrap().get(path)
-            && *held_len == len
-            && *held_at == modified
-        {
-            return entries.clone();
-        }
-        let entries = Arc::new(session_file::read(kind, path).unwrap_or_default());
-        self.0
-            .lock()
-            .unwrap()
-            .insert(path.to_owned(), (len, modified, entries.clone()));
+        let held = match self.0.lock().unwrap().get_mut(path) {
+            Some(file) if file.len == len && file.modified == modified => {
+                return file.entries.clone();
+            }
+            Some(file) => file.reading.take(),
+            None => None,
+        };
+        let mut reading = held.unwrap_or_else(|| session_file::Reading::new(kind, path));
+        let entries = Arc::new(reading.read().unwrap_or_default());
+        self.0.lock().unwrap().insert(
+            path.to_owned(),
+            CachedFile {
+                len,
+                modified,
+                entries: entries.clone(),
+                reading: Some(reading),
+            },
+        );
         entries
     }
 }

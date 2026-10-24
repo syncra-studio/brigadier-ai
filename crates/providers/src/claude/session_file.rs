@@ -6,7 +6,8 @@
 //! subagents (`<id>/subagents/agent-*.jsonl`, each beside the `Agent` call that ran it).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -21,10 +22,18 @@ const NO_RESPONSE: &str = "No response requested.";
 
 /// The thread the session file at `path` holds, its subagents' beside their calls.
 pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
-    let mut entries = read_lines(path, None)?;
-    let mut children = subagents(path);
+    let entries = read_lines(path, None)?;
+    Ok(with_subagents(entries, subagents(path)))
+}
+
+/// A session file's items with its subagents' (`children`, by the call that ran each)
+/// beside their calls.
+fn with_subagents(
+    mut entries: Vec<FileEntry>,
+    mut children: HashMap<String, Vec<FileEntry>>,
+) -> Vec<FileEntry> {
     if children.is_empty() {
-        return Ok(entries);
+        return entries;
     }
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries.drain(..) {
@@ -39,12 +48,24 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
             out.extend(inner);
         }
     }
-    Ok(out)
+    out
 }
 
 /// Each subagent's thread, by the call that ran it.
 fn subagents(path: &Path) -> HashMap<String, Vec<FileEntry>> {
     let mut found = HashMap::new();
+    for (call, transcript) in subagent_files(path) {
+        if let Ok(entries) = read_lines(&transcript, Some(&call)) {
+            found.insert(call, entries);
+        }
+    }
+    found
+}
+
+/// Each subagent's transcript, with the call that ran it, as the session file at `path`'s
+/// directory lists them.
+fn subagent_files(path: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = Vec::new();
     let Ok(dir) = std::fs::read_dir(path.with_extension("").join("subagents")) else {
         return found;
     };
@@ -62,23 +83,173 @@ fn subagents(path: &Path) -> HashMap<String, Vec<FileEntry>> {
         else {
             continue;
         };
-        let transcript = meta.with_file_name(format!("{stem}.jsonl"));
-        if let Ok(entries) = read_lines(&transcript, Some(&call)) {
-            found.insert(call, entries);
-        }
+        found.push((call, meta.with_file_name(format!("{stem}.jsonl"))));
     }
     found
+}
+
+/// A session file and its subagents' transcripts read so far, to read again for only the
+/// lines added since: a long session's file runs to tens of MB, and a whole read of it to
+/// tens of ms, at each turn's start and end.
+pub(crate) struct Reading {
+    path: PathBuf,
+    main: Option<Part>,
+    /// Each subagent's transcript read so far, by its path.
+    subagents: HashMap<PathBuf, Part>,
+}
+
+impl Reading {
+    pub(crate) fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+            main: None,
+            subagents: HashMap::new(),
+        }
+    }
+
+    /// The thread the session file holds now, as [`read`] gives it: each file read on from
+    /// where this last read it, or whole when it is another file now (replaced, cut short or
+    /// rewritten).
+    pub(crate) fn read(&mut self) -> std::io::Result<Vec<FileEntry>> {
+        let main = Part::read(self.main.take(), &self.path, None)?;
+        let mut held = std::mem::take(&mut self.subagents);
+        let mut children = HashMap::new();
+        for (call, transcript) in subagent_files(&self.path) {
+            let Ok(part) = Part::read(held.remove(&transcript), &transcript, Some(&call)) else {
+                continue;
+            };
+            children.insert(call, part.entries.clone());
+            self.subagents.insert(transcript, part);
+        }
+        let entries = with_subagents(main.entries.clone(), children);
+        self.main = Some(main);
+        Ok(entries)
+    }
+}
+
+/// One file read so far.
+struct Part {
+    lines: Lines,
+    entries: Vec<FileEntry>,
+    /// The bytes read: up to the end of the last whole line. A line still being written
+    /// waits for its newline.
+    at: u64,
+    stamp: Stamp,
+}
+
+/// Which file a path was, how long and when it last changed.
+#[derive(Clone, Copy, PartialEq)]
+struct Stamp {
+    identity: u128,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self {
+            identity: identity(meta),
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        }
+    }
+
+    /// Whether `now` is this file grown: Claude only ever appends to its files.
+    fn grew_to(&self, now: &Stamp) -> bool {
+        self.identity == now.identity && now.len > self.len
+    }
+}
+
+/// The file a path is now: its device and inode.
+#[cfg(unix)]
+fn identity(meta: &std::fs::Metadata) -> u128 {
+    use std::os::unix::fs::MetadataExt;
+    (u128::from(meta.dev()) << 64) | u128::from(meta.ino())
+}
+
+/// The file a path is now: when it was made (Windows gives no inode outside nightly Rust).
+#[cfg(not(unix))]
+fn identity(meta: &std::fs::Metadata) -> u128 {
+    meta.created()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |at| at.as_nanos())
+}
+
+impl Part {
+    /// The file at `path` read on from `held`, or whole when `held` is none or another file.
+    fn read(held: Option<Part>, path: &Path, parent: Option<&str>) -> std::io::Result<Part> {
+        let mut file = std::fs::File::open(path)?;
+        let stamp = Stamp::of(&file.metadata()?);
+        let mut part = match held {
+            Some(part) if part.stamp == stamp => return Ok(part),
+            Some(part) if part.stamp.grew_to(&stamp) => part,
+            _ => Part {
+                lines: Lines::new(path, parent),
+                entries: Vec::new(),
+                at: 0,
+                stamp,
+            },
+        };
+        file.seek(std::io::SeekFrom::Start(part.at))?;
+        let mut bytes = Vec::new();
+        file.take(stamp.len.saturating_sub(part.at))
+            .read_to_end(&mut bytes)?;
+        let whole = bytes
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |end| end + 1);
+        let text = std::str::from_utf8(&bytes[..whole])
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        part.lines.feed(text, &mut part.entries);
+        part.at += whole as u64;
+        part.stamp = stamp;
+        Ok(part)
+    }
 }
 
 /// One file's lines as thread items; `parent` is the subagent call they ran in.
 fn read_lines(path: &Path, parent: Option<&str>) -> std::io::Result<Vec<FileEntry>> {
     let text = std::fs::read_to_string(path)?;
-    let file = path.display().to_string();
-    let mut parser = Parser::replay();
     let mut entries = Vec::new();
-    for (number, line) in text.lines().enumerate() {
+    Lines::new(path, parent).feed(&text, &mut entries);
+    Ok(entries)
+}
+
+/// A session file's lines read so far, to read on from: the parser's state and the line
+/// count (an image is found again by its line).
+struct Lines {
+    parser: Parser,
+    /// The lines read.
+    number: usize,
+    file: String,
+    parent: Option<String>,
+}
+
+impl Lines {
+    fn new(path: &Path, parent: Option<&str>) -> Self {
+        Self {
+            parser: Parser::replay(),
+            number: 0,
+            file: path.display().to_string(),
+            parent: parent.map(str::to_owned),
+        }
+    }
+
+    /// Reads on through `text`, whole lines (the last may lack its newline only at the
+    /// file's end), adding their items to `entries`.
+    fn feed(&mut self, text: &str, entries: &mut Vec<FileEntry>) {
+        for line in text.lines() {
+            let number = self.number;
+            self.number += 1;
+            self.line(number, line, entries);
+        }
+    }
+
+    fn line(&mut self, number: usize, line: &str, entries: &mut Vec<FileEntry>) {
+        let (file, parser, parent) = (&self.file, &mut self.parser, self.parent.as_deref());
         let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
+            return;
         };
         let at_ms = str_of(&value, "timestamp").and_then(crate::time::parse_rfc3339_ms);
         let mut images: Vec<FileImage> = {
@@ -96,7 +267,7 @@ fn read_lines(path: &Path, parent: Option<&str>) -> std::io::Result<Vec<FileEntr
                 .collect()
         };
         let (line, steer) = match translate(value, parent.is_some()) {
-            Line::Skip => continue,
+            Line::Skip => return,
             Line::Interrupted => {
                 entries.push(FileEntry {
                     parent: parent.map(str::to_owned),
@@ -110,7 +281,7 @@ fn read_lines(path: &Path, parent: Option<&str>) -> std::io::Result<Vec<FileEntr
                         at_ms,
                     )
                 });
-                continue;
+                return;
             }
             Line::Feed { line, steer } => (line, steer),
         };
@@ -129,7 +300,6 @@ fn read_lines(path: &Path, parent: Option<&str>) -> std::io::Result<Vec<FileEntr
             });
         }
     }
-    Ok(entries)
 }
 
 enum Line {
