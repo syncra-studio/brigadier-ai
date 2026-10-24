@@ -421,6 +421,62 @@ async fn worker_sends_it_to_the_sessions_worker_and_keeps_a_notice() {
     judging.flow.stop().await;
 }
 
+/// What the user pasted goes to the worker with their words: the worker never gets a bare
+/// `[Pasted text #1]`.
+#[tokio::test]
+async fn a_worker_gets_what_the_user_pasted() {
+    let judging = Judging::start(
+        "queue-worker-pasted",
+        Options::default(),
+        Plan {
+            judgment: Some(Judgment::Worker { id: String::new() }),
+            ..Plan::default()
+        },
+    )
+    .await;
+    let mut pasted = judging
+        .flow
+        .core
+        .add_attachment(
+            "Pasted text.md".into(),
+            "text/markdown".into(),
+            b"- ten pages".to_vec(),
+            true,
+        )
+        .await
+        .unwrap();
+    pasted.inline = Some(1);
+    judging.flow.say("Run the tests.").await;
+    super::eventually("the command to run", || judging.has("running")).await;
+    judging
+        .flow
+        .manager
+        .send_message(
+            judging.flow.conversation.clone(),
+            "Also check [Pasted text #1].".into(),
+            vec![pasted],
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    super::eventually("the thread to read it", || judging.has("steered")).await;
+    let judged = judging.judged().await;
+    assert_eq!(judged["state"], "sent-to-worker", "{judged:#}");
+    super::eventually("the worker to hear it", || judging.has("worker heard")).await;
+    let heard = judging.answer("worker heard");
+    let heard = heard.as_str().unwrap();
+    assert!(
+        heard.starts_with("Also check [Pasted text #1, pasted here by the user:]")
+            && heard.contains("- ten pages"),
+        "{heard}"
+    );
+    judging.gate.notify_one();
+    judging.flow.settled().await;
+    judging.flow.stop().await;
+}
+
 /// A hand-off to a worker that can't take it puts the message back in its slot, waiting for
 /// its own turn, and tells the thread why.
 #[tokio::test]
@@ -484,7 +540,8 @@ async fn unjudged_it_joins_the_working_answer_and_a_late_judgment_hears_so() {
     judging.flow.stop().await;
 }
 
-/// Unjudged when the user stops the turn, it waits in the queue, no longer Deciding.
+/// Unjudged when the user stops the turn, it waits in the queue, no longer Deciding. The
+/// user's Steer then sends it on a turn, named again: the stopped turn never answered it.
 #[tokio::test]
 async fn unjudged_at_a_stop_it_waits() {
     let judging = Judging::start("queue-stopped", Options::default(), Plan::default()).await;
@@ -506,6 +563,88 @@ async fn unjudged_at_a_stop_it_waits() {
         })
         .await;
     assert!(!board.requests.contains_key(&item.id));
+    judging.flow.settled().await;
+    steer_sends_it_named(&judging, &item).await;
+    judging.flow.stop().await;
+}
+
+/// The user's Steer on `item`, which the thread read before and judged no further in that
+/// turn: it goes on a turn of its own, named, and its request is that turn's.
+async fn steer_sends_it_named(judging: &Judging, item: &QueuedMessage) {
+    judging
+        .flow
+        .manager
+        .steer_queued(judging.flow.conversation.clone(), item.id.clone())
+        .await
+        .unwrap();
+    judging
+        .flow
+        .until("it to go on a turn", |board| joined(board, item))
+        .await;
+    judging.flow.settled().await;
+    let inputs = judging.inputs();
+    assert_eq!(inputs.len(), 2, "{inputs:#?}");
+    assert_eq!(
+        inputs[1],
+        format!(
+            "[queued message {}, now on its own turn]\n{ASKED}",
+            shown(item)
+        )
+    );
+}
+
+/// The user's Steer on a message the thread offered as a new session sends it, named, on a
+/// turn of its own: nothing else would.
+#[tokio::test]
+async fn a_steer_on_an_offered_message_sends_it_named() {
+    let judging = Judging::start(
+        "queue-steer-offered",
+        Options::default(),
+        Plan {
+            judgment: Some(Judgment::NewSession),
+            ..Plan::default()
+        },
+    )
+    .await;
+    let item = judging.send_while_working().await;
+    assert_eq!(judging.judged().await["state"], "offered");
+    judging.gate.notify_one();
+    judging.flow.settled().await;
+    steer_sends_it_named(&judging, &item).await;
+    judging.flow.stop().await;
+}
+
+/// A message still being given to the session can't be edited either: the words it reads are
+/// fixed once Deciding.
+#[tokio::test]
+async fn a_message_being_given_to_judge_cant_be_edited() {
+    let judging = Judging::start("queue-edit-deciding", Options::default(), Plan::default()).await;
+    let conversation = judging.flow.conversation.clone();
+    let item = judging
+        .flow
+        .core
+        .enqueue_as(
+            &conversation,
+            ASKED.into(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    let edited = judging
+        .flow
+        .manager
+        .edit_queued(
+            &conversation,
+            &item.id,
+            "Something else.".into(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+    assert!(edited.is_err(), "{edited:?}");
     judging.flow.stop().await;
 }
 
@@ -654,6 +793,82 @@ async fn with_no_codex_turn_running_it_waits_plainly() {
     assert_eq!(inputs.len(), 2, "{inputs:#?}");
     assert!(inputs[1].contains(ASKED) && !inputs[1].contains("[queued message"));
     judging.flow.stop().await;
+}
+
+/// A normal Chat judges the same way (run2-D46): its message waits Deciding, reaches the running
+/// turn under its frame, and the Chat's own `brigadier queue` joins it.
+#[tokio::test]
+async fn a_chat_judges_it_too() {
+    let (judging, chat, item) = chat_judging("queue-chat", Judgment::Join).await;
+    assert_eq!(judging.judged().await["state"], "joined");
+    judging
+        .flow
+        .until_in(&chat, "it to join", |board| joined(board, &item))
+        .await;
+    judging.gate.notify_one();
+    judging.flow.settled_in(&chat).await;
+    assert_eq!(judging.inputs().len(), 1, "{:#?}", judging.inputs());
+    judging.flow.stop().await;
+}
+
+/// A Chat has no project to open a session in: its `new-session` is refused, and the message
+/// stays Deciding, to be judged otherwise or join by itself.
+#[tokio::test]
+async fn a_chat_offers_no_new_session() {
+    let (judging, chat, item) = chat_judging("queue-chat-new-session", Judgment::NewSession).await;
+    let judged = judging.judged().await;
+    assert_eq!(judged["error"]["code"], "refused", "{judged:#}");
+    let board = judging.flow.board_of(&chat).await;
+    assert!(
+        board
+            .queue
+            .items
+            .iter()
+            .all(|queued| queued.id != item.id || !queued.offer_session),
+        "{:?}",
+        board.queue
+    );
+    judging.gate.notify_one();
+    judging
+        .flow
+        .until_in(&chat, "it to join with the turn", |board| {
+            joined(board, &item)
+        })
+        .await;
+    judging.flow.stop().await;
+}
+
+/// A Chat whose "Run the tests." turn runs, with the message sent meanwhile Deciding and read
+/// by the turn, to be judged `judgment`.
+async fn chat_judging(name: &str, judgment: Judgment) -> (Judging, ConversationId, QueuedMessage) {
+    let judging = Judging::start(
+        name,
+        Options::default(),
+        Plan {
+            judgment: Some(judgment),
+            ..Plan::default()
+        },
+    )
+    .await;
+    let chat = super::chat_thread_tests::new_chat(&judging.flow).await;
+    judging.flow.say_to(&chat, "Run the tests.").await;
+    super::eventually("the command to run", || judging.has("running")).await;
+    judging.flow.say_to(&chat, ASKED).await;
+    let board = judging
+        .flow
+        .until_in(&chat, "the message to wait, Deciding", |board| {
+            board
+                .queue
+                .items
+                .first()
+                .is_some_and(|item| item.text == ASKED && item.deciding && item.delivered)
+        })
+        .await;
+    let item = board.queue.items[0].clone();
+    super::eventually("the thread to read it", || judging.has("steered")).await;
+    let steered = judging.answer("steered");
+    assert_eq!(shown_in(steered.as_str().unwrap()), shown(&item));
+    (judging, chat, item)
 }
 
 /// A side chat keeps the plain queue: nothing reaches its turn until that ends.

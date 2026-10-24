@@ -66,9 +66,30 @@ pub(crate) fn judges_queue(conversation: &Conversation) -> bool {
     conversation.side_of.is_none()
 }
 
-/// The text a queued message goes to a worker with: the user's words, and where its files are.
-fn worker_text(item: &QueuedMessage, files: &[(String, Option<String>)]) -> String {
-    let mut text = item.text.clone();
+/// Queued `item` as the user's message it is read as, kept nowhere.
+fn as_message(conversation_id: &crate::model::ConversationId, item: &QueuedMessage) -> Message {
+    Message {
+        id: item.id.clone(),
+        conversation_id: conversation_id.clone(),
+        seq: 0,
+        role: MessageRole::User,
+        text: item.text.clone(),
+        blob: None,
+        created_at_ms: item.queued_at_ms,
+        attachments: item.attachments.clone(),
+        mentions: item.mentions.clone(),
+        model: None,
+        request_id: None,
+        parent_id: None,
+        peer: None,
+        answer_at_ms: None,
+    }
+}
+
+/// The text a queued message goes to a worker with: the user's words with what they pasted
+/// (`words`), and where its files are.
+fn worker_text(words: String, files: &[(String, Option<String>)]) -> String {
+    let mut text = words;
     if !files.is_empty() {
         let named: Vec<String> = files
             .iter()
@@ -144,22 +165,7 @@ impl SessionManager {
         let steered = match cli {
             Some(cli) => {
                 // The message the session reads, kept nowhere until it is judged.
-                let message = Message {
-                    id: item.id.clone(),
-                    conversation_id: conv.id.clone(),
-                    seq: 0,
-                    role: MessageRole::User,
-                    text: item.text.clone(),
-                    blob: None,
-                    created_at_ms: item.queued_at_ms,
-                    attachments: item.attachments.clone(),
-                    mentions: item.mentions.clone(),
-                    model: None,
-                    request_id: None,
-                    parent_id: None,
-                    peer: None,
-                    answer_at_ms: None,
-                };
+                let message = as_message(&conv.id, &item);
                 conv.frame(&item.id, deciding_frame(&shown));
                 let input = self
                     .turn_input(conv, std::slice::from_ref(&message), &[])
@@ -187,6 +193,8 @@ impl SessionManager {
             {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not queue a message plainly"; conversation = %conv.id, error = %err);
             }
+            // The turn may have ended meanwhile and passed it by, still Deciding.
+            self.kick(conv);
             item.deciding = false;
             return item;
         }
@@ -309,28 +317,26 @@ impl SessionManager {
         Ok(())
     }
 
-    /// The user's Steer on queued message `item_id`: one the session already has joins at once
-    /// without going again (true); one it doesn't is left to the plain steer (false).
+    /// The user's Steer on queued message `item_id`: one the running turn has and still judges
+    /// joins at once without going again, and one being handed to a worker is left to that
+    /// (true). Any other is left to the plain steer (false), named again if the session read
+    /// it before: its judgment was wait or a new session, or its turn is over.
     pub(super) async fn steered_delivered(
         &self,
         conv: &Arc<ConvLive>,
         item_id: &str,
     ) -> Result<bool> {
-        let delivered = self
-            .core
-            .board(&conv.id)
-            .await?
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == item_id && item.delivered);
-        if !delivered {
-            return Ok(false);
-        }
-        if !conv.state.lock().await.claimed.contains(item_id) {
+        let deciding = {
+            let state = conv.state.lock().await;
+            if state.claimed.contains(item_id) {
+                return Ok(true);
+            }
+            state.deciding.iter().any(|id| id == item_id)
+        };
+        if deciding {
             self.join_delivered(conv, item_id).await?;
         }
-        Ok(true)
+        Ok(deciding)
     }
 
     /// The turn ended: the queued messages it left unjudged join it when it got through
@@ -532,6 +538,14 @@ impl SessionManager {
                 QueueState::Waiting
             }
             Judgment::NewSession => {
+                if self.core.conversation(&conv.id)?.kind != crate::model::ConversationKind::Session
+                {
+                    return Ok(CliReply::error(
+                        ErrorCode::Refused,
+                        "refused: a Chat opens no sessions; join it, let it wait, or give it to a \
+                         worker",
+                    ));
+                }
                 self.unjudge(&conv, &item.id).await;
                 self.core
                     .offer_queued_as_session(&conv.id, &item.id)
@@ -592,7 +606,8 @@ impl SessionManager {
         }
         let sent = match claimed {
             Ok(_) => {
-                self.cli_send(caller, worker, Some(worker_text(&item, &files)), None)
+                let words = self.full_words(&as_message(&conv.id, &item)).await;
+                self.cli_send(caller, worker, Some(worker_text(words, &files)), None)
                     .await
             }
             Err(err) => Err(err),

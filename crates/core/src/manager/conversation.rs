@@ -1204,13 +1204,14 @@ impl SessionManager {
         if conv.state.lock().await.seam.held {
             return Ok(());
         }
-        // One the session already has joins without going again (run2-D46).
+        // One the running turn has to judge joins without going again (run2-D46).
         if self.steered_delivered(&conv, &item_id).await? {
             return Ok(());
         }
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(&id, &item_id).await?;
+                conv.goes_on_own_turn(&item);
                 self.core.append_queued(id.clone(), item).await
             })
             .await?;

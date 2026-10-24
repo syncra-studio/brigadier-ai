@@ -59,8 +59,8 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       const at = index < 0 ? items.length + index : index;
       const item = items[at];
       const composer = aui.composer();
-      // One the session already has can't be written again (run2-D46).
-      if (!target || !conversationId || !item || item.delivered || !composer.getState().isEmpty) return;
+      // One the session has, or is being given, can't be written again (run2-D46).
+      if (!target || !conversationId || !item || item.delivered || item.deciding || !composer.getState().isEmpty) return;
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions);
       target.mentions.recall(item.mentions);
@@ -238,7 +238,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem
-                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered}
+                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered || !!item.deciding}
                     onSelect={() => action.run(async () => pull?.(stored.indexOf(item)))}
                   >
                     <Pencil />

@@ -1940,7 +1940,8 @@ impl Core {
         check_attachments(&attachments)?;
         self.change_queue(id, |queue| {
             let item = find_queued(queue, item_id)?;
-            if item.delivered {
+            // Being given to the session (Deciding) counts as had: the words it reads are fixed.
+            if item.delivered || item.deciding {
                 return Err(Error::Invalid(
                     "the session already has this message; delete it and send it again".into(),
                 ));
