@@ -2,7 +2,7 @@
 //! one adapter and nothing above it names an agent (proposed in the plugins redesign plan).
 //!
 //! An adapter never changes a config by itself: it *plans* the CLI's own commands (and, where a
-//! CLI has none but reads a per-project file, that file's edit), and [`run`] carries a plan
+//! CLI has none but reads a per-project file, that file's edit), and [`apply()`] carries a plan
 //! out. Reading stays the [`Catalog`]'s: an adapter says which of its sources are its own.
 //!
 //! Where an item lives:
@@ -10,6 +10,8 @@
 //! - [`Place::Project`]: one project only, "just me" (kept out of the repository) unless
 //!   `shared`, which writes the form the team commits.
 
+mod app_server;
+mod apply;
 mod claude;
 pub mod codex;
 
@@ -17,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Agent, Catalog, Roots, Source};
 
+pub use apply::{Applied, ApplyError, apply};
 pub use claude::Claude;
 pub use codex::Codex;
 
@@ -162,6 +165,21 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Lists the MCP servers the CLI loads in `project` (or anywhere), as it reports them.
     fn list_servers(&self, project: Option<&Path>) -> CliCall;
+
+    /// Writes `edit` in the user's own config through the CLI's own config writer, run with
+    /// `env`. Only an agent whose plans hold [`Step::UserConfig`] has one.
+    fn write_user_config(
+        &self,
+        roots: &Roots,
+        env: &[(String, String)],
+        edit: &TomlEdit,
+    ) -> Result<(), ApplyError> {
+        let _ = (roots, env, edit);
+        Err(ApplyError::Failed(format!(
+            "Brigadier has no way to change {}'s own settings.",
+            self.label()
+        )))
+    }
 }
 
 static CLAUDE: Claude = Claude;

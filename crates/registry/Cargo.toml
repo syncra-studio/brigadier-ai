@@ -16,6 +16,8 @@ serde_json.workspace = true
 # The CLIs' keys for their stored MCP sign-ins.
 sha2 = "0.11.0"
 toml = "1.1.6"
+# A project's Codex file, edited in place: comments, order and other entries kept.
+toml_edit = { version = "0.25.15", default-features = false, features = ["parse", "display"] }
 tracing.workspace = true
 yaml-rust2 = "0.13.0"
 

@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use super::{
-    AgentAdapter, Capabilities, CliCall, Place, ProjectScope, Step, TomlEdit, Unsupported,
+    AgentAdapter, ApplyError, Capabilities, CliCall, Place, ProjectScope, Step, TomlEdit,
+    Unsupported, app_server, apply,
 };
 use crate::{Agent, Catalog, Roots, Source};
 
@@ -139,5 +140,31 @@ impl AgentAdapter for Codex {
             Some(dir) => call.in_dir(dir),
             None => call,
         }
+    }
+
+    /// Through `codex app-server`'s `config/value/write`; a removal takes the tables it would
+    /// leave empty with it.
+    fn write_user_config(
+        &self,
+        roots: &Roots,
+        env: &[(String, String)],
+        edit: &TomlEdit,
+    ) -> Result<(), ApplyError> {
+        let (key, value) = match &edit.value {
+            Some(value) => (
+                edit.key.clone(),
+                serde_json::to_value(value).map_err(|err| {
+                    ApplyError::Failed(format!("Brigadier couldn't send the setting: {err}"))
+                })?,
+            ),
+            None => {
+                let config = std::fs::read_to_string(roots.codex_home.join("config.toml")).ok();
+                (
+                    apply::removal_key(config.as_deref(), &edit.key),
+                    serde_json::Value::Null,
+                )
+            }
+        };
+        app_server::write_value(PROGRAM, env, &apply::key_path(&key), value)
     }
 }
