@@ -131,3 +131,35 @@ test("in a page, what streamed between two frames is drawn once, at the frame", 
     delete page.cancelAnimationFrame;
   }
 });
+
+test("a delta waiting for the frame when a read of its thread lands shows once", async () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
+  const frames: (() => void)[] = [];
+  page.document = { hidden: false };
+  page.requestAnimationFrame = (draw: () => void) => frames.push(draw);
+  page.cancelAnimationFrame = () => {};
+  const user = at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1);
+  useCliThread.setState({ views: { reread: { entries: [user], turns: [] } } });
+  // The read's snapshot already holds the delta's words.
+  const read: ThreadView = { entries: [user, at({ type: "messageDelta", itemId: "m", text: "hello" }, 2)], turns: [] };
+  let land: (() => void) | null = null;
+  mockIPC((cmd) => (cmd === "ipc_request" ? new Promise((resolve) => (land = () => resolve({ method: "threadView", view: read }))) : null));
+  try {
+    const reading = loadThreadView("reread");
+    await settle();
+    // The delta comes while the read is under way, and waits for the next frame.
+    applyThreadNews({ conversationId: "reread", entries: [at({ type: "messageDelta", itemId: "m", text: "hello" }, 2)] });
+    // The read lands before that frame.
+    (land as (() => void) | null)?.();
+    await reading;
+    for (const draw of frames.splice(0)) draw();
+    assert.deepEqual(useCliThread.getState().views["reread"]?.entries.at(-1)?.event, { type: "messageDelta", itemId: "m", text: "hello" });
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+    delete page.document;
+    delete page.requestAnimationFrame;
+    delete page.cancelAnimationFrame;
+  }
+});

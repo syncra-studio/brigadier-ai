@@ -140,7 +140,8 @@ function setView(conversationId: string, view: ThreadView): void {
 /**
  * Reads a conversation's thread. What the stream said while it was read is added once it lands:
  * whole items again (they only replace themselves), not deltas, which the view may hold already
- * (their item's own end brings its whole text). A turn that ended meanwhile reads it once more.
+ * (their item's own end brings its whole text). News still waiting for the frame when it lands
+ * was said while it was read, too. A turn that ended meanwhile reads it once more.
  */
 export async function loadThreadView(conversationId: string): Promise<void> {
   const going = reads.get(conversationId);
@@ -152,6 +153,8 @@ export async function loadThreadView(conversationId: string): Promise<void> {
   reads.set(conversationId, read);
   try {
     const { view } = await request({ method: "threadView", conversationId });
+    // What waits for the frame goes to the read now, while it is still under way.
+    if (queued.length > 0) flushNews();
     const heard = read.heard.filter((entry) => !isDelta(entry.event));
     // One without an id of its own (an error) is the view's already when it holds the same.
     const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
