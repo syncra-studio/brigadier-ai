@@ -87,6 +87,18 @@ impl AgentAdapter for Codex {
         CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
     }
 
+    fn refresh_marketplace(&self, _: &str) -> Option<CliCall> {
+        // It reads a local marketplace as it is.
+        None
+    }
+
+    fn update_plugin(&self, id: &str, _: &Place) -> Result<Vec<Step>, Unsupported> {
+        // Adding it again copies the new version into its cache; where it is on is unchanged.
+        Ok(vec![Step::Run(
+            CliCall::new(PROGRAM, &["plugin", "add"]).arg(id),
+        )])
+    }
+
     fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
         let add = Step::Run(CliCall::new(PROGRAM, &["plugin", "add"]).arg(id));
         Ok(match place {

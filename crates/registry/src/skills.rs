@@ -261,7 +261,7 @@ fn same_contents(a: &Path, b: &Path) -> bool {
 }
 
 /// `name` and `description` from a `SKILL.md`'s YAML frontmatter.
-fn frontmatter(text: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn frontmatter(text: &str) -> (Option<String>, Option<String>) {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let Some(rest) = text
         .strip_prefix("---\n")

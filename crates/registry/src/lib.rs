@@ -30,6 +30,7 @@
 
 pub mod adapter;
 pub mod item;
+pub mod library;
 mod plugins;
 mod servers;
 mod sign_ins;

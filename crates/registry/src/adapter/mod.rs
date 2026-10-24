@@ -138,8 +138,14 @@ pub trait AgentAdapter: Send + Sync {
     /// Adds a local marketplace (a folder) to the CLI.
     fn add_marketplace(&self, dir: &Path) -> CliCall;
 
+    /// Reads local marketplace `name` again, when the CLI keeps a copy of it.
+    fn refresh_marketplace(&self, name: &str) -> Option<CliCall>;
+
     /// Installs plugin `id` (`<plugin>@<marketplace>`) at `place`.
     fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
+
+    /// Brings installed plugin `id` at `place` to its marketplace's version.
+    fn update_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
 
     /// Uninstalls plugin `id` from `place`.
     fn remove_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;

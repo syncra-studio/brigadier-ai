@@ -82,6 +82,22 @@ impl AgentAdapter for Claude {
         CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
     }
 
+    fn refresh_marketplace(&self, name: &str) -> Option<CliCall> {
+        Some(CliCall::new(PROGRAM, &["plugin", "marketplace", "update"]).arg(name))
+    }
+
+    fn update_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
+        let (scope, dir) = scope(place);
+        let call = CliCall::new(PROGRAM, &["plugin", "update"])
+            .arg(id)
+            .arg("--scope")
+            .arg(scope);
+        Ok(vec![Step::Run(match dir {
+            Some(dir) => call.in_dir(dir),
+            None => call,
+        })])
+    }
+
     fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
         Ok(vec![Step::Run(plugin_call(
             &["plugin", "install"],
