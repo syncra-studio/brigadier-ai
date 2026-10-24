@@ -71,11 +71,20 @@ test("matching is fuzzy: letters in order count, after closer matches", () => {
   assert.deepEqual(mentionSections("zzzz", sources)[0]!.rows, []);
 });
 
-test("/ opens the commands menu after leading spaces, never mid-sentence", () => {
+test("/ opens the commands menu where a word starts, anywhere in the text, never inside a word", () => {
+  // At the start, after leading spaces, and mid-text after a space or a newline.
   assert.deepEqual(slashTrigger("/mod", "/", 4), { query: "mod", offset: 0, endOffset: 4 });
   assert.deepEqual(slashTrigger("   /mod", "/", 7), { query: "mod", offset: 3, endOffset: 7 });
   assert.deepEqual(slashTrigger("\n /", "/", 3), { query: "", offset: 2, endOffset: 3 });
+  assert.deepEqual(slashTrigger("fix this /rev", "/", 13), { query: "rev", offset: 9, endOffset: 13 });
+  assert.deepEqual(slashTrigger("first line\n/gr", "/", 14), { query: "gr", offset: 11, endOffset: 14 });
+  // With text after the caret, which stays where it is.
+  assert.deepEqual(slashTrigger("run /re now", "/", 7), { query: "re", offset: 4, endOffset: 7 });
+  // Never inside a word: a path or a link.
   assert.equal(slashTrigger("fix a/b", "/", 7), null);
+  assert.equal(slashTrigger("src/a", "/", 4), null);
+  assert.equal(slashTrigger("see http://x/y", "/", 14), null);
+  assert.equal(slashTrigger("see http://", "/", 11), null);
   // It closes at a space, so "/overnight do it" is sent, not run again.
   assert.equal(slashTrigger("/overnight do it", "/", 16), null);
   // The caret before the slash.

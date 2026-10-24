@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-test("the @ menu has a heading per kind before a query and one ranked list with one, folders mention, it opens on new chats and sessions; / opens after leading spaces", { timeout: 120000 }, async (t) => {
+test("the @ menu has a heading per kind before a query and one ranked list with one, folders mention, it opens on new chats and sessions; / opens where a word starts and types the CLI's commands", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "composer-menus.html", "composer-menus-result", 90000)) as Record<string, unknown>;
   assert.equal(seen.error, undefined, String(seen.error));
   for (const mode of ["rich", "plain"]) {
@@ -13,7 +13,10 @@ test("the @ menu has a heading per kind before a query and one ranked list with 
     assert.deepEqual(run.query, ["lib", "menu.ts", "chips.ts"], mode);
     assert.deepEqual(run.sent, { text: "@src/lib now", mentions: [{ type: "folder", path: "src/lib" }] }, mode);
     assert.equal(run.slashAfterSpaces, true, mode);
-    assert.equal(run.slashMidSentence, false, mode);
+    assert.equal(run.slashMidSentence, true, mode);
+    assert.equal(run.picked, "a /grill-me", mode);
+    assert.equal(run.pickedInside, "z /grill-me tail", mode);
+    assert.equal(run.slashInWord, false, mode);
     // A new chat mentions the other conversations; a new session its project's files.
     assert.deepEqual(run.newChat, ["# Chats", "Menus", "Release notes"], mode);
     assert.equal(run.newSession, true, mode);

@@ -305,6 +305,35 @@ impl Codex {
         let (rpc, stdout) = self
             .app_server(&cwd, None, None, None, private_logs)
             .await?;
+        Self::control_on(rpc, stdout, work).await
+    }
+
+    /// [`Self::control`] on a throwaway app-server with the user's plugins on, as a thread's
+    /// has them, so their skills count. Nothing starts a thread on it, so no hook runs.
+    async fn control_with_plugins<T>(
+        &self,
+        work: impl AsyncFnOnce(&Rpc) -> Result<T>,
+    ) -> Result<T> {
+        let mut spec = self.server_spec(&self.binary()?, &self.platform.paths().data_dir, None);
+        let mut args = app_server_args(None);
+        if let Some(at) = args
+            .windows(2)
+            .position(|pair| pair[0] == "--disable" && pair[1] == "plugins")
+        {
+            args.drain(at..at + 2);
+        }
+        spec.args = args.into_iter().map(Into::into).collect();
+        let process::Spawned { process, stdout } =
+            process::spawn(self.platform.clone(), &spec, process::Options::default())?;
+        Self::control_on(Arc::new(Rpc::new(process)), stdout, work).await
+    }
+
+    /// Initializes the app-server `rpc` reads from `stdout`, runs `work`, then shuts it down.
+    async fn control_on<T>(
+        rpc: Arc<Rpc>,
+        stdout: mpsc::Receiver<String>,
+        work: impl AsyncFnOnce(&Rpc) -> Result<T>,
+    ) -> Result<T> {
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
         let result = async {
             rpc.initialize().await?;
@@ -826,6 +855,20 @@ impl Provider for Codex {
         })
     }
 
+    fn commands(
+        &self,
+        folder: Option<PathBuf>,
+        trusted: bool,
+    ) -> BoxFuture<'_, Result<Vec<CliCommand>>> {
+        Box::pin(async move {
+            let folder = folder.unwrap_or_else(|| self.platform.paths().data_dir.clone());
+            let skills = self
+                .control_with_plugins(async |rpc: &Rpc| list_skills(rpc, &folder).await)
+                .await?;
+            Ok(skill_commands(skills, trusted))
+        })
+    }
+
     fn start(&self, spec: SessionSpec, ledger: Arc<dyn Ledger>) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
             let cwd = spec.cwd.canonicalize().map_err(|err| {
@@ -919,6 +962,7 @@ impl Provider for Codex {
                 tools: spec.tools,
                 writable_roots: writable_roots(&spec),
                 effort: spec.effort.clone(),
+                cwd: cwd.clone(),
             });
             session
                 .emit(ProviderEvent::SessionStarted {
@@ -2069,6 +2113,8 @@ pub struct CodexSession {
     /// What its workspace sandbox writes besides its working directory.
     writable_roots: Vec<PathBuf>,
     effort: Option<String>,
+    /// Its working directory, where Codex finds the repository's skills.
+    cwd: PathBuf,
 }
 
 impl CodexSession {
@@ -2157,6 +2203,18 @@ impl CodexSession {
 impl ProviderSession for CodexSession {
     fn context_window(&self) -> Option<i64> {
         self.context_window
+    }
+
+    fn commands(&self) -> BoxFuture<'_, Vec<CliCommand>> {
+        Box::pin(async move {
+            match list_skills(&self.rpc, &self.cwd).await {
+                Ok(skills) => skill_commands(skills, true),
+                Err(error) => {
+                    tracing::warn!(%error, "Codex didn't list its skills");
+                    Vec::new()
+                }
+            }
+        })
     }
 
     fn native_id(&self) -> String {
@@ -2333,6 +2391,60 @@ impl ProviderSession for CodexSession {
 /// [`ProviderEvent::McpServers`]. It runs apart, once the thread is open; asked again while it
 /// runs, it lists once more after. A refusal ends the listing for this session (an app-server
 /// without it), quietly: the startup steps still tell each server's state.
+/// `skills/list`'s answer: the skills Codex finds for each folder asked about. Only what the
+/// `/` menu reads; the generated bindings leave these messages out.
+#[derive(Debug, serde::Deserialize)]
+struct SkillsList {
+    data: Vec<SkillsOfFolder>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SkillsOfFolder {
+    skills: Vec<Skill>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Skill {
+    name: String,
+    description: String,
+    #[serde(default)]
+    short_description: Option<String>,
+    enabled: bool,
+    /// `user`, `repo`, `system` or `admin`.
+    scope: String,
+}
+
+/// The skills Codex finds for `folder`: the user's, the repository's, its plugins' and its own.
+async fn list_skills(rpc: &Rpc, folder: &Path) -> Result<Vec<Skill>> {
+    let list: SkillsList = rpc
+        .call("skills/list", &json!({ "cwds": [folder] }))
+        .await?;
+    Ok(list
+        .data
+        .into_iter()
+        .flat_map(|entry| entry.skills)
+        .collect())
+}
+
+/// Codex's skills as `/` menu entries, each typed as Codex's own mention (`$name`), once each
+/// and only those switched on. `trusted`: the folder's own (`repo`) skills count.
+fn skill_commands(skills: Vec<Skill>, trusted: bool) -> Vec<CliCommand> {
+    let mut seen = HashSet::new();
+    skills
+        .into_iter()
+        .filter(|skill| skill.enabled && (trusted || skill.scope != "repo"))
+        .filter(|skill| seen.insert(skill.name.clone()))
+        .map(|skill| CliCommand {
+            text: format!("${}", skill.name),
+            description: Some(skill.short_description.unwrap_or(skill.description))
+                .filter(|text| !text.is_empty()),
+            name: skill.name,
+            argument_hint: None,
+        })
+        .collect()
+}
+
 fn list_mcp_servers(rpc: &Arc<Rpc>, shared: &Arc<Shared>) {
     if !shared.mcp_listing.load(Ordering::Acquire) {
         return;
@@ -2533,6 +2645,59 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `/` menu lists what `skills/list` reports, each typed as Codex's `$name` mention
+    /// (checked live on 0.164: `$skill` in a turn's text runs it), once each and only those
+    /// switched on; the folder's own skills only where the user trusts it.
+    #[test]
+    fn commands_are_the_skills_codex_lists() {
+        let list: SkillsList = serde_json::from_value(json!({"data": [{
+            "cwd": "/repo",
+            "errors": [],
+            "skills": [
+                {"name": "w03-codex-skill", "description": "Project skill", "enabled": true,
+                 "path": "/repo/.agents/skills/w03-codex-skill/SKILL.md", "scope": "repo"},
+                {"name": "grill-me", "description": "A long description", "shortDescription": "Grill",
+                 "enabled": true, "path": "/u/grill-me/SKILL.md", "scope": "user"},
+                {"name": "pdf:pdf", "description": "PDFs", "enabled": true, "pluginId": "pdf",
+                 "path": "/p/pdf/SKILL.md", "scope": "user"},
+                {"name": "pdf:pdf", "description": "PDFs again", "enabled": true,
+                 "path": "/q/pdf/SKILL.md", "scope": "user"},
+                {"name": "off", "description": "Switched off", "enabled": false,
+                 "path": "/u/off/SKILL.md", "scope": "user"},
+                {"name": "imagegen", "description": "", "enabled": true,
+                 "path": "/s/imagegen/SKILL.md", "scope": "system"},
+            ],
+        }]}))
+        .unwrap();
+        let skills = || list.data[0].skills.clone();
+        let trusted = skill_commands(skills(), true);
+        let names: Vec<_> = trusted
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["w03-codex-skill", "grill-me", "pdf:pdf", "imagegen"]
+        );
+        assert_eq!(
+            trusted[1],
+            CliCommand {
+                name: "grill-me".into(),
+                text: "$grill-me".into(),
+                description: Some("Grill".into()),
+                argument_hint: None,
+            }
+        );
+        assert_eq!(trusted[2].text, "$pdf:pdf");
+        assert_eq!(trusted[3].description, None);
+        let untrusted = skill_commands(skills(), false);
+        assert!(
+            untrusted
+                .iter()
+                .all(|command| command.name != "w03-codex-skill")
+        );
+    }
 
     #[test]
     fn plans_read_as_people_name_them() {

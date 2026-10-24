@@ -4849,7 +4849,7 @@ impl SessionManager {
     }
 
     /// The model a Chat without one of its own runs on: the app's default for Chats.
-    fn default_chat_choice(&self) -> ModelChoice {
+    pub(super) fn default_chat_choice(&self) -> ModelChoice {
         self.core
             .settings()
             .default_chat_model

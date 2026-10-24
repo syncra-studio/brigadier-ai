@@ -1,7 +1,9 @@
 import {
   ComposerPrimitive,
+  useAui,
   unstable_useTriggerPopoverScopeContext,
   type Unstable_TriggerItem,
+  type Unstable_TriggerMatcher,
 } from "@assistant-ui/react";
 import {
   type ComponentProps,
@@ -26,7 +28,10 @@ export type ComposerCommand = {
   /** A heading the command is listed under ("Skills"); ungrouped commands come first. */
   group?: string;
   icon: ReactNode;
-  run: () => void;
+  /** Runs it; a command with `text` has nothing to run. */
+  run?: () => void;
+  /** What picking it types where the `/` was (a CLI's "/review"), the rest of the message kept. */
+  text?: string;
 };
 
 /** assistant-ui's trigger adapter (its type lives in @assistant-ui/core). */
@@ -70,15 +75,30 @@ function commandAdapter(commands: readonly ComposerCommand[]): TriggerAdapter {
  * highlighted, Enter runs it and clears the typed command. Render it inside
  * `ComposerPrimitive.Unstable_TriggerPopoverRoot`, next to the composer.
  */
-export const ComposerCommands: FC<{ commands: readonly ComposerCommand[] }> = ({ commands }) => {
+export const ComposerCommands: FC<{
+  commands: readonly ComposerCommand[];
+  /** Called as the menu opens, to bring its commands up to date. */
+  onOpen?: () => void;
+}> = ({ commands, onOpen }) => {
   const adapter = useMemo(() => commandAdapter(commands), [commands]);
   const byId = useMemo(() => new Map(commands.map((command) => [command.id, command])), [commands]);
+  // Where the typed `/` and its query are, for a command that types its text there.
+  const trigger = useRef<{ offset: number; endOffset: number } | null>(null);
+  const matcher = useMemo<Unstable_TriggerMatcher>(
+    () => (text, char, cursor) => {
+      const match = slashTrigger(text, char, cursor);
+      trigger.current = match;
+      return match;
+    },
+    [],
+  );
   return (
-    <ComposerPrimitive.Unstable_TriggerPopover char="/" matcher={slashTrigger} adapter={adapter}>
+    <ComposerPrimitive.Unstable_TriggerPopover char="/" matcher={matcher} adapter={adapter}>
       <ComposerPrimitive.Unstable_TriggerPopover.Action
         removeOnExecute
-        onExecute={(item) => byId.get(item.id)?.run()}
+        onExecute={(item) => byId.get(item.id)?.run?.()}
       />
+      <TypeCommandText byId={byId} trigger={trigger} onOpen={onOpen} />
       <ComposerPrimitive.Unstable_TriggerPopoverItems>
         {(matches) => (
           <CommandList>
@@ -114,6 +134,43 @@ export const ComposerCommands: FC<{ commands: readonly ComposerCommand[] }> = ({
     </ComposerPrimitive.Unstable_TriggerPopover>
   );
 };
+
+/**
+ * Picking a command with `text` types it in place of the `/` and its query, followed by a
+ * space, and leaves the rest of the message as it was; the caret goes after it. Also tells
+ * `onOpen` when the menu opens.
+ */
+function TypeCommandText({
+  byId,
+  trigger,
+  onOpen,
+}: {
+  byId: ReadonlyMap<string, ComposerCommand>;
+  trigger: { readonly current: { offset: number; endOffset: number } | null };
+  onOpen: (() => void) | undefined;
+}) {
+  const aui = useAui();
+  const { open, registerSelectItemOverride, setCursorPosition } = unstable_useTriggerPopoverScopeContext();
+  useEffect(() => {
+    if (open) onOpen?.();
+  }, [open, onOpen]);
+  useEffect(
+    () =>
+      registerSelectItemOverride((item) => {
+        const text = byId.get(item.id)?.text;
+        const at = trigger.current;
+        if (text === undefined || !at) return false;
+        const current = aui.composer().getState().text;
+        const before = current.slice(0, at.offset);
+        const after = current.slice(at.endOffset);
+        aui.composer().setText(before + text + (after.startsWith(" ") ? after : ` ${after}`));
+        setCursorPosition(before.length + text.length + 1);
+        return true;
+      }),
+    [aui, byId, trigger, registerSelectItemOverride, setCursorPosition],
+  );
+  return null;
+}
 
 /** The menu's scrolling panel, keeping the highlighted row in view as the arrows move it. */
 function CommandList({ children }: { children: ReactNode }) {

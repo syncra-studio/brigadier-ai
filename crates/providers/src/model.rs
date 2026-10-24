@@ -809,6 +809,22 @@ pub struct McpServerState {
     pub transport: Option<String>,
 }
 
+/// One thing a CLI runs when a message holds it, for the composer's `/` menu: a built-in
+/// command, a skill (the user's, the project's or a plugin's), a plugin's command or an MCP
+/// prompt, as the CLI itself reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CliCommand {
+    /// Its name as the CLI lists it ("review", "github:triage (MCP)").
+    pub name: String,
+    /// What a message holds to run it ("/review", "$review").
+    pub text: String,
+    /// The CLI's own words for it.
+    pub description: Option<String>,
+    /// What it takes after its name ("[pr]"), when the CLI says.
+    pub argument_hint: Option<String>,
+}
+
 /// Everything a provider session reports, in one vocabulary for every CLI.
 ///
 /// Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event

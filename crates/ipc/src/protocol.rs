@@ -29,7 +29,7 @@ use brigadier_core::{
     UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
     WorkspaceTarget, WorkspaceTree,
 };
-use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
+use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -204,6 +204,23 @@ pub enum Request {
     /// Branches and state of a repository, for the composer's branch picker.
     GetRepoInfo {
         path: String,
+    },
+    /// What a conversation's CLI runs from the composer's `/` menu (built-in commands, skills,
+    /// plugin commands, MCP prompts), as the CLI reports them. Without a conversation, what a
+    /// new one's `provider` would run, in project `projectId`'s folder `repo` for a session.
+    ListCliCommands {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        conversation_id: Option<ConversationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        provider: Option<ProviderKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        project_id: Option<ProjectId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        repo: Option<String>,
     },
     /// The repositories the user's own Claude Code and Codex sessions worked in, most recent
     /// first: the first run's project suggestions.
@@ -1365,6 +1382,9 @@ pub enum Response {
     RebuildIndex,
     GetRepoInfo {
         repo: RepoInfo,
+    },
+    ListCliCommands {
+        commands: Vec<CliCommand>,
     },
     FindProjects {
         candidates: Vec<ProjectCandidate>,

@@ -183,9 +183,24 @@ impl Claude {
     /// Runs a throwaway process that answers control requests, then exits. It loads no
     /// settings, no MCP servers and writes no session.
     async fn control(&self, requests: Vec<Map<String, Value>>) -> Result<Vec<Value>> {
+        self.control_in(
+            Self::control_args(),
+            self.platform.paths().data_dir.clone(),
+            requests,
+        )
+        .await
+    }
+
+    /// [`Self::control`] with `args`, in `cwd`.
+    async fn control_in(
+        &self,
+        args: Vec<String>,
+        cwd: PathBuf,
+        requests: Vec<Map<String, Value>>,
+    ) -> Result<Vec<Value>> {
         let mut spec = self.env.spec(&self.binary()?);
-        spec.args = Self::control_args().into_iter().map(Into::into).collect();
-        spec.cwd = Some(self.platform.paths().data_dir.clone());
+        spec.args = args.into_iter().map(Into::into).collect();
+        spec.cwd = Some(cwd);
         spec.env
             .push(("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), "5m".into()));
         let process::Spawned {
@@ -255,6 +270,33 @@ impl Claude {
                 "",
                 "--settings",
                 r#"{"autoMemoryEnabled":false}"#,
+            ]
+            .map(str::to_owned),
+        );
+        args
+    }
+
+    /// [`Self::control_args`] for [`Provider::commands`]: the user's settings, and the
+    /// project's and their local ones in a folder they trust, as a thread's
+    /// ([`Self::session_flags`]), so their skills and plugins count; with no hooks run and no
+    /// MCP servers started for a listing.
+    fn commands_args(trusted: bool) -> Vec<String> {
+        let mut args = Self::stream_args();
+        args.extend(
+            [
+                "--verbose",
+                "--no-session-persistence",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--setting-sources",
+                if trusted {
+                    "user,project,local"
+                } else {
+                    "user"
+                },
+                "--settings",
+                r#"{"autoMemoryEnabled":false,"disableAllHooks":true}"#,
             ]
             .map(str::to_owned),
         );
@@ -1114,6 +1156,25 @@ impl Provider for Claude {
         })
     }
 
+    fn commands(
+        &self,
+        folder: Option<PathBuf>,
+        trusted: bool,
+    ) -> BoxFuture<'_, Result<Vec<CliCommand>>> {
+        Box::pin(async move {
+            let folder = folder.unwrap_or_else(|| self.platform.paths().data_dir.clone());
+            let mut initialize = Map::new();
+            initialize.insert("subtype".into(), "initialize".into());
+            let answers = self
+                .control_in(Self::commands_args(trusted), folder, vec![initialize])
+                .await?;
+            Ok(answers
+                .first()
+                .map(|answer| parse::commands(answer, &[]))
+                .unwrap_or_default())
+        })
+    }
+
     fn quota(&self) -> BoxFuture<'_, Result<QuotaSnapshot>> {
         Box::pin(async move {
             let mut usage = Map::new();
@@ -1290,6 +1351,7 @@ impl Provider for Claude {
                 events: Events::new(events_tx, spec.redactor.clone()),
                 turn_active: AtomicBool::new(false),
                 next_request: AtomicU64::new(1),
+                commands: Mutex::new(Vec::new()),
             });
             let (parser_tx, parser_rx) = mpsc::unbounded_channel();
             tokio::spawn(read_loop(
@@ -1304,6 +1366,11 @@ impl Provider for Claude {
                     .collect(),
                 session_files,
             ));
+            let own_servers: Vec<String> = spec
+                .mcp_servers
+                .iter()
+                .map(|server| server.name.clone())
+                .collect();
             let mut session = ClaudeSession {
                 native_id: native_id.clone(),
                 context_window: None,
@@ -1325,6 +1392,7 @@ impl Provider for Claude {
                     return Err(err);
                 }
             };
+            *lock(&session.shared.commands) = parse::commands(&answer, &own_servers);
             session.context_window = session.startup_window(cli_version.as_deref()).await;
             let model = spec.model.clone().or_else(|| {
                 answer
@@ -1615,7 +1683,7 @@ impl Replayer for ClaudeReplayer {
             .into_iter()
             .filter_map(|output| match output {
                 Output::Event(event) => Some(event),
-                Output::Control(_) => None,
+                Output::Control(_) | Output::Commands(_) => None,
             })
             .collect();
         for event in &events {
@@ -1635,6 +1703,9 @@ struct Shared {
     events: Events,
     turn_active: AtomicBool,
     next_request: AtomicU64,
+    /// What the session runs from a message: what `initialize` said ([`parse::commands`]),
+    /// with what `system/init` added since ([`parse::merge_commands`]).
+    commands: Mutex<Vec<CliCommand>>,
 }
 
 enum ParserCommand {
@@ -1752,6 +1823,10 @@ impl ClaudeSession {
 impl ProviderSession for ClaudeSession {
     fn context_window(&self) -> Option<i64> {
         self.context_window
+    }
+
+    fn commands(&self) -> BoxFuture<'_, Vec<CliCommand>> {
+        Box::pin(async { lock(&self.shared.commands).clone() })
     }
 
     fn native_id(&self) -> String {
@@ -1902,6 +1977,9 @@ async fn read_loop(
                 Output::Event(event) => {
                     // When nobody listens any more, keep draining so the CLI never blocks.
                     shared.events.send(event).await;
+                }
+                Output::Commands(names) => {
+                    parse::merge_commands(&mut lock(&shared.commands), names);
                 }
                 Output::Control(Control::Response { request_id, result }) => {
                     if let Some(reply) = lock(&shared.pending).remove(&request_id) {

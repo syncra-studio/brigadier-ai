@@ -51,6 +51,9 @@ mockIPC((command, payload) => {
     case "listFiles":
       listings.push(`session:${req.conversationId}`);
       return { method: req.method, files: FILES, truncated: false };
+    case "listCliCommands":
+      // As the session's CLI reports them: one of the user's skills.
+      return { method: req.method, commands: [{ name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
     case "listProjectFiles":
       listings.push(`project:${req.projectId}`);
       return { method: req.method, files: FILES, truncated: false };
@@ -147,9 +150,29 @@ async function exercise(mode: "rich" | "plain") {
   seen.slashAfterSpaces = true;
   await key("Escape");
   await clear();
+  // Mid-text after a space too, with what the CLI runs; picking one types it there.
   await type("a /");
+  await until("the / menu mid-text", () => commands() !== null);
+  seen.slashMidSentence = true;
+  await type("gri");
+  await until("the CLI's skill", () => commands()?.textContent?.includes("grill-me") === true);
+  await key("Enter");
+  await until("the skill typed", () => commands() === null && typed().includes("grill-me"));
+  seen.picked = typed().replaceAll("\u00a0", " ").trimEnd();
+  await clear();
+  // In the middle of a message, the text after it kept.
+  await type("z tail");
+  for (let step = 0; step < 5; step++) await key("ArrowLeft");
+  await type(" /gri");
+  await until("the / menu in the middle", () => commands()?.textContent?.includes("grill-me") === true);
+  await key("Enter");
+  await until("the skill typed in the middle", () => commands() === null && typed().includes("grill-me"));
+  seen.pickedInside = typed().replaceAll("\u00a0", " ");
+  await clear();
+  // Never inside a word: a path.
+  await type("see a/");
   await sleep(150);
-  seen.slashMidSentence = commands() !== null;
+  seen.slashInWord = commands() !== null;
   await clear();
 
   // A new chat: the @ menu has the other conversations, and no files.

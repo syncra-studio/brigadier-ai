@@ -130,6 +130,11 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           // or it would close as it opens.
           onOpenModel={() => requestAnimationFrame(() => openModel(true))}
           permission={permissionLevel && { level: permissionLevel, onOpen: () => requestAnimationFrame(() => setPermissionOpen(true)) }}
+          draft={conversation ? null : {
+            provider: resolved.model.provider,
+            projectId: resolved.kind === "session" ? (resolved.project?.id ?? null) : null,
+            repo: resolved.kind === "session" ? resolved.repoPath : null,
+          }}
         />
         {/* Hidden, not unmounted, while the slash or + menu is open over it. */}
         <ComposerRail className="transition-[opacity,visibility] group-has-[[data-slot=composer-commands]]/composer:invisible group-has-[[data-slot=composer-commands]]/composer:opacity-0 group-has-[[data-slot=plus-trigger][data-state=open]]/composer:invisible group-has-[[data-slot=plus-trigger][data-state=open]]/composer:opacity-0">

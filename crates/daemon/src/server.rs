@@ -1314,6 +1314,7 @@ fn answered_beside(request: &Request) -> bool {
             | Request::FindProjects
             | Request::FindRepos
             | Request::GetRepoInfo { .. }
+            | Request::ListCliCommands { .. }
             | Request::BrowseFolders { .. }
             | Request::CheckFolder { .. }
             | Request::AddProject { .. }
@@ -1592,6 +1593,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::GetRepoInfo { path } => Response::GetRepoInfo {
             repo: heap(|| sessions.repo_info(path)).await?,
+        },
+        Request::ListCliCommands {
+            conversation_id,
+            provider,
+            project_id,
+            repo,
+        } => Response::ListCliCommands {
+            commands: heap(|| sessions.cli_commands(conversation_id, provider, project_id, repo))
+                .await?,
         },
         Request::FindProjects => Response::FindProjects {
             candidates: heap(|| sessions.find_projects()).await?,

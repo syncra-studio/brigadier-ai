@@ -1,6 +1,9 @@
 import { useAui, useAuiState, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { type FC, useContext, useMemo, useState } from "react";
 
+import { cliMenuCommands, conversationProvider } from "@/app/conversation/cliCommands";
+import { useCliCommands } from "@/app/conversation/useCliCommands";
+import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
@@ -20,10 +23,11 @@ import {
   Lightbulb,
   Pencil,
   Pin,
+  ProviderGlyph,
   SettingsSlider,
   Unpin,
 } from "@/components/icons";
-import type { Conversation, PermissionLevel } from "@/ipc/generated";
+import type { Conversation, PermissionLevel, ProviderKind } from "@/ipc/generated";
 import { PERMISSION_LABELS, useCanCompact } from "@/lib/setup";
 import {
   archive,
@@ -62,7 +66,8 @@ export function useLatestAnswer(): string | null {
  * The `/` menu in the composer, with the commands that mean something in Brigadier: Archive,
  * Compact (Chats whose CLI compacts), Fork, Init (sessions), Model, New, Permissions (where the
  * composer has its pill), Pin, Rename, Start as a new session (a project's sessions) and Status. A
- * draft has only Model and Permissions.
+ * draft has only Model and Permissions. Below them, under the CLI's name, what the CLI itself
+ * says it runs from a message (its commands, skills and MCP prompts); picking one types it.
  */
 export const SlashCommands: FC<{
   conversation: Conversation | null;
@@ -71,7 +76,9 @@ export const SlashCommands: FC<{
   onOpenModel: () => void;
   /** The level the permission pill shows, and opening its menu; null where there is no pill. */
   permission?: { level: PermissionLevel; onOpen: () => void } | null;
-}> = ({ conversation, groups, onOpenModel, permission = null }) => {
+  /** A draft's CLI, and the project and folder a new session would start in. */
+  draft?: { provider: ProviderKind; projectId: string | null; repo: string | null } | null;
+}> = ({ conversation, groups, onOpenModel, permission = null, draft = null }) => {
   const aui = useAui();
   const status = useContext(StatusCardContext);
   const compactable = useCanCompact(conversation?.setup);
@@ -82,6 +89,8 @@ export const SlashCommands: FC<{
   const { run, error } = useAction();
   const [renaming, setRenaming] = useState(false);
   const [forking, setForking] = useState(false);
+  const [listed, refreshListed] = useCliCommands(conversation ? { conversation } : draft);
+  const provider = conversation ? conversationProvider(conversation) : (draft?.provider ?? null);
 
   const commands = useMemo<ComposerCommand[]>(() => {
     const model: ComposerCommand = {
@@ -243,10 +252,20 @@ export const SlashCommands: FC<{
     }
     return list.toSorted((a, b) => a.label.localeCompare(b.label));
   }, [conversation, groups, answer, compactable, share, onOpenModel, permission, status, run, aui]);
+  const menu = useMemo(
+    () => [
+      ...commands,
+      ...cliMenuCommands(listed, commands, {
+        name: provider ? PROVIDER_LABELS[provider] : undefined,
+        icon: provider ? <ProviderGlyph provider={provider} className="size-icon-sm" /> : <Bolt />,
+      }),
+    ],
+    [commands, listed, provider],
+  );
 
   return (
     <>
-      <ComposerCommands commands={commands} />
+      <ComposerCommands commands={menu} onOpen={refreshListed} />
       {error && (
         <p role="alert" className="text-destructive absolute bottom-full start-0 mb-2 text-xs">
           {error}

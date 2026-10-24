@@ -25,6 +25,7 @@ mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod cli;
+mod cli_commands;
 mod cli_ledger;
 mod cli_thread;
 mod cli_tools;
@@ -167,6 +168,8 @@ pub struct SessionManager {
     mcp_auth: Arc<mcp_auth::McpAuth>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
+    /// The `/` menu's answers of CLIs that haven't started ([`cli_commands`]).
+    cli_command_probes: cli_commands::Probes,
     /// What plain workers' CLIs did that their parents haven't heard yet, kept (S29).
     worker_events: worker_events::WorkerEvents,
     /// When each working worker's CLI last said anything, for its `quiet` event.
@@ -380,6 +383,7 @@ impl SessionManager {
             )),
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
+            cli_command_probes: Default::default(),
             worker_events: Default::default(),
             worker_quiet: Default::default(),
             session_turns: tokio::sync::Notify::new(),

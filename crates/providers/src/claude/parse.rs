@@ -34,6 +34,10 @@ pub enum Control {
 pub enum Output {
     Event(ProviderEvent),
     Control(Control),
+    /// What `system/init` lists as run from a message (`slash_commands`), by name, Brigadier's
+    /// own servers' prompts left out: it has the prompts of MCP servers that connected after
+    /// `initialize` answered ([`merge_commands`]).
+    Commands(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -796,6 +800,18 @@ impl Parser {
                     self.cwd = Some(cwd.to_owned());
                 }
                 self.mcp_servers(value, out);
+                if let Some(names) = value.get("slash_commands").and_then(Value::as_array) {
+                    let names = names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|name| {
+                            mcp_prompt(name)
+                                .is_none_or(|(server, _)| !self.own_mcp.contains(server))
+                        })
+                        .map(str::to_owned)
+                        .collect();
+                    out.push(Output::Commands(names));
+                }
                 if !self.started {
                     self.started = true;
                     out.push(Output::Event(ProviderEvent::SessionStarted {
@@ -1770,6 +1786,73 @@ fn slash_command(text: &str) -> Option<String> {
     })
 }
 
+/// What `initialize` says the session runs from a message (`commands`): its built-in commands,
+/// skills, plugin commands and MCP prompts (`github:triage (MCP)`), each typed as `/` and its
+/// name. Left out: the prompts of Brigadier's own MCP servers (`own_servers`), and the
+/// internal ones Claude marks with a leading `__`.
+pub fn commands(answer: &Value, own_servers: &[String]) -> Vec<CliCommand> {
+    let text = |command: &Value, key: &str| {
+        command
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let own_prompt = |name: &str| {
+        name.strip_suffix(" (MCP)")
+            .and_then(|prompt| prompt.split_once(':'))
+            .is_some_and(|(server, _)| own_servers.iter().any(|own| own == server))
+    };
+    answer
+        .get("commands")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|command| {
+            let name = text(command, "name")?;
+            if name.starts_with("__") || own_prompt(&name) {
+                return None;
+            }
+            Some(CliCommand {
+                text: format!("/{name}"),
+                description: text(command, "description"),
+                argument_hint: text(command, "argumentHint"),
+                name,
+            })
+        })
+        .collect()
+}
+
+/// An MCP prompt's server and name, from the name `system/init` lists it by
+/// (`mcp__github__triage`).
+fn mcp_prompt(name: &str) -> Option<(&str, &str)> {
+    name.strip_prefix("mcp__")?
+        .split_once("__")
+        .filter(|(server, prompt)| !server.is_empty() && !prompt.is_empty())
+}
+
+/// Adds to what `initialize` listed ([`commands`]) the names `system/init` lists beside them
+/// ([`Output::Commands`]), an MCP prompt by the name `initialize` gives one
+/// (`github:triage (MCP)`, which runs it as its `mcp__` name does).
+pub fn merge_commands(known: &mut Vec<CliCommand>, names: Vec<String>) {
+    for name in names {
+        let name = match mcp_prompt(&name) {
+            Some((server, prompt)) => format!("{server}:{prompt} (MCP)"),
+            None => name,
+        };
+        if name.starts_with("__") || known.iter().any(|command| command.name == name) {
+            continue;
+        }
+        known.push(CliCommand {
+            text: format!("/{name}"),
+            name,
+            description: None,
+            argument_hint: None,
+        });
+    }
+}
+
 /// Claude's usage windows: the 5-hour session window, the weekly one, and weekly windows that
 /// meter one model family (`seven_day_opus`). Other `rate_limits` entries (overage, extra
 /// usage, internal buckets) are not windows work waits on.
@@ -2501,7 +2584,7 @@ mod tests {
             .flat_map(|line| parser.feed(&line.to_string()))
             .filter_map(|output| match output {
                 Output::Event(event) => Some(event),
-                Output::Control(_) => None,
+                Output::Control(_) | Output::Commands(_) => None,
             })
             .collect();
         assert!(
@@ -2828,6 +2911,95 @@ mod tests {
                 read("/r/c.rs", None),
             ]
         );
+    }
+
+    /// The `/` menu lists what `initialize` reports (checked live on 2.1.310): built-ins,
+    /// the user's and the project's skills, plugin commands and MCP prompts, typed as
+    /// `/name`; Brigadier's own server's prompts and Claude's internal entries stay out.
+    #[test]
+    fn commands_are_what_initialize_reports() {
+        let answer = json!({"commands": [
+            {"name": "compact", "description": "Clear history but keep a summary", "argumentHint": "<instructions>"},
+            {"name": "grill-me", "description": "A relentless interview. (user)", "argumentHint": ""},
+            {"name": "w03-proj-skill", "description": "Project skill. (project)", "argumentHint": ""},
+            {"name": "code-review", "description": "Review the diff", "argumentHint": "[level]"},
+            {"name": "w03p:greet (MCP)", "description": "Greet someone", "argumentHint": ""},
+            {"name": "brigadier:status (MCP)", "description": "Brigadier's own", "argumentHint": ""},
+            {"name": "__remote-workflow", "description": "internal", "argumentHint": ""},
+            {"description": "no name"},
+        ]});
+        let listed = commands(&answer, &["brigadier".to_owned()]);
+        let names: Vec<_> = listed.iter().map(|command| command.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "compact",
+                "grill-me",
+                "w03-proj-skill",
+                "code-review",
+                "w03p:greet (MCP)"
+            ]
+        );
+        assert_eq!(
+            listed[0],
+            CliCommand {
+                name: "compact".into(),
+                text: "/compact".into(),
+                description: Some("Clear history but keep a summary".into()),
+                argument_hint: Some("<instructions>".into()),
+            }
+        );
+        assert_eq!(listed[1].argument_hint, None);
+        assert_eq!(listed[4].text, "/w03p:greet (MCP)");
+        assert!(commands(&json!({}), &[]).is_empty());
+    }
+
+    /// A project's MCP servers connect after `initialize` answered (checked live on 2.1.310):
+    /// their prompts come in `system/init`'s `slash_commands`, and join the list there.
+    #[test]
+    fn init_adds_the_prompts_of_servers_that_connected_late() {
+        let mut parser = Parser::live();
+        parser.own_mcp = HashSet::from(["brigadier".to_owned()]);
+        let init = json!({
+            "type": "system", "subtype": "init", "session_id": "s", "cwd": "/p",
+            "slash_commands": ["compact", "grill-me", "mcp__w03p__greet", "mcp__brigadier__status"],
+        });
+        let names = parser
+            .feed(&init.to_string())
+            .into_iter()
+            .find_map(|output| match output {
+                Output::Commands(names) => Some(names),
+                _ => None,
+            })
+            .expect("the init's commands");
+        assert_eq!(names, ["compact", "grill-me", "mcp__w03p__greet"]);
+
+        let mut known = commands(
+            &json!({"commands": [
+                {"name": "compact", "description": "Summarize", "argumentHint": ""},
+                {"name": "grill-me", "description": "Interview", "argumentHint": ""},
+            ]}),
+            &[],
+        );
+        merge_commands(&mut known, names);
+        merge_commands(
+            &mut known,
+            vec!["mcp__w03p__greet".into(), "late-skill".into()],
+        );
+        let listed: Vec<_> = known
+            .iter()
+            .map(|command| (command.name.as_str(), command.text.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("compact", "/compact"),
+                ("grill-me", "/grill-me"),
+                ("w03p:greet (MCP)", "/w03p:greet (MCP)"),
+                ("late-skill", "/late-skill"),
+            ]
+        );
+        assert_eq!(known[0].description.as_deref(), Some("Summarize"));
     }
 
     #[test]

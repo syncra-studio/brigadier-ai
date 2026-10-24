@@ -149,6 +149,19 @@ pub trait Provider: Send + Sync {
         let _ = (native_id, needle);
         Box::pin(async { false })
     }
+
+    /// What a session of this CLI would run from its `/` menu in `folder` (the CLI's own
+    /// default without one), before any session there started: asked of the CLI itself, as
+    /// [`ProviderSession::commands`] is. `trusted`: the user trusts the folder, so the
+    /// project's own setup (its skills, its commands) counts.
+    fn commands(
+        &self,
+        folder: Option<PathBuf>,
+        trusted: bool,
+    ) -> BoxFuture<'_, Result<Vec<CliCommand>>> {
+        let _ = (folder, trusted);
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// A CLI session continued in a terminal: the resolved binary (never a name looked up on a
@@ -204,6 +217,12 @@ pub trait ProviderSession: Send + Sync {
                 "this CLI cannot stop a background task".into(),
             ))
         })
+    }
+
+    /// What the session runs when a message holds it ([`CliCommand`]), as its CLI reports
+    /// them now: empty when the CLI reports none.
+    fn commands(&self) -> BoxFuture<'_, Vec<CliCommand>> {
+        Box::pin(async { Vec::new() })
     }
 
     /// Answers an [`ProviderEvent::ApprovalRequested`].

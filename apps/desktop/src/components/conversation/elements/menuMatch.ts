@@ -24,15 +24,13 @@ export function fuzzyMatch(text: string, query: string): { rank: 0 | 1 | 2; at: 
 }
 
 /**
- * `/` opens the commands menu as the message's first character, after any spaces or blank
- * lines; the menu closes at a space after it.
+ * `/` opens the commands menu where a word starts: at the start of the message or of a line,
+ * or after a space, anywhere in the text. Never inside a word (a path like `src/a`, a link like
+ * `http://x/y`); the menu closes at a space after it.
  */
 export const slashTrigger: Unstable_TriggerMatcher = (text, char, cursor) => {
-  const lead = /^\s*/u.exec(text)?.[0].length ?? 0;
-  if (!text.startsWith(char, lead)) return null;
-  const start = lead + char.length;
-  if (cursor < start) return null;
-  const query = text.slice(start, cursor);
-  if (/\s/u.test(query)) return null;
-  return { query, offset: lead, endOffset: cursor };
+  // The word the caret is in, from the space or line start before it.
+  const word = /\S*$/u.exec(text.slice(0, cursor))?.[0] ?? "";
+  if (!word.startsWith(char)) return null;
+  return { query: word.slice(char.length), offset: cursor - word.length, endOffset: cursor };
 };
