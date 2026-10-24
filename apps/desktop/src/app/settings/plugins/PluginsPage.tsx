@@ -13,7 +13,7 @@ import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { ATTENTION_TONE, elsewhereLine, has, needsAttention, projectSummary, sections, TAB_LABEL, type Row } from "./model";
+import { ATTENTION_TONE, elsewhereLine, has, needsAttention, placesOf, projectSummary, sections, spreadOf, TAB_LABEL, type Row } from "./model";
 import { FoldCard, PluginRow } from "./parts";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use. Pick a project to choose what's on there.";
@@ -88,6 +88,17 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     });
   };
 
+  /** A Library item some agents are missing: each of them gets it where the others have it. */
+  const addMissing = (item: PluginItemView) => {
+    if (!adapter) return;
+    action.run(async () => {
+      for (const { agent } of item.agents.filter((entry) => entry.state.type === "missing")) {
+        for (const where of placesOf(view, item)) await checked(view, () => adapter.switchPlugin(item.key, where, true, agent));
+      }
+      refresh();
+    });
+  };
+
   const current = selected ? find(selected) : undefined;
   let page;
   if (current && adapter) {
@@ -106,6 +117,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           }),
           onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key }) : undefined,
           onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
+          onAddMissing: () => addMissing(current),
           onRemove: () => setOpen({ type: "remove", key: current.key }),
           onRetry: refresh,
           onUpdate: () => action.run(async () => {
@@ -141,6 +153,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           onProject={onProject}
           onOpen={(item) => setSelected(item.key)}
           onFlip={(item, on) => flip(item, on)}
+          onAddMissing={addMissing}
           onDialog={setOpen}
         />
       </SettingsPage>
@@ -191,7 +204,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   );
 }
 
-function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onDialog }: {
+function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onAddMissing, onDialog }: {
   view: PluginsView;
   focus: PluginProjectView | null;
   tab: PluginKind;
@@ -203,6 +216,7 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
   onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
+  onAddMissing: (item: PluginItemView) => void;
   onDialog: (open: Open) => void;
 }) {
   const attention = needsAttention(view);
@@ -229,6 +243,7 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
           <SettingsCard>
             {attention.map((item) => {
               const kind = item.attention!.type;
+              const spread = kind === "notEverywhere" ? spreadOf(item) : null;
               return (
                 <PluginRow
                   key={item.key}
@@ -238,13 +253,13 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
                   lit={(state) => state.type === "ready" || state.type === "working"}
                   onOpen={() => onOpen(item)}
                   end={
-                    kind === "signIn" && !adapter?.signIn ? undefined : <Button
+                    (kind === "signIn" && !adapter?.signIn) || (kind === "notEverywhere" && !spread) ? undefined : <Button
                       variant="soft"
                       size="sm"
-                      disabled={!adapter}
-                      onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : onDialog({ type: "useEverywhere", key: item.key }))}
+                      disabled={kind === "notEverywhere" ? busy : !adapter}
+                      onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : spread === "addMissing" ? onAddMissing(item) : onDialog({ type: "useEverywhere", key: item.key }))}
                     >
-                      {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : "Use everywhere"}
+                      {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : spread === "addMissing" ? "Add to every agent" : "Use everywhere"}
                     </Button>
                   }
                 />

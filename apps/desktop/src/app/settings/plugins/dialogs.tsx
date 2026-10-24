@@ -52,6 +52,12 @@ export function failures(view: PluginsView, results: PluginAgentResult[]): strin
   return failed.map((result) => `${labelOf(view, result.agent)}: ${result.message ?? "it didn't take the change."}`).join("\n");
 }
 
+/** What the user should know although every agent took a change: "sentry is added, but it didn't start: …". */
+export function notes(results: PluginAgentResult[]): string | null {
+  const said = [...new Set(results.filter((result) => result.ok && result.message).map((result) => result.message!))];
+  return said.length ? said.join("\n") : null;
+}
+
 /** Runs `action` and throws what the agents that didn't take it said. */
 export async function checked(view: PluginsView, action: () => Promise<PluginAgentResult[]>): Promise<PluginAgentResult[]> {
   const results = await action();
@@ -86,10 +92,17 @@ export function UseEverywhereDialog({ view, item, adapter, onClose, onDone }: {
   const holder = holders(view, item);
   const kinds = TAB_LABEL[item.kind].toLowerCase().replace("mcp", "MCP");
   const confirm = () => action.run(async () => {
-    await checked(view, () => adapter.everyAgent(item.key));
+    // Undo takes the Library's copy it made, not the item it came from.
+    let copy: string | null = null;
+    await checked(view, async () => {
+      const done = await adapter.everyAgent(item.key);
+      copy = done.key;
+      return done.results;
+    });
     onClose();
+    const undo = copy;
     toast(`${item.name} is in every agent now`, {
-      actions: [{ label: "Undo", run: () => void adapter.undoEveryAgent(item.key).catch((cause: unknown) => toast(String(cause), { tone: "error" })) }],
+      actions: undo ? [{ label: "Undo", run: () => void adapter.undoEveryAgent(undo).catch((cause: unknown) => toast(String(cause), { tone: "error" })) }] : [],
     });
     onDone?.();
   });

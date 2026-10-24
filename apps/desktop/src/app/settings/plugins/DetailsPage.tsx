@@ -4,7 +4,7 @@ import { Folder } from "@/components/icons";
 import { Banner, CopyButton, SettingsCard } from "@/components/shared";
 import type { AgentItemState, PluginItemView, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
-import { agentsIn, isOn, KIND_LABEL, listNames, projectName, shownDetail, wontStartReason, type Tone } from "./model";
+import { agentsIn, isOn, KIND_LABEL, listNames, projectName, shownDetail, spreadOf, wontStartReason, type Tone } from "./model";
 import { AgentRow, FoldCard, ItemMark, StateBadge, stateOf } from "./parts";
 
 /** What the details page can ask of the list page that holds it. */
@@ -17,6 +17,8 @@ type DetailsActions = {
   /** Absent while the agents can't be signed in from here. */
   onSignIn?: (() => void) | undefined;
   onUseEverywhere: () => void;
+  /** A Library item: gives it to the agents missing it. */
+  onAddMissing: () => void;
   onRemove: () => void;
   onRetry: () => void;
   onUpdate: () => void;
@@ -126,6 +128,15 @@ function AttentionBanner({ view, item, actions }: { view: PluginsView; item: Plu
     return (
       <Banner tone="warning" text={`${who} ${agentsIn(view, item, "needsSignIn").length === 1 ? "needs" : "need"} you to sign in to ${item.name}. Until then, ${who} sessions can't use it.`}>
         {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
+      </Banner>
+    );
+  }
+  const spread = spreadOf(item);
+  if (!spread) return <Banner tone="info" text={`${attention.message} It came in that agent's own plugin, so the other agents can't add it.`} />;
+  if (spread === "addMissing") {
+    return (
+      <Banner tone="info" text={`${attention.message} Add it to every agent and they all get it.`}>
+        <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onAddMissing}>Add to every agent</Button>
       </Banner>
     );
   }

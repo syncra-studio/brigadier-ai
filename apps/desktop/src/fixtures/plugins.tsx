@@ -157,10 +157,12 @@ const adapter: PluginsAdapter = {
     changed();
     return ok();
   },
-  checkAdd: async (text) => {
-    calls.push(`checkPluginAdd ${text}`);
-    if (!text.includes("sentry")) return [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, error: "That doesn't look like an MCP server or a skill." }];
-    return [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, error: null }];
+  checkAdd: async (text, name) => {
+    calls.push(`checkPluginAdd ${text}${name ? ` name ${name}` : ""}`);
+    // A bare server object has no name of its own.
+    if (text.startsWith("{")) return name ? { drafts: [{ name, kind: "server", detail: "docs", remote: false, signsIn: false, error: null }], needsName: false } : { drafts: [], needsName: true };
+    if (!text.includes("sentry")) return { drafts: [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, error: "That doesn't look like an MCP server or a skill." }], needsName: false };
+    return { drafts: [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, error: null }], needsName: false };
   },
   add: (_text, name, projectId, shared) => {
     calls.push(`addPlugin ${name ?? "-"} ${projectId ?? "everywhere"} ${shared ? "shared" : "just me"}`);
@@ -181,7 +183,7 @@ const adapter: PluginsAdapter = {
     const item = spec(key)!;
     Object.assign(item, { key: `lib:${item.name}`, library: true, only: undefined, attention: undefined, switchable: true });
     changed();
-    return ok();
+    return { results: ok(), key: item.key };
   },
   undoEveryAgent: async (key) => {
     calls.push(`undoUseEverywhere ${key}`);
@@ -425,6 +427,43 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   seen.added = read();
   seen.addCalls = calls.filter((call) => call.startsWith("addPlugin"));
+
+  // A name the paste lacks is asked for in place, then sent; a warning from a good add shows.
+  await reset(setKey);
+  click("Add");
+  await pause();
+  type("What to add", '{"command":"docs"}');
+  await pause();
+  const named = calls.length;
+  click("Continue");
+  await pause(120);
+  seen.askName = read();
+  type("Name", "docs");
+  await pause();
+  click("Continue");
+  await pause(120);
+  click("Add", document.querySelector("[data-dialog]")!);
+  await pause(120);
+  adding?.resolve(agents.map(({ agent }, index) => ({ agent, ok: true, message: index === 0 ? "docs is added, but it didn't start: docs: command not found." : null })));
+  await pause(120);
+  seen.addedWithWarning = read();
+  seen.nameCalls = calls.slice(named).filter((call) => !call.startsWith("switch"));
+
+  // Only some agents have it: a Library item goes to the rest where the others have it; another
+  // agent's plugin has no fix to offer.
+  await reset(setKey);
+  Object.assign(spec("lib:delegator")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  Object.assign(spec("plugin:higgsfield/higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  usePlugins.getState().refresh();
+  await pause(120);
+  seen.partial = read();
+  const spread = calls.length;
+  click("Add to every agent");
+  await pause(120);
+  seen.spreadCalls = calls.slice(spread);
+  click("Open higgsfield");
+  await pause(120);
+  seen.pluginBanner = read();
 
   // Details: the Projects card's switches, Remove, and a project note's fix.
   await open("D3");

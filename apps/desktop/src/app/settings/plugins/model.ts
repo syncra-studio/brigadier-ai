@@ -145,6 +145,24 @@ export const ATTENTION_TONE: Record<NonNullable<PluginItemView["attention"]>["ty
   notEverywhere: "muted",
 };
 
+/**
+ * What fixes an item only some agents have: a Library item is added to the agents missing it
+ * ("addMissing"); another agent's plugin can't go to the others (null); anything else goes into
+ * the Library first ("useEverywhere").
+ */
+export function spreadOf(item: PluginItemView): "addMissing" | "useEverywhere" | null {
+  if (item.key.startsWith("lib:")) return "addMissing";
+  if (item.key.startsWith("plugin:")) return null;
+  return "useEverywhere";
+}
+
+/** Where a Library item goes for the agents missing it: where the others have it, by project id (null: every project). */
+export function placesOf(view: PluginsView, item: PluginItemView): (string | null)[] {
+  if (item.everywhere) return [null];
+  const ids = item.onIn.flatMap((path) => view.projects.find((project) => project.path === path)?.id ?? []);
+  return ids.length ? ids : [null];
+}
+
 /** A project's summary in the filter: "2 of its own · 2 turned off". */
 export function projectSummary(view: PluginsView, project: PluginProjectView): string {
   const own = view.items.filter((item) => !item.everywhere && item.onIn.includes(project.path)).length;

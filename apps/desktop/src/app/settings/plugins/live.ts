@@ -10,21 +10,26 @@ const POLL_MS = 5000;
 /** How often a running change is asked how it goes. */
 const JOB_MS = 300;
 
-/** Waits for change `id` to finish; each agent's part, or why it stopped. */
-async function finished(id: string): Promise<PluginAgentResult[]> {
+/** Waits for change `id` to finish. */
+async function settled(id: string): Promise<PluginJobView> {
   for (;;) {
     const { job } = await request({ method: "getPluginJob", id });
-    if (job.finished) return results(job);
+    if (job.finished) return job;
     await new Promise((resolve) => setTimeout(resolve, JOB_MS));
   }
 }
 
+/** Waits for change `id` to finish; each agent's part, or why it stopped. */
+const finished = async (id: string): Promise<PluginAgentResult[]> => results(await settled(id));
+
 function results(job: PluginJobView): PluginAgentResult[] {
   if (job.error) throw new Error(job.error);
+  // What the user should know although it worked goes with the first agent that did it.
+  const first = job.agents.findIndex(({ step }) => step.type === "done");
   return job.agents.map(({ agent, step }, index) => ({
     agent,
     ok: step.type !== "failed",
-    message: step.type === "failed" || step.type === "skipped" ? step.reason || null : index === 0 ? job.warning : null,
+    message: step.type === "failed" || step.type === "skipped" ? step.reason || null : index === first ? job.warning : null,
   }));
 }
 
@@ -69,10 +74,11 @@ export function livePlugins(): PluginsAdapter {
     },
     switchPlugin: async (key, projectId, on, agent) =>
       finished((await request({ method: "switchPlugin", key, projectId, on, agent: agent ?? null })).job),
-    checkAdd: async (text) => {
-      const { check } = await request({ method: "checkPluginAdd", text, name: null });
+    checkAdd: async (text, name) => {
+      const { check } = await request({ method: "checkPluginAdd", text, name });
+      if (check.needsName && !name?.trim()) return { drafts: [], needsName: true };
       if (check.error) throw new Error(check.error);
-      return check.items.map((item): PluginDraft => ({
+      const drafts = check.items.map((item): PluginDraft => ({
         name: item.name,
         kind: item.kind,
         detail: item.detail,
@@ -80,10 +86,14 @@ export function livePlugins(): PluginsAdapter {
         signsIn: item.remote && item.secrets.length === 0,
         error: null,
       }));
+      return { drafts, needsName: false };
     },
     add: async (text, name, projectId, shared) =>
       finished((await request({ method: "addPlugin", text, name, projectId, shared })).job),
-    everyAgent: async (key) => finished((await request({ method: "useEverywhere", key })).job),
+    everyAgent: async (key) => {
+      const job = await settled((await request({ method: "useEverywhere", key })).job);
+      return { results: results(job), key: job.keys[0] ?? null };
+    },
     undoEveryAgent: async (key) => finished((await request({ method: "undoUseEverywhere", key })).job),
     remove: async (key) => finished((await request({ method: "removePlugin", key })).job),
     update: async (key) => finished((await request({ method: "updatePlugin", key })).job),

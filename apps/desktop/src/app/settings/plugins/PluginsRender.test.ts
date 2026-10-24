@@ -239,7 +239,21 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.equal(seen.notSwitchable!.dialog!.title, "Use grill-me in every agent?");
   assert.deepEqual(seen.useEverywhereCalls, ["useEverywhere skill:grill-me", "switchPlugin lib:grill-me p-brigadier off"]);
   assert.deepEqual(seen.afterUseEverywhere!.toasts, ["grill-me is in every agent nowUndo"]);
-  assert.equal((seen.undoCalls as unknown as string[]).at(-1), "undoUseEverywhere skill:grill-me");
+  // Undo takes the Library's copy Use everywhere made.
+  assert.equal((seen.undoCalls as unknown as string[]).at(-1), "undoUseEverywhere lib:grill-me");
+
+  // A paste with no name asks for one in place; the add sends it; a good add's warning shows.
+  assert.match(seen.askName!.dialog!.text, /What you pasted has no name\. Give this server one\.Name/);
+  assert.equal(seen.askName!.dialog!.slot, "add");
+  assert.deepEqual(seen.nameCalls, ['checkPluginAdd {"command":"docs"}', 'checkPluginAdd {"command":"docs"} name docs', "addPlugin docs everywhere just me"]);
+  assert.match(seen.addedWithWarning!.dialog!.text, /docs is added, but it didn't start: docs: command not found\./);
+  assert.deepEqual(seen.addedWithWarning!.dialog!.buttons, ["Close", "Done"]);
+
+  // Only some agents have it: a Library item is added to the rest; another agent's plugin offers nothing.
+  const partial = section(seen.partial!, "Needs attention").rows;
+  assert.deepEqual([row(partial, "delegator").button, row(partial, "higgsfield").button, row(partial, "grill-me").button], ["Add to every agent", null, "Use everywhere"]);
+  assert.deepEqual(seen.spreadCalls, AGENTS.slice(1).map((agent) => `switchPlugin lib:delegator p-brigadier on ${agent}`));
+  assert.equal(seen.pluginBanner!.banner, "Only Claude Code has it. It came in that agent's own plugin, so the other agents can't add it.");
 
   // G7: Remove, from the details page; confirming goes back to the list.
   const g7 = seen.G7!.dialog!;
