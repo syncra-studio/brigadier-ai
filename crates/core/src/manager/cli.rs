@@ -137,6 +137,7 @@ pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> Worke
             .as_ref()
             .and_then(|workspace| workspace.branch.clone()),
         changes: diffs.get(&task.id).copied(),
+        context: None,
     }
 }
 
@@ -625,7 +626,10 @@ impl SessionManager {
             .iter()
             // A closed worker is gone from its session.
             .filter(|task| !task.plain.as_ref().is_some_and(|plain| plain.closed))
-            .map(|task| worker_row(task, &diffs))
+            .map(|task| WorkerRow {
+                context: self.worker_context(task),
+                ..worker_row(task, &diffs)
+            })
             .collect();
         Ok(WorkersOutput { session, workers })
     }

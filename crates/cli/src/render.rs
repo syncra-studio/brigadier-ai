@@ -93,6 +93,26 @@ pub fn sessions(output: &SessionsOutput) -> String {
     out
 }
 
+/// How full a worker's context is: "120k of 1M", "120k" without a known window, "-" unknown.
+fn context(context: Option<crate::protocol::ContextSize>) -> String {
+    fn tokens(n: i64) -> String {
+        if n >= 1_000_000 && n % 1_000_000 == 0 {
+            format!("{}M", n / 1_000_000)
+        } else if n >= 1_000 {
+            format!("{}k", n / 1_000)
+        } else {
+            n.to_string()
+        }
+    }
+    match context {
+        None => "-".into(),
+        Some(c) => match c.window_tokens {
+            Some(window) => format!("{} of {}", tokens(c.used_tokens), tokens(window)),
+            None => tokens(c.used_tokens),
+        },
+    }
+}
+
 fn worker_rows(workers: &[WorkerRow]) -> String {
     let mut rows = vec![vec![
         "ID".into(),
@@ -101,6 +121,7 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
         "AGENT".into(),
         "MODEL".into(),
         "CHANGES".into(),
+        "CONTEXT".into(),
         "TITLE".into(),
     ]];
     for worker in workers {
@@ -117,6 +138,7 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
             worker.agent.word().into(),
             model,
             changes(worker.changes),
+            context(worker.context),
             worker.title.clone(),
         ]);
     }

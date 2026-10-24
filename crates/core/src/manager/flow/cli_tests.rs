@@ -121,7 +121,10 @@ fn looking(answers: Answers) -> Script {
                     "worker workers",
                     brigadier(&turn, CliRequest::Workers).await,
                 );
-                return Reply::text("Reported: three lines.");
+                return Reply {
+                    context_tokens: Some(42_000),
+                    ..Reply::text("Reported: three lines.")
+                };
             }
             let Some(conversation) = turn.conversation() else {
                 return Reply::text("Noted.");
@@ -318,6 +321,11 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     assert_eq!(rows[0]["number"], 1);
     assert_eq!(rows[0]["title"], "Count the lines");
     assert_eq!(rows[0]["agent"], "claude");
+    // How full its context is, as its CLI said, for the parent to weigh reusing it (run2-D42).
+    assert_eq!(
+        rows[0]["context"],
+        json!({"usedTokens": 42_000, "windowTokens": 1_000_000})
+    );
 
     // A worker calls as itself: it sees the sidebar sessions, none as its own, and has no
     // workers.

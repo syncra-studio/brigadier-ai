@@ -428,6 +428,19 @@ pub struct WorkerRow {
     pub branch: Option<String>,
     /// What its worktree changed since it started; absent when it has none, or once it ended.
     pub changes: Option<Changes>,
+    /// How full its context is, as its CLI last said; absent until it said, or once it ended.
+    /// What the parent weighs before giving it more work instead of starting a new worker.
+    #[serde(default)]
+    pub context: Option<ContextSize>,
+}
+
+/// How much of a CLI's context is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSize {
+    pub used_tokens: i64,
+    /// Absent when neither the CLI nor Brigadier knows the model's window.
+    pub window_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

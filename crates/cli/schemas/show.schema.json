@@ -225,6 +225,30 @@
         },
         "changes": {
           "$ref": "#/$defs/changes"
+        },
+        "context": {
+          "description": "How full its context is, as its CLI last said; null before it said and once it ended.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "usedTokens",
+            "windowTokens"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "usedTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "windowTokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
         }
       }
     }

@@ -125,8 +125,9 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "workers",
         summary: "List this session's own workers.",
-        details: "Each row: id, number, state, agent, model, title, branch and lines added and \
-                  removed. These are the ids `send`, `wait` and `close` take.",
+        details: "Each row: id, number, state, agent, model, title, branch, lines added and \
+                  removed, and how full its context is. These are the ids `send`, `wait` and \
+                  `close` take.",
         args: &[],
         available: true,
         schema: include_str!("../schemas/workers.schema.json"),

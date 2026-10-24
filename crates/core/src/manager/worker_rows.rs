@@ -42,6 +42,9 @@ pub(crate) struct WorkerCli {
     sent_event_ms: Option<i64>,
     pub limit: Option<LimitHit>,
     pub fresh_context: bool,
+    /// The context it last said it holds, and its window when it said one. Not part of its
+    /// rows: `brigadier workers` reads it.
+    pub context: Option<(i64, Option<i64>)>,
     /// The open turn had an error the CLI won't retry.
     errored: bool,
     /// The open turn's user message, once its CLI said it.
@@ -77,6 +80,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
     cli.line = None;
     let before = WorkerCli {
         user_message: None,
+        context: None,
         ..cli.clone()
     };
     cli.last_event_ms = Some(at);
@@ -112,6 +116,10 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
             }
         }
         ProviderEvent::CompactionStarted { .. } => cli.fresh_context = true,
+        ProviderEvent::ContextSize {
+            used_tokens,
+            window_tokens,
+        } => cli.context = Some((*used_tokens, *window_tokens)),
         ProviderEvent::TurnCompleted { status, .. } if cli.open => {
             cli.open = false;
             cli.last_end = Some(match status {
@@ -132,6 +140,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
     let mut now = WorkerCli {
         user_message: None,
         line: None,
+        context: None,
         ..cli.clone()
     };
     now.last_event_ms = before.last_event_ms;
@@ -202,6 +211,29 @@ pub(crate) fn row(
 }
 
 impl SessionManager {
+    /// How full worker `task`'s context is, as its CLI last said, with its model's window when
+    /// known; `None` before it said, and once it ended or was closed.
+    pub(crate) fn worker_context(
+        &self,
+        task: &Task,
+    ) -> Option<brigadier_cli::protocol::ContextSize> {
+        if task.state.is_final() || task.plain.as_ref().is_some_and(|plain| plain.closed) {
+            return None;
+        }
+        let (used_tokens, reported) = self
+            .worker_rows
+            .cli
+            .lock()
+            .unwrap()
+            .get(&task.id)?
+            .context?;
+        let choice = &task.route.choice;
+        Some(brigadier_cli::protocol::ContextSize {
+            used_tokens,
+            window_tokens: self.model_window(choice.provider, choice.model.as_deref(), reported),
+        })
+    }
+
     /// Follows an event of worker `task`'s CLI (of session `conversation`) into its row.
     /// Answers the line it adds to the worker's `record/turns.jsonl` ([`Self::note_worker_turn`]).
     pub(super) fn note_worker_cli(
@@ -603,6 +635,22 @@ mod tests {
         follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);
         follow(&mut cli, &turn_end(TurnStatus::Completed), 7);
         assert_eq!(cli.last_end, Some(TurnEnd::Failed));
+    }
+
+    /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its
+    /// rows again: they don't show it.
+    #[test]
+    fn a_workers_context_size_is_kept_without_changing_its_row() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        let size = |used| ProviderEvent::ContextSize {
+            used_tokens: used,
+            window_tokens: Some(1_000_000),
+        };
+        assert!(!follow(&mut cli, &size(120_000), 2));
+        assert_eq!(cli.context, Some((120_000, Some(1_000_000))));
+        assert!(!follow(&mut cli, &size(130_000), 3));
+        assert_eq!(cli.context, Some((130_000, Some(1_000_000))));
     }
 
     fn said(id: &str) -> ProviderEvent {

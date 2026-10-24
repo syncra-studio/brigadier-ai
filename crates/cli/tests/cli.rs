@@ -138,6 +138,10 @@ fn worker_row() -> WorkerRow {
             insertions: 40,
             deletions: 2,
         }),
+        context: Some(ContextSize {
+            used_tokens: 120_000,
+            window_tokens: Some(1_000_000),
+        }),
     }
 }
 
@@ -224,6 +228,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     effort: None,
                     branch: None,
                     changes: None,
+                    context: None,
                     state: WorkerState::Done,
                     ..worker_row()
                 },
@@ -834,6 +839,9 @@ fn text_output_reads_well() {
     );
     let workers = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["workers"]));
     assert!(workers.contains("codex-model-1 (high)"), "{workers}");
+    // How full each worker's context is, to weigh reusing it (run2-D42).
+    assert!(workers.contains("CONTEXT"), "{workers}");
+    assert!(workers.contains("120k of 1M"), "{workers}");
     let read = stdout(&brigadier(
         Some(&dir.0),
         Some(GRANT),
