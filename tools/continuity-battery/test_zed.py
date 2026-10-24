@@ -1,6 +1,7 @@
 """Offline checks for the measured compaction algorithm; no network or model calls."""
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -57,7 +58,8 @@ class ZedTests(unittest.TestCase):
                           "p = patch('zed.urlopen', side_effect=OSError('offline')); p.start(); "
                           f"sys.exit({module}.main())")
                 ran = subprocess.run([sys.executable, "-B", "-c", source], cwd=Path(__file__).parent,
-                                     capture_output=True, text=True, timeout=20)
+                                     capture_output=True, text=True, timeout=20, env={**os.environ,
+                                         "BRIGADIER_BATTERY_EVIDENCE_DIR": str(Path(folder) / "private")})
                 self.assertEqual(ran.returncode, 0, ran.stderr)
                 result = json.loads(evidence.read_text())
                 self.assertEqual(result["status"], "skipped")
