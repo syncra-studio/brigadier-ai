@@ -456,7 +456,7 @@ async function drive(setKey: (key: number) => void) {
   // agent's plugin has no fix to offer.
   await reset(setKey);
   Object.assign(spec("lib:delegator")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
-  Object.assign(spec("plugin:higgsfield/higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  Object.assign(spec("plugin:higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
   usePlugins.getState().refresh();
   await pause(120);
   seen.partial = read();
