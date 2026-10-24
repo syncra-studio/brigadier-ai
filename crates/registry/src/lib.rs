@@ -20,9 +20,8 @@
 //! [`Catalog::skill_native`]. Values of a server's environment and headers are [`Secret`]s: only
 //! their names leave Brigadier's process, never their values.
 //!
-//! A remote server with no credentials in its config signs in with OAuth, which each CLI keeps in
-//! a store of its own: [`Catalog::sign_in`] says which stored sign-in can serve a session, from
-//! what a [`SignInStores`] reads ([`sign_ins`]).
+//! A remote server with no credentials in its config signs in with OAuth ([`Server::signs_in`]),
+//! through each CLI's own `mcp login`, which keeps it in the CLI's own store.
 //!
 //! [`Registry`] keeps the user's part current with a file watcher; a project's part is read when
 //! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
@@ -34,7 +33,6 @@ pub mod item;
 pub mod library;
 mod plugins;
 mod servers;
-mod sign_ins;
 mod skills;
 mod watch;
 
@@ -44,10 +42,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub use plugins::Plugin;
-pub use sign_ins::{
-    Owner, Probe, SignInStores, Unread, claude_key, claude_lock_name, codex_keys, identity,
-    owner_agent, sha256_hex,
-};
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
@@ -247,8 +241,7 @@ pub struct Server {
     pub project: Option<PathBuf>,
     pub transport: Transport,
     /// A remote server with no credentials of its own in the config: it signs in with OAuth,
-    /// which each agent does by itself (Codex: `codex mcp login`), so another agent's sign-in
-    /// doesn't serve it as such (docs/research/phase7-probes.md (f)): [`Catalog::sign_in`].
+    /// which each agent does by itself, with its own `mcp login`.
     pub signs_in: bool,
     /// The plugin it comes with ([`Source::ClaudePlugin`], [`Source::CodexPlugin`]).
     pub plugin: Option<Plugin>,
@@ -278,18 +271,6 @@ pub struct OAuthClient {
     pub client_secret: Option<Secret>,
 }
 
-/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum CodexStore {
-    /// The Keychain, else `$CODEX_HOME/.credentials.json` (its default).
-    #[default]
-    Auto,
-    File,
-    Keyring,
-    /// A value Brigadier doesn't know: its sign-ins aren't read.
-    Other,
-}
-
 /// A server, or a whole config file, that couldn't be read: no session gets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
@@ -307,26 +288,6 @@ pub struct Problem {
     pub read: Option<String>,
     /// Why, never quoting the config's text (it may hold a secret).
     pub error: String,
-}
-
-/// How a session's agent is signed in to a server that [`Server::signs_in`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignIn {
-    /// The agent has the server by itself, and its own sign-in serves it.
-    Native,
-    /// The sign-in another agent stored can serve it (read, and written back when renewed).
-    ReusableFrom(Agent),
-    /// Brigadier's own sign-in serves it, to every agent.
-    InBrigadier,
-    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
-    Needed,
-    /// Not known: a store couldn't be read without asking the user, or it failed.
-    Unknown,
-    /// The agent's stored sign-in can't be reused: the system wasn't allowed to let Brigadier
-    /// read it.
-    NotAllowed(Agent),
-    /// Sign-ins to it can't be checked or kept on this system.
-    Unsupported,
 }
 
 /// A session, as far as what it finds by itself goes.
@@ -366,8 +327,6 @@ pub struct Catalog {
     /// The plugins of Claude Code and Codex that are on: the user's and, read for a project,
     /// the project's.
     pub plugins: Vec<Plugin>,
-    /// Where Codex keeps its MCP sign-ins.
-    pub codex_store: CodexStore,
     /// The user's Codex servers the read project's own `.codex/config.toml` switches off
     /// (`[mcp_servers.<name>] enabled = false`), when Codex trusts the project.
     pub codex_off_here: Vec<String>,
@@ -399,7 +358,6 @@ impl Catalog {
                 .map(servers::codex_trusted)
                 .unwrap_or_default(),
             plugins: Vec::new(),
-            codex_store: codex.as_ref().map(servers::codex_store).unwrap_or_default(),
             codex_off_here: Vec::new(),
         };
         skills::add_user(&mut catalog.skills, roots);
@@ -541,70 +499,6 @@ impl Catalog {
     /// Whether `session`'s agent finds `skill` by itself.
     pub fn skill_native(&self, skill: &Skill, session: &Session<'_>) -> bool {
         skill.roots.iter().any(|root| root.native(session))
-    }
-
-    /// How `session`'s agent is signed in to `server`, from what `stores` read; `None` for one
-    /// that doesn't sign in.
-    pub fn sign_in(
-        &self,
-        server: &Server,
-        session: &Session<'_>,
-        stores: &dyn SignInStores,
-    ) -> Option<SignIn> {
-        self.sign_in_from(server, session, stores)
-            .map(|(sign_in, _)| sign_in)
-    }
-
-    /// As [`Self::sign_in`], with the entry whose agent's stored sign-in serves it for
-    /// [`SignIn::ReusableFrom`]: the agent's own sign-in when it has the server and isn't known
-    /// to lack one, else the first usable one of an entry with its [`identity`] (Claude's and
-    /// Codex's keys are an entry's), else Brigadier's own.
-    pub fn sign_in_from<'a>(
-        &'a self,
-        server: &'a Server,
-        session: &Session<'_>,
-        stores: &dyn SignInStores,
-    ) -> Option<(SignIn, Option<&'a Server>)> {
-        if !server.signs_in {
-            return None;
-        }
-        let native = self.server_native(server, session);
-        if native && stores.probe(session.agent.into(), server) != Probe::Absent {
-            return Some((SignIn::Native, None));
-        }
-        let (mut refused, mut unknown, mut unsupported) = (None, false, false);
-        let mut note = |probe| match probe {
-            Probe::Unknown => unknown = true,
-            Probe::Unsupported => unsupported = true,
-            Probe::Usable | Probe::Absent | Probe::Refused => {}
-        };
-        for entry in sign_ins::same_server(&self.servers, server) {
-            let Some(agent) = owner_agent(entry.source) else {
-                continue;
-            };
-            if native && entry.id == server.id && agent == session.agent {
-                continue;
-            }
-            match stores.probe(agent.into(), entry) {
-                Probe::Usable => return Some((SignIn::ReusableFrom(agent), Some(entry))),
-                Probe::Refused => refused = refused.or(Some(agent)),
-                probe => note(probe),
-            }
-        }
-        match stores.probe(Owner::Brigadier, server) {
-            Probe::Usable => return Some((SignIn::InBrigadier, None)),
-            probe => note(probe),
-        }
-        // What stands in the way of a reuse, the one the user can act on first.
-        Some((
-            match (refused, unknown, unsupported) {
-                (Some(agent), _, _) => SignIn::NotAllowed(agent),
-                (None, true, _) => SignIn::Unknown,
-                (None, false, true) => SignIn::Unsupported,
-                (None, false, false) => SignIn::Needed,
-            },
-            None,
-        ))
     }
 
     pub fn server(&self, id: &str) -> Option<&Server> {

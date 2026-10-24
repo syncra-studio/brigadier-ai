@@ -7,8 +7,8 @@ use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Vis
 use serde_json::{Map, Value};
 
 use crate::{
-    Agent, CodexStore, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
-    plugins, server_id,
+    Agent, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport, plugins,
+    server_id,
 };
 
 /// How a source writes variables in its values.
@@ -260,19 +260,6 @@ pub(crate) fn codex_trusted(config: &toml::Table) -> Vec<PathBuf> {
         })
         .map(|(path, _)| PathBuf::from(path))
         .collect()
-}
-
-/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`, `auto` by default).
-pub(crate) fn codex_store(config: &toml::Table) -> CodexStore {
-    match config
-        .get("mcp_oauth_credentials_store")
-        .and_then(toml::Value::as_str)
-    {
-        None | Some("auto") => CodexStore::Auto,
-        Some("file") => CodexStore::File,
-        Some("keyring") => CodexStore::Keyring,
-        Some(_) => CodexStore::Other,
-    }
 }
 
 /// `mcpServers` of a JSON config (Claude Code, Claude Desktop, Cursor).
