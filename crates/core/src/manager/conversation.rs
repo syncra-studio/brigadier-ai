@@ -58,6 +58,33 @@ use crate::{Error, Result, now_ms};
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
 
+/// The streaming replies of a turn the event feed was told of, with the phase it was told.
+#[derive(Default)]
+struct SaidStreaming(HashMap<String, Option<TextPhase>>);
+
+impl SaidStreaming {
+    /// What of reply `item`'s streamed `text` the event feed is told: its first words, then
+    /// nothing but its phase once that is first said (no words: the feed's readers only ask
+    /// whether and which reply streams). `None`: nothing.
+    fn news(&mut self, item: &str, text: String, phase: Option<TextPhase>) -> Option<String> {
+        match self.0.get_mut(item) {
+            None if !text.is_empty() => {
+                self.0.insert(item.to_owned(), phase);
+                Some(text)
+            }
+            Some(held @ None) if phase.is_some() => {
+                *held = phase;
+                Some(String::new())
+            }
+            _ => None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
 
@@ -3367,6 +3394,7 @@ impl SessionManager {
         let mut watchdog_tick = tokio::time::interval(timing.tick);
         watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut deltas: Vec<ProviderEvent> = Vec::new();
+        let mut said = SaidStreaming::default();
         let mut deadline: Option<tokio::time::Instant> = None;
         loop {
             let flush_at = async {
@@ -3414,7 +3442,10 @@ impl SessionManager {
                     }
                     Some(mut event) => {
                         deadline = None;
-                        self.store_deltas(&conv, std::mem::take(&mut deltas)).await;
+                        self.store_deltas(&conv, std::mem::take(&mut deltas), &mut said).await;
+                        if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+                            said.clear();
+                        }
                         // A CLI that starts (again) tells its MCP servers anew.
                         if matches!(event, ProviderEvent::SessionStarted { .. }) {
                             self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended).await;
@@ -3450,7 +3481,7 @@ impl SessionManager {
                 }
                 () = flush_at => {
                     deadline = None;
-                    self.store_deltas(&conv, std::mem::take(&mut deltas)).await;
+                    self.store_deltas(&conv, std::mem::take(&mut deltas), &mut said).await;
                 }
             }
         }
@@ -3464,7 +3495,7 @@ impl SessionManager {
         if current {
             self.snapshot_finish(&conv.id).await;
         }
-        self.store_deltas(&conv, deltas).await;
+        self.store_deltas(&conv, deltas, &mut said).await;
         self.record_held_looked(&conv).await;
         self.grants.revoke(&cli.grants);
         conv.items().cli_ended();
@@ -3699,7 +3730,17 @@ impl SessionManager {
         self.deliver_for(&conv.id, envelope, request).await;
     }
 
-    async fn store_deltas(&self, conv: &ConvLive, deltas: Vec<ProviderEvent>) {
+    /// Keeps a command's streamed output, and puts on the event feed only what of the
+    /// streamed text the feed's readers use: that a reply is streaming, and which (its first
+    /// words, and its phase once known). The words themselves reach the app with the thread's
+    /// news ([`crate::thread_view::ThreadNews`]), and the whole reply and reasoning are stored
+    /// when they end.
+    async fn store_deltas(
+        &self,
+        conv: &ConvLive,
+        deltas: Vec<ProviderEvent>,
+        said: &mut SaidStreaming,
+    ) {
         // A command's streamed output is kept while it runs, not stored as it streams.
         for delta in &deltas {
             if let ProviderEvent::CommandOutputDelta { item_id, text } = delta {
@@ -3707,7 +3748,6 @@ impl SessionManager {
             }
         }
         let id = &conv.id;
-        let request_id = conv.state.lock().await.request.clone();
         let events: Vec<DomainEvent> = deltas
             .into_iter()
             .filter_map(|event| match event {
@@ -3715,20 +3755,13 @@ impl SessionManager {
                     item_id,
                     text,
                     phase,
-                } => Some(DomainEvent::MessageDelta {
-                    conversation_id: id.clone(),
-                    message_id: item_id,
-                    text,
-                    phase,
-                }),
-                ProviderEvent::ReasoningDelta { item_id, text } => {
-                    Some(DomainEvent::ThinkingDelta {
+                } => {
+                    let text = said.news(&item_id, text, phase)?;
+                    Some(DomainEvent::MessageDelta {
                         conversation_id: id.clone(),
-                        item_id,
+                        message_id: item_id,
                         text,
-                        request_id: request_id.clone(),
-                        at_ms: now_ms(),
-                        complete: false,
+                        phase,
                     })
                 }
                 _ => None,
@@ -5936,5 +5969,69 @@ mod tests {
             start_cause(false, true, Some(WriteCause::EffortChange)),
             WriteCause::EffortChange
         );
+    }
+}
+
+#[cfg(test)]
+mod said_streaming_tests {
+    use super::*;
+
+    /// A reply streamed at 300 deltas a second for a second, stored a 30 ms window at a time:
+    /// the event feed hears of it once, and once more when its phase comes; it heard every
+    /// window before (34 events).
+    #[test]
+    fn the_feed_hears_of_a_streaming_reply_once_and_of_its_phase_once() {
+        let mut said = SaidStreaming::default();
+        let (mut windows, mut told) = (0, Vec::new());
+        let mut deltas = Vec::new();
+        for n in 0..300u64 {
+            // The phase is first said a third of the way in.
+            let phase = (n >= 100).then_some(TextPhase::Answer);
+            let event = ProviderEvent::MessageDelta {
+                item_id: "m".into(),
+                text: format!("{n} "),
+                phase,
+            };
+            crate::runtime::merge_delta(&mut deltas, event);
+            let window_ends = (n + 1) * 1000 / 300 / 30 != n * 1000 / 300 / 30 || n == 299;
+            if window_ends {
+                windows += 1;
+                for delta in std::mem::take(&mut deltas) {
+                    if let ProviderEvent::MessageDelta {
+                        item_id,
+                        text,
+                        phase,
+                    } = delta
+                        && let Some(text) = said.news(&item_id, text, phase)
+                    {
+                        told.push((text, phase));
+                    }
+                }
+            }
+        }
+        assert_eq!(windows, 34);
+        assert_eq!(told.len(), 2, "{told:?}");
+        assert!(
+            told[0].0.starts_with("0 1 "),
+            "its first words: {}",
+            told[0].0
+        );
+        assert_eq!(told[0].1, None);
+        assert_eq!(told[1], (String::new(), Some(TextPhase::Answer)));
+        eprintln!(
+            "a reply of 300 deltas: {} feed events, was {windows}",
+            told.len()
+        );
+    }
+
+    /// Empty words say nothing streams yet; a new turn's replies are heard again.
+    #[test]
+    fn empty_words_wait_and_a_new_turn_starts_over() {
+        let mut said = SaidStreaming::default();
+        assert_eq!(said.news("m", String::new(), None), None);
+        assert_eq!(said.news("m", "Hi".into(), None), Some("Hi".into()));
+        assert_eq!(said.news("m", " there".into(), None), None);
+        said.clear();
+        assert_eq!(said.news("m", "Again".into(), None), Some("Again".into()));
     }
 }
