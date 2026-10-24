@@ -268,17 +268,25 @@ async function extra(seen: Record<string, unknown>) {
     void painted().then(() => keys.push(performance.now() - at));
   };
   window.addEventListener("keydown", onKey, true);
+  // The browser's own count, key to painted frame (Event Timing): only those of 16 ms or more.
+  const slow: number[] = [];
+  const timing = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) if (entry.name === "keydown") slow.push(entry.duration);
+  });
+  timing.observe({ type: "event", durationThreshold: 16 } as PerformanceObserverInit);
   reset();
   document.documentElement.dataset.phase = "typing";
   document.documentElement.dataset.typing = "";
   while (!("typed" in document.documentElement.dataset)) await wait(50);
   await wait(200);
   window.removeEventListener("keydown", onKey, true);
+  timing.disconnect();
   const sorted = keys.toSorted((a, b) => a - b);
   seen.typing = {
     ...summary(PHASE_MS), keys: keys.length,
     keyP50: Math.round(sorted[Math.floor(sorted.length / 2)] ?? 0), keyP95: Math.round(sorted[Math.floor(sorted.length * 0.95)] ?? 0), keyMax: Math.round(sorted.at(-1) ?? 0),
     typed: editor.textContent?.length ?? 0,
+    keysOver16: slow.length, slowestKey: Math.round(Math.max(0, ...slow)),
   };
   // Switching: the second session's first opening reads its view; after that both are held.
   reset();
