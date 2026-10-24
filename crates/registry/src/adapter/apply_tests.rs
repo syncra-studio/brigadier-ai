@@ -373,10 +373,12 @@ fn an_untrusted_project_is_refused_and_a_plain_folder_needs_no_exclude() {
     assert!(codex::project_file(&dir).exists());
 }
 
+#[cfg(unix)]
 const STUB: &str = "brigadier-apply-stub";
 
 /// A folder with a stub CLI in it: it prints its arguments, folder and Codex home, says why on
 /// stderr and fails for `fail`, and leaves a mark in its folder for `mark`.
+#[cfg(unix)]
 fn stub(dir: &Path) -> Vec<(String, String)> {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -398,6 +400,7 @@ fn stub(dir: &Path) -> Vec<(String, String)> {
     )]
 }
 
+#[cfg(unix)]
 fn call(args: &[&str], cwd: &Path) -> CliCall {
     CliCall {
         program: STUB,
@@ -408,6 +411,7 @@ fn call(args: &[&str], cwd: &Path) -> CliCall {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_run_step_runs_the_cli_with_its_folder_and_home() {
     let dir = fixture("run");
     let env = stub(&dir);
@@ -526,6 +530,7 @@ fn codex_writes_the_user_config_through_its_own_writer() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_project_file_it_cannot_edit_stops_the_plan_first() {
     let dir = fixture("broken-file");
     let env = stub(&dir);
