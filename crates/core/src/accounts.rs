@@ -773,6 +773,54 @@ mod tests {
         assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
     }
 
+    /// The order consumes the monitor's snapshots, as runtime does: an exhausted 5-hour
+    /// account has no place before its reset and rejoins without a fresh usage read.
+    #[tokio::test]
+    async fn a_five_hour_limit_rejoins_the_order_at_its_reset() {
+        let monitor = crate::routing::QuotaMonitor::load(None, 0).await;
+        let mut limited = weekly(None, 100.0, Some(20));
+        let quota = limited.quota.as_mut().unwrap();
+        quota.windows[0].resets_at_ms = Some(1_000);
+        quota.limit = Some(LimitHit {
+            kind: LimitKind::UsageWindow,
+            window: Some("five_hour".into()),
+            resets_at_ms: Some(1_000),
+        });
+        let other = weekly(Some("work"), 40.0, Some(60));
+        for candidate in [&limited, &other] {
+            monitor.note(&candidate.account, candidate.quota.as_ref().unwrap(), 0);
+        }
+        let settings = settings(None, true);
+        for now in [0, 999, 1_000, 1_001] {
+            let all: Vec<_> = [&limited, &other]
+                .into_iter()
+                .map(|candidate| Candidate {
+                    quota: monitor.current_for(&candidate.account, now),
+                    ..candidate.clone()
+                })
+                .collect();
+            let placed = order(&settings, ProviderKind::Claude, None, &all, now);
+            let own = placed
+                .iter()
+                .find(|entry| entry.account.account.is_none())
+                .unwrap();
+            if now < 1_000 {
+                assert_eq!(own.place, None);
+                assert_eq!(
+                    own.reason,
+                    OrderReason::AtLimit {
+                        ready_at_ms: Some(1_000)
+                    }
+                );
+                assert_eq!(placed[0].account.account.as_deref(), Some("work"));
+            } else {
+                assert_eq!(own.place, Some(1), "at {now}: {placed:?}");
+                assert_eq!(placed[0].account.account, None);
+                assert!(all[0].quota.as_ref().unwrap().limit.is_none());
+            }
+        }
+    }
+
     #[test]
     fn an_unknown_weekly_reset_sorts_last() {
         let mut unread = candidate(Some("home"), 0.0, false);

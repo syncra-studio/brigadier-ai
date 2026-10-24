@@ -18,6 +18,8 @@ pub mod accounts;
 mod chat_shell_live_tests;
 pub mod claude;
 pub mod cli;
+#[cfg(all(test, unix))]
+mod cli_config_tests;
 pub mod codex;
 mod events;
 pub mod fixtures;

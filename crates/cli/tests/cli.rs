@@ -185,8 +185,8 @@ fn sample(request: &CliRequest) -> CliReply {
                 rule: "forbid: fable".into(),
             }],
         }),
-        CliRequest::Sessions { .. } => CliReply::ok(&SessionsOutput {
-            project: Some("brigadier-ai".into()),
+        CliRequest::Sessions { all } => CliReply::ok(&SessionsOutput {
+            project: (!all).then(|| "brigadier-ai".into()),
             sessions: vec![
                 SessionRow {
                     id: "0000c0de".into(),
@@ -200,7 +200,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     }),
                     workers: 2,
                     caller: true,
-                    project: None,
+                    project: all.then(|| "brigadier-ai".into()),
                 },
                 SessionRow {
                     id: "0000beef".into(),
@@ -210,7 +210,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     changes: None,
                     workers: 0,
                     caller: false,
-                    project: None,
+                    project: all.then(|| "other".into()),
                 },
             ],
         }),
@@ -333,7 +333,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             queued: answer.is_none(),
             answered: *answer,
-            message: None,
+            message: answer.is_none().then(|| "msg-session-1".into()),
         }),
         CliRequest::Wait { timeout_secs, .. } if timeout_secs.is_some() => {
             CliReply::ok(&WaitOutput {
@@ -576,6 +576,7 @@ fn every_subcommands_json_output_fits_its_schema() {
     let dir = DataDir::new("schemas");
     let read_calls: &[&[&str]] = &[
         &["sessions", "--json"],
+        &["sessions", "--all", "--json"],
         &["workers", "--json"],
         &["show", "0000", "--json"],
         &["show", "a1b2", "--json"],

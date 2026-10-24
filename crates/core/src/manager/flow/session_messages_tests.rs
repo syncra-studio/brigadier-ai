@@ -149,7 +149,9 @@ async fn flow(name: &str, refuse_steers: bool) -> (Flow, Arc<Seen>) {
 async fn call(flow: &Flow, seen: &Seen, id: &ConversationId, request: CliRequest) -> CliReply {
     let (session, grant) = seen.callers.lock().unwrap()[id].clone();
     let caller = flow.manager.cli_caller(&session, &grant).unwrap();
-    flow.manager
+    let sessions = matches!(request, CliRequest::Sessions { .. });
+    let reply = flow
+        .manager
         .cli_call(
             &caller,
             CliCall {
@@ -157,7 +159,13 @@ async fn call(flow: &Flow, seen: &Seen, id: &ConversationId, request: CliRequest
                 request,
             },
         )
-        .await
+        .await;
+    if sessions && let CliReply::Ok { output } = &reply {
+        let schema = brigadier_cli::commands::find("sessions").unwrap().schema;
+        let found = brigadier_cli::schema::violations(schema, output);
+        assert!(found.is_empty(), "sessions: {found:?}\n{output:#}");
+    }
+    reply
 }
 
 fn ok(reply: CliReply) -> Value {

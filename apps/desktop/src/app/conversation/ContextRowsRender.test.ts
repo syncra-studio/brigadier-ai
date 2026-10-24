@@ -41,8 +41,9 @@ test("Waiting on you lists each worker's permission prompt, question and sign-in
   assert.deepEqual(seen.workers, ["API routes needs you+48 −0", "Web page needs you+120 −4", "1 done"]);
 });
 
-test("a usage limit's Resumes at card has Continue now and Don't resume, and Don't resume leaves no card", { timeout: 90000 }, async (t) => {
+test("with agent fallback off, a usage limit's Resumes at card has Continue now and Don't resume, and Don't resume leaves no card", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "context-rows.html?drive=1&limit=usage", "context-rows-result", 60000)) as Record<string, unknown>;
+  assert.equal(seen.switchProviders, false);
   assert.match(String(seen.wait), /^Resumes at .+in 1h 35m/);
   assert.deepEqual(seen.waitButtons, ["Continue now", "Don't resume"]);
   assert.deepEqual(seen.asked, ["continueWaiting", "dontResume"]);

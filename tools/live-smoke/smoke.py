@@ -11,7 +11,7 @@ workers, turns metered) and leaves nothing behind.
   3  a Claude thread and a Codex thread each run a Codex worker through `brigadier start`, wait
      for its turn's end, and close it: the worker shows only in its session, never the sidebar
   4  Stop during `brigadier wait`: the worker's later turn end reaches the stopped thread once
-  5  every request that finished ends on a real answer, not a narration line
+  5  every request that finished has a real answer among its replies
 
 usage: smoke.py --daemon <brigadierd> [--claude-model sonnet] [--codex-model gpt-6-luna]
                 [--long 70] [--job 100] [--keep-report PATH] [--tag NAME]
@@ -558,7 +558,7 @@ class Smoke:
               f"{len(nets)} net messages" + (f": {nets[0]['event']['text'][:200]!r}" if nets else ""))
         n = turns(self.data, self.convs["C1"], stopped_at + 1000, now_ms())
         check(sc, "one turn starts for it", n == 1, f"{n} turns metered after the Stop")
-    # -- scenario 5: every finished request ends on a real answer --
+    # -- scenario 5: every finished request has a real answer --
 
     def scenario_answers(self):
         sc = "5 final answers"
@@ -583,10 +583,13 @@ class Smoke:
                 if not said:
                     check(sc, f"{name}: “{preview}” has an answer", False, "no assistant message")
                     continue
-                last = max(said, key=lambda m: m["seq"])["text"].strip()
-                ok = bool(last) and not last.startswith("[quiet]") and (not codes or any(c.lower() in last.lower() for c in codes))
-                check(sc, f"{name}: “{preview}” ends on its answer", ok,
-                      f"last text {last[:100]!r}" + (f", expected one of {codes}" if codes else ""))
+                # A background command's finish can add another answer to the request
+                # after its requested result (for example a ledger acknowledgement).
+                answers = [m["text"].strip() for m in said]
+                answer = next((text for text in answers if text and not text.startswith("[quiet]")
+                               and (not codes or any(c.lower() in text.lower() for c in codes))), None)
+                check(sc, f"{name}: “{preview}” has its answer", answer is not None,
+                      f"texts {[text[:100] for text in answers]!r}" + (f", expected one of {codes}" if codes else ""))
 
     # -- cleanup --
 

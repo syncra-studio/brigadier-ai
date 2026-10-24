@@ -79,6 +79,7 @@ showRows(id, Object.values(tasks).map((task, index) => rowOf(task, {
   background: [{ id: "b1", itemId: "c9", kind: "shell", label: "npm run dev", status: "running", startedAtMs: now - 3 * MIN, endedAtMs: null, outputFile: "/tmp/b1.out", summary: null, lastLine: "listening on :3000" }],
 });
 useApp.setState({
+  settings: { ...useApp.getState().settings, switchProviders: false },
   summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   projects: { p1: { id: "p1", name: "todo-app" } } as never,
   info: { platform: "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
@@ -113,6 +114,7 @@ async function drive(): Promise<string> {
   for (let i = 0; i < 100 && !card()?.querySelector('[data-slot="workers-summary-worker"], [data-slot="workers-summary"]'); i++) await frame();
   await frame();
   const seen: Record<string, unknown> = {};
+  seen.switchProviders = useApp.getState().settings.switchProviders;
   seen.sections = [...card()!.querySelectorAll('[data-slot="summary-section"] > header button[aria-controls]')].map((title) => title.textContent?.trim());
   seen.projectMenu = !!card()!.querySelector('[data-slot="summary-section"] > header button[aria-label="Project actions"], [data-slot="summary-section"] > header button[aria-haspopup]');
   const rows = [...card()!.querySelectorAll<HTMLElement>('[data-slot="summary-row"], [data-slot="workers-summary"], [data-slot="workers-summary-worker"]')].filter((row) => !row.closest("[data-activities]"));

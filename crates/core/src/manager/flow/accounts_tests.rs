@@ -1921,7 +1921,13 @@ async fn the_account_nearest_its_limit_works_first_and_both_out_waits() {
     let out = own_out.clone();
     let flow = Flow::start(
         "accounts-order",
-        Options::default(),
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
         logging(&log, move |turn| match turn.account.as_deref() {
             Some("acct-b") => Reply::limited(),
             _ if out.load(std::sync::atomic::Ordering::SeqCst) => Reply::limited(),
@@ -1968,7 +1974,8 @@ async fn the_account_nearest_its_limit_works_first_and_both_out_waits() {
         ["Claude Code hit its usage limit on Account acct-b; continuing on this computer's login."]
     );
 
-    // Both out: the message waits for the reset; Codex isn't asked.
+    // Both out: the persisted wait and the CLI's limit supply the Resumes at card.
+    assert!(!flow.core.settings().switch_providers);
     own_out.store(true, std::sync::atomic::Ordering::SeqCst);
     flow.say("Next.").await;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -1980,6 +1987,32 @@ async fn the_account_nearest_its_limit_works_first_and_both_out_waits() {
         assert!(tokio::time::Instant::now() < deadline, "no wait");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let wait = conversation.quota_wait.expect("the Resumes at card's wait");
+    assert_eq!(
+        wait.limit_kind,
+        Some(brigadier_providers::LimitKind::UsageWindow)
+    );
+    assert!(wait.resets_at_ms.is_some_and(|at| at > crate::now_ms()));
+    assert_eq!(wait.model.as_ref().unwrap().provider, ProviderKind::Claude);
+    assert!(wait.request.is_some());
+    let thread = flow.manager.thread_view(&flow.conversation).unwrap();
+    let limit = thread
+        .turns
+        .last()
+        .and_then(|turn| turn.limit.as_ref())
+        .expect("the card's limit");
+    assert_eq!(limit.window.as_deref(), Some("five_hour"));
+    assert_eq!(limit.kind, brigadier_providers::LimitKind::UsageWindow);
+    assert!(
+        flow.core
+            .conversation_view(flow.conversation.clone(), 1)
+            .await
+            .unwrap()
+            .conversation
+            .quota_wait
+            .is_some()
+    );
     assert!(
         seen(&log)
             .iter()
@@ -2109,6 +2142,107 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
         file.seams[0].end.death.as_deref(),
         Some("usage limit on Claude Code · continued on Codex")
     );
+    flow.stop().await;
+}
+
+/// S38: a limit while writing the hand-off preserves the note already written, and the
+/// fallback successor reads it. The preceding successful turn rules out a first-turn death.
+#[tokio::test]
+async fn the_agent_fallback_keeps_a_written_handoff_note() {
+    use crate::manager::seam::{Phase, SeamConfig, read_seam};
+    use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
+    const NOTE: &str = "Doing now: update the parser.\nNext: check the edge case N-542.";
+    let log = Log::default();
+    let inputs = log.clone();
+    let flow = Flow::start(
+        "20261022-0805-w181-fallback-note",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                take_in_steers: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        Arc::new(move |turn| {
+            let inputs = inputs.clone();
+            Box::pin(async move {
+                inputs.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                if turn.provider == ProviderKind::Codex {
+                    return Reply::text("Continued from the note.");
+                }
+                if turn.input == "Grow and hand off." {
+                    turn.report_context(70_000).await;
+                    let nudge = turn.steered().await.expect("the seam asks for the note");
+                    assert!(nudge.starts_with(NUDGE_MARK), "{nudge}");
+                    let path = nudge
+                        .split("write the hand-off note at ")
+                        .nth(1)
+                        .unwrap()
+                        .split(": doing now")
+                        .next()
+                        .unwrap();
+                    std::fs::write(path, NOTE).unwrap();
+                    return Reply::limited();
+                }
+                Reply::text("Ready.")
+            })
+        }),
+    )
+    .await;
+    flow.manager.set_seam(SeamConfig {
+        tokens: 60_000,
+        hold: std::time::Duration::from_secs(60),
+    });
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Get ready.").await;
+    flow.settled().await;
+    flow.say("Grow and hand off.").await;
+    flow.until("the fallback reads the note", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(turns[0].native_id, turns[1].native_id);
+    let successor = turns
+        .iter()
+        .find(|turn| turn.provider == ProviderKind::Codex)
+        .unwrap();
+    assert_ne!(successor.native_id, turns[1].native_id);
+    assert!(
+        successor.input.starts_with(HANDOFF_MARK),
+        "{}",
+        successor.input
+    );
+    assert!(
+        successor
+            .input
+            .contains(&format!("## Hand-off note\n{NOTE}")),
+        "{}",
+        successor.input
+    );
+    let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
+    assert!(matches!(file.phase, Phase::Live));
+    assert_eq!(file.seams.len(), 1);
+    assert_eq!(file.seams[0].provider, ProviderKind::Codex);
+    assert_eq!(
+        std::fs::read_to_string(file.seams[0].note.as_ref().unwrap()).unwrap(),
+        NOTE
+    );
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert_eq!(view.seams.len(), 1, "the divider survives a reload");
+    assert!(view.seams[0].note.is_some());
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
     flow.stop().await;
 }
 
