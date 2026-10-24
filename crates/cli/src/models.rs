@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelsOutput {
+    /// How many workers the caller may run at the same time: the user's setting (Settings ›
+    /// Configuration › Workers). Advice; `start` refuses no further worker.
+    pub workers_at_once: u32,
     pub models: Vec<Model>,
     /// Each agent's account switch (Settings › Providers › the agent's page).
     pub agents: Vec<AgentAccounts>,

@@ -47,6 +47,12 @@ plainTextComposer: boolean,
  */
 showFullAccessNotice: boolean, 
 /**
+ * How many workers one session may run at the same time (Settings › Configuration ›
+ * Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
+ * refuses no further worker (G18).
+ */
+workersAtOnce: number, 
+/**
  * Co-authored-by trailers that name an AI are left out of commit messages: the user's
  * own commits, what the agents write, and the commits Brigadier lands or keeps.
  */

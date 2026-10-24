@@ -3,6 +3,7 @@
   "title": "brigadier models --json",
   "type": "object",
   "required": [
+    "workersAtOnce",
     "models",
     "agents",
     "switchProviders",
@@ -12,6 +13,11 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "workersAtOnce": {
+      "description": "How many workers this session may run at the same time: the user's setting (Settings > Configuration > Workers). Advice; start refuses no further worker.",
+      "type": "integer",
+      "minimum": 1
+    },
     "models": {
       "type": "array",
       "items": {

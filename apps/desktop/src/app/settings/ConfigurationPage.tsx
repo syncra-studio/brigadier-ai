@@ -57,6 +57,10 @@ export const CONFIGURATION_ROWS = {
     label: "Show the Full access notice",
     description: "A card above the composer while a session is on Full access",
   },
+  workersAtOnce: {
+    label: "Workers at once",
+    description: "How many workers one session may run at the same time",
+  },
   brigadeSkill: {
     label: "How sessions run workers",
     description: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
@@ -102,6 +106,7 @@ export function ConfigurationPage() {
 
       <SettingsSection title="Workers">
         <SettingsCard>
+          <WorkersAtOnceRow />
           <BrigadeSkillRow />
         </SettingsCard>
       </SettingsSection>
@@ -213,6 +218,30 @@ function BrigadeSkillRow() {
           </Button>
         </div>
       )}
+    </SettingsRow>
+  );
+}
+
+/** The numbers "Workers at once" offers; the daemon reads a saved number outside them as the nearest. */
+const WORKERS_AT_ONCE = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/** How many workers one session may run at the same time (run2-D31): advice the brigade skill reads. */
+function WorkersAtOnceRow() {
+  const save = useAction();
+  const saved = useApp((s) => s.settings.workersAtOnce);
+  const value = Math.min(Math.max(saved, WORKERS_AT_ONCE[0]), WORKERS_AT_ONCE[WORKERS_AT_ONCE.length - 1]!);
+  return (
+    <SettingsRow
+      label={CONFIGURATION_ROWS.workersAtOnce.label}
+      description={CONFIGURATION_ROWS.workersAtOnce.description}
+      error={save.error}
+    >
+      <SettingsSelect<string>
+        label={CONFIGURATION_ROWS.workersAtOnce.label}
+        value={String(value)}
+        options={WORKERS_AT_ONCE.map((count) => ({ value: String(count), label: String(count) }))}
+        onChange={(count) => save.run(() => setSetting("workersAtOnce", Number(count)))}
+      />
     </SettingsRow>
   );
 }

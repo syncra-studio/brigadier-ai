@@ -1395,6 +1395,65 @@ async fn models_fresh_rules_admit_every_offered_model() {
     flow.stop().await;
 }
 
+/// `brigadier models` carries the user's "Workers at once" (run2-D31): 3 by default, then what
+/// Settings saves. It is advice: a start past it is not refused (G18).
+#[tokio::test]
+async fn models_carry_the_workers_at_once_setting_and_start_ignores_it() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Started.");
+            }
+            if let Some(round) = turn.input.strip_prefix("Count workers ") {
+                let models = brigadier(&turn, CliRequest::Models).await;
+                seen.lock()
+                    .unwrap()
+                    .insert(format!("models {round}"), models);
+            }
+            if turn.input.contains("Start two.") {
+                for title in ["one", "two"] {
+                    let request = StartRequest {
+                        title: Some(title.into()),
+                        local: true,
+                        ..start("Reply once.")
+                    };
+                    let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                    seen.lock()
+                        .unwrap()
+                        .insert(format!("start {title}"), result);
+                }
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-workers-at-once", Options::default(), script).await;
+    flow.say("Count workers 1").await;
+    flow.settled().await;
+    let mut settings = flow.core.settings();
+    settings.workers_at_once = 1;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Count workers 2").await;
+    flow.settled().await;
+    flow.say("Start two.").await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["models 1"]["workersAtOnce"], 3);
+    assert_eq!(seen["models 2"]["workersAtOnce"], 1);
+    for title in ["one", "two"] {
+        assert!(
+            seen[&format!("start {title}")].get("error").is_none(),
+            "{seen:#?}"
+        );
+    }
+    flow.stop().await;
+}
+
 /// User rules refuse and quote Fable; removing only that directive admits the exact request.
 #[tokio::test]
 async fn models_rules_are_the_only_gate_on_start() {

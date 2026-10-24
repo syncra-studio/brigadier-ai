@@ -653,7 +653,13 @@ fn local_time(at_ms: i64) -> String {
 
 /// A compact advice view. `--json` carries every row when the terminal summary is abbreviated.
 pub fn models(output: &crate::models::ModelsOutput) -> String {
-    let mut lines = vec!["Models and usage (advice; only your rules restrict starts)".to_owned()];
+    let mut lines = vec![
+        "Models and usage (advice; only your rules restrict starts)".to_owned(),
+        format!(
+            "Workers at once: up to {} (the user's setting, Settings › Configuration)",
+            output.workers_at_once
+        ),
+    ];
     for agent in [
         crate::protocol::Agent::Claude,
         crate::protocol::Agent::Codex,
@@ -848,6 +854,7 @@ mod tests {
     #[test]
     fn models_reads_window_ids_as_words_and_times_as_times_not_epoch_ms() {
         let output = ModelsOutput {
+            workers_at_once: 4,
             models: vec![],
             agents: vec![],
             switch_providers: false,
@@ -877,6 +884,11 @@ mod tests {
             rules: vec![],
         };
         let text = models(&output);
+        // The worker count leads, so the 25-line cut never hides it (run2-D31).
+        assert_eq!(
+            text.lines().nth(1),
+            Some("Workers at once: up to 4 (the user's setting, Settings › Configuration)")
+        );
         assert!(!text.contains("five_hour"), "{text}");
         assert!(!text.contains("1792783200000"), "{text}");
         assert!(text.contains("5-hour 8% used, resets "), "{text}");

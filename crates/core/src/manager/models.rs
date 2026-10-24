@@ -607,6 +607,7 @@ impl SessionManager {
             })
             .collect();
         Ok(ModelsOutput {
+            workers_at_once: settings.workers_at_once(),
             models,
             agents,
             switch_providers: settings.switch_providers,

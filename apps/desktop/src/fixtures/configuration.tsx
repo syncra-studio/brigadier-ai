@@ -2,7 +2,7 @@
  * Settings → Configuration over a faked daemon: its rows, the explanations in its menus, and
  * search and old links landing on its rows.
  *
- * ?drive=1 reads the rows, opens the model and permission menus, follows an old page's link
+ * ?drive=1 reads the rows, picks a worker count, opens the model and permission menus, follows an old page's link
  * and a search, and writes what it saw to #configuration-result
  * (ConfigurationPageRender.test.ts reads it). Without it the page stays as it opens, for
  * screenshots; ?menu=sessions | chats | permission opens that row's menu.
@@ -143,6 +143,16 @@ function Fixture() {
       },
       () => {
         seen.skillShown = [...calls];
+        const row = document.querySelector('[data-setting="Workers at once"]');
+        seen.workers = { helper: text(row?.querySelector(".text-xs")), choice: text(trigger("Workers at once")) };
+        trigger("Workers at once")?.click();
+      },
+      () => {
+        seen.workersMenu = menuChoices().map((choice) => choice[0]);
+        all('[role="menuitemradio"]').find((item) => text(item) === "5")?.click();
+      },
+      () => {
+        seen.workersPicked = { choice: text(trigger("Workers at once")), saved: useApp.getState().settings.workersAtOnce };
         trigger(MENUS.sessions!)?.click();
       },
       () => {

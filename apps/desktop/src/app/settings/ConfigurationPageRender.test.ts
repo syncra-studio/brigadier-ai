@@ -60,6 +60,10 @@ test("Configuration shows its defaults in one card and explains the choices in i
     calls: ["reset", "create", "show ~/.brigadier/brigade/SKILL.md"],
   });
   assert.deepEqual(seen.skillShown, ["reset", "create", "show ~/.brigadier/brigade/SKILL.md", "show ~/.brigadier/brigade/SKILL.md"]);
+  // "Workers at once" (run2-D31): 3 by default, 1 to 8, saved when picked.
+  assert.deepEqual(seen.workers, { helper: "How many workers one session may run at the same time", choice: "3" });
+  assert.deepEqual(seen.workersMenu, ["1", "2", "3", "4", "5", "6", "7", "8"]);
+  assert.deepEqual(seen.workersPicked, { choice: "5", saved: 5 });
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);

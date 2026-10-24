@@ -882,6 +882,10 @@ pub struct Settings {
     pub plain_text_composer: bool,
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
+    /// How many workers one session may run at the same time (Settings › Configuration ›
+    /// Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
+    /// refuses no further worker (G18).
+    pub workers_at_once: u32,
     /// Co-authored-by trailers that name an AI are left out of commit messages: the user's
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
@@ -1130,6 +1134,19 @@ fn default_true() -> bool {
     true
 }
 
+/// Workers one session runs at once unless the user picks another number (run2-D31).
+pub const DEFAULT_WORKERS_AT_ONCE: u32 = 3;
+/// The numbers Settings offers for [`Settings::workers_at_once`].
+pub const WORKERS_AT_ONCE_RANGE: std::ops::RangeInclusive<u32> = 1..=8;
+
+impl Settings {
+    /// [`Self::workers_at_once`] inside [`WORKERS_AT_ONCE_RANGE`], whatever the saved file holds.
+    pub fn workers_at_once(&self) -> u32 {
+        self.workers_at_once
+            .clamp(*WORKERS_AT_ONCE_RANGE.start(), *WORKERS_AT_ONCE_RANGE.end())
+    }
+}
+
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
 pub const SETTINGS_VERSION: u32 = 7;
@@ -1152,6 +1169,7 @@ impl Default for Settings {
             show_context_usage: true,
             plain_text_composer: false,
             show_full_access_notice: true,
+            workers_at_once: DEFAULT_WORKERS_AT_ONCE,
             omit_ai_coauthors: true,
             git_writer: None,
             commit_style: GitStyle::default(),
@@ -2804,6 +2822,22 @@ pub struct ModelRules {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Settings saved before the worker count existed read the default, 3 (run2-D31); a number
+    /// outside the range Settings offers reads as its nearest end.
+    #[test]
+    fn workers_at_once_defaults_to_three_and_stays_in_range() {
+        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
+        assert_eq!(settings.workers_at_once, 3);
+        assert_eq!(settings.workers_at_once(), 3);
+        for (saved, read) in [(0, 1), (5, 5), (40, 8)] {
+            let settings = Settings {
+                workers_at_once: saved,
+                ..Settings::default()
+            };
+            assert_eq!(settings.workers_at_once(), read);
+        }
+    }
 
     #[test]
     fn settings_saved_with_the_old_density_still_load() {

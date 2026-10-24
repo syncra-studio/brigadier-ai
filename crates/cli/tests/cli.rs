@@ -146,6 +146,7 @@ fn worker_row() -> WorkerRow {
 fn sample(request: &CliRequest) -> CliReply {
     match request {
         CliRequest::Models => CliReply::ok(&brigadier_cli::models::ModelsOutput {
+            workers_at_once: 3,
             models: vec![],
             agents: vec![brigadier_cli::models::AgentAccounts {
                 agent: Agent::Claude,
