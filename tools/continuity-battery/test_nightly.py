@@ -1,4 +1,5 @@
 """Deterministic report/transport checks; never calls a model or daemon."""
+import argparse
 import json
 from pathlib import Path
 import tempfile
@@ -15,6 +16,101 @@ from plain import PlainBattery
 
 
 class NightlyTests(unittest.TestCase):
+    def test_dispatch_arm_selection_validates_and_deduplicates(self):
+        self.assertEqual(nightly.parse_arms("seam,plain,zed"), nightly.ARMS)
+        self.assertEqual(nightly.parse_arms(" zed, seam,zed "), ("zed", "seam"))
+        for value in ("", "seam,", "unknown", "seam,unknown"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                nightly.parse_arms(value)
+
+    def write_arm_reports(self, root, arms):
+        inputs = root / "input"
+        inputs.mkdir()
+        for provider in ("claude", "codex"):
+            for arm in arms:
+                report = {"provider": provider, "status": "complete", "arms": [
+                    {"block": "recall", "profile": "short", "arm": arm, "status": "complete",
+                     "recall": 1, "task_passed": True, "compactions": 0}]}
+                (inputs / f"{provider}-{arm}.json").write_text(json.dumps(report))
+        return inputs
+
+    def test_seam_dispatch_omissions_are_not_incomplete_or_regressions(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w187-selection-") as folder:
+            root = Path(folder)
+            inputs = self.write_arm_reports(root, nightly.ARMS)
+            # Even stale artifacts for excluded arms cannot contribute measurements or issues.
+            for provider in ("claude", "codex"):
+                for arm in ("plain", "zed"):
+                    path = inputs / f"{provider}-{arm}.json"
+                    report = json.loads(path.read_text())
+                    report["arms"][0]["recall"] = 0
+                    path.write_text(json.dumps(report))
+            previous = nightly.collect(inputs, root / "previous")
+            summary = nightly.collect(inputs, root / "output", previous, selected_arms=("seam",))
+            self.assertEqual([p["status"] for p in summary["providers"]], ["complete", "complete"])
+            self.assertEqual(summary["regressions"], [])
+            for provider in summary["providers"]:
+                omitted = [r for r in provider["arms"] if r["arm"] != "seam"]
+                self.assertEqual({r["arm"] for r in omitted}, {"plain", "zed"})
+                self.assertTrue(all(r["status"] == "not_run" and r["reason"] == "not run on this dispatch"
+                                    for r in omitted))
+            text = (root / "output/report.md").read_text()
+            self.assertIn("plain: not run on this dispatch", text)
+            self.assertIn("zed: not run on this dispatch", text)
+            self.assertNotIn("incomplete", text.split("## Regressions")[0])
+            self.assertEqual({r["arm"] for r in summary["aggregate"]}, {"seam"})
+            self.assertEqual(json.loads((root / "output/summary.json").read_text()), summary)
+            with patch("nightly.subprocess.run") as gh:
+                nightly.issue(summary)
+                gh.assert_not_called()
+
+    def test_selected_regressions_still_open_or_update_issues(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w187-regression-") as folder:
+            root = Path(folder)
+            inputs = self.write_arm_reports(root, ("seam",))
+            path = inputs / "claude-seam.json"
+            report = json.loads(path.read_text())
+            report["arms"][0]["recall"] = .5
+            path.write_text(json.dumps(report))
+            summary = nightly.collect(inputs, root / "output", selected_arms=("seam",))
+            self.assertEqual(summary["regressions"], ["claude recall short seam: recall below 90%"])
+            for existing in ([], [{"number": 123, "title": "Continuity battery regression"}]):
+                with self.subTest(existing=bool(existing)), patch("nightly.subprocess.run", return_value=
+                        SimpleNamespace(stdout=json.dumps(existing))) as gh:
+                    nightly.issue(summary)
+                    self.assertEqual(gh.call_count, 2)
+                    self.assertIn("comment" if existing else "create", gh.call_args.args[0])
+
+    def test_nightly_defaults_still_require_all_arms(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w187-nightly-") as folder:
+            root = Path(folder)
+            inputs = self.write_arm_reports(root, nightly.ARMS)
+            summary = nightly.collect(inputs, root / "output")
+            self.assertEqual([p["status"] for p in summary["providers"]], ["complete", "complete"])
+            self.assertFalse(any(r["status"] == "not_run" for p in summary["providers"] for r in p["arms"]))
+            (inputs / "claude-zed.json").unlink()
+            summary = nightly.collect(inputs, root / "output")
+            self.assertEqual(summary["providers"][0]["status"], "incomplete")
+
+    def test_missing_selected_arm_is_still_incomplete(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w187-missing-") as folder:
+            root = Path(folder)
+            inputs = self.write_arm_reports(root, ("seam",))
+            (inputs / "claude-seam.json").unlink()
+            summary = nightly.collect(inputs, root / "output", selected_arms=("seam",))
+            self.assertEqual([p["status"] for p in summary["providers"]], ["incomplete", "complete"])
+            self.assertIn("selected arms", summary["providers"][0]["reason"])
+
+    def test_missing_selected_artifact_is_not_hidden_by_skipped_secrets(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w187-secrets-") as folder:
+            root = Path(folder)
+            for provider in ("claude", "codex"):
+                nightly.provider_report(provider, root / "input", "/missing/daemon", False, "seam")
+            summary = nightly.collect(root / "input", root / "output", selected_arms=("seam",))
+            self.assertEqual([p["status"] for p in summary["providers"]], ["skipped", "skipped"])
+            summary = nightly.collect(root / "input", root / "output", selected_arms=("seam", "plain"))
+            self.assertEqual([p["status"] for p in summary["providers"]], ["incomplete", "incomplete"])
+
     def test_false_worker_claim_accepts_invalid(self):
         expected = {"tool_only": "VT-X", "absent_ledger": "ORCHID-X", "large_failure": "MIDFAIL-X"}
         answer = json.dumps({"false_worker": "Invalid: the report said writeDataFile writes atomically "
@@ -48,7 +144,7 @@ class NightlyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w117-report-") as folder:
             root = Path(folder)
             for provider in ("claude", "codex"):
-                for arm in ("seam", "plain"):
+                for arm in nightly.ARMS:
                     nightly.provider_report(provider, root / "input", "/missing/daemon", False, arm)
             (root / "input/claude-recall-short-seam.json").write_text(json.dumps({"provider": "claude", "roles": {}}))
             result = nightly.collect(root / "input", root / "output")

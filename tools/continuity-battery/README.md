@@ -91,6 +91,11 @@ only Brigadier's arm is also checked for its ledger marker. No `/compact` is sen
 
 The workflow runs all three arms for short recall (nine filler turns), long recall (90),
 and decision survival (90), with matching filler schedules within each provider.
+Manual dispatches accept an `arms` string (default `seam,plain,zed`), for example
+`gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main -f arms=seam`.
+Only the selected arms run on both providers. Omitted arms are labelled "not run on this
+dispatch" in the report and cannot trigger regression issues. Nightly calls always run
+all three arms; an absent selected arm still makes its provider incomplete.
 The long schedule supplies over 400k inert input tokens at ordinary tokenization;
 the metered usage and observed compactions/seams are reported rather than assumed.
 The three-context decision bar is unqualified if fewer than three native compactions

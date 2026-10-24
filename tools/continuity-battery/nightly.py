@@ -19,6 +19,13 @@ FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
 ARMS = ("seam", "plain", "zed")
 
 
+def parse_arms(value):
+    arms = tuple(dict.fromkeys(arm.strip() for arm in value.split(",")))
+    if not arms or any(arm not in ARMS for arm in arms):
+        raise argparse.ArgumentTypeError("arms must be a comma-separated list of seam, plain, zed")
+    return arms
+
+
 def decision_checks(result):
     """Scenario checks, without ledger markers for CLI arms."""
     if not result.get("rows"):
@@ -296,20 +303,27 @@ def markdown(summary):
     return "\n".join(lines) + "\n"
 
 
-def collect(inputs, output, previous=None):
+def collect(inputs, output, previous=None, selected_arms=ARMS):
     output.mkdir(parents=True, exist_ok=True)
     providers = []
     for provider in ("claude", "codex"):
         files = [p for p in inputs.rglob(f"{provider}-*.json") if p.name in
-                 {f"{provider}-{arm}.json" for arm in (*ARMS, "both")}]
+                 {f"{provider}-{arm}.json" for arm in (*selected_arms, "both")}]
         reports = [json.loads(file.read_text()) for file in files]
-        observed = {row["arm"] for report in reports for row in report.get("arms", [])}
-        complete = all(arm in observed for arm in ARMS) and all(r["status"] == "complete" for r in reports)
+        rows = [row for report in reports for row in report["arms"] if row["arm"] in selected_arms]
+        observed = {row["arm"] for row in rows}
+        complete = all(arm in observed for arm in selected_arms) and all(r["status"] == "complete" for r in reports)
+        covered = {arm for arm in selected_arms if any(
+            file.name in (f"{provider}-{arm}.json", f"{provider}-both.json") for file in files)}
+        rows += [{"block": block, "profile": profile, "arm": arm, "status": "not_run",
+                  "reason": "not run on this dispatch"}
+                 for arm in ARMS if arm not in selected_arms
+                 for block, profile in (("recall", "short"), ("recall", "long"), ("decisions", "long"))]
         providers.append({"provider": provider,
-                          "status": "skipped" if reports and all(r["status"] == "skipped" for r in reports)
+                          "status": "skipped" if covered == set(selected_arms) and all(r["status"] == "skipped" for r in reports)
                                     else "complete" if complete else "incomplete",
-                          "reason": "; ".join(sorted({r["reason"] for r in reports if r.get("reason")})) or (None if complete else "runner did not complete all three arms"),
-                          "arms": [row for report in reports for row in report["arms"]]})
+                          "reason": "; ".join(sorted({r["reason"] for r in reports if r.get("reason")})) or (None if complete else "runner did not complete selected arms"),
+                          "arms": rows})
     weekly = next(inputs.rglob("weekly.json"), None)
     summary = {"schema_version": 1, "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                "source": os.environ.get("GITHUB_SHA", "local"),
@@ -346,6 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["provider", "collect"])
     parser.add_argument("--provider", choices=["claude", "codex"])
     parser.add_argument("--arm", choices=ARMS)
+    parser.add_argument("--arms", type=parse_arms, default=ARMS, help="comma-separated arms expected in the collected report")
     parser.add_argument("--daemon", default="target/debug/brigadierd")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--zed-long", action="store_true", help="run the zed arm's long recall + decisions profiles")
@@ -357,6 +372,7 @@ if __name__ == "__main__":
     if args.mode == "provider":
         provider_report(args.provider, args.output, str(Path(args.daemon).resolve()), args.live, args.arm, args.zed_long)
     else:
-        summary = collect(args.input, args.output, json.loads(args.previous.read_text()) if args.previous and args.previous.exists() else None)
+        summary = collect(args.input, args.output, json.loads(args.previous.read_text()) if args.previous and args.previous.exists() else None,
+                          selected_arms=args.arms)
         if args.issue:
             issue(summary)

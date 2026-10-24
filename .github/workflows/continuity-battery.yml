@@ -6,6 +6,10 @@ on:
   workflow_call:
   workflow_dispatch:
     inputs:
+      arms:
+        description: "Comma-separated arms to run: seam, plain, zed"
+        type: string
+        default: seam,plain,zed
       zed_long:
         description: "Run the zed arm's long recall + decisions profiles too (default: short only)"
         type: boolean
@@ -19,8 +23,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  selection:
+    name: Select battery arms
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.arms.outputs.matrix }}
+      arms: ${{ steps.arms.outputs.arms }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate requested arms (nightly always runs all three)
+        id: arms
+        env:
+          ARMS: ${{ github.event_name == 'workflow_dispatch' && inputs.arms || 'seam,plain,zed' }}
+        run: |
+          python3 -B - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'tools/continuity-battery')
+          from nightly import parse_arms
+          arms = parse_arms(os.environ['ARMS'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'matrix={json.dumps(arms)}\n')
+              output.write(f'arms={",".join(arms)}\n')
+          PY
+
   provider:
     name: ${{ matrix.provider }} / ${{ matrix.arm }}
+    needs: selection
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 350
@@ -28,7 +58,7 @@ jobs:
       fail-fast: false
       matrix:
         provider: [claude, codex]
-        arm: [seam, plain, zed]
+        arm: ${{ fromJSON(needs.selection.outputs.matrix) }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -147,7 +177,7 @@ jobs:
 
   report:
     name: Artifact and regression issue
-    needs: [provider, weekly]
+    needs: [selection, provider, weekly]
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -172,9 +202,12 @@ jobs:
           fi
       - name: Summarize measurements
         if: always()
+        env:
+          ARMS: ${{ needs.selection.outputs.arms || 'seam,plain,zed' }}
         run: |
           python3 tools/continuity-battery/nightly.py collect --input "$RUNNER_TEMP/continuity-input" \
-            --output "$RUNNER_TEMP/continuity-report" --previous "$RUNNER_TEMP/continuity-previous/summary.json"
+            --output "$RUNNER_TEMP/continuity-report" --previous "$RUNNER_TEMP/continuity-previous/summary.json" \
+            --arms "$ARMS"
           cat "$RUNNER_TEMP/continuity-report/report.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
