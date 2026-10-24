@@ -873,6 +873,7 @@ impl Parser {
                             .unwrap_or("Claude could not compact the conversation")
                             .to_owned(),
                     ),
+                    native_id: None,
                 }));
             }
             Some("compact_boundary") => {
@@ -892,6 +893,7 @@ impl Parser {
                     tokens_before: metadata.get("pre_tokens").and_then(Value::as_i64),
                     tokens_after,
                     error: None,
+                    native_id: str_of(value, "uuid").map(str::to_owned),
                 }));
                 if let Some(used) = tokens_after {
                     self.context_used = Some(used);

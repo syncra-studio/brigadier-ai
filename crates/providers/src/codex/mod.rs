@@ -1470,15 +1470,23 @@ async fn thread_config(
     }
     config.insert("mcp_servers".into(), Value::Object(servers));
     shell_sees_brigadier(&mut config, &effective, spec);
-    context::configure(
-        rpc,
-        spec.model.as_deref(),
-        &effective,
-        home,
-        cwd,
-        &mut config,
-    )
-    .await?;
+    match &spec.native_compaction {
+        // A long session compacts where plain Codex does (run2-D6): the window pushed out for
+        // the seam goes. A limit asked for (a shared comparison point) never overrides the
+        // user's own (G17).
+        Some(native) => config.extend(native_compaction(native, &effective)),
+        None => {
+            context::configure(
+                rpc,
+                spec.model.as_deref(),
+                &effective,
+                home,
+                cwd,
+                &mut config,
+            )
+            .await?;
+        }
+    }
     if let Some(mode) = web_search(spec.tools) {
         config.insert("web_search".into(), json!(mode));
     }
@@ -1536,6 +1544,20 @@ fn shell_sees_brigadier(config: &mut Map<String, Value>, effective: &Value, spec
         set.insert(name.clone(), Value::String(value.clone()));
     }
     config.insert("shell_environment_policy".into(), policy);
+}
+
+/// A long session's compaction settings: none but the comparison point asked for, and not
+/// even that when the user set their own limit (G17). Codex's window stays its own (run2-D6).
+fn native_compaction(native: &crate::NativeCompaction, effective: &Value) -> Map<String, Value> {
+    let theirs = effective
+        .pointer("/config/model_auto_compact_token_limit")
+        .is_some_and(|value| !value.is_null());
+    native
+        .codex_limit
+        .filter(|_| !theirs)
+        .map(|limit| ("model_auto_compact_token_limit".to_owned(), json!(limit)))
+        .into_iter()
+        .collect()
 }
 
 /// Loaded project layers only: Codex itself decides whether the project is trusted.
@@ -2758,6 +2780,30 @@ mod tests {
         assert_eq!(json[1], json[3]);
     }
 
+    #[test]
+    fn a_long_session_keeps_codexs_own_window_and_the_users_own_limit() {
+        let native = crate::NativeCompaction::default();
+        let none = json!({"config": {}});
+        assert!(native_compaction(&native, &none).is_empty());
+        let shared = crate::NativeCompaction {
+            codex_limit: Some(200_000),
+            ..crate::NativeCompaction::default()
+        };
+        let config = native_compaction(&shared, &none);
+        assert_eq!(config.len(), 1);
+        assert_eq!(config["model_auto_compact_token_limit"], 200_000);
+        assert_eq!(
+            native_compaction(
+                &shared,
+                &json!({"config": {"model_auto_compact_token_limit": null}})
+            )
+            .len(),
+            1
+        );
+        let theirs = json!({"config": {"model_auto_compact_token_limit": 150000}});
+        assert!(native_compaction(&shared, &theirs).is_empty());
+    }
+
     pub(super) fn spec(tools: ToolSet, allowed_models: Option<AllowedModels>) -> SessionSpec {
         SessionSpec {
             cwd: PathBuf::from("/tmp"),
@@ -2789,6 +2835,7 @@ mod tests {
             output_hook: None,
             stop_hook: None,
             lean_worker: false,
+            native_compaction: None,
         }
     }
 

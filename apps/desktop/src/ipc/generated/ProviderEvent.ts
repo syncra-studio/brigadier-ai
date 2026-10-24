@@ -66,7 +66,13 @@ last: TokenUsage | null,
 /**
  * The model calls since the last report, each as it read its prompt.
  */
-calls?: Array<CallCache>, } | { "type": "contextSize", usedTokens: number, windowTokens: number | null, } | { "type": "compactionStarted", automatic: boolean, } | { "type": "compactionRefused" } | { "type": "compactionEnded", automatic: boolean, tokensBefore: number | null, tokensAfter: number | null, error: string | null, } | { "type": "taskNotice", itemId: string, text: string, } | { "type": "rateLimits", quota: QuotaSnapshot, } | { "type": "approvalRequested", request: ApprovalRequest, } | { "type": "approvalResolved", id: string, decision: ApprovalDecision, decidedBy: Decider, } | { "type": "turnCompleted", turnId: string | null, status: TurnStatus, durationMs: number | null, usage: TokenUsage | null, } | { "type": "error", error: ProviderError, } | { "type": "notice", level: NoticeLevel, message: string, } | { "type": "exited", code: number | null, 
+calls?: Array<CallCache>, } | { "type": "contextSize", usedTokens: number, windowTokens: number | null, } | { "type": "compactionStarted", automatic: boolean, } | { "type": "compactionRefused" } | { "type": "compactionEnded", automatic: boolean, tokensBefore: number | null, tokensAfter: number | null, error: string | null, 
+/**
+ * The CLI's own id for this compaction (Claude's `compact_boundary` uuid, Codex's
+ * `contextCompaction` item id), when it gives one: what a put-back of the session's
+ * decisions is tied to, so it happens once per compaction (run2-D8).
+ */
+nativeId?: string, } | { "type": "taskNotice", itemId: string, text: string, } | { "type": "rateLimits", quota: QuotaSnapshot, } | { "type": "approvalRequested", request: ApprovalRequest, } | { "type": "approvalResolved", id: string, decision: ApprovalDecision, decidedBy: Decider, } | { "type": "turnCompleted", turnId: string | null, status: TurnStatus, durationMs: number | null, usage: TokenUsage | null, } | { "type": "error", error: ProviderError, } | { "type": "notice", level: NoticeLevel, message: string, } | { "type": "exited", code: number | null, 
 /**
  * The signal that ended it, when one did.
  */

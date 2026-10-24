@@ -153,6 +153,7 @@ impl Fake {
             output_hook: None,
             stop_hook: None,
             lean_worker: false,
+            native_compaction: None,
         }
     }
 }

@@ -2643,6 +2643,7 @@ impl SessionManager {
             output_hook,
             stop_hook: None,
             lean_worker: false,
+            native_compaction: self.native_compaction(conv, choice.provider),
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);
@@ -4122,8 +4123,8 @@ impl SessionManager {
                     state.context = Some((*used_tokens, window));
                     window
                 };
-                // Past the seam, the hand-off (S22).
-                if self.seam_on(conv) {
+                // Past the seam, the hand-off (S22); a long session compacts in place instead.
+                if self.seam_on(conv) && self.long_mode(conv, cli.provider).is_none() {
                     self.seam_context(conv, cli, *used_tokens, window).await;
                 }
             }
@@ -4132,6 +4133,9 @@ impl SessionManager {
                 let used = conv.state.lock().await.context.map_or(0, |(used, _)| used);
                 self.seam_nudge(conv, Some(cli), used, true).await;
             }
+            // A long session compacts in place: its thread shows the CLI's own divider.
+            ProviderEvent::CompactionStarted { .. }
+                if self.long_mode(conv, cli.provider).is_some() => {}
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>
             {
@@ -4182,6 +4186,7 @@ impl SessionManager {
                 tokens_before,
                 tokens_after,
                 error,
+                ..
             } if conv.kind == ConversationKind::Chat => {
                 let running = conv.state.lock().await.compaction.take();
                 let now = now_ms();

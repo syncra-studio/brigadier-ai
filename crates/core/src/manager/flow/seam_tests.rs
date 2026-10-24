@@ -29,6 +29,8 @@ fn seam_on(flow: &mut Flow, hold: Duration) {
     let config = SeamConfig {
         tokens: 60_000,
         hold,
+        long: None,
+        tokens_set: false,
     };
     flow.seam = Some(config);
     flow.manager.set_seam(config);

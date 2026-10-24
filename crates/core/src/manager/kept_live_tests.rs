@@ -139,6 +139,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         output_hook: None,
         stop_hook: None,
         lean_worker: false,
+        native_compaction: None,
     };
     let ledger = Arc::new(Recorded(Mutex::default()));
     let started = provider.start(spec, ledger.clone()).await.expect("started");

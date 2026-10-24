@@ -609,6 +609,8 @@ async fn an_event_after_the_parents_seam_reaches_its_successor_once() {
     let config = SeamConfig {
         tokens: 60_000,
         hold: Duration::from_millis(200),
+        long: None,
+        tokens_set: false,
     };
     flow.seam = Some(config);
     flow.manager.set_seam(config);

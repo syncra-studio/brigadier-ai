@@ -2269,6 +2269,8 @@ mod litter_tests;
 #[cfg(unix)]
 mod local_commit_tests;
 #[cfg(unix)]
+mod long_session_tests;
+#[cfg(unix)]
 mod mcp_servers_tests;
 #[cfg(unix)]
 #[cfg(unix)]

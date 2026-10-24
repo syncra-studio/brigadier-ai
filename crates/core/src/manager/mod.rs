@@ -61,6 +61,7 @@ mod kept;
 mod kept_live_tests;
 mod lifecycle;
 mod local_files;
+mod long_sessions;
 mod mcp_login;
 mod mcp_secrets;
 mod outputs;

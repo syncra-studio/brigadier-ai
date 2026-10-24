@@ -2254,6 +2254,8 @@ async fn the_agent_fallback_keeps_a_written_handoff_note() {
     flow.manager.set_seam(SeamConfig {
         tokens: 60_000,
         hold: std::time::Duration::from_secs(60),
+        long: None,
+        tokens_set: false,
     });
     let mut settings = flow.core.settings();
     settings.switch_providers = true;

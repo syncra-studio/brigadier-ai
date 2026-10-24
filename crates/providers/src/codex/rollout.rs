@@ -257,6 +257,7 @@ fn compaction() -> ProviderEvent {
         tokens_before: None,
         tokens_after: None,
         error: None,
+        native_id: None,
     }
 }
 

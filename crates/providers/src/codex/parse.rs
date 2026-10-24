@@ -684,7 +684,7 @@ impl Parser {
                 self.compacting = Some((automatic, self.context_used, None));
                 ProviderEvent::CompactionStarted { automatic }
             }
-            ThreadItem::ContextCompaction { .. } => {
+            ThreadItem::ContextCompaction { id, .. } => {
                 let (automatic, tokens_before, tokens_after) =
                     self.compacting.take().unwrap_or((true, None, None));
                 self.compacted = true;
@@ -693,6 +693,7 @@ impl Parser {
                     tokens_before,
                     tokens_after,
                     error: None,
+                    native_id: Some(id.clone()),
                 }
             }
             _ => return,

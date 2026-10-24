@@ -351,6 +351,7 @@ impl SessionManager {
                         self.begin_move(conv, Some(cli)).await;
                     }
                 } else if let Some((used, window)) = used
+                    && self.long_mode(conv, cli.provider).is_none()
                     && used >= self.seam_config().threshold(window, base)
                 {
                     self.seam_nudge(conv, Some(cli), used, false).await;

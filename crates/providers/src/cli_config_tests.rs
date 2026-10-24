@@ -150,6 +150,7 @@ for line in sys.stdin:
             output_hook: None,
             stop_hook: None,
             lean_worker: false,
+            native_compaction: None,
         }
     }
 }

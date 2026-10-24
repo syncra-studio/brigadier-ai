@@ -986,6 +986,12 @@ pub enum ProviderEvent {
         tokens_before: Option<i64>,
         tokens_after: Option<i64>,
         error: Option<String>,
+        /// The CLI's own id for this compaction (Claude's `compact_boundary` uuid, Codex's
+        /// `contextCompaction` item id), when it gives one: what a put-back of the session's
+        /// decisions is tied to, so it happens once per compaction (run2-D8).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        native_id: Option<String>,
     },
     /// The CLI's own line for a background task's end that it took up in a turn of its own
     /// (Claude Code: `Background command "…" completed (exit code 0)`), shown before its reply.
@@ -1425,6 +1431,35 @@ pub struct SessionSpec {
     /// files. Its skills are cut through [`Self::switched_off`]; its instruction files still
     /// load.
     pub lean_worker: bool,
+    /// A session's thread under `BRIGADIER_LONG_SESSIONS` (run2-D2): the CLI compacts in place
+    /// with its own compaction instead of the session moving to a fresh one at a size. `None`:
+    /// as [`Self::auto_compact`] says.
+    pub native_compaction: Option<NativeCompaction>,
+}
+
+/// How a session's CLI compacts natively ([`SessionSpec::native_compaction`]). Brigadier
+/// re-implements nothing: it only sets the CLI's own options and hooks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeCompaction {
+    /// Claude: the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), a backstop just
+    /// above where Brigadier asks it to compact (run2-D5). Left out when the user set a window of
+    /// their own (G17); `autoCompactEnabled: false` in their settings still wins over it.
+    pub backstop_window: Option<i64>,
+    /// Codex: `model_auto_compact_token_limit`. `None`: Codex's own point (run2-D6).
+    pub codex_limit: Option<i64>,
+    /// Claude: the hooks that put the session's decisions back after each compaction
+    /// (run2-D8), one `SessionStart` hook (matcher `compact`) per slot.
+    pub restore: Option<RestoreHooks>,
+}
+
+/// The put-back hooks: slot `k` of `slots` runs `command args… --slot k`, which prints that
+/// slot's slice of the decisions, labelled, under Claude's 10,000-character cap per hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreHooks {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub slots: usize,
+    pub timeout_secs: u64,
 }
 
 /// The models a session's native subagents may run on, derived only from the user's model

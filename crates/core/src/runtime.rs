@@ -1660,6 +1660,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         output_hook: None,
         stop_hook: None,
         lean_worker: false,
+        native_compaction: None,
     }
 }
 

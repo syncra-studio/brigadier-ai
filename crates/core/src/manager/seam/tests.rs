@@ -562,6 +562,8 @@ fn the_threshold_leaves_room_in_a_small_window() {
     let config = SeamConfig {
         tokens: 200_000,
         hold: HOLD,
+        long: None,
+        tokens_set: false,
     };
     assert_eq!(config.threshold(Some(1_000_000), None), 200_000);
     assert_eq!(config.threshold(Some(200_000), None), 160_000);
@@ -578,7 +580,12 @@ fn the_seam_stays_below_codex_compaction_even_with_a_large_bootstrap() {
         let compact = maximum / 10 * 9;
         for window in [maximum, maximum / 100 * 95] {
             for tokens in [60_000, 200_000, 2_000_000] {
-                let config = SeamConfig { tokens, hold: HOLD };
+                let config = SeamConfig {
+                    tokens,
+                    hold: HOLD,
+                    long: None,
+                    tokens_set: false,
+                };
                 for base in [None, Some(maximum / 5 * 4), Some(maximum)] {
                     assert!(config.threshold(Some(window), base) < compact);
                 }

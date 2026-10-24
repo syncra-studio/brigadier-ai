@@ -21,6 +21,7 @@ use brigadier_providers::{ProviderEvent, ProviderKind, Role};
 use serde::{Deserialize, Serialize};
 
 use super::cli_ledger::{Ledger, LedgerFile};
+use super::long_sessions::LongSessions;
 use super::records::{READ_MAX, entry_text};
 use super::session_dir::{LineageEntry, write_atomic};
 use crate::thread_view::{HANDOFF_END, HANDOFF_MARK, NUDGE_MARK, SeamMark};
@@ -52,17 +53,25 @@ const USER_BYTES: usize = 80_000;
 pub(crate) struct SeamConfig {
     pub tokens: i64,
     pub hold: Duration,
+    /// `BRIGADIER_LONG_SESSIONS`: the CLI compacts in place instead of size seams
+    /// ([`super::long_sessions`]); `None`: off, seams as before.
+    pub long: Option<LongSessions>,
+    /// [`TOKENS_ENV`] was set: a long session's Codex compacts there too, the point a shared
+    /// comparison asks for, instead of at Codex's own (run2-D6).
+    pub tokens_set: bool,
 }
 
 impl SeamConfig {
     pub(crate) fn from_env() -> Self {
+        let set = std::env::var(TOKENS_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .filter(|tokens| *tokens > 0);
         Self {
-            tokens: std::env::var(TOKENS_ENV)
-                .ok()
-                .and_then(|value| value.trim().parse::<i64>().ok())
-                .filter(|tokens| *tokens > 0)
-                .unwrap_or(DEFAULT_TOKENS),
+            tokens: set.unwrap_or(DEFAULT_TOKENS),
             hold: HOLD,
+            long: LongSessions::from_env(),
+            tokens_set: set.is_some(),
         }
     }
 
