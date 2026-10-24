@@ -115,7 +115,8 @@ async function drive() {
     seen.asked = asked;
 
     // The keyboard: ↓ from the search to the picked model, ← to its agent, ↓ to the next agent,
-    // → into its models, typing searches, Escape clears the search, then closes.
+    // Space into its models, ← back, → into its models, typing searches, Escape clears the
+    // search, then closes.
     await open();
     const keys: [string, string | null][] = [];
     const press = async (name: string) => {
@@ -127,6 +128,8 @@ async function drive() {
     await press("ArrowLeft");
     await press("ArrowDown");
     seen.browsingLine = line();
+    await press(" ");
+    await press("ArrowLeft");
     await press("ArrowRight");
     await press("g");
     seen.searched = models().map((row) => row.textContent);

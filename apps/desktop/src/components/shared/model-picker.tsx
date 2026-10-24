@@ -118,7 +118,9 @@ function header(title: string, aside?: string) {
 const count = (n: number) => `${n} ${n === 1 ? "model" : "models"}`;
 
 /** Whether a key types a character into the search. */
-const typed = (event: KeyboardEvent) => event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
+// Space stays the focused row's activation.
+const typed = (event: KeyboardEvent) =>
+  event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 
 /**
  * The picker's open content. It opens on the checked row's agent (Automatic when that is

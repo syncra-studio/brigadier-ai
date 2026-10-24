@@ -12,12 +12,15 @@ test("a session's model picker continues on another agent from its models, and t
   const line = "Picking a model continues on Codex: fresh context, with a hand-off note.";
   assert.deepEqual(seen.codex, { line, models: ["GPT-5.5"] });
   assert.deepEqual(seen.asked, [{ provider: "codex", model: { provider: "codex", model: "gpt-5.5", effort: "medium" } }]);
-  // ↓ from the search to the picked model, ← to its agent, ↓ browses the next, → into its models,
-  // typing searches, the first Escape clears the search and keeps the picker open.
+  // ↓ from the search to the picked model, ← to its agent, ↓ browses the next, Space into its
+  // models, ← back, → into its models, typing searches, the first Escape clears the search and
+  // keeps the picker open.
   assert.deepEqual(seen.keys, [
     ["ArrowDown", "Opus 5.5Default"],
     ["ArrowLeft", "Claude Code"],
     ["ArrowDown", "Codex"],
+    [" ", "GPT-5.5"],
+    ["ArrowLeft", "Codex"],
     ["ArrowRight", "GPT-5.5"],
     ["g", "search:g"],
     ["Escape", "search:"],
