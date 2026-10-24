@@ -134,7 +134,7 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
         <span
           className={cn(
             "text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums",
-            action && !actionVisible && "group-hover/row:invisible group-focus-within/row:invisible",
+            action && !actionVisible && "group-hover/row:hidden group-focus-within/row:hidden",
           )}
         >
           {meta}
@@ -144,7 +144,7 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
   );
 }
 
-/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused;
+/** The action's place: after the text, replacing the meta while the row is hovered or focused;
  * or, for a row whose action must stay put (a failed row's Restart and ×), after the meta, taking
  * its own room so the row's words truncate before it. */
 function RowAction({ children, visible }: { children: ReactNode; visible?: boolean | undefined }) {
@@ -153,7 +153,7 @@ function RowAction({ children, visible }: { children: ReactNode; visible?: boole
       data-slot="summary-row-action"
       className={cn(
         "items-center",
-        visible ? "flex shrink-0" : "absolute inset-y-0 end-0 hidden group-focus-within/row:flex group-hover/row:flex",
+        visible ? "flex shrink-0" : "hidden shrink-0 group-focus-within/row:flex group-hover/row:flex",
       )}
     >
       {children}
@@ -222,7 +222,7 @@ export function SummaryRowButton({
   );
   if (!action) return button;
   return (
-    <div className="group/row relative isolate flex min-w-0">
+    <div className="group/row relative isolate flex min-w-0 items-center gap-2">
       {button}
       <RowAction visible={actionVisible}>{action}</RowAction>
     </div>
