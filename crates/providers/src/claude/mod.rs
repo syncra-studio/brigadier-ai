@@ -186,6 +186,8 @@ impl Claude {
         let mut spec = self.env.spec(&self.binary()?);
         spec.args = Self::control_args().into_iter().map(Into::into).collect();
         spec.cwd = Some(self.platform.paths().data_dir.clone());
+        spec.env
+            .push(("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), "5m".into()));
         let process::Spawned {
             process,
             mut stdout,
@@ -245,6 +247,7 @@ impl Claude {
             [
                 "--verbose",
                 "--no-session-persistence",
+                "--exclude-dynamic-system-prompt-sections",
                 "--strict-mcp-config",
                 "--mcp-config",
                 r#"{"mcpServers":{}}"#,
@@ -334,6 +337,8 @@ impl Claude {
                 .map(str::to_owned)
                 .to_vec()
         };
+        // The CLI moves dynamic facts to the first message without removing them (D63).
+        args.push("--exclude-dynamic-system-prompt-sections".into());
         // A lean worker (G23) loads only the servers Brigadier gives it, none of the user's,
         // with the user's settings and instruction files still read.
         if user_setup && spec.lean_worker {
@@ -435,6 +440,16 @@ impl Claude {
 /// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
 fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
     let mut env = spec.env.clone();
+    // Workers (including lean research and fusion) and one-shots use short cache writes;
+    // user sessions, Chats and their successors keep the CLI default (D63).
+    if spec.ephemeral
+        || matches!(
+            spec.tools,
+            ToolSet::Lean | ToolSet::None | ToolSet::Web | ToolSet::Review
+        )
+    {
+        env.push(("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), "5m".into()));
+    }
     // What the MCP config of Brigadier's servers (the computer-use driver's, S35) refers to by
     // name, each under its server's own alias, and what the output hook reads. The user's own
     // servers load from their setup, untouched.
@@ -2532,6 +2547,68 @@ for line in sys.stdin:
                 assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
             }
         }
+    }
+
+    #[test]
+    fn cache_defaults_cover_every_launch_kind_and_origin() {
+        let dir = Temp::new();
+        let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
+        let native_id = "00000000-0000-4000-8000-000000000000";
+        for origin in [
+            Origin::New,
+            Origin::NewAs {
+                native_id: native_id.into(),
+            },
+            Origin::Resume {
+                native_id: native_id.into(),
+            },
+            Origin::Fork {
+                native_id: native_id.into(),
+            },
+        ] {
+            spec.origin = origin;
+            for (tools, short) in [
+                (ToolSet::Default, false),
+                (ToolSet::Thread, false),
+                (ToolSet::SideChat, false),
+                (ToolSet::TabChat, false),
+                (ToolSet::Lean, true),
+                (ToolSet::None, true),
+                (ToolSet::Web, true),
+                (ToolSet::Review, true),
+            ] {
+                spec.tools = tools;
+                for ephemeral in [false, true] {
+                    spec.ephemeral = ephemeral;
+                    let args =
+                        Claude::session_args(&spec, dir.path(), native_id, false, None).unwrap();
+                    let terminal = Claude::session_flags(&spec, dir.path(), false, None);
+                    for args in [args, terminal] {
+                        assert_eq!(
+                            args.iter()
+                                .filter(|arg| *arg == "--exclude-dynamic-system-prompt-sections")
+                                .count(),
+                            1
+                        );
+                    }
+                    let env = session_env(&spec, true);
+                    let ttl = env
+                        .iter()
+                        .rev()
+                        .find(|(key, _)| key == "CLAUDE_CODE_PROMPT_CACHE_TTL");
+                    assert_eq!(
+                        ttl.map(|(_, value)| value.as_str()),
+                        (short || ephemeral).then_some("5m"),
+                        "{tools:?} {ephemeral}"
+                    );
+                }
+            }
+        }
+        assert!(
+            Claude::control_args()
+                .iter()
+                .any(|arg| arg == "--exclude-dynamic-system-prompt-sections")
+        );
     }
 
     #[test]

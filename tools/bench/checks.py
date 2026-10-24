@@ -223,116 +223,69 @@ class WorkerModel(unittest.TestCase):
 
 
 class CacheOptions(unittest.TestCase):
-    def test_daemon_selects_an_executable_launcher_only_when_enabled(self):
-        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
-            for enabled, stable in ((False, False), (False, True), (True, False), (True, True)):
-                root = Path(tmp) / f"dynamic {enabled} stable {stable} with spaces"
-                root.mkdir()
-                args = SimpleNamespace(daemon="/fake/daemon", worker_model="auto",
-                                       claude_flag_exclude_dynamic=enabled, worker_cache_ttl=None, stable_standing=stable)
-                daemon = Daemon(args, root)
-                daemon.provider = "claude"
-                calls = []
-                def call(method, **fields):
-                    calls.append((method, fields))
-                    return {"catalog": {"settings": {}}}
-                daemon.call = call
-                with patch.dict(os.environ, {"BRIGADIER_BENCH_STABLE_STANDING": "1"}), \
-                        patch("bench.subprocess.Popen") as process, patch("bench.shutil.which", return_value="/bin/echo"):
-                    process.return_value.poll.return_value = None
-                    daemon.start()
-                launched_env = process.call_args.kwargs["env"]
-                self.assertEqual(launched_env.get("BRIGADIER_BENCH_STABLE_STANDING"), "1" if stable else None)
-                settings = calls[-1][1]["settings"]
-                if enabled:
-                    launcher = Path(settings["agentPaths"][0]["path"])
-                    config = json.loads(daemon.launch_config.read_text())
-                    config["parent"] = "parent-session"
-                    daemon.launch_config.write_text(json.dumps(config))
-                    env = dict(os.environ, BRIGADIER_SESSION="parent-session")
-                    discovered = subprocess.run([str(launcher), "--version"], env=env, check=True, capture_output=True, text=True)
-                    self.assertEqual(discovered.stdout.strip(), "--version")
-                    session = subprocess.run([str(launcher), "-p", "task"], env=env, check=True, capture_output=True, text=True)
-                    self.assertEqual(session.stdout.strip(), EXCLUDE_DYNAMIC + " -p task")
-                else:
-                    self.assertNotIn("agentPaths", settings)
-                    self.assertIsNone(daemon.launch_config)
-
-    def test_plain_flag_is_opt_in_and_claude_only(self):
-        args = SimpleNamespace(effort="low", claude_flag_exclude_dynamic=False)
-        baseline = bench.plain_command("claude", "task", "opus", args, "sid")
-        self.assertNotIn(EXCLUDE_DYNAMIC, baseline)
-        args.claude_flag_exclude_dynamic = True
-        changed = bench.plain_command("claude", "task", "opus", args, "sid")
-        self.assertEqual(changed, baseline[:-1] + [EXCLUDE_DYNAMIC, "task"])
-        self.assertNotIn(EXCLUDE_DYNAMIC, bench.plain_command("codex", "task", None, args, "sid"))
-
-    def test_launcher_distinguishes_parent_worker_and_discovery(self):
+    def test_daemon_audits_shipped_claude_without_changing_startup(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
             root = Path(tmp)
-            config = root / "launch.json"
-            audit = root / "audit.jsonl"
-            config.write_text(json.dumps(dict(binary="/real/claude", parent="parent-session",
-                                              exclude_dynamic=True, worker_cache_ttl="5m", audit=str(audit))))
-            for session, arguments, role, ttl in (
-                    ("parent-session", ["-p", "task"], "parent", "1h"),
-                    ("worker-session", ["-p", "task"], "worker", "5m"),
-                    ("worker-session", ["--print", "task"], "worker", "5m"),
-                    ("worker-session", ["--version"], None, "1h"),
-                    (None, ["--version"], None, "1h")):
-                with self.subTest(session=session, arguments=arguments):
-                    env = {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
-                    if session:
-                        env["BRIGADIER_SESSION"] = session
-                    with patch.dict(os.environ, env, clear=True), patch("claude_launch.os.execve") as execute:
-                        launch(config, arguments)
-                    binary, argv, actual_env = execute.call_args.args
-                    self.assertEqual(binary, "/real/claude")
-                    self.assertEqual(argv, [binary] + ([EXCLUDE_DYNAMIC] if role else []) + arguments)
-                    self.assertEqual(actual_env["CLAUDE_CODE_PROMPT_CACHE_TTL"], ttl)
-            rows = [json.loads(line) for line in audit.read_text().splitlines()]
-            self.assertEqual([r["role"] for r in rows], ["parent", "worker", "worker"])
-            self.assertEqual([r["cache_ttl_override"] for r in rows], [None, "5m", "5m"])
-            # The independent levers also work separately, without an inherited TTL.
-            config.write_text(json.dumps(dict(binary="/real/claude", parent="parent-session",
-                                              exclude_dynamic=False, worker_cache_ttl="5m", audit=str(audit))))
-            with patch.dict(os.environ, {"BRIGADIER_SESSION": "parent-session"}, clear=True), patch("claude_launch.os.execve") as execute:
-                launch(config, ["-p"])
-            self.assertNotIn("CLAUDE_CODE_PROMPT_CACHE_TTL", execute.call_args.args[2])
-            self.assertEqual(execute.call_args.args[1], ["/real/claude", "-p"])
+            args = SimpleNamespace(daemon="/fake/daemon", worker_model="auto")
+            daemon = Daemon(args, root)
+            daemon.provider = "claude"
+            calls = []
+            def call(method, **fields):
+                calls.append((method, fields))
+                return {"catalog": {"settings": {}}}
+            daemon.call = call
+            with patch("bench.subprocess.Popen") as process, patch("bench.shutil.which", return_value="/bin/echo"):
+                process.return_value.poll.return_value = None
+                daemon.start()
+            launcher = Path(calls[-1][1]["settings"]["agentPaths"][0]["path"])
+            config = json.loads(daemon.launch_config.read_text())
+            config["parent"] = "parent-session"
+            daemon.launch_config.write_text(json.dumps(config))
+            env = dict(os.environ, BRIGADIER_SESSION="parent-session")
+            for arguments in [["--version"], ["-p", EXCLUDE_DYNAMIC, "task"]]:
+                actual = subprocess.run([str(launcher), *arguments], env=env, check=True, capture_output=True, text=True)
+                self.assertEqual(actual.stdout.strip(), " ".join(arguments))
 
-    def test_launcher_audits_the_actual_standing_text_and_environment(self):
+    def test_plain_baseline_keeps_the_clis_defaults(self):
+        args = SimpleNamespace(effort="low")
+        for provider in ["claude", "codex"]:
+            self.assertNotIn(EXCLUDE_DYNAMIC, bench.plain_command(provider, "task", None, args, "sid"))
+
+    def test_launcher_audits_actual_flags_environment_and_standing_without_mutation(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
             root = Path(tmp)
             config, audit = root / "launch.json", root / "audit.jsonl"
-            config.write_text(json.dumps(dict(binary="/real/claude", parent="parent-session",
-                                              exclude_dynamic=True, worker_cache_ttl=None, audit=str(audit))))
+            config.write_text(json.dumps(dict(binary="/real/claude", parent="parent-session", audit=str(audit))))
             standing = "$BRIGADIER_SESSION_DIR $BRIGADIER_LEDGER"
-            env = dict(BRIGADIER_SESSION="parent-session", BRIGADIER_SESSION_DIR="/session", BRIGADIER_LEDGER="/session/record/ledger.md")
-            with patch.dict(os.environ, env, clear=True), patch("claude_launch.os.execve"):
-                launch(config, ["-p", "--append-system-prompt", standing, "task"])
-            row = json.loads(audit.read_text())
-            self.assertEqual(row["standing_sha256"], hashlib.sha256(standing.encode()).hexdigest())
-            self.assertTrue(row["standing_placeholders"])
-            self.assertTrue(row["standing_env_present"])
+            arguments = ["-p", EXCLUDE_DYNAMIC, "--append-system-prompt", standing]
+            for session, ttl in [("parent-session", None), ("worker-session", "5m")]:
+                env = dict(BRIGADIER_SESSION=session, BRIGADIER_SESSION_DIR="/session", BRIGADIER_LEDGER="/session/record/ledger.md")
+                if ttl:
+                    env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = ttl
+                with patch.dict(os.environ, env, clear=True), patch("claude_launch.os.execve") as execute:
+                    launch(config, arguments)
+                self.assertEqual(execute.call_args.args, ("/real/claude", ["/real/claude", *arguments], env))
+            rows = [json.loads(line) for line in audit.read_text().splitlines()]
+            self.assertEqual([r["role"] for r in rows], ["parent", "worker"])
+            self.assertEqual([r["cache_ttl_env"] for r in rows], [None, "5m"])
+            for row in rows:
+                self.assertEqual(row["standing_sha256"], hashlib.sha256(standing.encode()).hexdigest())
+                self.assertTrue(row["standing_placeholders"])
+                self.assertTrue(row["standing_env_present"])
+                self.assertTrue(row["exclude_dynamic"])
 
-    def test_option_defaults_metadata_and_invalid_ttl(self):
+    def test_report_records_shipped_defaults_and_rejects_retired_switches(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
             base = [sys.executable, "-I", str(bench.HERE / "bench.py"), "--skip", "--arms", "A,W", "--output", tmp]
             subprocess.run(base, check=True, capture_output=True)
             report = json.loads((Path(tmp) / "report.json").read_text())
-            self.assertFalse(report["claude_flag_exclude_dynamic"])
-            self.assertIsNone(report["worker_cache_ttl"])
-            self.assertFalse(report["stable_standing"])
-            subprocess.run(base + ["--claude-flag-exclude-dynamic", "--worker-cache-ttl", "5m", "--stable-standing"], check=True, capture_output=True)
-            report = json.loads((Path(tmp) / "report.json").read_text())
             self.assertTrue(report["claude_flag_exclude_dynamic"])
             self.assertEqual(report["worker_cache_ttl"], "5m")
             self.assertTrue(report["stable_standing"])
-            self.assertIn("stable standing = True", (Path(tmp) / "report.md").read_text())
-            bad = subprocess.run(base + ["--worker-cache-ttl", "garbage"], capture_output=True, text=True)
-            self.assertEqual(bad.returncode, 2)
-            self.assertIn("invalid choice", bad.stderr)
+            self.assertIn("Brigadier startup:", (Path(tmp) / "report.md").read_text())
+            for retired in ["--claude-flag-exclude-dynamic", "--worker-cache-ttl", "--stable-standing"]:
+                bad = subprocess.run(base + [retired], capture_output=True, text=True)
+                self.assertEqual(bad.returncode, 2)
 
 
 class Graders(unittest.TestCase):

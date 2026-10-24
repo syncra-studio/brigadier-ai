@@ -2584,10 +2584,7 @@ impl SessionManager {
             access: launch
                 .as_ref()
                 .map_or(Access::ReadOnly, |launch| launch.access),
-            append_system_prompt: Some(prompts::with_session_paths(
-                &prompt,
-                self.session_dir(&conv.id).root(),
-            )),
+            append_system_prompt: Some(prompts::standing_text(&prompt)),
             // Brigadier's own MCP server is gone (G16): the user's load from their setup, the
             // computer-use driver's beside them.
             mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),

@@ -24,7 +24,6 @@ sys.path.insert(0, str(HERE))
 from metrics import FIELDS, cost, parse, records
 from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
 from tasks import TASKS, VERSION, fixture, grade
-from claude_launch import EXCLUDE_DYNAMIC
 
 spec = importlib.util.spec_from_file_location("bench_ipc", ROOT / "tools/live-smoke/smoke.py")
 ipc_module = importlib.util.module_from_spec(spec)
@@ -146,8 +145,6 @@ def plain_command(provider, prompt, model, args, sid):
                ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-c", f'model_reasoning_effort="{args.effort}"'])
     if model:
         command += ["--model", model]
-    if provider == "claude" and args.claude_flag_exclude_dynamic:
-        command += [EXCLUDE_DYNAMIC]
     command += [prompt]
     return command
 
@@ -209,8 +206,6 @@ class Daemon:
         models = models_file(self.root, self.args.worker_model)
         env.update(BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_MODELS_FILE=str(models),
                    TMPDIR=str(self.root), SHELL=shutil.which("zsh") or "/bin/bash")
-        if self.args.stable_standing:
-            env["BRIGADIER_BENCH_STABLE_STANDING"] = "1"
         with (self.root / "daemon.log").open("w") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)], env=env,
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
@@ -224,14 +219,13 @@ class Daemon:
         catalog = wait(ready, 60)["catalog"]
         settings = catalog["settings"]
         settings.update(onboarded=True, introSeen=True, defaultPermission="full")
-        if self.provider == "claude" and (self.args.claude_flag_exclude_dynamic or self.args.worker_cache_ttl):
+        if self.provider == "claude":
             binary = shutil.which("claude")
             if not binary:
-                raise RuntimeError("Claude binary missing for cache experiment")
+                raise RuntimeError("Claude binary missing for launch audit")
             self.launch_config = self.root / "claude-launch.json"
             self.launch_config.write_text(json.dumps(dict(
-                binary=binary, parent=None, exclude_dynamic=self.args.claude_flag_exclude_dynamic,
-                worker_cache_ttl=self.args.worker_cache_ttl, audit=str(self.root / "claude-launch.jsonl"))))
+                binary=binary, parent=None, audit=str(self.root / "claude-launch.jsonl"))))
             launcher = self.root / "claude-bench"
             command = [sys.executable, "-I", str(HERE / "claude_launch.py"), str(self.launch_config)]
             launcher.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
@@ -447,7 +441,7 @@ def markdown(report):
     prepare(report)
     lines = ["# CLI bench", "", "Report only; regressions never gate CI or releases.", "",
              f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}; worker model {report.get('worker_model', 'pinned')}", "",
-             f"Cache experiment: exclude dynamic = {report.get('claude_flag_exclude_dynamic', False)}; worker TTL override = {report.get('worker_cache_ttl') or 'CLI default'}; stable standing = {report.get('stable_standing', False)}", "",
+             f"Brigadier startup: exclude dynamic = {report.get('claude_flag_exclude_dynamic', False)}; worker TTL = {report.get('worker_cache_ttl') or 'CLI default'}; stable standing = {report.get('stable_standing', False)}", "",
              "| Arm | Task/run | Status | Pass | Wall s | First output s | Worktree s | API calls | Input / cache write / cache read / output | Cost units | CLI commands | Ledger adds | Injected msgs / bytes |",
              "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---|"]
     for r in report["runs"]:
@@ -507,12 +501,6 @@ def run_main():
     p.add_argument("--effort", choices=["low", "medium", "high"], default="low")
     p.add_argument("--worker-model", choices=["pinned", "auto"], default="pinned",
                    help="auto: W's worker gets no --model/--effort and the daemon has the shipped rules file, so Brigadier's advice picks them")
-    p.add_argument("--claude-flag-exclude-dynamic", action="store_true",
-                   help="Report-only experiment: move dynamic Claude system sections to the first user message, for parents and workers")
-    p.add_argument("--worker-cache-ttl", choices=["5m", "1h"], default=None,
-                   help="Report-only experiment: override CLAUDE_CODE_PROMPT_CACHE_TTL for Claude workers only")
-    p.add_argument("--stable-standing", action="store_true",
-                   help="Report-only experiment: keep standing path variables in the isolated daemon system text")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--scratch-prefix", default="brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-", help="Unique run/worker prefix for /tmp scratch")
     p.add_argument("--keep-transcripts", type=Path, default=None, help="Copy each run's native transcripts to DIR/<arm>-<task>-<run>/")
@@ -527,9 +515,9 @@ def run_main():
               "created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "effort": args.effort,
               "requested_models": {"claude": args.claude_model, "codex": args.codex_model},
               "worker_model": args.worker_model,
-              "claude_flag_exclude_dynamic": args.claude_flag_exclude_dynamic,
-              "worker_cache_ttl": args.worker_cache_ttl,
-              "stable_standing": args.stable_standing,
+              "claude_flag_exclude_dynamic": True,
+              "worker_cache_ttl": "5m",
+              "stable_standing": True,
               "standing_instruction_bytes": (ROOT / "crates/core/src/manager/standing_instructions.md").stat().st_size,
               "runs": []}
     if args.skip:

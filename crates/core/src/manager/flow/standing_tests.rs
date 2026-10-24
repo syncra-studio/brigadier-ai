@@ -10,7 +10,7 @@ use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply, Script};
 use crate::manager::prompts::{
     LEDGER_ENV, NO_AI_COAUTHORS, SESSION_DIR_ENV, STANDING_INSTRUCTIONS, WORKERS_LINE,
-    with_session_paths,
+    standing_text,
 };
 
 /// A thread that starts one worker, and a worker that answers.
@@ -66,7 +66,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         flow.say_to(&chat, "Which nozzle?").await;
         flow.settled_in(&chat).await;
         let specs = flow.specs();
-        // Exactly the file with its two paths written out, and for Codex the user's default
+        // Exactly the file with its path placeholders, and for Codex the user's default
         // "no AI co-authors" (Claude's settings hold it to that instead).
         let template = match provider {
             ProviderKind::Claude => STANDING_INSTRUCTIONS.trim_end().to_owned(),
@@ -76,12 +76,8 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         };
         let thread = of(&specs, ToolSet::Thread);
         let folder = flow.manager.session_dir(&flow.conversation);
-        let expected = with_session_paths(&template, folder.root());
-        assert!(!expected.contains("$BRIGADIER_"), "{expected}");
-        assert!(expected.contains(&format!(
-            "Keep a ledger at {}.",
-            folder.record().join("ledger.md").display()
-        )));
+        let expected = standing_text(&template);
+        assert!(expected.contains("Keep a ledger at $BRIGADIER_LEDGER."));
         // S22b's lines (§6 as amended on 10-23): ids and the time from `ledger add`, the
         // Decision and Open kinds, and derived documents that cite entry ids.
         for line in [
@@ -108,10 +104,11 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         let own = env(&worker, SESSION_DIR_ENV).expect("its folder");
         assert_eq!(
             worker.append_system_prompt.as_deref(),
-            Some(&*with_session_paths(
-                &template.replacen(&format!("\n{WORKERS_LINE}"), "", 1),
-                std::path::Path::new(own)
-            ))
+            Some(&*standing_text(&template.replacen(
+                &format!("\n{WORKERS_LINE}"),
+                "",
+                1
+            )))
         );
         assert!(expected.contains(WORKERS_LINE));
         assert!(
@@ -133,10 +130,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
             .clone();
         let chat_prompt = chat_spec.append_system_prompt.as_deref().unwrap();
         assert!(
-            chat_prompt.starts_with(&format!(
-                "{}\n\n",
-                with_session_paths(STANDING_INSTRUCTIONS.trim_end(), chat_folder.root())
-            )),
+            chat_prompt.starts_with(&format!("{}\n\n", STANDING_INSTRUCTIONS.trim_end())),
             "{chat_prompt}"
         );
         assert!(!chat_prompt.contains("runs no workers"));
@@ -144,6 +138,15 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
             env(&chat_spec, LEDGER_ENV),
             Some(&*chat_folder.record().join("ledger.md").display().to_string())
         );
+        // Every placeholder used by the standing text resolves in each actual CLI environment.
+        for spec in [&thread, &worker, &chat_spec] {
+            let text = spec.append_system_prompt.as_ref().unwrap();
+            assert!(!text.contains(env(spec, SESSION_DIR_ENV).unwrap()));
+            for name in [SESSION_DIR_ENV, LEDGER_ENV, "TMPDIR"] {
+                assert!(text.contains(&format!("${name}")));
+                assert!(!env(spec, name).unwrap_or_default().is_empty(), "{name}");
+            }
+        }
         flow.stop().await;
     }
 }

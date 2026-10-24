@@ -1334,7 +1334,7 @@ pub struct SessionSpec {
     /// A one-shot run that nothing ever resumes, forks or continues (a Brain pass, a commit
     /// message, a handoff note): a new or forked Codex thread is started ephemeral, never saved,
     /// so it stays out of the Codex app's lists and leaves nothing to clean up. Such a thread
-    /// can't be resumed once its process ends. Claude ignores it.
+    /// can't be resumed once its process ends. Claude uses five-minute cache writes for it (D63).
     pub ephemeral: bool,
     pub access: Access,
     /// Appended to the CLI's own system prompt.

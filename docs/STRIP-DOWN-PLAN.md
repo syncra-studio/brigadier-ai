@@ -78,6 +78,8 @@ The user's `disableAllHooks` applies inside Brigadier too, including to Brigadie
 The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
 choice per worker, never the user's own sessions.
 
+D63: every Claude launch uses the CLI’s `--exclude-dynamic-system-prompt-sections`; it and the cache TTL option below are the CLI’s own options, and the facts the model sees are unchanged (G17).
+
 **Brigadier pushes nothing (G1).** A thread receives only:
 - the user's messages;
 - results of things it started itself, which the CLI already delivers;
@@ -139,6 +141,8 @@ card), the rail above its composer and its worker cards and panel. It is like Cl
 Delegator's worker tabs. Archiving or deleting the parent takes its workers (S20). Under the hood a worker is
 still a plain CLI with its own worktree and its own checks. A worker can't start workers of its own; it may use
 its CLI's own subagents (user, 2026-10-23: "workers cant start other workers").
+
+D63: Claude workers (including lean research and fusion consults) and Brigadier’s one-shots use `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`; user sessions, Chats and their seam successors keep the CLI default.
 
 **The parent knows everything about its workers (Q9).** A worker's turn end, question, prompt or stop reaches its
 parent, idle or not, the Delegator way: a `brigadier wait` the parent keeps in its CLI's background re-invokes it
@@ -1743,6 +1747,7 @@ message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Op
 "cites entry ids" line were added on 10-23 (S22b, `research/CONTINUITY.md` §3.1–§3.6) (user, 2026-10-23: "find a fix for this").
 A worker gets the file without its last line: `brigadier start` refuses a worker's own workers, and it has no
 brigade skill (the w152 bench, 10-23).
+D63, D58: appended standing text keeps `$NAME` path placeholders and explains shell expansion; every named variable is exported by the session, so the text is identical across sessions.
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.

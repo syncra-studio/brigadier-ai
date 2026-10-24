@@ -8,7 +8,7 @@ use crate::model::{GitStyle, Settings};
 
 /// All Brigadier adds to a session (G17): `standing_instructions.md`, one template for every
 /// session. Claude gets it with `--append-system-prompt`, Codex as the thread's developer
-/// instructions, with only the two paths it names filled in ([`with_session_paths`]).
+/// instructions. Its path placeholders resolve through the session environment (D63, D58).
 pub(crate) const STANDING_INSTRUCTIONS: &str = include_str!("standing_instructions.md");
 
 /// The variable that holds the session's folder.
@@ -16,32 +16,9 @@ pub(crate) const SESSION_DIR_ENV: &str = "BRIGADIER_SESSION_DIR";
 /// The variable that holds the session's ledger, `record/ledger.md` in its folder.
 pub(crate) const LEDGER_ENV: &str = "BRIGADIER_LEDGER";
 
-/// `text` with the session folder and ledger it names ([`SESSION_DIR_ENV`], [`LEDGER_ENV`])
-/// written out as the paths of the session or worker at `root`, as its environment holds
-/// them. Claude asks before any command with a variable it can't check, so in Accept edits
-/// a ledger named only by its variable cost the user a card per entry.
-pub(crate) fn with_session_paths(text: &str, root: &std::path::Path) -> String {
-    session_paths(
-        text,
-        root,
-        std::env::var("BRIGADIER_BENCH_STABLE_STANDING")
-            .ok()
-            .as_deref(),
-    )
-}
-
-/// Default-off bench experiment, read in the daemon; the CLI already has both variables.
-fn session_paths(text: &str, root: &std::path::Path, stable: Option<&str>) -> String {
-    if stable == Some("1") {
-        return format!(
-            "{text}\n$NAME paths are environment variables; expand them in shell commands."
-        );
-    }
-    super::session_dir::standing_env(root)
-        .into_iter()
-        .fold(text.to_owned(), |text, (name, value)| {
-            text.replace(&format!("${name}"), &value)
-        })
+/// Keep the standing text identical across sessions; their environments carry the paths.
+pub(crate) fn standing_text(text: &str) -> String {
+    format!("{text}\n$NAME paths are environment variables; expand them in shell commands.")
 }
 
 /// A session's or worker's instructions: the standing instructions, then only what the user's
@@ -471,33 +448,15 @@ mod tests {
     }
 
     #[test]
-    fn standing_paths_are_stable_only_under_the_bench_gate() {
-        let first = std::path::Path::new("/sessions/one");
-        let second = std::path::Path::new("/sessions/two/workers/1-worker");
+    fn standing_paths_remain_environment_placeholders() {
         for template in [
             session_instructions(&Settings::default(), ProviderKind::Claude),
             worker_instructions(&Settings::default(), ProviderKind::Claude),
         ] {
-            let stable = session_paths(&template, first, Some("1"));
-            assert_eq!(stable, session_paths(&template, second, Some("1")));
-            assert!(stable.contains("$BRIGADIER_SESSION_DIR"));
-            assert!(stable.contains("$BRIGADIER_LEDGER"));
-            assert!(stable.ends_with("expand them in shell commands."));
-            for gate in [None, Some(""), Some("0"), Some("true")] {
-                for root in [first, second] {
-                    let expected = template
-                        .replace("$BRIGADIER_SESSION_DIR", &root.display().to_string())
-                        .replace(
-                            "$BRIGADIER_LEDGER",
-                            &root.join("record/ledger.md").display().to_string(),
-                        );
-                    assert_eq!(session_paths(&template, root, gate), expected);
-                }
-                assert_ne!(
-                    session_paths(&template, first, gate),
-                    session_paths(&template, second, gate)
-                );
-            }
+            let text = standing_text(&template);
+            assert!(text.contains("$BRIGADIER_SESSION_DIR"));
+            assert!(text.contains("$BRIGADIER_LEDGER"));
+            assert!(text.ends_with("expand them in shell commands."));
         }
     }
 
