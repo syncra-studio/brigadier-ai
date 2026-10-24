@@ -76,17 +76,27 @@ export function usedMcpServers(entries: readonly FileEntry[]): string[] {
 /** Shell tools whose call carries its command as `command`. */
 const SHELL_TOOLS = new Set(["Bash"]);
 
-/** The thread's commands that finished, by item id: a Codex command, a Claude shell call. */
-export function finishedCommands(entries: readonly FileEntry[]): { itemId: string; command: string }[] {
-  return entries.flatMap(({ event, parent }) => {
-    if (parent) return [];
-    if (event.type === "command" && event.status !== "inProgress") return [{ itemId: event.itemId, command: unwrapCommand(event.command) }];
-    if (event.type === "toolCall" && event.status !== "inProgress" && SHELL_TOOLS.has(toolName(event.name))) {
-      const command = field(event.input, "command");
-      return command ? [{ itemId: event.itemId, command: unwrapCommand(command) }] : [];
-    }
-    return [];
-  });
+/** A finished command of the thread, with what the keys below ask of it. */
+type Finished = { itemId: string; command: string; pushes: boolean; git: boolean };
+
+/**
+ * Each entry's finished command (a Codex command, a Claude shell call), read once: an item the
+ * stream left alone keeps its entry, and these keys are read with each streamed word.
+ */
+const finished = new WeakMap<FileEntry, Finished | null>();
+
+function finishedCommand(entry: FileEntry): Finished | null {
+  const { event, parent } = entry;
+  // A command still running is read again once it finishes.
+  if (parent || (event.type !== "command" && event.type !== "toolCall") || event.status === "inProgress") return null;
+  let made = finished.get(entry);
+  if (made === undefined) {
+    const asked = event.type === "command" ? event.command : SHELL_TOOLS.has(toolName(event.name)) ? field(event.input, "command") : null;
+    const command = asked ? unwrapCommand(asked) : null;
+    made = command === null ? null : { itemId: event.itemId, command, pushes: movesPullRequest(command), git: runsGit(command) };
+    finished.set(entry, made);
+  }
+  return made;
 }
 
 /** A command's own commands, one after another: `a && b; c`. */
@@ -107,10 +117,10 @@ export function runsGit(command: string): boolean {
  * new one changes it.
  */
 export function pullRequestKey(entries: readonly FileEntry[]): string {
-  return finishedCommands(entries).filter((each) => movesPullRequest(each.command)).map((each) => each.itemId).join(" ");
+  return entries.flatMap((entry) => finishedCommand(entry) ?? []).filter((each) => each.pushes).map((each) => each.itemId).join(" ");
 }
 
 /** What the branch row reads again on besides turn ends: the finished git commands so far. */
 export function gitCommandsKey(entries: readonly FileEntry[]): string {
-  return finishedCommands(entries).filter((each) => runsGit(each.command)).map((each) => each.itemId).join(" ");
+  return entries.flatMap((entry) => finishedCommand(entry) ?? []).filter((each) => each.git).map((each) => each.itemId).join(" ");
 }

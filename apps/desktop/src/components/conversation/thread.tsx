@@ -353,9 +353,7 @@ const ThreadRoot: FC<{
                 data-slot="aui_message-group"
                 className="flex flex-col gap-y-6 empty:hidden"
               >
-                <ThreadPrimitive.Messages>
-                  {() => <ThreadMessage />}
-                </ThreadPrimitive.Messages>
+                <ThreadPrimitive.Messages>{renderMessage}</ThreadPrimitive.Messages>
               </div>
               {/* Room for the newest turn's answer, made when the user sends. */}
               <div ref={setSpacer} aria-hidden data-slot="aui_thread-spacer" className="shrink-0" />
@@ -396,6 +394,11 @@ const ThreadRoot: FC<{
     </ThreadScrollContext.Provider>
   );
 };
+
+/* One function for every render: the message list keeps its rows only while its children
+   function stays the same, so a new one each time would draw every message again on each
+   streamed word. */
+const renderMessage = () => <ThreadMessage />;
 
 const ThreadMessage: FC = () => {
   const { AssistantMessage } = useThreadComponents();

@@ -237,6 +237,18 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
   }
 }
 
+/** Each entry's row as last made: an item the stream left alone keeps its entry (`mergeEntries`). */
+const madeSteps = new WeakMap<FileEntry, { stopped: boolean; step: ToolStep | null }>();
+
+/** `toolStep`, made once per entry: the thread is made again with each streamed word. */
+function keptToolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
+  const made = madeSteps.get(entry);
+  if (made?.stopped === stopped) return made.step;
+  const step = toolStep(entry, stopped);
+  madeSteps.set(entry, { stopped, step });
+  return step;
+}
+
 /** A turn's state in the words the thread's blocks use, with its error. */
 export function turnState(turn: Pick<ThreadTurn, "end" | "error">): { state: BlockState; error: string | null } {
   switch (turn.end) {
@@ -511,7 +523,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         return;
       }
       default: {
-        const kind = toolStep(entry, ended === "stopped");
+        const kind = keptToolStep(entry, ended === "stopped");
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }

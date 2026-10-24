@@ -832,6 +832,8 @@ export function ConversationView({
     [conversation, resolved, targets, mentions, running, onResume, pulled, attachments],
   );
 
+  // The same value while these stay: each change draws every message of the thread again.
+  const view = useMemo(() => ({ selection, conversation, embedded }), [selection, conversation, embedded]);
   // Every standalone conversation and draft can show its context card.
   const summary = !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
@@ -868,7 +870,7 @@ export function ConversationView({
     [checkout, conversationId],
   );
   return (
-    <ViewContext.Provider value={{ selection, conversation, embedded }}>
+    <ViewContext.Provider value={view}>
       <ThreadHistoryContext.Provider value={earlier}>
       <ComposerTargetContext.Provider value={target}>
         <WorkspacePaneContext.Provider value={workspace}>

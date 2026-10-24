@@ -1,6 +1,6 @@
 import { ComposerPrimitive, ComposerRail, ComposerRailItem, ComposerAttachments, type ComposerProps } from "@/components/conversation";
 import {
-  type FC,
+  memo,
   useContext,
   useEffect,
   useRef,
@@ -49,7 +49,7 @@ import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { useThreadView } from "@/state/cliThread";
+import { useOpenTurnStart } from "@/state/cliThread";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { loadModelRules, useModelRulesRead } from "@/state/modelRules";
 import { folderTrust } from "@/state/trust";
@@ -62,7 +62,7 @@ const NO_GROUPS: ModelGroup[] = [];
  * project (or none, for a Chat), environment, branch, permission level and model; a started
  * session can still change its model, effort and permission level, a Chat its model.
  */
-export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder }) => {
+export const ConversationComposer = memo(function ConversationComposer({ autoFocus, placeholder }: ComposerProps) {
   const target = useContext(ComposerTargetContext);
   const [modelOpen, setModelOpen] = useState(false);
   // The user's rules file, read as the composer opens and again as the model picker does, so a
@@ -235,7 +235,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
       </div>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
-};
+});
 
 /**
  * "Working for 2m 5s" while the conversation's CLI turn is open, from its first second on,
@@ -243,15 +243,14 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
  * question card (#366): nothing works then. The turn's start is its CLI's own timestamp.
  */
 function useWorkingFor(conversationId: string | null): string | null {
-  const view = useThreadView(conversationId);
+  const startedAtMs = useOpenTurnStart(conversationId);
   const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
   const asking = useBoard((s) => {
     const board = s.board;
     if (!conversationId || board?.conversationId !== conversationId) return false;
     return Object.values(board.questions).some((question) => question.answer === null);
   });
-  const last = view?.turns.at(-1);
-  const from = open && !asking && last && last.end === null ? last.startedAtMs : null;
+  const from = open && !asking ? startedAtMs : null;
   // The time, read as a turn starts (or the composer opens on one), then on each whole second of
   // it; none shows until it was read for this turn.
   const [clock, setClock] = useState<{ from: number | null; now: number }>(() => ({ from, now: Date.now() }));

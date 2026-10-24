@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/shared/model-selector";
@@ -58,12 +58,10 @@ export function useRepoInfo(path: string | null): RepoState & { reload: () => vo
   const reload = useCallback(() => setAttempt((value) => value + 1), []);
   const current = result !== null && result.key === key ? result : null;
   const cached = path === null ? null : (repoCache.get(path) ?? null);
-  return {
-    info: current?.info ?? cached,
-    error: current?.error ?? null,
-    loading: key !== null && current === null,
-    reload,
-  };
+  const info = current?.info ?? cached;
+  const error = current?.error ?? null;
+  const loading = key !== null && current === null;
+  return useMemo(() => ({ info, error, loading, reload }), [info, error, loading, reload]);
 }
 
 /** The draft's choices for this project (choices made for another project don't carry over). */
@@ -130,52 +128,55 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   // An effort above the user's ceiling comes down to one it allows: the picker can't be left on
   // what the rules refuse, so Send isn't either.
   const rules = useModelRules((s) => s.view?.rules ?? NO_RULES);
-  const model = allowedPick(rules, groups, resolveModel(draft.model, kind, project, settings, groups));
-  const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, project, settings, groups));
-  const permission = resolvePermission(draft.permission, settings);
-  const { environment } = draft;
-  const current = repo.info?.currentBranch ?? null;
-  const base = environment === "localCheckout" ? current : (draft.base ?? current);
+  // The same object while nothing it is made from changes: the composer and its send hang on it.
+  return useMemo(() => {
+    const model = allowedPick(rules, groups, resolveModel(draft.model, kind, project, settings, groups));
+    const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, project, settings, groups));
+    const permission = resolvePermission(draft.permission, settings);
+    const { environment } = draft;
+    const current = repo.info?.currentBranch ?? null;
+    const base = environment === "localCheckout" ? current : (draft.base ?? current);
 
-  let problem: string | null = null;
-  let target: DraftTarget | null = null;
-  if (noModel) {
-    problem = "No model is available. Turn one on in Providers.";
-  } else if (kind === "chat") {
-    target = { kind: "chat", setup: { type: "chat", model, permission } };
-  } else if (!project || !repoPath) {
-    problem = "This project has no repository yet. Add one in its settings.";
-  } else {
-    const place = environmentRequest({ ...draft, current, loading: repo.loading, holder });
-    if ("problem" in place) {
-      problem = place.problem;
+    let problem: string | null = null;
+    let target: DraftTarget | null = null;
+    if (noModel) {
+      problem = "No model is available. Turn one on in Providers.";
+    } else if (kind === "chat") {
+      target = { kind: "chat", setup: { type: "chat", model, permission } };
+    } else if (!project || !repoPath) {
+      problem = "This project has no repository yet. Add one in its settings.";
     } else {
-      const setup: SetupRequest = {
-        type: "session",
-        repo: repoPath,
-        environment: place.request,
-        permission,
-        orchestrator: model,
-        planMode: draft.planMode,
-      };
-      target = { kind: "session", projectId: project.id, setup };
+      const place = environmentRequest({ ...draft, current, loading: repo.loading, holder });
+      if ("problem" in place) {
+        problem = place.problem;
+      } else {
+        const setup: SetupRequest = {
+          type: "session",
+          repo: repoPath,
+          environment: place.request,
+          permission,
+          orchestrator: model,
+          planMode: draft.planMode,
+        };
+        target = { kind: "session", projectId: project.id, setup };
+      }
     }
-  }
 
-  return {
-    kind,
-    project,
-    repoPath,
-    repo,
-    draft,
-    environment,
-    base,
-    permission,
-    model,
-    defaultModel,
-    groups,
-    target,
-    problem,
-    noModel,
-  };
+    return {
+      kind,
+      project,
+      repoPath,
+      repo,
+      draft,
+      environment,
+      base,
+      permission,
+      model,
+      defaultModel,
+      groups,
+      target,
+      problem,
+      noModel,
+    };
+  }, [kind, project, settings, draft, groups, noModel, repoPath, repo, holder, rules]);
 }

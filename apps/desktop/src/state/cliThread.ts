@@ -51,6 +51,9 @@ function keepInput(earlier: ProviderEvent, later: ProviderEvent): ProviderEvent 
 const later = (a: number | undefined, b: number | undefined): number | undefined =>
   a === undefined ? b : b === undefined ? a : Math.max(a, b);
 
+/** Where each item of a merged list sits, by item id (see `mergeEntries`). */
+const positions = new WeakMap<readonly FileEntry[], Map<string, number>>();
+
 /**
  * `more` added to `entries`, one entry per item, as the engine merges them: a later event of an
  * item already there takes its place, which stays where the item began; a running command's
@@ -59,11 +62,18 @@ const later = (a: number | undefined, b: number | undefined): number | undefined
  */
 export function mergeEntries(entries: readonly FileEntry[], more: readonly FileEntry[]): FileEntry[] {
   const merged = [...entries];
-  const at = new Map<string, number>();
-  merged.forEach((entry, index) => {
-    const id = itemIdOf(entry.event);
-    if (id !== null) at.set(id, index);
-  });
+  // The index of the list merged into last, handed on to the list made from it: a streaming turn
+  // merges a delta at a time, and reading every entry again for each would cost the whole thread.
+  let at = positions.get(entries);
+  if (at) positions.delete(entries);
+  else {
+    at = new Map<string, number>();
+    for (const [index, entry] of merged.entries()) {
+      const id = itemIdOf(entry.event);
+      if (id !== null) at.set(id, index);
+    }
+  }
+  positions.set(merged, at);
   for (const entry of more) {
     const id = itemIdOf(entry.event);
     const index = id === null ? undefined : at.get(id);
@@ -211,6 +221,17 @@ export function useThreadView(conversationId: string | null): ThreadView | null 
     if (conversationId && !useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
   }, [conversationId]);
   return view;
+}
+
+/**
+ * When a conversation's newest turn started, while it runs; `null` once it ended or until its
+ * thread is read. Only a turn's start or end draws its readers again, not each streamed word.
+ */
+export function useOpenTurnStart(conversationId: string | null): number | null {
+  return useCliThread((s) => {
+    const last = conversationId ? s.views[conversationId]?.turns.at(-1) : undefined;
+    return last && last.end === null ? last.startedAtMs : null;
+  });
 }
 
 const NO_ROWS: readonly WorkerRow[] = [];

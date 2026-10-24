@@ -22,7 +22,8 @@ export function useSidebarWidth(key: string) {
     saveWidth(key, next);
   }, [key]);
   const [resizing, setResizing] = React.useState(false);
-  return { width, setWidth, resizing, setResizing };
+  // The same object while none of it changes: what is made from it (a pane's context) stays too.
+  return React.useMemo(() => ({ width, setWidth, resizing, setResizing }), [width, setWidth, resizing]);
 }
 
 /** Narrow windows temporarily fold the panel without changing the remembered wide choice. */
