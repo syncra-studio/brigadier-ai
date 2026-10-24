@@ -542,3 +542,354 @@ fn both_clis_follow_the_page() {
     assert_eq!(failures.lock().unwrap().as_slice(), [] as [String; 0]);
     let _ = std::fs::remove_dir_all(home);
 }
+
+const MCP_SERVER: &str = r#"import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if 'id' not in req:
+        continue
+    if req['method'] == 'initialize':
+        result = {'protocolVersion': req['params']['protocolVersion'], 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
+    elif req['method'] == 'tools/list':
+        result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'}}]}
+    else:
+        result = {}
+    print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}), flush=True)
+"#;
+
+/// What a plain CLI prints, run in `folder` with the throwaway homes in `vars`.
+fn plain(vars: &[(String, String)], folder: &Path, program: &str, args: &[&str]) -> String {
+    let out = Command::new(program)
+        .args(args)
+        .env_clear()
+        .envs(vars.iter().cloned())
+        .current_dir(folder)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{program} {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The servers a plain `claude mcp list` in `folder` lists.
+fn claude_servers(vars: &[(String, String)], folder: &Path) -> Vec<String> {
+    let text = plain(vars, folder, "claude", &["mcp", "list"]);
+    println!("claude mcp list in {}:\n{text}", folder.display());
+    let mut names: Vec<String> = text
+        .lines()
+        .filter(|line| line.contains(" - "))
+        .filter_map(|line| line.split_once(": ").map(|(name, _)| name.to_owned()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The servers a plain `codex mcp list` in `folder` has on.
+fn codex_servers(vars: &[(String, String)], folder: &Path) -> Vec<String> {
+    let text = plain(vars, folder, "codex", &["mcp", "list", "--json"]);
+    println!("codex mcp list --json in {}:\n{text}", folder.display());
+    let listed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+    let mut names: Vec<String> = listed
+        .iter()
+        .filter(|server| server["enabled"] == true)
+        .filter_map(|server| server["name"].as_str().map(str::to_owned))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The lines a CLI started in `folder` prints, until `stop` says enough; then it is stopped.
+fn read_until(
+    mut command: Command,
+    vars: &[(String, String)],
+    folder: &Path,
+    input: &[serde_json::Value],
+    stop: impl Fn(&serde_json::Value) -> Option<Vec<String>>,
+) -> Vec<String> {
+    use std::io::{BufRead, Write};
+    let mut child = command
+        .env_clear()
+        .envs(vars.iter().cloned())
+        .current_dir(folder)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for message in input {
+        writeln!(stdin, "{message}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let mut found = None;
+    for line in std::io::BufReader::new(child.stdout.take().unwrap()).lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(&line.unwrap()) else {
+            continue;
+        };
+        if let Some(names) = stop(&message) {
+            found = Some(names);
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let mut names = found.expect("the CLI ended before it said");
+    names.sort();
+    names
+}
+
+/// The skills a plain `claude` in `folder` starts with, from its `system/init`.
+fn claude_skills(vars: &[(String, String)], folder: &Path) -> Vec<String> {
+    let mut command = Command::new("claude");
+    command.args(["-p", "--output-format", "stream-json", "--verbose", "hi"]);
+    let names = read_until(command, vars, folder, &[], |message| {
+        (message["type"] == "system" && message["subtype"] == "init").then(|| {
+            message["skills"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|name| name.as_str().map(str::to_owned))
+                .collect()
+        })
+    });
+    println!("claude skills in {}: {names:?}", folder.display());
+    names
+}
+
+/// The skills a plain Codex in `folder` has on, from its app-server's `skills/list`.
+fn codex_skills(vars: &[(String, String)], folder: &Path) -> Vec<String> {
+    let mut command = Command::new("codex");
+    command.arg("app-server");
+    let input = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"clientInfo": {"name": "probe", "version": "1"}}}),
+        serde_json::json!({"jsonrpc": "2.0", "method": "initialized"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "skills/list",
+            "params": {"cwds": [folder]}}),
+    ];
+    let names = read_until(command, vars, folder, &input, |message| {
+        (message["id"] == 2 && message.get("method").is_none()).then(|| {
+            message["result"]["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|entry| entry["skills"].as_array().unwrap().iter())
+                .filter(|skill| skill["enabled"] == true)
+                .filter_map(|skill| skill["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+    });
+    println!("codex skills in {}: {names:?}", folder.display());
+    names
+}
+
+fn has(names: &[String], name: &str) -> bool {
+    names
+        .iter()
+        .any(|listed| listed == name || listed.ends_with(&format!(":{name}")))
+}
+
+/// D8 and G17, with the real CLIs in throwaway homes: what the page turns on only in a
+/// project, or off in a project while on everywhere, is exactly what a plain `claude` and a
+/// plain `codex` started there have; the Codex file stays out of git; and a project Codex
+/// doesn't trust is said so in plain words.
+#[test]
+#[ignore = "runs the installed claude and codex"]
+fn plain_clis_have_what_the_page_shows() {
+    let home = home("plain");
+    let claude_dir = home.join("claude");
+    let codex_home = home.join("codex");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let (project, sibling, wild) = (home.join("proj"), home.join("sib"), home.join("wild"));
+    for dir in [&project, &sibling, &wild] {
+        std::fs::create_dir_all(dir).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    // Codex trusts two of the three; the user's own Codex server is on everywhere.
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[mcp_servers.mine]\ncommand = \"/usr/bin/python3\"\nargs = [\"{}\"]\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            home.join("server.py").display(),
+            project.display(),
+            sibling.display()
+        ),
+    );
+    write(&home.join("server.py"), MCP_SERVER);
+    let mut vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(key, _)| key == "PATH" || key == "USER" || key == "TMPDIR")
+        .collect();
+    vars.push(("HOME".into(), home.display().to_string()));
+    vars.push(("CLAUDE_CONFIG_DIR".into(), claude_dir.display().to_string()));
+    vars.push(("CODEX_HOME".into(), codex_home.display().to_string()));
+    let roots = Roots::from_vars(vars.clone()).unwrap();
+    let env: Vec<(String, String)> = roots.vars.clone().into_iter().collect();
+    let library = Library::in_home(&home, PathBuf::from("/bin/brigadier"));
+    let secrets = Kept::default();
+    let projects = [project.clone(), sibling.clone(), wild.clone()];
+    let failures = std::sync::Mutex::new(Vec::new());
+    let report = |agent: Agent, step: PluginStep| {
+        if let PluginStep::Failed { reason } = step {
+            failures
+                .lock()
+                .unwrap()
+                .push(format!("{agent:?}: {reason}"));
+        }
+    };
+    let ctx = Ctx {
+        roots: &roots,
+        env: &env,
+        library: &library,
+        secrets: &secrets,
+        projects: &projects,
+        report: &report,
+    };
+    let no_failures = || assert_eq!(failures.lock().unwrap().as_slice(), [] as [String; 0]);
+    let server = |name: &str| {
+        format!(
+            r#"{{"mcpServers": {{"{name}": {{"command": "/usr/bin/python3", "args": ["{}"]}}}}}}"#,
+            home.join("server.py").display()
+        )
+    };
+    let tidy = home.join("src/tidy");
+    write(
+        &tidy.join("SKILL.md"),
+        "---\nname: tidy\ndescription: Tidy up.\n---\nbody\n",
+    );
+    let neat = home.join("src/neat");
+    write(
+        &neat.join("SKILL.md"),
+        "---\nname: neat\ndescription: Keep it neat.\n---\nbody\n",
+    );
+
+    // Only in this project: a server and a skill, "just me".
+    add(&ctx, &server("here"), None, Some(&project), false).unwrap();
+    add(
+        &ctx,
+        &tidy.display().to_string(),
+        None,
+        Some(&project),
+        false,
+    )
+    .unwrap();
+    no_failures();
+    // On everywhere, then off in this project: a server and a skill from the Library, and the
+    // user's own Codex server.
+    add(&ctx, &server("every"), None, None, false).unwrap();
+    add(&ctx, &neat.display().to_string(), None, None, false).unwrap();
+    switch(&ctx, "lib:every", Some(&project), false, None).unwrap();
+    switch(&ctx, "lib:neat", Some(&project), false, None).unwrap();
+    switch(&ctx, "server:mine", Some(&project), false, None).unwrap();
+    no_failures();
+
+    // The page.
+    use crate::manager::plugins::{ProjectCatalog, Unknown, build};
+    let catalog = |path: &Path, id: &str| ProjectCatalog {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        path: path.to_owned(),
+        catalog: Catalog::read(&roots, Some(path)),
+    };
+    let user = Catalog::read(&roots, None);
+    let page = build(
+        &user,
+        &[
+            catalog(&project, "proj"),
+            catalog(&sibling, "sib"),
+            catalog(&wild, "wild"),
+        ],
+        &library.entries(),
+        &Unknown,
+        None,
+    );
+    let item = |key: &str| {
+        page.items
+            .iter()
+            .find(|item| item.key == key)
+            .unwrap_or_else(|| panic!("{key} not on the page: {page:#?}"))
+    };
+    let here = project.display().to_string();
+    for key in ["lib:here", "lib:tidy"] {
+        assert!(!item(key).everywhere, "{key}");
+        assert_eq!(item(key).on_in, std::slice::from_ref(&here), "{key}");
+    }
+    for key in ["lib:every", "lib:neat"] {
+        assert!(item(key).everywhere, "{key}");
+        assert_eq!(item(key).off_in, std::slice::from_ref(&here), "{key}");
+    }
+    let wild_line = page.projects.iter().find(|line| line.id == "wild").unwrap();
+    assert_eq!(wild_line.notes.len(), 1, "{wild_line:?}");
+    assert_eq!(
+        wild_line.notes[0].message,
+        "Codex only reads this project's settings once you trust the project."
+    );
+
+    // Plain `claude` and `codex`, in the project and next door.
+    let claude_in = claude_servers(&vars, &project);
+    assert!(
+        has(&claude_in, "here") && !has(&claude_in, "every"),
+        "{claude_in:?}"
+    );
+    let claude_next = claude_servers(&vars, &sibling);
+    assert!(
+        !has(&claude_next, "here") && has(&claude_next, "every"),
+        "{claude_next:?}"
+    );
+    let codex_in = codex_servers(&vars, &project);
+    assert!(has(&codex_in, "here"), "{codex_in:?}");
+    assert!(
+        !has(&codex_in, "every") && !has(&codex_in, "mine"),
+        "{codex_in:?}"
+    );
+    let codex_next = codex_servers(&vars, &sibling);
+    assert!(!has(&codex_next, "here"), "{codex_next:?}");
+    assert!(
+        has(&codex_next, "every") && has(&codex_next, "mine"),
+        "{codex_next:?}"
+    );
+    let skills_in = claude_skills(&vars, &project);
+    assert!(
+        has(&skills_in, "tidy") && !has(&skills_in, "neat"),
+        "{skills_in:?}"
+    );
+    let skills_next = claude_skills(&vars, &sibling);
+    assert!(
+        !has(&skills_next, "tidy") && has(&skills_next, "neat"),
+        "{skills_next:?}"
+    );
+    let skills_in = codex_skills(&vars, &project);
+    assert!(
+        has(&skills_in, "tidy") && !has(&skills_in, "neat"),
+        "{skills_in:?}"
+    );
+    let skills_next = codex_skills(&vars, &sibling);
+    assert!(
+        !has(&skills_next, "tidy") && has(&skills_next, "neat"),
+        "{skills_next:?}"
+    );
+
+    // The Codex file is the user's alone.
+    let ignored = plain(
+        &vars,
+        &project,
+        "git",
+        &["check-ignore", "-v", ".codex/config.toml"],
+    );
+    println!("git check-ignore -v .codex/config.toml: {ignored}");
+    assert!(ignored.contains("info/exclude"), "{ignored}");
+
+    // A project Codex doesn't trust: refused in the same plain words, Claude still done.
+    assert!(!switch(&ctx, "lib:every", Some(&wild), false, None).unwrap());
+    assert_eq!(
+        failures.lock().unwrap().as_slice(),
+        ["Codex: Codex only reads this project's settings once you trust the project."]
+    );
+    let _ = std::fs::remove_dir_all(home);
+}
