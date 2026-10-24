@@ -1588,3 +1588,66 @@ client_secret = "csecret"
     let stores = stores.with(Owner::Codex, "codex:user:lin", Probe::Unknown);
     assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unknown));
 }
+
+#[test]
+fn a_trusted_projects_codex_file_switches_plugins_and_servers_there_only() {
+    let home = fixture("codex-layer");
+    let codex_home = home.join("codex-home");
+    let cache = codex_home.join("plugins/cache/brigadier");
+    for name in ["here", "every"] {
+        let root = cache.join(name).join("1.0.0");
+        write(
+            &root.join(".codex-plugin/plugin.json"),
+            &format!(r#"{{"name": "{name}"}}"#),
+        );
+        skill(&root.join(format!("skills/{name}")), name, "A skill.");
+    }
+    let project = home.join("project");
+    let other = home.join("other");
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[plugins.\"here@brigadier\"]\nenabled = false\n\n\
+             [plugins.\"every@brigadier\"]\nenabled = true\n\n\
+             [mcp_servers.pencil]\ncommand = \"pencil\"\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display(),
+            other.display()
+        ),
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "# mine\n[plugins.\"here@brigadier\"]\nenabled = true\n\n\
+         [plugins.\"every@brigadier\"]\nenabled = false\n\n\
+         [mcp_servers.pencil]\nenabled = false\n",
+    );
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    fn session(project: &Path) -> Session<'_> {
+        Session {
+            agent: Agent::Codex,
+            cwd: project,
+            project: Some(project),
+            in_checkout: true,
+        }
+    }
+    let here = Catalog::read(&roots, Some(&project));
+    assert_eq!(native_skills(&here, &session(&project)), ["here:here"]);
+    let pencil = here.servers.iter().find(|s| s.name == "pencil").unwrap();
+    assert!(!here.server_native(pencil, &session(&project)));
+    let there = Catalog::read(&roots, Some(&other));
+    assert_eq!(native_skills(&there, &session(&other)), ["every:every"]);
+    let pencil = there.servers.iter().find(|s| s.name == "pencil").unwrap();
+    assert!(there.server_native(pencil, &session(&other)));
+    // Untrusted: Codex doesn't read the file, and neither does the catalog.
+    write(
+        &codex_home.join("config.toml"),
+        "[plugins.\"here@brigadier\"]\nenabled = false\n\n\
+         [plugins.\"every@brigadier\"]\nenabled = true\n",
+    );
+    let untrusted = Catalog::read(&roots, Some(&project));
+    assert_eq!(
+        native_skills(&untrusted, &session(&project)),
+        ["every:every"]
+    );
+}

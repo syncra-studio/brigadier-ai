@@ -368,6 +368,9 @@ pub struct Catalog {
     pub plugins: Vec<Plugin>,
     /// Where Codex keeps its MCP sign-ins.
     pub codex_store: CodexStore,
+    /// The user's Codex servers the read project's own `.codex/config.toml` switches off
+    /// (`[mcp_servers.<name>] enabled = false`), when Codex trusts the project.
+    pub codex_off_here: Vec<String>,
 }
 
 impl Catalog {
@@ -397,6 +400,7 @@ impl Catalog {
                 .unwrap_or_default(),
             plugins: Vec::new(),
             codex_store: codex.as_ref().map(servers::codex_store).unwrap_or_default(),
+            codex_off_here: Vec::new(),
         };
         skills::add_user(&mut catalog.skills, roots);
         let mut plugins = plugins::claude(roots, None);
@@ -438,6 +442,54 @@ impl Catalog {
                 self.add_plugin(roots, plugin, None);
             }
         }
+        self.add_codex_layer(roots, project);
+    }
+
+    /// What a trusted project's own `.codex/config.toml` switches: the user's plugins and
+    /// servers off there, plugins on only there.
+    fn add_codex_layer(&mut self, roots: &Roots, project: &Path) {
+        if !self.codex_trusted.iter().any(|path| path == project) {
+            return;
+        }
+        let file = adapter::codex::project_file(project);
+        let Some(layer) = servers::read_toml(
+            &file,
+            Source::CodexProject,
+            Some(project),
+            &mut self.problems,
+        ) else {
+            return;
+        };
+        self.codex_off_here = layer
+            .get("mcp_servers")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+            .filter(|(_, server)| {
+                server.get("enabled").and_then(toml::Value::as_bool) == Some(false)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for (plugin, on) in plugins::codex_switched(roots, Some(&layer), Some(project)) {
+            let known = self
+                .plugins
+                .iter()
+                .find(|known| known.agent == Agent::Codex && known.id == plugin.id)
+                .cloned();
+            match (known, on) {
+                (Some(known), false) => {
+                    skills::remove_plugin(&mut self.skills, &known);
+                    self.servers
+                        .retain(|server| server.plugin.as_ref() != Some(&known));
+                    self.plugins.retain(|other| *other != known);
+                }
+                (None, true) => {
+                    let user = servers::codex_config(roots, &mut Vec::new());
+                    self.add_plugin(roots, plugin, user.as_ref());
+                }
+                _ => {}
+            }
+        }
     }
 
     fn add_plugin(&mut self, roots: &Roots, plugin: Plugin, codex: Option<&toml::Table>) {
@@ -465,7 +517,10 @@ impl Catalog {
     fn loads(&self, server: &Server, session: &Session<'_>) -> bool {
         let project = server.project.as_deref();
         match (server.source, session.agent) {
-            (Source::ClaudeUser, Agent::Claude) | (Source::CodexUser, Agent::Codex) => true,
+            (Source::ClaudeUser, Agent::Claude) => true,
+            (Source::CodexUser, Agent::Codex) => {
+                !(session.project.is_some() && self.codex_off_here.contains(&server.name))
+            }
             // Claude keys its local scope on the exact folder a session starts in.
             (Source::ClaudeLocal, Agent::Claude) => project == Some(session.cwd),
             (Source::ClaudeProject, Agent::Claude) => project == session.project,

@@ -533,6 +533,19 @@ fn active_version(folder: &Path) -> Option<PathBuf> {
 
 /// Codex's plugins that are on, from its `config.toml`.
 pub(crate) fn codex(roots: &Roots, config: Option<&toml::Table>) -> Vec<Plugin> {
+    codex_switched(roots, config, None)
+        .into_iter()
+        .filter_map(|(plugin, on)| on.then_some(plugin))
+        .collect()
+}
+
+/// The plugins a Codex config names, each with whether it switches it on: a project's layer
+/// (`project`) switches the user's on or off for sessions there.
+pub(crate) fn codex_switched(
+    roots: &Roots,
+    config: Option<&toml::Table>,
+    project: Option<&Path>,
+) -> Vec<(Plugin, bool)> {
     let cache = roots.codex_home.join("plugins").join("cache");
     let mut plugins = Vec::new();
     for (id, switch) in config
@@ -541,9 +554,7 @@ pub(crate) fn codex(roots: &Roots, config: Option<&toml::Table>) -> Vec<Plugin> 
         .into_iter()
         .flatten()
     {
-        if switch.get("enabled").and_then(toml::Value::as_bool) == Some(false) {
-            continue;
-        }
+        let on = switch.get("enabled").and_then(toml::Value::as_bool) != Some(false);
         let Some((plugin, marketplace)) = split_id(id) else {
             continue;
         };
@@ -557,13 +568,16 @@ pub(crate) fn codex(roots: &Roots, config: Option<&toml::Table>) -> Vec<Plugin> 
         if manifest_path(&root, Agent::Codex).is_none() {
             continue;
         }
-        plugins.push(Plugin {
-            agent: Agent::Codex,
-            id: id.clone(),
-            name: named(&root, Agent::Codex, plugin),
-            root,
-            project: None,
-        });
+        plugins.push((
+            Plugin {
+                agent: Agent::Codex,
+                id: id.clone(),
+                name: named(&root, Agent::Codex, plugin),
+                root,
+                project: project.map(Path::to_owned),
+            },
+            on,
+        ));
     }
     plugins
 }

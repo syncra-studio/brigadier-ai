@@ -743,7 +743,7 @@ fn read_json(
     }
 }
 
-fn read_toml(
+pub(crate) fn read_toml(
     path: &Path,
     source: Source,
     project: Option<&Path>,

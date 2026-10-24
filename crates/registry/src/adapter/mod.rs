@@ -11,7 +11,7 @@
 //!   `shared`, which writes the form the team commits.
 
 mod claude;
-mod codex;
+pub mod codex;
 
 use std::path::{Path, PathBuf};
 
