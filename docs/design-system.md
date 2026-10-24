@@ -16,7 +16,6 @@ through its MCP server, never as text.
 | `foundations.pen` | Every component, nothing else. The design system boards (Tokens & type, Icons, Primitives · Controls, Primitives · Menus, popovers & dialogs, Glyphs & indicators, Shared app parts), then one board per area of the main window under "Group · App", then one board per area of Settings under "Group · Settings". |
 | `app.pen` | The main window's screens only: 15 boards, one per surface, in four groups (App shell, Conversation, Side panel, Setup). No components of its own. |
 | `settings.pen` | The Settings window's screens only, the Inspector (a page inside Settings) among them: one board per page in `pages.ts` order. No components of its own. |
-| `unused.pen` | Components nothing in the app renders today, each with a cleanup note (what to remove in the code, and how sure). Never build from it. |
 
 ## Boards
 
@@ -470,8 +469,6 @@ indicators board, controls, the other files) places it as a ref.
 - When the UI changes, update the component and all its states first, then the screens that show
   it. Every component lives in `foundations.pen`, on its area's board; `app.pen` and
   `settings.pen` only place instances of it.
-- When code removes a component, delete it from `unused.pen` too (and its foundations copy if its
-  note says so).
 - Agents editing through the MCP: pass the file's full real path, and make sure the file is open
   in Pen, or the call silently works on whichever file is active. Never `Replace` a child of an
   instance of a reusable component (insert the new part, move it, delete the old one). After a
