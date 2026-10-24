@@ -8,7 +8,7 @@ import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/Configurat
 import { REPORTS_ROWS, ReportsPage } from "@/app/settings/ReportsPage";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { GENERAL_ROWS } from "@/app/settings/generalRows";
-import { PluginsPage, integrationSearchRows } from "@/app/settings/integrations/PluginsPage";
+import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
@@ -151,7 +151,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     icon: Plugin,
     group: "Agents",
     component: PluginsPage,
-    get rows() { return integrationSearchRows(); },
+    get rows() { return pluginSearchRows(); },
   },
   {
     id: "routing",

@@ -1,7 +1,7 @@
 import { Suspense, useEffect } from "react";
 
-import { connectIntegrations } from "@/app/settings/integrations/adapter";
-import { liveIntegrations } from "@/app/settings/integrations/live";
+import { connectPlugins } from "@/app/settings/plugins/adapter";
+import { livePlugins } from "@/app/settings/plugins/live";
 import { prefetchSettingsPages, settingsPage } from "@/app/settings/pages";
 import { whenIdle } from "@/lib/preloadable";
 import { closeSettings } from "@/state/actions";
@@ -24,8 +24,8 @@ export function SettingsView({ page }: { page: SettingsPageId }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-  // Plugins and Settings search read the daemon's catalog while Settings is open.
-  useEffect(() => connectIntegrations(liveIntegrations()), []);
+  // Plugins and Settings search read the agents' skills and MCP servers while Settings is open.
+  useEffect(() => connectPlugins(livePlugins()), []);
   // Once it shows and the app is idle, the other pages get ready to show at once too.
   useEffect(() => whenIdle(prefetchSettingsPages, 300), []);
 

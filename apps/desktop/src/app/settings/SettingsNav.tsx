@@ -1,4 +1,4 @@
-import { useIntegrations } from "@/app/settings/integrations/adapter";
+import { usePlugins } from "@/app/settings/plugins/adapter";
 import { useState } from "react";
 
 import {
@@ -26,8 +26,8 @@ function openResult({ page, row }: SettingsSearchResult) {
  * (Reports, Inspector) folded until opened. Typing replaces the pages with the settings found, each with its page's name.
  */
 export function SettingsNav() {
-  // Catalog changes also refresh the integrations found by Settings search.
-  useIntegrations((state) => state.snapshot);
+  // Plugins page changes also refresh what Settings search finds there.
+  usePlugins((state) => state.view);
   const current = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [query, setQuery] = useState("");
   // Developer opens on a click, or by itself while one of its pages is open.

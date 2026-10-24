@@ -251,8 +251,6 @@
   --container-model-picker-agents: 11rem;
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
-  --leading-integration: 1.4;
-  --leading-integration-value: 1.45;
   --container-setup: min(68rem, calc(100vw - 2rem));
   --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);
   /* The thread's column beside the pinned summary, in a pane too narrow for both side by side:
