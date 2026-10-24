@@ -1395,3 +1395,38 @@ fn a_trusted_projects_codex_file_switches_plugins_and_servers_there_only() {
         ["every:every"]
     );
 }
+
+#[test]
+fn a_codex_project_entry_that_only_switches_a_server_keeps_the_users_command() {
+    let home = fixture("codex-switch-only");
+    let codex_home = home.join("codex-home");
+    let project = home.join("project");
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[mcp_servers.pencil]\ncommand = \"pencil\"\nenabled = false\n\n\
+             [mcp_servers.figma]\nurl = \"https://figma.example/mcp\"\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "[mcp_servers.pencil]\nenabled = true\n\n[mcp_servers.figma]\nenabled = false\n",
+    );
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    let here = Catalog::read(&roots, Some(&project));
+    assert!(here.problems.is_empty(), "{:?}", here.problems);
+    let pencil = here.server(&format!("codex:project:{}:pencil", project.display()));
+    let pencil = pencil.unwrap_or_else(|| panic!("{:?}", ids(&here)));
+    assert_eq!(stdio(pencil).0, "pencil");
+    let session = Session {
+        agent: Agent::Codex,
+        cwd: &project,
+        project: Some(&project),
+        in_checkout: true,
+    };
+    assert!(here.server_native(pencil, &session));
+    let figma = here.servers.iter().find(|s| s.name == "figma").unwrap();
+    assert!(!here.server_native(figma, &session));
+}

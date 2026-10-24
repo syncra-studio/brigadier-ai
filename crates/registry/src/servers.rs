@@ -202,10 +202,12 @@ pub(crate) fn codex_layers(
     dir: &Path,
     problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
+    let user = codex_config(roots, &mut Vec::new());
     let mut servers: Vec<Server> = Vec::new();
     for folder in dir.ancestors() {
         let file = folder.join(".codex").join("config.toml");
-        if let Some(layer) = read_toml(&file, Source::CodexProject, Some(project), problems) {
+        if let Some(mut layer) = read_toml(&file, Source::CodexProject, Some(project), problems) {
+            inherit(&mut layer, user.as_ref());
             for server in toml_servers(
                 &layer,
                 Source::CodexProject,
@@ -224,6 +226,44 @@ pub(crate) fn codex_layers(
         }
     }
     servers
+}
+
+/// A project layer's servers over the user's entries of the same names, as Codex merges its
+/// layers: an entry that only switches a server (`enabled`) keeps the user's command or url.
+fn inherit(layer: &mut toml::Table, user: Option<&toml::Table>) {
+    let Some(user) = user
+        .and_then(|user| user.get("mcp_servers"))
+        .and_then(toml::Value::as_table)
+    else {
+        return;
+    };
+    let Some(own) = layer
+        .get_mut("mcp_servers")
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return;
+    };
+    for (name, entry) in own.iter_mut() {
+        if let (Some(toml::Value::Table(under)), toml::Value::Table(over)) =
+            (user.get(name), &*entry)
+        {
+            let mut merged = under.clone();
+            merge_toml(&mut merged, over);
+            *entry = toml::Value::Table(merged);
+        }
+    }
+}
+
+/// `over` merged into `under`, table by table.
+fn merge_toml(under: &mut toml::Table, over: &toml::Table) {
+    for (key, value) in over {
+        match (under.get_mut(key), value) {
+            (Some(toml::Value::Table(under)), toml::Value::Table(over)) => merge_toml(under, over),
+            _ => {
+                under.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 /// `$CODEX_HOME/config.toml`, read once for its servers, skills and trust.
