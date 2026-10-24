@@ -270,23 +270,28 @@ struct CachedFile {
 type FileStamp = Vec<(PathBuf, u64, std::time::SystemTime)>;
 
 fn file_stamp(kind: ProviderKind, path: &Path) -> Option<FileStamp> {
-    let mut paths = vec![path.to_owned()];
+    let stamp = |path: PathBuf| {
+        let meta = std::fs::metadata(&path).ok()?;
+        Some((path, meta.len(), meta.modified().ok()?))
+    };
+    // The session's own file must be there; a subagent's that went or can't be read is left
+    // out, not the whole thread.
+    let mut stamps = vec![stamp(path.to_owned())?];
     if kind == ProviderKind::Claude
         && let Ok(children) = std::fs::read_dir(path.with_extension("").join("subagents"))
     {
-        paths.extend(children.flatten().map(|entry| entry.path()).filter(|path| {
-            path.extension()
-                .is_some_and(|ext| ext == "jsonl" || ext == "json")
-        }));
+        let mut children: Vec<PathBuf> = children
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|ext| ext == "jsonl" || ext == "json")
+            })
+            .collect();
+        children.sort();
+        stamps.extend(children.into_iter().filter_map(stamp));
     }
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|path| {
-            let meta = std::fs::metadata(&path).ok()?;
-            Some((path, meta.len(), meta.modified().ok()?))
-        })
-        .collect()
+    Some(stamps)
 }
 
 /// Session files read, kept while they don't change.
@@ -563,6 +568,29 @@ mod tests {
             images: Vec::new(),
             phase: None,
         }
+    }
+
+    /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
+    #[cfg(unix)]
+    #[test]
+    fn a_subagent_file_that_cannot_be_read_leaves_the_thread_whole() {
+        let dir = std::env::temp_dir().join(format!("bg-thread-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("s1/subagents")).unwrap();
+        let file = dir.join("s1.jsonl");
+        std::fs::write(&file, "").unwrap();
+        std::fs::write(dir.join("s1/subagents/agent-a.jsonl"), "").unwrap();
+        // Listed by the folder, gone by the time it is looked at.
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("s1/subagents/agent-b.jsonl"))
+            .unwrap();
+        let stamp = file_stamp(ProviderKind::Claude, &file).expect("the thread's own file reads");
+        let names: Vec<_> = stamp
+            .iter()
+            .map(|(path, ..)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["s1.jsonl", "agent-a.jsonl"]);
+        assert!(file_stamp(ProviderKind::Claude, &dir.join("gone.jsonl")).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn message(id: &str, role: Role) -> FileEntry {
