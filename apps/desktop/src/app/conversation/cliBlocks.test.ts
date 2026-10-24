@@ -356,7 +356,7 @@ const stored = (id: string, createdAtMs: number): Message => ({
   requestId: id,
   parentId: null,
 });
-const NO_BOARD: BoardDigest = { tasks: {}, approvals: {}, questions: {}, orchestratorSteps: [], machineSteps: [], decisions: [], compactions: {} };
+const NO_BOARD: BoardDigest = { tasks: {}, questions: {}, orchestratorSteps: [], machineSteps: [], decisions: [], compactions: {} };
 
 test("the tree chains the turns, then the messages on their way", () => {
   const first = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };

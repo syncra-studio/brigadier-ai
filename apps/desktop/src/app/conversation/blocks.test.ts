@@ -52,7 +52,6 @@ function blocksOf(
 const tasks = night.tasks as unknown as Record<string, Task>;
 const board: BoardDigest = {
   tasks,
-  approvals: {},
   questions: {},
   orchestratorSteps: night.orchestratorSteps as unknown as OrchestratorStep[],
   machineSteps: [],
@@ -583,7 +582,7 @@ const record = (messageId: string, position: number, requestId: string, state: P
   sentAtMs: position * 1000, settled: false, position, automatic: false,
 });
 const peerDigest = (peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
-  tasks: {}, approvals: {}, questions: {}, decisions: [], machineSteps: [], compactions: {}, orchestratorSteps,
+  tasks: {}, questions: {}, decisions: [], machineSteps: [], compactions: {}, orchestratorSteps,
   peerMessages: Object.fromEntries(peerMessages.map((peer) => [peer.messageId, peer])),
 });
 const requestsOf = (...records: UserRequest[]) => ({ requests: Object.fromEntries(records.map((request) => [request.id, request])) });

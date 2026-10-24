@@ -376,7 +376,6 @@ const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
 const EMPTY_DIGEST: BoardDigest = {
   tasks: {},
-  approvals: {},
   questions: {},
   orchestratorSteps: [],
   machineSteps: [],
@@ -442,7 +441,6 @@ export function ConversationView({
         ? {
             tasks: s.board.tasks,
             workerSteps: s.board.workerSteps,
-            approvals: s.board.approvals,
             questions: s.board.questions,
             orchestratorSteps: s.board.orchestratorSteps,
             machineSteps: s.board.machineSteps,

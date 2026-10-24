@@ -1,7 +1,6 @@
 import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import type {
-  Approval,
   AttachmentRef,
   Compaction,
   CompactionState,
@@ -242,7 +241,6 @@ export type Block = {
 export type BoardDigest = {
   tasks: Readonly<Record<string, Task>>;
   workerSteps?: readonly WorkerStep[];
-  approvals: Readonly<Record<string, Approval>>;
   questions: Readonly<Record<string, Question>>;
   orchestratorSteps: readonly OrchestratorStep[];
   machineSteps: readonly MachineStep[];
