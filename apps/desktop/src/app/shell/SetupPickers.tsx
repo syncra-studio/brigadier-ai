@@ -145,13 +145,13 @@ export function PermissionPicker({
           side="top"
           align="start"
           data-slot="permission-menu"
-          className="max-w-(--radix-dropdown-menu-content-available-width) p-1.5"
+          className="w-125 max-w-(--radix-dropdown-menu-content-available-width) p-1.5"
         >
-          <div className="flex items-baseline justify-between gap-6 px-2 pt-1 pb-1.5 text-sm">
+          <div className="flex items-end justify-between gap-6 px-2 pt-1 pb-1.5 text-sm">
             <p className="text-muted-foreground">How should the agent’s actions be approved?</p>
             <button
               type="button"
-              className="text-muted-foreground hover:text-foreground shrink-0 underline underline-offset-2"
+              className="text-muted-foreground hover:text-foreground shrink-0"
               onClick={() => {
                 setOpen(false);
                 openPermissionsHelp();
@@ -184,7 +184,8 @@ export function PermissionPicker({
                   disabled={untrusted && level !== "ask"}
                   indicator={<Check className="size-icon-md" />}
                   className={cn(
-                    "h-auto gap-3 rounded-xl py-1.5 pe-9",
+                    // The check sits 10px in, 12px past the words.
+                    "h-auto gap-3 rounded-xl py-1.5 pe-9.5 *:data-[slot=dropdown-menu-radio-item-indicator]:end-2.5",
                     orange && "text-full-access focus:text-full-access",
                   )}
                 >

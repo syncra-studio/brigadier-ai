@@ -95,6 +95,15 @@ async function drive() {
     key(field, "Enter");
     seen.fromSlash = (await until("the menu from the / command", menu)).dataset.state;
     await sleep(500);
+    // As drawn: 500px wide, a plain "Learn more", the check 10px in from the row's end.
+    const open = menu()!;
+    const chosen = open.querySelector<HTMLElement>('[role=menuitemradio][data-state=checked]')!;
+    const check = chosen.querySelector("[data-slot=dropdown-menu-radio-item-indicator]")!;
+    seen.look = {
+      width: Math.round(open.getBoundingClientRect().width),
+      learnMore: getComputedStyle([...open.querySelectorAll("button")].find((each) => each.textContent === "Learn more")!).textDecorationLine,
+      checkInset: Math.round(chosen.getBoundingClientRect().right - check.getBoundingClientRect().right),
+    };
     seen.stillOpen = menu()?.dataset.state;
     key(menu()!, "Escape");
     await until("the menu to close", () => !menu());
