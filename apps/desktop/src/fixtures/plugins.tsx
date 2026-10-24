@@ -23,7 +23,7 @@ if (params.has("drive") || params.has("state")) {
   still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
   document.head.append(still);
 }
-useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
+useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info, selection: { type: "settings", page: "plugins" } }));
 
 const ALL_AGENTS = [
   ["claude", "Claude Code"],
@@ -139,9 +139,17 @@ const adapter: PluginsAdapter = {
     listeners.add(onChange);
     return () => listeners.delete(onChange);
   },
-  switchPlugin: async (key, projectId, on) => {
-    calls.push(`switchPlugin ${key} ${projectId ?? "everywhere"} ${on ? "on" : "off"}`);
+  switchPlugin: async (key, projectId, on, agent) => {
+    calls.push(`switchPlugin ${key} ${projectId ?? "everywhere"} ${on ? "on" : "off"}${agent ? ` ${agent}` : ""}`);
     const item = spec(key)!;
+    if (agent) {
+      const special = { ...item.special };
+      if (on) delete special[agent];
+      else special[agent] = { type: "off" };
+      item.special = special;
+      changed();
+      return ok();
+    }
     const path = projects.find((project) => project.id === projectId)?.path;
     if (!path) Object.assign(item, on ? { everywhere: true, offIn: [], onIn: [] } : { everywhere: false, onIn: [], offIn: [] });
     else if (item.everywhere) item.offIn = toggle(item.offIn, path, !on);
@@ -426,6 +434,15 @@ async function drive(setKey: (key: number) => void) {
   click("Every project");
   await pause(120);
   seen.detailCalls = calls.slice(detail);
+  // Advanced: one agent's switch.
+  await open("D1");
+  document.querySelector<HTMLButtonElement>('[data-setting="Advanced"] button')!.click();
+  await pause(120);
+  const agentSwitch = calls.length;
+  click("linear for Codex");
+  await pause(120);
+  seen.agentCalls = calls.slice(agentSwitch);
+  seen.agentSwitches = all('[data-setting="Advanced"] [data-slot="agent-row"]').map((row) => `${row.getAttribute("data-agent")} ${text(row.querySelector('[data-slot="row-line"]'))} ${row.querySelector("[role=switch]")?.getAttribute("aria-checked")}`);
   await open("G7");
   click("Remove", document.querySelector("[data-dialog]")!);
   await pause(120);

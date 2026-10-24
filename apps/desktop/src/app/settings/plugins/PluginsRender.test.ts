@@ -147,7 +147,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
     "steady-app~/Code/steady-app true",
     "landing~/Code/landing true",
   ]);
-  assert.deepEqual(d1.folds.map((entry) => [entry.text, entry.open]), [["AdvancedAddress, sign-in details, where it's saved.", false]]);
+  assert.deepEqual(d1.folds.map((entry) => [entry.text, entry.open]), [["AdvancedAddress, sign-in details, turn off for one agent, where it's saved.", false]]);
   assert.equal(d1.removeRow, "Remove linearRemoves it from every agent and every project.");
 
   // D2: won't start, with Try again.
@@ -168,6 +168,16 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   ]);
   for (const agentRow of d3.agentRows) assert.match(agentRow, /Ready in brigadier-ai\.Ready$/);
   assert.deepEqual(seen.detailCalls, ["switchPlugin lib:postgres p-brigadier off", "switchPlugin lib:postgres everywhere on"]);
+  // Advanced: one agent's switch turns it off for that agent alone; an agent waiting to sign in
+  // still has it on, one that can't have it has no switch.
+  assert.deepEqual(seen.agentCalls, ["switchPlugin server:linear everywhere off codex"]);
+  assert.deepEqual(seen.agentSwitches, [
+    "claude On in every project. true",
+    "codex Off in every project. false",
+    "gemini On in every project. true",
+    "cursor On in every project. true",
+    "opencode On in every project. true",
+  ]);
 
   // Every dialog is the app's dialog at Project settings' width.
   for (const state of ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]) assert.equal(seen[state]!.dialog?.width, 560, state);

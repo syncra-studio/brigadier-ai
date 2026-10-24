@@ -2,7 +2,7 @@ import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/pa
 import { Button } from "@/components/controls";
 import { Folder } from "@/components/icons";
 import { Banner, CopyButton, SettingsCard } from "@/components/shared";
-import type { AgentItemState, PluginItemView, PluginProjectView, PluginsView } from "@/ipc/generated";
+import type { AgentItemState, PluginItemView, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
 import { agentsIn, isOn, KIND_LABEL, listNames, projectName, shownDetail, wontStartReason, type Tone } from "./model";
 import { AgentRow, FoldCard, ItemMark, StateBadge, stateOf } from "./parts";
@@ -12,6 +12,8 @@ type DetailsActions = {
   busy: boolean;
   onBack: () => void;
   onSwitch: (projectId: string | null, on: boolean) => void;
+  /** One agent's switch, where the page looks. */
+  onSwitchAgent: (agent: ProviderKind, on: boolean) => void;
   /** Absent while the agents can't be signed in from here. */
   onSignIn?: (() => void) | undefined;
   onUseEverywhere: () => void;
@@ -76,7 +78,7 @@ export function DetailsPage({ view, item, focus, actions }: { view: PluginsView;
           ))}
         </SettingsCard>
       </SettingsSection>
-      <FoldCard title="Advanced" line={item.kind === "skill" ? "Folder, where it's saved." : item.remote ? "Address, sign-in details, where it's saved." : "Command, where it's saved."} setting="Advanced">
+      <FoldCard title="Advanced" line={advancedLine(item)} setting="Advanced">
         <>
           <InfoRow title={item.kind === "skill" ? "Folder" : item.remote ? "Address" : "Command"} value={item.detail} />
           {item.remote && item.kind === "server" && (
@@ -88,6 +90,16 @@ export function DetailsPage({ view, item, focus, actions }: { view: PluginsView;
               {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in again</Button>}
             </div>
           )}
+          {item.switchable && view.agents.map((agent) => {
+            const state = stateOf(item, agent.agent);
+            if (state.type === "missing" || state.type === "notSupported") return null;
+            const where = focus ? `in ${focus.name}` : "in every project";
+            const on = state.type !== "off";
+            return (
+              <AgentRow key={agent.agent} agent={agent} line={on ? `On ${where}.` : `Off ${where}.`} className="px-4 py-3"
+                end={<SettingsSwitch label={`${item.name} for ${agent.label}`} checked={on} disabled={actions.busy} onCheckedChange={(next) => actions.onSwitchAgent(agent.agent, next)} />} />
+            );
+          })}
           {item.files.map((file) => <InfoRow key={file} title="Saved in" value={shortPath(file)} />)}
         </>
       </FoldCard>
@@ -135,6 +147,13 @@ function agentLine(item: PluginItemView, state: AgentItemState, only: string | n
     case "notSupported": return [state.reason, "muted"];
     case "working": return ["Working on it…", "muted"];
   }
+}
+
+/** What Advanced holds, in a line. */
+function advancedLine(item: PluginItemView): string {
+  const one = item.switchable ? ", turn off for one agent" : "";
+  if (item.kind === "skill") return `Folder${one}, where it's saved.`;
+  return item.remote ? `Address, sign-in details${one}, where it's saved.` : `Command${one}, where it's saved.`;
 }
 
 function signInLine(view: PluginsView, item: PluginItemView): string {

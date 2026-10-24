@@ -30,8 +30,8 @@ export type PluginsAdapter = {
   read: (projectId: string | null) => Promise<PluginsView>;
   /** Calls `onChange` when the page may have changed (the agents' setup, the projects). */
   subscribe: (onChange: () => void) => () => void;
-  /** The row switch: `projectId` null means every project. */
-  switchPlugin: (key: string, projectId: string | null, on: boolean) => Promise<PluginAgentResult[]>;
+  /** The row switch: `projectId` null means every project; `agent`, for that agent alone. */
+  switchPlugin: (key: string, projectId: string | null, on: boolean, agent?: ProviderKind) => Promise<PluginAgentResult[]>;
   /** What a paste would add. */
   checkAdd: (text: string) => Promise<PluginDraft[]>;
   add: (text: string, name: string | null, projectId: string | null, shared: boolean) => Promise<PluginAgentResult[]>;

@@ -100,6 +100,10 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           busy,
           onBack: () => setSelected(null),
           onSwitch: (where, on) => flip(current, on, where),
+          onSwitchAgent: (agent, on) => action.run(async () => {
+            await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
+            refresh();
+          }),
           onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key }) : undefined,
           onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
           onRemove: () => setOpen({ type: "remove", key: current.key }),

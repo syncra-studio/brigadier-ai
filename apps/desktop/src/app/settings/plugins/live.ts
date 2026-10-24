@@ -67,8 +67,8 @@ export function livePlugins(): PluginsAdapter {
         unsubscribe();
       };
     },
-    switchPlugin: async (key, projectId, on) =>
-      finished((await request({ method: "switchPlugin", key, projectId, on, agent: null })).job),
+    switchPlugin: async (key, projectId, on, agent) =>
+      finished((await request({ method: "switchPlugin", key, projectId, on, agent: agent ?? null })).job),
     checkAdd: async (text) => {
       const { check } = await request({ method: "checkPluginAdd", text, name: null });
       if (check.error) throw new Error(check.error);
