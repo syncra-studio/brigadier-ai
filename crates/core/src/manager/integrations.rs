@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use brigadier_providers::{ProviderKind, SwitchedOff};
+use brigadier_registry::adapter::adapters;
 use brigadier_registry::{
     Agent, Catalog, CodexStore, Owner, Registry, Roots, Secret, Server, Session, SignIn,
     SignInStores, SkillRoot, Source, Transport, identity, owner_agent,
@@ -277,6 +278,13 @@ pub struct SkillLocationView {
     pub native_to: Vec<ProviderKind>,
 }
 
+/// Every agent, in the adapters' order.
+fn agents() -> impl Iterator<Item = ProviderKind> {
+    adapters()
+        .into_iter()
+        .map(|adapter| provider(adapter.agent()))
+}
+
 fn agent(provider: ProviderKind) -> Agent {
     match provider {
         ProviderKind::Claude => Agent::Claude,
@@ -317,8 +325,7 @@ fn server_native_to(
     server: &Server,
     project: Option<&Path>,
 ) -> Vec<ProviderKind> {
-    [ProviderKind::Claude, ProviderKind::Codex]
-        .into_iter()
+    agents()
         .filter(|provider| catalog.server_native(server, &worker_session(*provider, project)))
         .collect()
 }
@@ -383,8 +390,7 @@ pub(crate) fn view(
         .skills
         .iter()
         .map(|skill| {
-            let native_to: Vec<ProviderKind> = [ProviderKind::Claude, ProviderKind::Codex]
-                .into_iter()
+            let native_to: Vec<ProviderKind> = agents()
                 .filter(|provider| catalog.skill_native(skill, &worker_session(*provider, project)))
                 .collect();
             SkillView {
@@ -404,8 +410,7 @@ pub(crate) fn view(
                             SkillRoot::Plugin(plugin) => Some(plugin.id.clone()),
                             _ => None,
                         },
-                        native_to: [ProviderKind::Claude, ProviderKind::Codex]
-                            .into_iter()
+                        native_to: agents()
                             .filter(|provider| root.native(&worker_session(*provider, project)))
                             .collect(),
                     })

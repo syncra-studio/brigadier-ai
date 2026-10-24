@@ -28,6 +28,7 @@
 //! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
 //! [`Roots::vars`], the environment the CLIs themselves run with.
 
+pub mod adapter;
 mod plugins;
 mod servers;
 mod sign_ins;
