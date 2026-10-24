@@ -301,6 +301,17 @@ class Workflow(unittest.TestCase):
         self.assertIn("path: ${{ runner.temp }}/continuity-experiment-cell-${{ matrix.id }}", experiment_job)
         self.assertNotIn("path: ${{ runner.temp }}/continuity-private", workflow)
 
+    def test_experiment_runs_never_share_the_nightly_concurrency_group(self):
+        workflow = (dispatch.ROOT / ".github/workflows/continuity-battery.yml").read_text()
+        group = re.search(r"(?m)^concurrency:\n  group: (.*)\n  cancel-in-progress: false$", workflow).group(1)
+        experiment = "(inputs.runner == 'experiment' || inputs.dry_run || (inputs.preset && inputs.preset != 'none'))"
+        # The nightly (workflow_call: no runner/preset/dry_run inputs) keeps its group exactly.
+        self.assertEqual(group, "continuity-${{ github.ref }}${{ " + experiment + " && format('-experiment-{0}-{1}-{2}', "
+                                "inputs.preset || 'none', inputs.profile, inputs.providers) || '' }}")
+        # The suffix is chosen by the same test that routes a run to the experiment jobs.
+        experiment_job = workflow.split("  experiment-plan:\n", 1)[1].split("    runs-on:", 1)[0]
+        self.assertIn(experiment, experiment_job)
+
 
 if __name__ == "__main__":
     unittest.main()

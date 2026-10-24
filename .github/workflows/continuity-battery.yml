@@ -52,8 +52,10 @@ on:
 permissions:
   contents: read
 
+# Experiment dispatches get their own group per preset/profile/providers, so they never queue
+# behind, block or cancel the nightly (whose group is unchanged), nor each other's pending runs.
 concurrency:
-  group: continuity-${{ github.ref }}
+  group: continuity-${{ github.ref }}${{ (inputs.runner == 'experiment' || inputs.dry_run || (inputs.preset && inputs.preset != 'none')) && format('-experiment-{0}-{1}-{2}', inputs.preset || 'none', inputs.profile, inputs.providers) || '' }}
   cancel-in-progress: false
 
 jobs:

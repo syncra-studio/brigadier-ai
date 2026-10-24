@@ -467,6 +467,10 @@ per fully passing lineage. The existing legacy scenarios randomize their plants 
 their repetitions do not provide paired non-inferiority intervals. Short-profile success
 validates execution only; it cannot prove the long-profile eviction or endurance bar.
 
+Experiment dispatches use their own concurrency group per preset/profile/providers, so they
+never queue behind or cancel the nightly, and the nightly's group is unchanged. Separate
+dispatches with different inputs run side by side, each with its own four-cell limit.
+
 Live cells consume only the workflow's existing credentials and skip with `needs the user:
 secrets` when missing. They upload public per-cell reports (`continuity-experiment-cell-*`,
 30 days) and a separate public `continuity-experiment` aggregate (90 days). This does not
