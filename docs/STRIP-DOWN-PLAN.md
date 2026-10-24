@@ -756,7 +756,7 @@ and `run`.
     (`P/codex/mod.rs:131`) and `agents.enabled=false` (:144) for threads. Codex can't hold a subagent to a model
     list; its subagents run Codex models only.
   - Amended by run2-D43 (10-24): a session's and a Chat's thread starts with its CLI's subagent tool off
-    again (Claude `--disallowedTools Agent,Task`, Codex `-c agents.enabled=false`); workers keep theirs.
+    again (Claude `--disallowedTools Agent,Task,Workflow`: its Workflow tool runs sub-agents too; Codex `-c agents.enabled=false`); workers keep theirs.
     `Monitor`, `TaskStop`, goals and the sleep tool stay on.
 - **Files:** `P/claude/mod.rs`, `P/codex/mod.rs`, their provider tests.
 - **Done when:**

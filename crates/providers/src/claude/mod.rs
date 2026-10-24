@@ -90,8 +90,10 @@ const CONTEXT_SUMMARY_SINCE: &str = "2.1.257";
 /// instead. Everything else the plain CLI has stays (G17; measured on 2.1.309 in the S17 run).
 const TAB_DENIED_TOOLS: &str =
     "RemoteTrigger,PushNotification,ScheduleWakeup,CronCreate,CronDelete,CronList,AskUserQuestion";
-/// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
-const SUB_AGENT_TOOLS: &str = "Agent,Task";
+/// Claude's built-in tools that start sub-agents: `Agent` (`Task` is its older name), and
+/// `Workflow`, which runs a script of them (still there without `Agent`, checked live on
+/// 2.1.310).
+const SUB_AGENT_TOOLS: &str = "Agent,Task,Workflow";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
