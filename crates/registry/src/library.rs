@@ -12,7 +12,7 @@
 //!
 //! No env or header value is written to a file: each goes to the Keychain ([`SecretSink`]),
 //! and the server runs through `brigadier mcp run <plugin>/<server> -- …` (env) or names
-//! `brigadier secret headers <plugin>/<server>` as its headers helper (Claude).
+//! `brigadier secret headers <plugin>/<server>` as its headers helper (each agent's own key).
 //!
 //! A plugin's version counts up whenever its files change ([`Packed::changed`]); the hash of
 //! its files is kept in `.brigadier.json` next to them.
@@ -415,11 +415,16 @@ impl Library {
                         .store(&id, name, value)
                         .map_err(LibraryError::Secret)?;
                 }
+                // Each agent runs the helper for the headers when it connects (Codex 0.164's
+                // `http_headers_helper`, Claude Code's `headersHelper`).
                 let mut claude = json!({ "type": "http", "url": url });
+                let mut codex = claude.clone();
                 if !headers.is_empty() {
-                    claude["headersHelper"] = json!(format!("{brigadier} secret headers {id}"));
+                    let helper = json!(format!("{brigadier} secret headers {id}"));
+                    claude["headersHelper"] = helper.clone();
+                    codex["http_headers_helper"] = helper;
                 }
-                (claude, json!({ "type": "http", "url": url }))
+                (claude, codex)
             }
         };
         write_json(

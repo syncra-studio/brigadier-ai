@@ -112,6 +112,57 @@ fn a_server_is_packed_for_each_agent_with_no_value_in_any_file() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A remote server's headers reach every agent through the Keychain helper (Codex 0.164's
+/// `http_headers_helper`, Claude Code's `headersHelper`), never as a value in a file.
+#[test]
+fn a_remote_servers_headers_reach_each_agent_through_the_helper() {
+    let dir = scratch("headers");
+    let library = Library::at(dir.join("lib"), PathBuf::from("/bin/brigadier"));
+    let kept = Kept::default();
+    let item = Item::Server(ServerSpec {
+        name: "api".to_owned(),
+        transport: TransportSpec::Http {
+            url: "https://mcp.example.com/mcp".to_owned(),
+            headers: vec![("Authorization".to_owned(), Secret::new("Bearer s3cret"))],
+        },
+    });
+    let packed = library.pack("api", &item, None, &[], false, &kept).unwrap();
+    let helper = json!("/bin/brigadier secret headers api/api");
+    let claude = read(&packed.entry.dir.join(".mcp.json"));
+    assert_eq!(claude["mcpServers"]["api"]["headersHelper"], helper);
+    let codex = read(&packed.entry.dir.join(".codex.mcp.json"));
+    assert_eq!(codex["mcpServers"]["api"]["http_headers_helper"], helper);
+    assert_eq!(
+        codex["mcpServers"]["api"]["url"],
+        json!("https://mcp.example.com/mcp")
+    );
+    let all = std::process::Command::new("grep")
+        .args(["-r", "s3cret"])
+        .arg(library.root())
+        .output()
+        .unwrap();
+    assert!(all.stdout.is_empty());
+
+    // None without headers.
+    let bare = Item::Server(ServerSpec {
+        name: "open".to_owned(),
+        transport: TransportSpec::Http {
+            url: "https://open.example.com/mcp".to_owned(),
+            headers: Vec::new(),
+        },
+    });
+    let packed = library
+        .pack("open", &bare, None, &[], false, &kept)
+        .unwrap();
+    let codex = read(&packed.entry.dir.join(".codex.mcp.json"));
+    assert!(
+        codex["mcpServers"]["open"]
+            .get("http_headers_helper")
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_version_counts_up_only_when_the_files_change() {
     let dir = scratch("version");
