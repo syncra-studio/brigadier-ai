@@ -136,5 +136,52 @@ fn the_page_shows_where_each_item_is_on_for_each_agent() {
             .message
             .contains("once you trust the project")
     );
+    // Each agent's own list: Codex needs a sign-in to pencil; Claude can't start postgres.
+    let lists = Lists(vec![
+        (
+            Agent::Codex,
+            None,
+            vec![brigadier_registry::adapter::Listed {
+                name: "pencil".into(),
+                needs_sign_in: true,
+                failed: None,
+            }],
+        ),
+        (
+            Agent::Claude,
+            Some(a.clone()),
+            vec![brigadier_registry::adapter::Listed {
+                name: "postgres".into(),
+                needs_sign_in: false,
+                failed: Some("Failed to connect — ENOENT".into()),
+            }],
+        ),
+    ]);
+    let every = build(&user, &projects, &[], &lists, None);
+    let pencil = item(&every, "server:pencil");
+    assert_eq!(
+        states(pencil),
+        [AgentItemState::Ready, AgentItemState::NeedsSignIn]
+    );
+    assert_eq!(
+        pencil.attention,
+        Some(PluginAttention::SignIn {
+            message: "Codex needs you to sign in.".to_owned()
+        })
+    );
+    let in_a = build(&user, &projects, &[], &lists, Some(&a));
+    let postgres = item(&in_a, "server:postgres");
+    assert_eq!(
+        states(postgres)[0],
+        AgentItemState::WontStart {
+            reason: "Failed to connect — ENOENT".to_owned()
+        }
+    );
+    assert_eq!(
+        postgres.attention,
+        Some(PluginAttention::WontStart {
+            message: "Won't start: Failed to connect — ENOENT".to_owned()
+        })
+    );
     let _ = std::fs::remove_dir_all(home);
 }

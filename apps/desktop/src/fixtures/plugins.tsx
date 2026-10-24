@@ -120,7 +120,7 @@ function view(projectId: string | null): PluginsView {
         agent,
         state: spec.only && !spec.only.includes(agent) ? { type: "missing" } : spec.special?.[agent] && (on || spec.special[agent]!.type === "working") ? spec.special[agent]! : on ? { type: "ready" } : { type: "off" },
       })),
-      attention: spec.attention ?? null, switchable: spec.switchable ?? true, updateAvailable: false, canUndo: false, files: [`${HOME}/.claude.json`], foundIn: spec.foundIn ?? null,
+      attention: spec.attention ?? null, switchable: spec.switchable ?? true, updateAvailable: false, canUndo: false, serverId: spec.remote ? `claude:user:${spec.name}` : null, files: [`${HOME}/.claude.json`], foundIn: spec.foundIn ?? null,
     };
   };
   if (empty) return { agents, projects, items: [], elsewhere: [] };

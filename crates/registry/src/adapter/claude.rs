@@ -193,9 +193,17 @@ impl AgentAdapter for Claude {
             .filter_map(|line| {
                 let (name, rest) = line.split_once(": ")?;
                 let name = name.trim();
+                // The status follows the last ` - `: `✘ Failed to connect — <why>`.
+                let status = rest
+                    .rsplit_once(" - ")
+                    .map_or("", |(_, status)| status.trim());
+                let failed = status
+                    .contains("Failed")
+                    .then(|| status.trim_start_matches(['✘', '✗', ' ']).to_owned());
                 (!name.is_empty() && !name.contains(char::is_whitespace)).then(|| Listed {
                     name: name.to_owned(),
                     needs_sign_in: rest.contains("Needs authentication"),
+                    failed,
                 })
             })
             .collect()

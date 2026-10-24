@@ -59,6 +59,10 @@ updateAvailable: boolean,
  */
 canUndo: boolean, 
 /**
+ * The server to sign in to (`Request::SignInMcpServer`'s id), for one that signs in.
+ */
+serverId: string | null, 
+/**
  * The files it is set up in.
  */
 files: Array<string>, 

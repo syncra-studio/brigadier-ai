@@ -1,6 +1,6 @@
-import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "@/app/settings/plugins/adapter";
+import { usePlugins, type PluginAgentResult, type PluginDraft, type PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { pickFolder, request } from "@/ipc/client";
-import type { PluginJobView } from "@/ipc/generated";
+import type { McpSignInProgress, PluginJobView } from "@/ipc/generated";
 import { openAddProject } from "@/state/addProject";
 import { useApp } from "@/state/store";
 import { setFolderTrust } from "@/state/trust";
@@ -25,6 +25,26 @@ function results(job: PluginJobView): PluginAgentResult[] {
     agent,
     ok: step.type !== "failed",
     message: step.type === "failed" || step.type === "skipped" ? step.reason || null : index === 0 ? job.warning : null,
+  }));
+}
+
+/** The sign-in going on for each item, by its key: what Cancel stops. */
+const signIns = new Map<string, string>();
+
+/** Waits for sign-in `id` to finish; how each agent's went. */
+async function signedIn(id: string): Promise<PluginAgentResult[]> {
+  for (;;) {
+    const { progress } = await request({ method: "getMcpSignInProgress", id });
+    if (progress.finished) return signInResults(progress);
+    await new Promise((resolve) => setTimeout(resolve, JOB_MS));
+  }
+}
+
+function signInResults(progress: McpSignInProgress): PluginAgentResult[] {
+  return progress.agents.map(({ agent, state }) => ({
+    agent,
+    ok: state.type !== "failed" && state.type !== "cancelled",
+    message: state.type === "failed" ? state.reason : state.type === "cancelled" ? "Cancelled." : null,
   }));
 }
 
@@ -67,6 +87,21 @@ export function livePlugins(): PluginsAdapter {
     undoEveryAgent: async (key) => finished((await request({ method: "undoUseEverywhere", key })).job),
     remove: async (key) => finished((await request({ method: "removePlugin", key })).job),
     update: async (key) => finished((await request({ method: "updatePlugin", key })).job),
+    signIn: async (key, projectId) => {
+      const serverId = usePlugins.getState().view.items.find((item) => item.key === key)?.serverId;
+      if (!serverId) throw new Error("It has nothing to sign in to.");
+      const { id } = await request({ method: "signInMcpServer", serverId, projectId });
+      signIns.set(key, id);
+      try {
+        return await signedIn(id);
+      } finally {
+        if (signIns.get(key) === id) signIns.delete(key);
+      }
+    },
+    cancelSignIn: async (key) => {
+      const id = signIns.get(key);
+      if (id) await request({ method: "cancelMcpSignIn", id });
+    },
     pickFolder: () => pickFolder(),
     trustProject: async (projectId) => {
       await setFolderTrust(projectId, null, true);

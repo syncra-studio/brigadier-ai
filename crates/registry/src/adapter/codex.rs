@@ -228,6 +228,8 @@ impl AgentAdapter for Codex {
                     name: server.get("name")?.as_str()?.to_owned(),
                     needs_sign_in: server.get("auth_status").and_then(|s| s.as_str())
                         == Some("not_logged_in"),
+                    // It lists without connecting.
+                    failed: None,
                 })
             })
             .collect()

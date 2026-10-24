@@ -120,6 +120,8 @@ pub struct Listed {
     pub name: String,
     /// The CLI says it needs a sign-in.
     pub needs_sign_in: bool,
+    /// The CLI couldn't start it or reach it: its own words.
+    pub failed: Option<String>,
 }
 
 /// `text` without terminal escapes (colours, links) and carriage returns.

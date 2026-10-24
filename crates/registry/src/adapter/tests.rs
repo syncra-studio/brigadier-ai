@@ -158,18 +158,26 @@ fn each_cli_signs_in_on_its_own_list_and_prints_the_page() {
     let listed = claude.parse_servers(
         "Checking MCP server health…\r\n\r\n\
          plugin:oauth:oauth-probe: http://127.0.0.1:53127/mcp (HTTP) - \u{1b}[33m! Needs authentication\u{1b}[39m\n\
-         user-one: /usr/bin/python3 /tmp/server.py - \u{1b}[32m✔ Connected\u{1b}[39m\n",
+         user-one: /usr/bin/python3 /tmp/server.py - \u{1b}[32m✔ Connected\u{1b}[39m\n\
+         broken: /usr/bin/false  - \u{1b}[31m✘ Failed to connect — CONNECTION_CLOSED: Connection closed\u{1b}[39m\n",
     );
     assert_eq!(
         listed,
         [
             Listed {
                 name: "plugin:oauth:oauth-probe".into(),
-                needs_sign_in: true
+                needs_sign_in: true,
+                failed: None,
             },
             Listed {
                 name: "user-one".into(),
-                needs_sign_in: false
+                needs_sign_in: false,
+                failed: None,
+            },
+            Listed {
+                name: "broken".into(),
+                needs_sign_in: false,
+                failed: Some("Failed to connect — CONNECTION_CLOSED: Connection closed".into()),
             },
         ]
     );

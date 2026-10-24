@@ -12,7 +12,7 @@ pub mod ops;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::{AgentAdapter, adapters};
+use brigadier_registry::adapter::{AgentAdapter, Listed, adapters};
 use brigadier_registry::library::{Entry, Library, MARKETPLACE};
 use brigadier_registry::{Agent, Catalog, Server, Session, Skill, SkillRoot, Source, Transport};
 use serde::{Deserialize, Serialize};
@@ -99,6 +99,8 @@ pub struct PluginItemView {
     pub update_available: bool,
     /// It came into the Library by Use everywhere, which can be undone.
     pub can_undo: bool,
+    /// The server to sign in to (`Request::SignInMcpServer`'s id), for one that signs in.
+    pub server_id: Option<String>,
     /// The files it is set up in.
     pub files: Vec<String>,
     /// For another app's: the app ("Claude Desktop").
@@ -162,15 +164,60 @@ pub(crate) struct ProjectCatalog {
 
 /// What each agent's own list says of a server, where known.
 pub(crate) trait Health {
-    fn state(&self, agent: Agent, name: &str, project: Option<&Path>) -> Option<AgentItemState>;
+    /// `agent`'s state of server `server` (of plugin `plugin`, by its name) in `project`.
+    fn state(
+        &self,
+        agent: Agent,
+        server: &str,
+        plugin: Option<&str>,
+        project: Option<&Path>,
+    ) -> Option<AgentItemState>;
 }
 
 /// No list read yet.
 pub(crate) struct Unknown;
 
 impl Health for Unknown {
-    fn state(&self, _: Agent, _: &str, _: Option<&Path>) -> Option<AgentItemState> {
+    fn state(
+        &self,
+        _: Agent,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&Path>,
+    ) -> Option<AgentItemState> {
         None
+    }
+}
+
+/// Each agent's own list (`claude mcp list`, `codex mcp list --json`), as last read: for every
+/// project (`None`) and the project the page looks at.
+pub(crate) struct Lists(pub Vec<(Agent, Option<PathBuf>, Vec<Listed>)>);
+
+impl Health for Lists {
+    fn state(
+        &self,
+        agent: Agent,
+        server: &str,
+        plugin: Option<&str>,
+        project: Option<&Path>,
+    ) -> Option<AgentItemState> {
+        let adapter = brigadier_registry::adapter::adapter(agent);
+        let (_, _, listed) = self
+            .0
+            .iter()
+            .find(|(a, p, _)| *a == agent && p.as_deref() == project)?;
+        let entry = listed
+            .iter()
+            .find(|entry| adapter.is_server(&entry.name, server, plugin))?;
+        Some(if entry.needs_sign_in {
+            AgentItemState::NeedsSignIn
+        } else if let Some(reason) = &entry.failed {
+            AgentItemState::WontStart {
+                reason: reason.clone(),
+            }
+        } else {
+            AgentItemState::Ready
+        })
     }
 }
 
@@ -287,8 +334,10 @@ struct Presence {
     /// Agents that have it anywhere.
     anywhere: Vec<Agent>,
     files: Vec<String>,
-    /// Names each agent's own list knows its server by.
-    native: Vec<(Agent, String)>,
+    /// Each agent's server: its name, and its plugin's name when it comes with one.
+    native: Vec<(Agent, String, Option<String>)>,
+    /// The server to sign in to, for one that signs in.
+    server_id: Option<String>,
     /// Sources that hold it: whether every agent with it can switch it per project.
     switchable: bool,
     problem: Option<String>,
@@ -393,6 +442,7 @@ fn gather(
                         switchable: false,
                         update_available: false,
                         can_undo: false,
+                        server_id: None,
                         files: vec![server.file.display().to_string()],
                         found_in: Some(server.source.label().to_owned()),
                     });
@@ -412,7 +462,17 @@ fn gather(
             let agent = adapter.agent();
             if catalog.server_native(server, &session(agent, project)) {
                 presence.note(agent, project);
-                push(&mut presence.native, (agent, server.native_name()));
+                push(
+                    &mut presence.native,
+                    (
+                        agent,
+                        server.name.clone(),
+                        server.plugin.as_ref().map(|plugin| plugin.name.clone()),
+                    ),
+                );
+                if server.signs_in && presence.server_id.is_none() {
+                    presence.server_id = Some(server.id.clone());
+                }
                 if owned_by_switchless {
                     presence.switchable = false;
                 }
@@ -566,12 +626,13 @@ pub(crate) fn build(
                 .map(|adapter| {
                     let agent = adapter.agent();
                     let state = if has(agent) {
-                        let name = presence
+                        presence
                             .native
                             .iter()
-                            .find(|(a, _)| *a == agent)
-                            .map(|(_, name)| name.as_str());
-                        name.and_then(|name| health.state(agent, name, focus))
+                            .find(|(a, _, _)| *a == agent)
+                            .and_then(|(_, name, plugin)| {
+                                health.state(agent, name, plugin.as_deref(), focus)
+                            })
                             .unwrap_or(AgentItemState::Ready)
                     } else if presence.anywhere.contains(&agent) {
                         AgentItemState::Off
@@ -594,6 +655,13 @@ pub(crate) fn build(
             let attention = if let Some(problem) = &presence.problem {
                 Some(PluginAttention::WontStart {
                     message: format!("Won't start: {problem}"),
+                })
+            } else if let Some(reason) = states.iter().find_map(|(_, state)| match state {
+                AgentItemState::WontStart { reason } => Some(reason),
+                _ => None,
+            }) {
+                Some(PluginAttention::WontStart {
+                    message: format!("Won't start: {reason}"),
                 })
             } else if !needs.is_empty() {
                 let verb = if needs.len() == 1 { "needs" } else { "need" };
@@ -629,6 +697,7 @@ pub(crate) fn build(
                 switchable: library || presence.switchable,
                 update_available: false,
                 can_undo: false,
+                server_id: presence.server_id,
                 files: presence.files,
                 found_in: None,
             })
@@ -709,7 +778,13 @@ impl super::SessionManager {
         let registry = self.registry();
         let projects = self.plugin_projects();
         let library = self.library();
-        let health = self.plugin_health();
+        let focus_path = focus.as_ref().and_then(|id| {
+            projects
+                .iter()
+                .find(|(known, _, _)| known == id)
+                .map(|(_, _, path)| path.clone())
+        });
+        let health = self.plugin_health(focus_path.as_deref());
         super::blocking(move || {
             let user = registry.catalog(None);
             let projects: Vec<ProjectCatalog> = projects
@@ -841,9 +916,23 @@ impl super::SessionManager {
         jobs::job(id).ok_or_else(|| crate::Error::Invalid(format!("no job {id}")))
     }
 
-    /// What the agents' own lists said of their servers, last time they were read.
-    pub(crate) fn plugin_health(&self) -> std::sync::Arc<dyn Health + Send + Sync> {
-        std::sync::Arc::new(Unknown)
+    /// What each agent's own list said of its servers, last time it was read, for every
+    /// project and for `focus`; a stale or missing list is read again in the background.
+    pub(crate) fn plugin_health(
+        &self,
+        focus: Option<&Path>,
+    ) -> std::sync::Arc<dyn Health + Send + Sync> {
+        let clis = self.clis();
+        let mut lists = Vec::new();
+        for adapter in adapters() {
+            let agent = adapter.agent();
+            for project in [None, focus] {
+                if let Some(listed) = self.mcp_logins.listed(&clis, agent, project) {
+                    lists.push((agent, project.map(Path::to_owned), listed));
+                }
+            }
+        }
+        std::sync::Arc::new(Lists(lists))
     }
 }
 
