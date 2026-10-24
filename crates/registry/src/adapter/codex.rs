@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use super::{
-    AgentAdapter, ApplyError, Capabilities, CliCall, Place, ProjectScope, Step, TomlEdit,
+    AgentAdapter, ApplyError, Capabilities, CliCall, Listed, Place, ProjectScope, Step, TomlEdit,
     Unsupported, app_server, apply,
 };
 use crate::{Agent, Catalog, Roots, Source};
@@ -135,7 +135,14 @@ impl AgentAdapter for Codex {
     }
 
     fn login(&self, name: &str) -> CliCall {
-        CliCall::new(PROGRAM, &["mcp", "login"]).arg(name)
+        // It waits for the browser's callback while its input stays open.
+        CliCall::new(PROGRAM, &["mcp", "login"])
+            .arg(name)
+            .arg("--no-browser")
+    }
+
+    fn logout(&self, name: &str) -> CliCall {
+        CliCall::new(PROGRAM, &["mcp", "logout"]).arg(name)
     }
 
     fn list_servers(&self, project: Option<&Path>) -> CliCall {
@@ -170,5 +177,28 @@ impl AgentAdapter for Codex {
             }
         };
         app_server::write_value(PROGRAM, env, &apply::key_path(&key), value)
+    }
+
+    /// A JSON array of servers, `auth_status` `not_logged_in` for one that needs a sign-in
+    /// (0.164.0).
+    fn parse_servers(&self, output: &str) -> Vec<Listed> {
+        let Ok(serde_json::Value::Array(servers)) = serde_json::from_str(output.trim()) else {
+            return Vec::new();
+        };
+        servers
+            .iter()
+            .filter_map(|server| {
+                Some(Listed {
+                    name: server.get("name")?.as_str()?.to_owned(),
+                    needs_sign_in: server.get("auth_status").and_then(|s| s.as_str())
+                        == Some("not_logged_in"),
+                })
+            })
+            .collect()
+    }
+
+    fn is_server(&self, listed: &str, server: &str, _: Option<&str>) -> bool {
+        // A plugin's server keeps its own name.
+        listed == server
     }
 }

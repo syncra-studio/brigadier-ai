@@ -61,7 +61,8 @@ mod kept;
 mod kept_live_tests;
 mod lifecycle;
 mod local_files;
-mod mcp_auth;
+mod mcp_login;
+mod mcp_secrets;
 mod outputs;
 mod page_tools;
 mod past_projects;
@@ -134,7 +135,7 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
-pub use mcp_auth::McpSignInStatus;
+pub use mcp_login::{AgentSignIn, AgentSignInState, McpSignInProgress, McpSignInStatus};
 pub use side_chat::BrowserPage;
 pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
@@ -166,7 +167,7 @@ pub struct SessionManager {
     data_dir: PathBuf,
     grants: Grants,
     /// Sign-ins to remote MCP servers shared between the agents, and their proxy.
-    mcp_auth: Arc<mcp_auth::McpAuth>,
+    mcp_logins: Arc<mcp_login::McpLogins>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// The `/` menu's answers of CLIs that haven't started ([`cli_commands`]).
@@ -375,13 +376,7 @@ impl SessionManager {
             data_dir,
             registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
-            mcp_auth: Arc::new(mcp_auth::McpAuth::new(
-                // Tests never touch the user's Keychain.
-                #[cfg(not(test))]
-                mcp_auth::system_keychain(),
-                #[cfg(test)]
-                Arc::new(mcp_auth::Memory::default()),
-            )),
+            mcp_logins: Arc::default(),
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             cli_command_probes: Default::default(),

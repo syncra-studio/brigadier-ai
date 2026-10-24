@@ -5,7 +5,9 @@
 
 use std::path::Path;
 
-use super::{AgentAdapter, Capabilities, CliCall, Place, ProjectScope, Step, Unsupported};
+use super::{
+    AgentAdapter, Capabilities, CliCall, Listed, Place, ProjectScope, Step, Unsupported, plain_text,
+};
 use crate::{Agent, Catalog, Roots, Source};
 
 const PROGRAM: &str = "claude";
@@ -130,10 +132,17 @@ impl AgentAdapter for Claude {
     }
 
     fn login(&self, name: &str) -> CliCall {
+        // Without a terminal it stops at once (research P4).
         CliCall {
             needs_terminal: true,
-            ..CliCall::new(PROGRAM, &["mcp", "login"]).arg(name)
+            ..CliCall::new(PROGRAM, &["mcp", "login"])
+                .arg(name)
+                .arg("--no-browser")
         }
+    }
+
+    fn logout(&self, name: &str) -> CliCall {
+        CliCall::new(PROGRAM, &["mcp", "logout"]).arg(name)
     }
 
     fn list_servers(&self, project: Option<&Path>) -> CliCall {
@@ -141,6 +150,29 @@ impl AgentAdapter for Claude {
         match project {
             Some(dir) => call.in_dir(dir),
             None => call,
+        }
+    }
+
+    /// One line a server: `<name>: <command or address> - <status>`, the status
+    /// `! Needs authentication` for one that needs a sign-in (2.1.310).
+    fn parse_servers(&self, output: &str) -> Vec<Listed> {
+        plain_text(output)
+            .lines()
+            .filter_map(|line| {
+                let (name, rest) = line.split_once(": ")?;
+                let name = name.trim();
+                (!name.is_empty() && !name.contains(char::is_whitespace)).then(|| Listed {
+                    name: name.to_owned(),
+                    needs_sign_in: rest.contains("Needs authentication"),
+                })
+            })
+            .collect()
+    }
+
+    fn is_server(&self, listed: &str, server: &str, plugin: Option<&str>) -> bool {
+        match plugin {
+            Some(plugin) => listed == format!("plugin:{plugin}:{server}"),
+            None => listed == server,
         }
     }
 }

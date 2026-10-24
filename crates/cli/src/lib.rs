@@ -17,6 +17,7 @@ pub mod models;
 pub mod protocol;
 pub mod render;
 pub mod schema;
+pub mod secrets;
 
 use std::io::Write;
 
@@ -27,6 +28,16 @@ use protocol::{CliError, CliReply, ErrorCode, ErrorOutput};
 
 /// Runs `brigadier` with the words after its name; returns the exit code.
 pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
+    // An MCP server's secrets work without the app (and without a session).
+    if let Some(code) = secrets::run_local(
+        &words,
+        &secrets::Keychain,
+        &mut std::io::stdin(),
+        stdout,
+        stderr,
+    ) {
+        return code;
+    }
     let ledger = words
         .iter()
         .find(|word| !word.starts_with('-'))

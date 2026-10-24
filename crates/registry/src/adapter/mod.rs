@@ -112,6 +112,51 @@ pub enum Step {
     },
 }
 
+/// One MCP server as a CLI's own list reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    /// The name the CLI's own commands take (`plugin:<plugin>:<server>` for a Claude plugin's).
+    pub name: String,
+    /// The CLI says it needs a sign-in.
+    pub needs_sign_in: bool,
+}
+
+/// `text` without terminal escapes (colours, links) and carriage returns.
+pub fn plain_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                // CSI: up to a final byte in `@`..=`~`.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC (a link's target): up to BEL or ESC `\`.
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if c == '\u{1b}' {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// What an agent can't do, in plain words for the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -163,11 +208,22 @@ pub trait AgentAdapter: Send + Sync {
     /// Turns the user's own MCP server `name` (not a plugin's) on or off at `place`.
     fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported>;
 
-    /// Signs the CLI in to the server it lists as `name` (the name its own list reports).
+    /// Signs the CLI in to the server it lists as `name` (the name its own list reports). It
+    /// prints the sign-in page's address rather than opening a browser: Brigadier opens it.
     fn login(&self, name: &str) -> CliCall;
+
+    /// Forgets the CLI's own sign-in to the server it lists as `name`.
+    fn logout(&self, name: &str) -> CliCall;
 
     /// Lists the MCP servers the CLI loads in `project` (or anywhere), as it reports them.
     fn list_servers(&self, project: Option<&Path>) -> CliCall;
+
+    /// Reads [`Self::list_servers`]' output.
+    fn parse_servers(&self, output: &str) -> Vec<Listed>;
+
+    /// Whether the name its list reports, `listed`, is server `server`, of plugin `plugin`
+    /// (its name, without the marketplace) when it comes with one.
+    fn is_server(&self, listed: &str, server: &str, plugin: Option<&str>) -> bool;
 
     /// Writes `edit` in the user's own config through the CLI's own config writer, run with
     /// `env`. Only an agent whose plans hold [`Step::UserConfig`] has one.

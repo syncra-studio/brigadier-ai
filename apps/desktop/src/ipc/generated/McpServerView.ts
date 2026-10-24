@@ -33,13 +33,12 @@ plugin: string | null,
  */
 file: string, transport: TransportView, 
 /**
- * A remote server that signs in with OAuth: how each agent's workers in the project are
- * signed in to it. `None`: it doesn't sign in.
+ * A remote server that signs in with OAuth: whether each agent that has it is signed in,
+ * as its CLI's own list says. `None`: it doesn't sign in.
  */
 signIn: SignInView | null, 
 /**
- * The sign-in in Brigadier to it waiting for the user, if one is: its id, as
- * `SignInMcpServer` gave it.
+ * The sign-in to it going on, if one is: its id, as `SignInMcpServer` gave it.
  */
 pendingSignIn: string | null, 
 /**

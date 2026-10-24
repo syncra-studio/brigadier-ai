@@ -2430,6 +2430,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetMcpSignIn { id } => Response::GetMcpSignIn {
             status: daemon.sessions.mcp_sign_in(&id)?,
         },
+        Request::GetMcpSignInProgress { id } => Response::GetMcpSignInProgress {
+            progress: daemon.sessions.mcp_sign_in_progress(&id)?,
+        },
         Request::CancelMcpSignIn { id } => {
             daemon.sessions.cancel_mcp_sign_in(&id)?;
             Response::CancelMcpSignIn

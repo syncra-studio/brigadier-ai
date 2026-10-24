@@ -17,14 +17,13 @@ use std::sync::{Arc, OnceLock};
 use brigadier_providers::{ProviderKind, SwitchedOff};
 use brigadier_registry::adapter::adapters;
 use brigadier_registry::{
-    Agent, Catalog, CodexStore, Owner, Registry, Roots, Secret, Server, Session, SignIn,
-    SignInStores, SkillRoot, Source, Transport, identity, owner_agent,
+    Agent, Catalog, Registry, Roots, Secret, Server, Session, SkillRoot, Source, Transport,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::SessionManager;
-use super::mcp_auth::{Homes, McpAuth, McpSignInStatus, Open, Place, Prober};
+use super::mcp_login::{Clis, McpSignInProgress, McpSignInStatus, Open, Target};
 use crate::model::{ConversationId, ProjectId, Settings};
 use crate::{Error, Result};
 
@@ -80,11 +79,10 @@ pub struct McpServerView {
     /// The file it is configured in.
     pub file: String,
     pub transport: TransportView,
-    /// A remote server that signs in with OAuth: how each agent's workers in the project are
-    /// signed in to it. `None`: it doesn't sign in.
+    /// A remote server that signs in with OAuth: whether each agent that has it is signed in,
+    /// as its CLI's own list says. `None`: it doesn't sign in.
     pub sign_in: Option<SignInView>,
-    /// The sign-in in Brigadier to it waiting for the user, if one is: its id, as
-    /// `SignInMcpServer` gave it.
+    /// The sign-in to it going on, if one is: its id, as `SignInMcpServer` gave it.
     pub pending_sign_in: Option<String>,
     /// The agents whose workers in the project have it by themselves; any other gets it only
     /// when a task names it.
@@ -119,12 +117,13 @@ pub enum TransportView {
     },
 }
 
-/// How each agent is signed in to a remote server.
+/// Whether each agent that has a remote server is signed in to it; `None` for one that doesn't
+/// have it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SignInView {
-    pub claude: SignInState,
-    pub codex: SignInState,
+    pub claude: Option<SignInState>,
+    pub codex: Option<SignInState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -134,50 +133,16 @@ pub struct SignInView {
     rename_all_fields = "camelCase"
 )]
 pub enum SignInState {
-    /// The agent has the server by itself and its own sign-in serves it.
-    Native,
-    /// The sign-in another agent stored can serve it.
-    ReusableFrom { agent: ProviderKind },
-    /// Brigadier's own sign-in serves it, to every agent: made at `since_ms` (ms since the
-    /// epoch), when known.
-    InBrigadier { since_ms: Option<i64> },
-    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
+    /// Its CLI's own list says it is signed in (or needs none).
+    SignedIn,
+    /// Its CLI's own list says it needs a sign-in.
     Needed,
-    /// Not known yet: a store couldn't be read without asking the user, or it failed.
+    /// Not known yet: its CLI's list is being read.
     Unknown,
-    /// `agent`'s stored sign-in can't be reused: macOS wasn't allowed to let Brigadier read
-    /// it. `AskMcpSignInAgain` reads it again.
-    NotAllowed { agent: ProviderKind },
-    /// Sign-ins to it can't be checked or kept on this system.
-    Unsupported,
 }
 
 fn provider(agent: Agent) -> ProviderKind {
-    match agent {
-        Agent::Claude => ProviderKind::Claude,
-        Agent::Codex => ProviderKind::Codex,
-    }
-}
-
-impl SignInState {
-    /// `sign_in`, with when Brigadier's own sign-in was made (ms since the epoch).
-    fn of(sign_in: SignIn, since: Option<u64>) -> Self {
-        match sign_in {
-            SignIn::Native => Self::Native,
-            SignIn::ReusableFrom(agent) => Self::ReusableFrom {
-                agent: provider(agent),
-            },
-            SignIn::InBrigadier => Self::InBrigadier {
-                since_ms: since.and_then(|ms| i64::try_from(ms).ok()),
-            },
-            SignIn::Needed => Self::Needed,
-            SignIn::Unknown => Self::Unknown,
-            SignIn::NotAllowed(agent) => Self::NotAllowed {
-                agent: provider(agent),
-            },
-            SignIn::Unsupported => Self::Unsupported,
-        }
-    }
+    super::mcp_login::provider(agent)
 }
 
 /// `pairs` with their values, in order.
@@ -330,12 +295,15 @@ fn server_native_to(
         .collect()
 }
 
-/// Settings' view of `catalog`, read for `project`, with the sign-ins `stores` read.
+/// How a server's sign-ins stand, for the view: per agent, and the sign-in going on.
+type SignIns<'a> = &'a dyn Fn(&Server) -> (Option<SignInView>, Option<String>);
+
+/// Settings' view of `catalog`, read for `project`, with each remote server's sign-ins.
 pub(crate) fn view(
     catalog: &Catalog,
     project: Option<&Path>,
     settings: &Settings,
-    stores: &Prober<'_>,
+    sign_ins: SignIns<'_>,
 ) -> IntegrationsView {
     let names = |pairs: &[(String, brigadier_registry::Secret)]| {
         pairs.iter().map(|(name, _)| name.clone()).collect()
@@ -343,47 +311,42 @@ pub(crate) fn view(
     let servers = catalog
         .servers
         .iter()
-        .map(|server| McpServerView {
-            id: server.id.clone(),
-            name: server.name.clone(),
-            source: server.source.label().to_owned(),
-            project: server.project.as_ref().map(|p| p.display().to_string()),
-            plugin: server.plugin.as_ref().map(|plugin| plugin.id.clone()),
-            file: server.file.display().to_string(),
-            transport: match &server.transport {
-                Transport::Stdio {
-                    command, args, env, ..
-                } => TransportView::Stdio {
-                    command: command.clone(),
-                    args: args.clone(),
-                    env: names(env),
-                    cwd: server
-                        .transport
-                        .working_dir()
-                        .map(|dir| dir.display().to_string()),
+        .map(|server| {
+            let (sign_in, pending_sign_in) = if server.signs_in {
+                sign_ins(server)
+            } else {
+                (None, None)
+            };
+            McpServerView {
+                id: server.id.clone(),
+                name: server.name.clone(),
+                source: server.source.label().to_owned(),
+                project: server.project.as_ref().map(|p| p.display().to_string()),
+                plugin: server.plugin.as_ref().map(|plugin| plugin.id.clone()),
+                file: server.file.display().to_string(),
+                transport: match &server.transport {
+                    Transport::Stdio {
+                        command, args, env, ..
+                    } => TransportView::Stdio {
+                        command: command.clone(),
+                        args: args.clone(),
+                        env: names(env),
+                        cwd: server
+                            .transport
+                            .working_dir()
+                            .map(|dir| dir.display().to_string()),
+                    },
+                    Transport::Http { url, headers } => TransportView::Http {
+                        url: url.clone(),
+                        headers: names(headers),
+                    },
                 },
-                Transport::Http { url, headers } => TransportView::Http {
-                    url: url.clone(),
-                    headers: names(headers),
-                },
-            },
-            sign_in: {
-                let state = |provider| {
-                    catalog
-                        .sign_in(server, &worker_session(provider, project), stores)
-                        .map(|sign_in| SignInState::of(sign_in, stores.signed_in_at(server)))
-                };
-                state(ProviderKind::Claude)
-                    .zip(state(ProviderKind::Codex))
-                    .map(|(claude, codex)| SignInView { claude, codex })
-            },
-            pending_sign_in: server
-                .signs_in
-                .then(|| stores.pending_sign_in(server))
-                .flatten(),
-            native_to: server_native_to(catalog, server, project),
-            off: settings.mcp_servers_off.contains(&server.id),
-            copy_key: copy_key(&server.transport),
+                sign_in,
+                pending_sign_in,
+                native_to: server_native_to(catalog, server, project),
+                off: settings.mcp_servers_off.contains(&server.id),
+                copy_key: copy_key(&server.transport),
+            }
         })
         .collect();
     let skills = catalog
@@ -600,16 +563,23 @@ fn settings_view(
     repo: Option<&Path>,
     others: &[PathBuf],
     switches: &Switches<'_>,
-    auth: &McpAuth,
+    sign_ins: SignIns<'_>,
 ) -> IntegrationsView {
     // The user's catalog keeps every local-scope server, so the list finds it under its project.
     let catalog = match repo {
         Some(_) => catalog_for(registry, repo, others, switches),
         None => registry.catalog(None),
     };
-    // Settings polls: its reads never ask the user.
-    let stores = auth.prober(registry.roots(), catalog.codex_store, true);
-    view(&catalog, repo, switches.settings, &stores)
+    view(&catalog, repo, switches.settings, sign_ins)
+}
+
+/// The sign-in target of `server`, listed in `project`.
+fn target(server: &Server, project: Option<&Path>) -> Target {
+    Target {
+        server: server.name.clone(),
+        plugin: server.plugin.as_ref().map(|plugin| plugin.name.clone()),
+        project: project.map(Path::to_owned),
+    }
 }
 
 impl SessionManager {
@@ -619,12 +589,6 @@ impl SessionManager {
             .read()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
-    }
-
-    /// Tests: reads the catalog from `roots` instead. The flows that do run on macOS only.
-    #[cfg(all(test, target_os = "macos"))]
-    pub(crate) fn set_registry(&self, roots: Roots) {
-        *self.registry.write().unwrap_or_else(|p| p.into_inner()) = Registry::new(roots);
     }
 
     /// The session's repository, while the user trusts it: the project whose setup its thread
@@ -684,8 +648,12 @@ impl SessionManager {
             }
             None => None,
         };
-        let (registry, settings, auth) =
-            (self.registry(), self.core.settings(), self.mcp_auth.clone());
+        let (registry, settings, logins, clis) = (
+            self.registry(),
+            self.core.settings(),
+            self.mcp_logins.clone(),
+            self.clis(),
+        );
         let others = match &repo {
             Some(repo) => self.everywhere_repos(&settings, Some(repo)),
             None => Vec::new(),
@@ -696,12 +664,41 @@ impl SessionManager {
                 settings: &settings,
                 project: project.as_ref(),
             };
+            // Each CLI's own list, as last read (Settings polls; a stale one is read again in
+            // the background).
+            let sign_ins = |server: &Server| {
+                let target = target(server, repo.as_deref());
+                let state = |agent: Agent| {
+                    let adapter = brigadier_registry::adapter::adapter(agent);
+                    let Some(listed) = logins.listed(&clis, agent, repo.as_deref()) else {
+                        return Some(SignInState::Unknown);
+                    };
+                    let plugin = target.plugin.as_deref();
+                    listed
+                        .iter()
+                        .find(|entry| adapter.is_server(&entry.name, &target.server, plugin))
+                        .map(|entry| {
+                            if entry.needs_sign_in {
+                                SignInState::Needed
+                            } else {
+                                SignInState::SignedIn
+                            }
+                        })
+                };
+                (
+                    Some(SignInView {
+                        claude: state(Agent::Claude),
+                        codex: state(Agent::Codex),
+                    }),
+                    logins.pending(&target),
+                )
+            };
             Ok(settings_view(
                 &registry,
                 repo.as_deref(),
                 &others,
                 &switches,
-                &auth,
+                &sign_ins,
             ))
         })
         .await
@@ -727,13 +724,25 @@ impl SessionManager {
         Ok(Some(PathBuf::from(repo)))
     }
 
+    /// How the agents' CLIs are run for their MCP commands: the login shell's environment and
+    /// each one's binary, the user's choice included.
+    pub(crate) fn clis(&self) -> Clis {
+        let env = self.runtime.cli_env().clone();
+        Clis {
+            env: env
+                .vars()
+                .into_iter()
+                .filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect(),
+            binary: Arc::new(move |agent| env.resolve(provider(agent))),
+        }
+    }
+
     /// The server `server_id` that signs in with OAuth, of `project`'s catalog when given and
-    /// trusted (else the user's), with that catalog.
-    async fn signing_server(
-        &self,
-        server_id: &str,
-        project: Option<ProjectId>,
-    ) -> Result<(Catalog, Server)> {
+    /// trusted (else the user's), as a sign-in target.
+    async fn signing_server(&self, server_id: &str, project: Option<ProjectId>) -> Result<Target> {
         let repo = self.trusted_project_repo(project)?;
         let registry = self.registry();
         let server_id = server_id.to_owned();
@@ -741,7 +750,6 @@ impl SessionManager {
             let catalog = registry.catalog(repo.as_deref());
             let server = catalog
                 .server(&server_id)
-                .cloned()
                 .ok_or_else(|| Error::Invalid(format!("no MCP server `{server_id}` here")))?;
             if !server.signs_in {
                 return Err(Error::Invalid(format!(
@@ -749,115 +757,78 @@ impl SessionManager {
                     server.name
                 )));
             }
-            Ok((catalog, server))
+            Ok(target(server, repo.as_deref()))
         })
         .await
     }
 
-    /// Where Brigadier keeps its own sign-in to `server`.
-    fn own_place(server: &Server) -> Result<Place> {
-        Place::of(Owner::Brigadier, server, CodexStore::default())
-            .ok_or_else(|| Error::Invalid(format!("`{}` isn't a remote server", server.name)))
-    }
-
-    /// Starts a sign-in in Brigadier to the server `server_id` (of `project`'s catalog, when
-    /// given and trusted), in the user's browser (`open`): its id at once, for
-    /// [`Self::mcp_sign_in`]. The sign-in then serves every agent's workers. One already
-    /// waiting for the server is kept: its page opens again and its id comes back.
+    /// Signs every agent that has the server `server_id` (of `project`'s catalog, when given
+    /// and trusted) and needs it in to it, one after another, each with its CLI's own `mcp
+    /// login`; each sign-in page opens in the user's browser (`open`). Its id at once, for
+    /// [`Self::mcp_sign_in`]. One already going for the server is kept: its page opens again
+    /// and its id comes back.
     pub async fn sign_in_mcp_server(
         &self,
         server_id: &str,
         project: Option<ProjectId>,
         open: Open,
     ) -> Result<String> {
-        if !self.mcp_auth.keeps_sign_ins() {
-            return Err(Error::Invalid(
-                "Sign-ins can't be kept on this system: Brigadier keeps them in the macOS Keychain."
-                    .into(),
-            ));
-        }
-        let (_, server) = self.signing_server(server_id, project).await?;
-        let homes = Homes::new(self.registry().roots());
-        let auth = self.mcp_auth.clone();
-        let (id, cancelled) = auth.begin_sign_in(Self::own_place(&server)?, open);
-        if let Some(cancelled) = cancelled {
-            let running = id.clone();
-            self.spawn(async move {
-                auth.sign_in(&running, &server, homes, cancelled).await;
-            });
-        }
-        Ok(id)
+        let target = self.signing_server(server_id, project).await?;
+        Ok(self.mcp_logins.start(self.clis(), target, open))
     }
 
-    /// How sign-in `id` ([`Self::sign_in_mcp_server`]) went.
+    /// How sign-in `id` ([`Self::sign_in_mcp_server`]) went, all agents at once.
     pub fn mcp_sign_in(&self, id: &str) -> Result<McpSignInStatus> {
-        self.mcp_auth
-            .sign_in_status(id)
+        Ok(self.mcp_sign_in_progress(id)?.status())
+    }
+
+    /// How sign-in `id` goes, agent by agent.
+    pub fn mcp_sign_in_progress(&self, id: &str) -> Result<McpSignInProgress> {
+        self.mcp_logins
+            .progress(id)
             .ok_or_else(|| Error::Invalid(format!("no sign-in `{id}`")))
     }
 
-    /// Stops sign-in `id` while it waits for the browser: nothing is kept, and it reads as
-    /// cancelled.
+    /// Stops sign-in `id`: the agent signing in now is stopped, the ones after it skipped.
     pub fn cancel_mcp_sign_in(&self, id: &str) -> Result<()> {
-        self.mcp_auth.cancel_sign_in(id).map_err(Error::Invalid)
+        self.mcp_logins.cancel(id).map_err(Error::Invalid)
     }
 
-    /// Opens sign-in `id`'s page in the browser again, while it waits.
+    /// Opens sign-in `id`'s current page in the browser again.
     pub fn reopen_mcp_sign_in(&self, id: &str) -> Result<()> {
-        self.mcp_auth.reopen_sign_in(id).map_err(Error::Invalid)
+        self.mcp_logins.reopen(id).map_err(Error::Invalid)
     }
 
-    /// Deletes Brigadier's own sign-in to the server `server_id`, if it has one: never Claude's
-    /// or Codex's.
+    /// Signs every agent that has the server `server_id` out of it, with its CLI's own `mcp
+    /// logout`.
     pub async fn sign_out_mcp_server(
         &self,
         server_id: &str,
         project: Option<ProjectId>,
     ) -> Result<()> {
-        let (_, server) = self.signing_server(server_id, project).await?;
-        let homes = Homes::new(self.registry().roots());
-        self.mcp_auth
-            .sign_out(&Self::own_place(&server)?, homes)
-            .await
-            .map_err(Error::Invalid)
+        let target = self.signing_server(server_id, project).await?;
+        let (logins, clis) = (self.mcp_logins.clone(), self.clis());
+        super::blocking(move || logins.sign_out(&clis, &target).map_err(Error::Invalid)).await
     }
 
-    /// Reads the agents' stored sign-ins to the server `server_id` again, though the user
-    /// refused it before: macOS asks them again. Returns at once; the catalog shows the
-    /// outcome.
+    /// Reads the agents' own lists again, so the next [`Self::integrations_view`] shows who
+    /// needs a sign-in as of now.
     pub async fn ask_mcp_sign_in_again(
         &self,
         server_id: &str,
         project: Option<ProjectId>,
     ) -> Result<()> {
-        let (catalog, server) = self.signing_server(server_id, project).await?;
-        let (registry, auth) = (self.registry(), self.mcp_auth.clone());
-        let id = identity(&server.transport);
-        let entries: Vec<(Agent, Server)> = catalog
-            .servers
-            .into_iter()
-            .filter(|entry| entry.signs_in && identity(&entry.transport) == id)
-            .filter_map(|entry| Some((owner_agent(entry.source)?, entry)))
-            .collect();
-        let asking = auth.prober(registry.roots(), catalog.codex_store, false);
-        let places: Vec<Place> = entries
-            .iter()
-            .filter_map(|(agent, entry)| asking.place((*agent).into(), entry))
-            .collect();
-        drop(asking);
-        auth.ask_again(&places);
-        let codex_store = catalog.codex_store;
-        self.spawn(async move {
-            let _ = super::blocking(move || {
-                let asking = auth.prober(registry.roots(), codex_store, false);
-                for (agent, entry) in &entries {
-                    asking.probe((*agent).into(), entry);
-                }
-                Ok(())
-            })
-            .await;
-        });
-        Ok(())
+        let target = self.signing_server(server_id, project).await?;
+        let (logins, clis) = (self.mcp_logins.clone(), self.clis());
+        super::blocking(move || {
+            for adapter in adapters() {
+                logins
+                    .list(&clis, adapter, target.project.as_deref())
+                    .map_err(Error::Invalid)?;
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// What a thread of `provider` starting in `cwd` goes without of its agent's own setup.
@@ -925,7 +896,11 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::mcp_auth::{McpAuth, Memory};
+
+    /// No sign-in read: the tests' servers don't sign in.
+    fn no_sign_ins(_: &Server) -> (Option<SignInView>, Option<String>) {
+        (None, None)
+    }
 
     fn home() -> PathBuf {
         let home =
@@ -1108,13 +1083,12 @@ mod tests {
             settings: &settings,
             project: Some(&project),
         };
-        let auth = McpAuth::new(Arc::new(Memory::default()));
         let view = settings_view(
             &registry,
             Some(&repo),
             std::slice::from_ref(&other),
             &switches,
-            &auth,
+            &no_sign_ins,
         );
         // The other project's server is there, but Claude in this project doesn't load it.
         let server = view
@@ -1133,7 +1107,7 @@ mod tests {
         assert_ne!(deploys[0].id, theirs.skills[0].id);
         assert!(deploys[0].native_to.contains(&ProviderKind::Claude));
         // The user's view alone doesn't take it in.
-        let user = settings_view(&registry, None, &[], &switches, &auth);
+        let user = settings_view(&registry, None, &[], &switches, &no_sign_ins);
         assert!(
             user.servers
                 .iter()
@@ -1173,14 +1147,13 @@ mod tests {
         };
         assert!(named(&everywhere, &b));
         // Settings' list still finds it, under its folder.
-        let auth = McpAuth::new(Arc::new(Memory::default()));
         let switches = Switches {
             settings: &settings,
             project: None,
         };
-        let user = settings_view(&registry, None, &[], &switches, &auth);
+        let user = settings_view(&registry, None, &[], &switches, &no_sign_ins);
         assert!(user.servers.iter().any(|server| server.id == id));
-        let in_b = settings_view(&registry, Some(&b), &[], &switches, &auth);
+        let in_b = settings_view(&registry, Some(&b), &[], &switches, &no_sign_ins);
         assert!(in_b.servers.iter().all(|server| server.id != id));
     }
 
@@ -1305,9 +1278,7 @@ mod tests {
         let lean = lean_switched_off(&catalog, &session(Agent::Codex), &[]);
         assert_eq!(lean.skill_files, [codex.join("skills/chart/SKILL.md")]);
 
-        let auth = McpAuth::new(Arc::new(Memory::default()));
-        let stores = auth.prober(&roots, catalog.codex_store, true);
-        let view = view(&catalog, None, &Settings::default(), &stores);
+        let view = view(&catalog, None, &Settings::default(), &no_sign_ins);
         let chart = view
             .skills
             .iter()

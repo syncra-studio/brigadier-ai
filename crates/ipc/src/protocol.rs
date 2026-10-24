@@ -1106,10 +1106,12 @@ pub enum Request {
     GetPlugins {
         project_id: Option<String>,
     },
-    /// Signs in to the remote MCP server `serverId` (an id of [`Request::GetIntegrations`]'s
-    /// catalog, of `projectId`'s when given; a project the user doesn't trust is refused) once
-    /// in Brigadier, in the user's browser. Answers at once with the sign-in's id; how it went
-    /// comes from [`Request::GetMcpSignIn`]. The sign-in then serves every agent's workers.
+    /// Signs every agent that has the remote MCP server `serverId` (an id of
+    /// [`Request::GetIntegrations`]'s catalog, of `projectId`'s when given; a project the user
+    /// doesn't trust is refused) and needs it in to it, one after another, each with its CLI's
+    /// own `mcp login`; each sign-in page opens in the user's browser. Answers at once with the
+    /// sign-in's id; how it goes comes from [`Request::GetMcpSignIn`] (all agents at once) and
+    /// [`Request::GetMcpSignInProgress`] (agent by agent).
     SignInMcpServer {
         server_id: String,
         project_id: Option<ProjectId>,
@@ -1118,8 +1120,12 @@ pub enum Request {
     GetMcpSignIn {
         id: String,
     },
-    /// Stops sign-in `id` while it waits for the browser: its callback listener closes,
-    /// nothing is saved, and [`Request::GetMcpSignIn`] reports it cancelled.
+    /// How sign-in `id` goes, agent by agent.
+    GetMcpSignInProgress {
+        id: String,
+    },
+    /// Stops sign-in `id`: the agent signing in now is stopped (its CLI ends), the ones after
+    /// it are skipped, and [`Request::GetMcpSignIn`] reports it cancelled.
     CancelMcpSignIn {
         id: String,
     },
@@ -1127,15 +1133,14 @@ pub enum Request {
     ReopenMcpSignIn {
         id: String,
     },
-    /// Deletes Brigadier's own sign-in to the server `serverId` (of `projectId`'s catalog when
-    /// given), if it has one. Claude Code's and Codex's own stores are never touched.
+    /// Signs every agent that has the server `serverId` (of `projectId`'s catalog when given)
+    /// out of it, with its CLI's own `mcp logout`.
     SignOutMcpServer {
         server_id: String,
         project_id: Option<ProjectId>,
     },
-    /// Forgets that macOS refused to let Brigadier read another agent's sign-in for the
-    /// server `serverId` and reads it once more, so macOS asks again. The new state arrives
-    /// with the next [`Request::GetIntegrations`].
+    /// Reads each agent's own list of servers again (for `projectId`'s folder when given), so
+    /// the next [`Request::GetIntegrations`] shows who needs a sign-in to `serverId` as of now.
     AskMcpSignInAgain {
         server_id: String,
         project_id: Option<ProjectId>,
@@ -1813,6 +1818,9 @@ pub enum Response {
     },
     GetMcpSignIn {
         status: brigadier_core::manager::McpSignInStatus,
+    },
+    GetMcpSignInProgress {
+        progress: brigadier_core::manager::McpSignInProgress,
     },
     CancelMcpSignIn,
     ReopenMcpSignIn,

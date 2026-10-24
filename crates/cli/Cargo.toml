@@ -19,5 +19,9 @@ jiff = "0.2.37"
 serde.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# An MCP server's secrets (`brigadier secret`, `brigadier mcp run`).
+security-framework = "3.7.0"
+
 [lints]
 workspace = true

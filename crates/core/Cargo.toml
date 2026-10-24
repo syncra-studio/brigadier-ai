@@ -21,16 +21,9 @@ base64.workspace = true
 blake3.workspace = true
 getrandom = "0.4.3"
 globset = "0.4.20"
-# MCP sign-ins: the daemon's local proxy and the OAuth requests behind it.
-http-body-util = "0.1.5"
-hyper = { version = "1.11.1", features = ["server", "http1"] }
-hyper-util = { version = "0.1.20", features = ["tokio"] }
-reqwest = { version = "0.13.5", default-features = false, features = ["stream", "rustls-no-provider"] }
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-sha2 = "0.11.0"
-url = "2.5.8"
-zeroize = "1.9.0"
 ignore = "0.4.33"
+# MCP sign-ins: Claude Code's `mcp login` runs only in a terminal.
+portable-pty = "0.9.0"
 jiff = "0.2.37"
 memchr.workspace = true
 # Pages: noticing edits made to the pages folder by other programs.
@@ -60,9 +53,6 @@ nix.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
-# MCP sign-ins the agents and Brigadier keep in the Keychain.
-core-foundation = "0.10.1"
-security-framework = "3.7.0"
 
 [lints]
 workspace = true

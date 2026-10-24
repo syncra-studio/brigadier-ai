@@ -2,6 +2,7 @@
 import type { SignInState } from "./SignInState";
 
 /**
- * How each agent is signed in to a remote server.
+ * Whether each agent that has a remote server is signed in to it; `None` for one that doesn't
+ * have it.
  */
-export type SignInView = { claude: SignInState, codex: SignInState, };
+export type SignInView = { claude: SignInState | null, codex: SignInState | null, };
