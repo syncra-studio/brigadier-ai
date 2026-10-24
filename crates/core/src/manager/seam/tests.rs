@@ -100,6 +100,30 @@ fn shown(text: &str) -> Vec<usize> {
 }
 
 #[test]
+fn the_note_instructions_name_skills_and_keep_secrets_out_of_the_note() {
+    let text = nudge(Path::new("/s/abcd1234/record/handoff/2.md"));
+    assert!(text.contains(
+        "Add a \"Skills to use next\" section when any apply, naming the skills by the names \
+         available to you."
+    ));
+    assert!(text.contains(
+        "Keep API keys, passwords, tokens and personal data out of the note; say where they \
+         live instead."
+    ));
+}
+
+#[test]
+fn the_successor_gets_the_notes_skills_section_and_the_users_words_whole() {
+    let note = "Doing now: the parser.\n\n## Skills to use next\nUse code-review next.\n\n\
+                Secrets live in /s/abcd1234/.env.";
+    let user = "Use API_TOKEN=example-placeholder for this test.";
+    let entries = vec![message("u1", Role::User, user)];
+    let text = boot(&entries, Some(note), None);
+    assert!(text.contains(&format!("## Hand-off note\n{note}\n")));
+    assert!(text.contains(&format!("[#0 · user]\n{user}")));
+}
+
+#[test]
 fn the_handoff_comes_in_its_order() {
     let entries = transcript(400, &"x".repeat(400));
     let text = boot(&entries, Some("doing now: the parser"), None);

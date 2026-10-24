@@ -281,7 +281,10 @@ pub(crate) fn nudge(note: &Path) -> String {
          each open item by id, and check your last steps kept each rule; write any slip as a \
          Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
          \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; they \
-         travel verbatim. Absolute paths only. Then stop.\nIf this is your second hand-off in a \
+         travel verbatim. Absolute paths only.\nAdd a \"Skills to use next\" section when any \
+         apply, naming the skills by the names available to you.\nKeep API keys, passwords, \
+         tokens and personal data out of the note; say where they live instead. Then stop.\n\
+         If this is your second hand-off in a \
          row that is still reading, say so in the note and propose splitting the work.",
         note.display()
     )
