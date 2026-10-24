@@ -5,7 +5,7 @@ import { ProjectSettingsButton, ProvidersButton } from "@/app/shell/SetupPickers
 export function ComposerHint({ target }: { target: ComposerTarget }) {
   const { conversation, resolved } = target;
   if (conversation) return null;
-  const { project, problem, repo, permission } = resolved;
+  const { project, problem, repo } = resolved;
   if (problem) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 px-2 text-xs">
@@ -21,18 +21,12 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
   // A new worktree starts from its base's last commit: what isn't committed stays out of it.
   const dirty = repo.info?.dirty;
   const local = resolved.environment === "localCheckout";
-  if (resolved.kind !== "session" || (permission !== "full" && !dirty)) return null;
+  if (resolved.kind !== "session" || !dirty) return null;
   return (
     <p className="text-muted-foreground px-2 text-xs">
-      {permission === "full" && (
-        <span className="text-full-access">
-          Full access: workers run commands without asking.{" "}
-        </span>
-      )}
-      {dirty &&
-        (local
-          ? "The session works in your checkout, uncommitted changes and all."
-          : "The session starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
+      {local
+        ? "The session works in your checkout, uncommitted changes and all."
+        : "The session starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout."}
     </p>
   );
 }
