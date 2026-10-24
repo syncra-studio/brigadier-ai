@@ -302,7 +302,7 @@ gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main 
 
 These profiles reuse `Battery`, the existing plain/Zed/summary transports, native accounting and
 cleanup. Tonight's existing nightly arm list, profile list, task schedule, thresholds and model
-calls are unchanged. The new entry point is not invoked by either workflow. The original `battery.py`, `decisions.py`
+calls are unchanged. The manual experiment dispatch below invokes the new entry point. The original `battery.py`, `decisions.py`
 and `updates.py` also accept `--fair`: this opts into a 200k default, fixed filler schedule,
 identical archive lookup access and continuity-only probes, with no injected faults. Their
 unflagged nightly defaults retain the original thresholds and fault prompts. For the original
@@ -396,3 +396,79 @@ Every attempted run captures evidence **before** deleting its native session/pro
 The optional `--evidence` legacy export is a caller-owned export in addition to the expiring
 bundle; its caller must delete it (the nightly's temporary-directory wrapper already does).
 No paid validation or full endurance run is implied by the dry-run commands above.
+
+## Manual experiment dispatch (Stage 0 and pilot)
+
+The existing `workflow_call` from `nightly.yml` and the default manual `runner=legacy`
+keep the same arms, credentials, schedules and public artifacts. The experiment path is
+opt-in: choose `runner=experiment`, a fixed `preset`, or `dry_run=true`. A preset selects
+experiment automatically and overrides `profile`, `arms`, `providers` and `repetitions`.
+No workflow is dispatched by these local planning commands:
+
+```sh
+python3 -B tools/continuity-battery/dispatch.py plan --preset stage0 --dry-run --output /tmp/stage0-plan
+python3 -B tools/continuity-battery/dispatch.py plan --preset pilot --dry-run --output /tmp/pilot-plan
+```
+
+Dispatch inputs added alongside the existing `arms` and `zed_long` inputs:
+
+- `runner`: `legacy` (default) or `experiment`.
+- `preset`: `none` (custom), `stage0`, or `pilot`.
+- `profile`: `work`, `endurance`, `recall-short`, `recall-long`, `updates-short`,
+  `updates-long`, `decisions-short`, or `decisions-long`. Legacy scenarios in this path
+  run with `--fair --tokens 200000`, nine/90 fillers and 1,200/3,500 ballast words.
+- `arms`: the existing comma-separated input also accepts `plain@200k`, `native-bare`,
+  `native`, `native-full`, `restore-only`, `instructions-only`, `native+checkpoint`,
+  `native-full+checkpoint`, and the test-only `seam-repaired` on the experiment path.
+  Its existing default (`seam,plain,zed`) is unchanged.
+- `providers`: `claude`, `codex`, or `both` (default).
+- `repetitions`: positive integer, default 1. Custom matrices cannot exceed 256 arm-runs.
+- `dry_run`: default false. True runs only the offline plan job, without reading provider
+  secrets, installing CLIs, building a daemon or calling models/judges. The plan is printed
+  in the job summary and uploaded as `continuity-experiment-plan`.
+
+Preset matrices (one arm-run means one arm in one independent lineage):
+
+| Preset/block | Provider | Profile | Arms | Repetitions | Arm-runs |
+|---|---|---|---|---:|---:|
+| stage0 | both | recall-short and updates-short | seam, plain@200k | 1 | 8 |
+| pilot/P1 | Codex | updates-short | seam, native-bare, native, plain | 4 | 16 |
+| pilot/P1 | Codex | recall-long | native-bare, native, plain | 2 | 6 |
+| pilot/P2 | Claude | work | plain@200k, native-bare, native-full, seam | 2 | 8 |
+| pilot/P3 | both | recall-short | seam, seam-repaired | 6 | 24 |
+| pilot/endurance | Claude | endurance | plain@200k, native-full | 1 | 2 |
+| pilot/endurance | Codex | endurance | plain@200k, native | 1 | 2 |
+
+Stage 0 uses the proposal's **$10–20** short-profile budget envelope. The pilot is **58
+arm-runs**, **$462.80–572.80** list equivalent; the assumed +10% judge and +20% failed-run
+allowance makes it **$601.64–744.64**, before Stage 0. These are planning estimates, not
+subscription charges. P3 uses the table's approximate $50 block estimate. No P5 output-cap
+arm is included (run2-D17); no checkpoint ablation or confirmatory round is included.
+The planner lists all groups, counts and budget assumptions before any model call. Reruns
+are an allowance only: the workflow does not automatically spend it retrying paid lineages.
+
+`seam-repaired` sets `BRIGADIER_LONG_SESSIONS=seam-repaired` on the real daemon: size
+seams remain as before, native compaction stays off, and only P3's lookup instruction,
+tool-evidence pointers and working-state hand-off text are added. It is a test mode, never
+a product default. Other candidate arms keep using the same real product switch.
+
+Each cell is bounded to 330 minutes inside a 350-minute job, with at most four concurrent
+cells. Work/endurance seeds and task order match across arms for each repetition; the
+public collector recombines those rows for the existing paired pilot statistics and cost
+per fully passing lineage. The existing legacy scenarios randomize their plants separately:
+their repetitions do not provide paired non-inferiority intervals. Short-profile success
+validates execution only; it cannot prove the long-profile eviction or endurance bar.
+
+Live cells consume only the workflow's existing credentials and skip with `needs the user:
+secrets` when missing. They upload public per-cell reports (`continuity-experiment-cell-*`,
+30 days) and a separate public `continuity-experiment` aggregate (90 days). This does not
+replace the nightly `continuity-battery` baseline or open regression issues.
+
+CI raw evidence goes to **`$RUNNER_TEMP/continuity-private/evidence-*`**, outside all upload
+paths, with w11's owner-only permissions and seven-day expiry manifests. It is **never
+uploaded**, including by the collector. Hosted-runner teardown deletes it sooner, so these
+hosted runs cannot provide post-run raw transcript diagnosis. To retain that evidence for
+seven days, use a persistent private runner and set `BRIGADIER_BATTERY_EVIDENCE_DIR` to a
+private persistent directory (and arrange periodic `evidence.py purge` on an idle host).
+A separately named GitHub artifact would still be public in this repository and is not
+used for raw evidence.
