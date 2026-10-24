@@ -35,6 +35,9 @@ class PlainBattery(battery.Battery):
     def native_path(self):
         if not getattr(self, "native_id", None):
             return None
+        known = getattr(self, "native_sessions", {}).get(self.native_id)
+        if known:
+            return Path(known)
         home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude") if self.args.provider == "claude"
                     else os.environ.get("CODEX_HOME", Path.home() / ".codex"))
         root = home / ("projects" if self.args.provider == "claude" else "sessions")
@@ -51,6 +54,9 @@ class PlainBattery(battery.Battery):
         return record
 
     def send(self, name, text, fault=None, *, tool_less=False):
+        if self.args.provider == "codex" and getattr(self.args, "shared_transition", False):
+            from codex_transport import send
+            return send(self, name, text, fault)
         self.tick()
         battery.log(name)
         step = {"name": name, "sent_ms": battery.now()}
@@ -58,6 +64,8 @@ class PlainBattery(battery.Battery):
         if self.args.provider == "claude":
             command = ["claude", "-p", "--model", self.args.model, "--effort", "high",
                        "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
+            if getattr(self.args, "shared_transition", False) and self.args.arm == "plain@200k":
+                command += ["--autocompact", str(self.args.tokens)]
             if self.native_id:
                 command += ["--resume", self.native_id]
             if tool_less:
@@ -122,6 +130,7 @@ class PlainBattery(battery.Battery):
         path = self.native_path()
         sessions = getattr(self, "native_sessions", {}) or {getattr(self, "native_id", None): str(path) if path else None}
         self.native_files = [file for file in sessions.values() if file]
+        self.native_sources = [(self.args.provider, file) for file in self.native_files]
         # Include every old session: summary requests belong to the session they compacted.
         entries = [{"entry": {"provider": self.args.provider,
                     "event": {"type": "sessionStarted", "file": file or str(self.root / f"missing-{sid}.jsonl")}}}
@@ -131,6 +140,16 @@ class PlainBattery(battery.Battery):
         self.result.update(compactions=sum(compactions(file, self.args.provider) for file in self.native_files),
                            native_session_ids=list(sessions), native_session_id=getattr(self, "native_id", None),
                            plain_events=getattr(self, "raw_events", []), ledger=battery.read_text(self.repo / "ledger.md"))
+
+    def cleanup_native(self):
+        client = getattr(self, "codex_client", None)
+        if client:
+            for native_id in self.native_sessions:
+                client.deadline = min(self.deadline, time.monotonic() + 10)
+                try:
+                    client.call("thread/delete", {"threadId": native_id})
+                except (OSError, RuntimeError, TimeoutError) as error:
+                    self.cleanup_notes.append("Codex thread cleanup: " + str(error))
 
     def cleanup(self):
         # Reuse the battery's own process/evidence/scratch cleanup, with no daemon IPC.

@@ -21,6 +21,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import battery  # noqa: E402
+from scoring import open_item_raised
 
 ITEMS = {
     "rule_jsdoc": "rule, later corrected: JSDoc first line 'Since 0.6:' (was 'Since 0.5:')",
@@ -120,6 +121,10 @@ The decisions in force (their ledger ids may differ; the brief may cite ids or s
 - open_question: whether amounts include VAT is undecided and waits on the user. Carrying it means the brief leaves it open or says to ask; deciding it silently is a contradiction.
 
 For each key say "cited" (stated, with a ledger id like L12), "stated" (stated without an id), "missing", or "contradicted".
+Explicit task constraints, also planted by the user and NOT additions: plain TypeScript, no dependencies,
+no tests, the three requested CSV function names and signatures, UTC date parts, the task's file layout,
+and no commit or push. The principle, README promise and verified rejection above are planted too.
+
 Then list every line of the brief that adds a requirement or decision not in the list above and is not marked "proposed" (file layout and naming the task itself gives don't count; quote each line).
 Reply with only a JSON object: {{"items": {{"rule_jsdoc": ..., "rule_exports": ..., "rule_spdx": ..., "decision_padding": ..., "decision_dates": ..., "own_decision": ..., "open_question": ..., "principle": ..., "open_promise": ..., "worker_claim": ...}}, "unmarked_additions": ["..."]}}
 
@@ -226,13 +231,18 @@ def own_decision(result):
 def principle(answer):
     parsed = battery.parse_answer(answer)
     a, b = str(parsed.get("a", "")).lower(), str(parsed.get("b", "")).lower()
-    asked = lambda v: "?" in v
-    return {"a": a, "b": b, "pass": (a.startswith("no") or asked(a)) and (b.startswith("yes") or asked(b))}
+    def response(value, expected):
+        if re.search(r"no idea|not sure|unknown|uncertain|maybe", value):
+            return False
+        definite = bool(re.match(expected + r"(?:$|[,.!:\s])", value))
+        relevant_question = "?" in value and bool(re.search(r"user|notice|visible|behavio[u]?r|impact|benefit|internal|warning", value))
+        return definite or relevant_question
+    return {"a": a, "b": b, "pass": response(a, "no") and response(b, "yes")}
 
 
 def raised(answer):
-    return {"open_question": bool(re.search(r"VAT", answer)),
-            "open_promise": bool(re.search(r"README", answer, re.I))}
+    return {"open_question": open_item_raised(answer, r"\bVAT\b"),
+            "open_promise": open_item_raised(answer, r"\bREADME\b")}
 
 
 def judge(brief, sep, model, provider="claude", effort="high"):
@@ -266,6 +276,8 @@ def score(result, judge_model):
     for key, description in ITEMS.items():
         value = str(recall.get(key, "unknown"))
         recalled = all(re.search(p, value, re.I) for p in RECALL[key])
+        if key == "decision_padding":
+            recalled = battery.invoice_decision(value)
         if key == "worker_claim":
             recalled = bool(re.search(r"writeFileSync", value)) and battery.definite_rejection(value)
         if key == "rule_exports":

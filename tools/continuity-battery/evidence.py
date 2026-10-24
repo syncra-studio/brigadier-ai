@@ -14,6 +14,9 @@ SCHEMA = "brigadier-continuity-private-v1"
 
 def private_json(path, value):
     path = Path(path)
+    absolute = path.resolve()
+    if any((parent / ".git").exists() for parent in absolute.parents):
+        raise ValueError("private evidence must stay outside every git checkout")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Refuse links, rather than following a public or user-owned export target.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -61,17 +64,17 @@ def retain(run, store=STORE, days=DAYS):
     sources, audit = [], []
     # Read before Delete: a daemon may delete/move the native session and its sidecars.
     from battery import native_path
-    for index, filename in enumerate(run.native_files):
-        file = native_path(filename, run.args.provider)
+    for index, (provider, filename) in enumerate(getattr(run, "native_sources", [(run.args.provider, file) for file in run.native_files])):
+        file = native_path(filename, provider)
         if not file.is_file():
             continue
         target = directory / f"native-{index}.jsonl"
         target.write_bytes(file.read_bytes())
         target.chmod(0o600)
-        sources.append({"source": str(file), "copy": target.name, "provider": run.args.provider})
+        sources.append({"source": str(file), "copy": target.name, "provider": provider})
         rows = records(target)
-        audit.append({"file": target.name, "calls": calls(rows, run.args.provider),
-                      "lookups": lookups(rows, run.args.provider, run.result.get("expected", {}))})
+        audit.append({"file": target.name, "calls": calls(rows, provider),
+                      "lookups": lookups(rows, provider, run.result.get("expected", {}))})
         sidecar = file.with_suffix("")
         if sidecar.is_dir():
             copy_tree(sidecar, directory / f"native-{index}-sidecar")
@@ -85,6 +88,9 @@ def retain(run, store=STORE, days=DAYS):
         (directory / "daemon.log").chmod(0o600)
     private_json(directory / "sources.json", sources)
     private_json(directory / "call-audit.json", audit)
+    lookup_rows = [item for source in audit for item in source["lookups"]]
+    run.result["lookup_stats"] = {"calls": len(lookup_rows), "calls_with_hits": sum(bool(item["hits"]) for item in lookup_rows),
+                                  "distinct_items_hit": len({key for item in lookup_rows for key in item["hits"] or []})}
     return directory
 
 

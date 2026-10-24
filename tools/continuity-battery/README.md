@@ -37,7 +37,7 @@ Overrides pass through `run.sh`, for example `--tokens 75000 --max-fillers 24`.
 `--report PATH` chooses the text report. `--evidence /absolute/private/path.json`
 keeps detailed input/output, provider events, hand-offs and metering outside git.
 The evidence contains the planted answers and is written before scratch cleanup.
-Without this option, only the text report remains. Exit 0 means the probe ran,
+A seven-day private bundle is also retained by default (location and expiry below). Exit 0 means the probe ran,
 even when recall fails; exit 2 means the run ended before the probe. This is a report,
 never a gate. A report-only formatting pass can import `report()` from `battery.py`
 and pass it saved JSON evidence; it makes no model calls.
@@ -118,9 +118,9 @@ exact `archived_sessions/` path when moved there. The harness's debug daemon idl
 bound outlives the measurement and cleanup; the normal product idle policy is unchanged.
 Run errors appear beside each observation in the consolidated report. Missing transcripts
 leave compactions unavailable and preserve the remaining seam/ledger evidence; private
-evidence retains the daemon exit code and log tail if its IPC connection disappears. Raw evidence
-stays in runner scratch and is deleted; uploaded Markdown contains only the synthetic
-battery's data, and `summary.json` contains the numbers. Never upload real transcripts.
+evidence retains the daemon log and owned native paths even if the daemon exits. Private bundles
+are retained separately from the public artifact, as described below. Uploaded Markdown contains
+only synthetic battery data, and `summary.json` contains the numbers. Never upload real transcripts.
 
 Every run uploads a consolidated **continuity-battery** artifact (`summary.json`,
 `report.md`, per-arm Markdown), retained for 90 days, plus provider artifacts for 30.
@@ -129,17 +129,19 @@ Settings › Reports reads the newest retained artifact on main via the user's e
 and skipped live arms stay visible. This checkout had no existing Reports component;
 the page reuses `SettingsPage`, `SettingsSection`, `SettingsCard` and `SettingsRow`.
 
-The summary reports native compactions, recall, task checks, all metered token kinds,
-reported dollar costs and price-weighted A/B ratios when both arms have reported prices,
-decision application/brief/open-item scores, and observed cold-return cost. Codex does
-not report dollar prices, so its dollar cost and price-weighted ratio are explicitly
-unavailable; no price is guessed from a model name. A cold return is a later uncached
-request, excluding the initial cold start; if none is observed, its cost is unavailable.
-Cold-return costs never trigger issues. The first artifact is the baseline; matching
-completed observations compare to the preceding artifact. Recall/task/decision/token
-bar misses, lost recall/application from that baseline, and native Claude compactions
-open or update a **Continuity battery regression** issue. Issue-post failure is reported
-by Actions but cannot gate sessions or app builds. Missing data is never a pass.
+The summary reports native compactions, recall, task checks and decision scores. Dollar fields
+use only deduplicated native economics, with input, cache write, cache read and output reported
+separately. The legacy `usage.cost_usd` public field aliases the native list-price total for the
+existing Reports UI. Unknown synthetic-event model attribution is explicitly unpriced; missing
+prices remain unavailable. Legacy metered dollar estimates remain in private evidence. Native
+cold-return dollar attribution is unavailable until per-call role/return attribution exists.
+The large-output middle marker is a visibility diagnostic, excluded from recall (11 recall
+items in the original script, 29 in updates). The T3 judge gets the full planted instruction set,
+including later task constraints. Fault-recovery runs are labelled and excluded from continuity
+cost comparisons; native compactions inside seam arms are flagged for either provider. The
+first artifact is the baseline; matching completed observations compare to the preceding artifact.
+Recall/task/decision/cost bar misses, lost recall/application, and native compactions inside seam
+arms can open a regression issue. No number gates sessions or builds; missing data is never a pass.
 
 No real-lineage sampler existed. `lineages.py` is the smallest read-only sampler: it
 reads only opted-in `record/lineage.json` files and their listed native files, draws up
@@ -294,3 +296,96 @@ Nightly selects all four arms. A targeted dispatch can compare the requested thr
 ```sh
 gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main -f arms=seam,plain,summary
 ```
+
+
+## Opt-in fair work and endurance comparisons
+
+These profiles reuse `Battery`, the existing plain/Zed/summary transports, native accounting and
+cleanup. Tonight's existing nightly arm list, profile list, task schedule, thresholds and model
+calls are unchanged. The new entry point is not invoked by either workflow.
+
+A plan-only dry run starts no daemon, model, judge or network request:
+
+```sh
+python3 -B tools/continuity-battery/experiment.py --profile work \
+  --arms plain,plain@200k,seam,native --repetitions 4 --dry-run --report /tmp/work-plan.json
+python3 -B tools/continuity-battery/experiment.py --profile endurance \
+  --arms plain@200k,native --dry-run --report /tmp/endurance-plan.json
+```
+
+A live comparison spends subscription tokens and belongs to the separately authorized paid round:
+
+```sh
+tools/continuity-battery/run.sh work --provider claude \
+  --arms plain,plain@200k,seam,native --tokens 200000 --repetitions 4 --report /tmp/work.json
+```
+
+`plain` retains the CLI default. `plain@200k` uses the selected shared `--tokens` value:
+Claude `--autocompact`, Codex `model_auto_compact_token_limit`. The seam/Zed/summary arms use
+that same configured threshold. Supported debug thresholds start at 100k, the installed Claude
+CLI's minimum. Codex in these opt-in profiles runs through its native app-server; the existing
+nightly transport is unchanged. All arms get the same read-only native archive lookup commands;
+recall explicitly permits those commands, forbids fixture access and never provides grader data.
+The archive returns original native rows, with stable exact item ids. It adds no product memory.
+
+`work` defaults to 300 small import tasks: read a receipt under 2 KB, write a checked JSON artifact,
+and explain the calculation in about 400 words (target ~600 output tokens). This targets ~1–3k
+context growth per model request; the actual native usage is retained, not assumed. Nonces are
+planted in middle user turns and one-time small tool receipts, after the first work task. Later
+checks apply a general rule and a scoped exporter reversal, close and replace a promise, raise
+an unresolved item without prompting its answer, and finish a draft artifact to an old spec.
+
+`endurance` defaults to at most 1,400 such tasks, targeting approximately 2M tokens of growth
+at a 200k transition point. All three disjoint fact sets are planted before the first transition.
+A is probed only at depth 3, B only at 6, C only at 10; an exporter decision and promise state
+change in the middle. Fewer than ten observed transitions, or a transition before planting
+finishes, makes the lineage incomplete. Increasing `--turns` is an explicit later-run choice.
+Earlier probes do not ask the later sets. Reports show per-depth memory scores, stale answers
+and ledger ids proven absent from the kept context, including post-compaction put-back items.
+An opaque payload makes missing ids unavailable, never zero.
+
+Per fact, the scorer inspects native replacement history or Claude's preservation UUIDs and
+compaction summary. Visible exact markers are `retained`; proven absent markers are `evicted`;
+missing metadata, missing preserved rows, or sealed/encrypted summaries are `unverified`.
+Only evicted facts enter memory scores; retained facts are separate, and unverified evidence
+cannot establish a memory benefit. A user fact still inside Codex's 64k retention or Claude's
+“All user messages” summary is never silently counted as memory. Full payloads remain private.
+
+Seeds and task order are paired across arms. Reports use independent lineage differences with
+90% Student intervals, and cost per fully passing lineage includes spend on failed attempts.
+Missing prices keep that cost unavailable. Pairing also requires the same build/hash, model,
+threshold, workload and evicted-item set. The proposed non-inferiority margin is a lower 90%
+bound strictly above -1/12, with no planted decision violated more often. `--phase pilot` is the
+default: it reports variance and never establishes non-inferiority. Confirmatory sample size
+must be chosen from the pilot before using `--phase confirmatory`. One lineage has no interval.
+
+Candidate arms are `native-bare`, `native`, `native-full`, `restore-only`, `instructions-only`,
+`native+checkpoint`, and `native-full+checkpoint`. They start the real daemon with the mode in
+`arms.LONG_SESSION_SWITCH` (placeholder environment variable `BRIGADIER_LONG_SESSIONS`, value
+`native` for that arm). No compaction, restore or checkpoint logic is imitated in Python.
+An older binary lacking the switch name skips cleanly before daemon startup. Phase B must
+align the switch/mode values and threshold controls with its real build before Stage 0;
+string presence is a preflight, not proof that a particular ablation worked.
+
+## Private evidence and expiry
+
+Every attempted run captures evidence **before** deleting its native session/project:
+
+- Default location: `~/.cache/brigadier-continuity/private/evidence-<timestamp>-<random>/`.
+  Set `BRIGADIER_BATTERY_EVIDENCE_DIR` to a persistent private directory on a runner if needed.
+- Owner-only permissions: directories 0700, files 0600. Git checkouts and linked export targets
+  are refused. Public reports omit this location, transcripts, payloads, checkpoints and answers.
+- `evidence.json` contains steps, notes, bootstraps, planted values and scoring. Native JSONL and
+  sidecars retain tool outputs; `record/` retains ledger, checkpoints and put-back receipts.
+  `call-audit.json` retains per-call native usage/TTL and lookup commands, outputs and matched
+  fact keys. A marker match identifies supporting evidence; raw results allow inspection of
+  whether the lookup read the intended item. `sources.json` maps private copies to native files.
+- Bundles expire after **7 days**. Expired marked bundles are removed at each harness or nightly
+  startup. On an otherwise idle persistent host, run `python3 tools/continuity-battery/evidence.py
+  purge` periodically; cleanup is invocation-driven, not a background service. A hosted runner
+  may destroy its home sooner, so a persistent private mount is required for later diagnosis.
+  Neither the public artifact nor this code uploads transcripts or provisions private storage.
+
+The optional `--evidence` legacy export is a caller-owned export in addition to the expiring
+bundle; its caller must delete it (the nightly's temporary-directory wrapper already does).
+No paid validation or full endurance run is implied by the dry-run commands above.

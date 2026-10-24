@@ -19,8 +19,10 @@ sys.dont_write_bytecode = True
 SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC / "tools/bench"))
 from metrics import parse as parse_native
-from economics import NOTE, combine, historical, role_table, usd
-from scoring import definite_rejection, recall_rows
+from economics import NOTE as ECONOMICS_NOTE, combine, historical, usd
+NOTE = ECONOMICS_NOTE.replace("Cost units and regression rules are unchanged.",
+                              "Dollar fields use native deduplicated economics only.")
+from scoring import definite_rejection, invoice_decision, recall_rows
 spec = importlib.util.spec_from_file_location("live_smoke", SRC / "tools/live-smoke/smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
@@ -65,6 +67,8 @@ def grade(answer, expected, action):
         value = str(parsed.get(key, "unknown"))
         pats = patterns or [re.escape(expected[key])]
         passed = all(re.search(p, value, re.I) for p in pats)
+        if key == "decision":
+            passed = invoice_decision(value)
         if key == "false_worker":
             passed = bool(re.search(r"writeFileSync", value)) and definite_rejection(value)
         if key in ("rule", "exception"):
@@ -128,6 +132,7 @@ class Battery:
         env.update(SHELL=shutil.which("zsh") or "/bin/bash", TMPDIR="/tmp", LANG="en_US.UTF-8",
                    BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_SEAM_TOKENS=str(self.args.tokens),
                    BRIGADIER_IDLE_EXIT_SECS=str(self.args.timeout + 600))
+        env = self.configure_environment(env)
         with (self.root / "daemon.log").open("a") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)],
                                          env=env, stdout=out, stderr=subprocess.STDOUT,
@@ -142,6 +147,9 @@ class Battery:
                 return None
         if not self.wait(ready, 60):
             raise RuntimeError("daemon startup timeout")
+
+    def configure_environment(self, env):
+        return env
 
     def setup(self):
         self.start()
@@ -199,7 +207,7 @@ class Battery:
 
     def record(self):
         """The session's `record/` folder (data in /tmp: its sessions folder is `<data>-s`)."""
-        return self.root / "data-s" / self.conversation[-8:] / "record"
+        return self.root / "data-s" / (self.conversation[-8:] if self.conversation else "unstarted") / "record"
 
     def seam_file(self):
         try:
@@ -378,18 +386,29 @@ class Battery:
         self.result["items"] = grade(probe["answer"], self.expected, action)
 
     def capture(self):
-        if not self.conversation or not self.proc or self.proc.poll() is not None:
+        if not self.conversation:
             return
-        entries = self.entries()
+        if not self.proc or self.proc.poll() is not None:
+            try:
+                lineage = json.loads((self.record() / "lineage.json").read_text())
+            except (OSError, ValueError):
+                lineage = []
+            entries = [{"atMs": entry.get("startedAt", entry.get("started_at", 0)), "entry": {
+                "provider": entry["provider"], "event": {"type": "sessionStarted", "file": entry["file"],
+                "nativeId": entry.get("sessionId", entry.get("session_id"))}}}
+                for entry in lineage if entry.get("provider") and entry.get("file")]
+            self.errors.append("capture: daemon unavailable; recovered native paths from owned lineage record")
+        else:
+            entries = self.entries()
         self.result["provider_events"] = entries
-        self.native_files = sorted({event["file"] for e in entries
-                                    if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted"
-                                    and event.get("file") and e["entry"].get("provider") == self.args.provider})
+        self.native_sources = list(dict.fromkeys((e["entry"].get("provider", self.args.provider), event["file"])
+            for e in entries if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted" and event.get("file")))
+        self.native_files = [file for _, file in self.native_sources]
         from lineages import compactions
         self.result["roles"] = capture_roles(entries)
-        missing = [file for file in self.native_files if not native_path(file, self.args.provider).is_file()]
+        missing = [file for provider, file in self.native_sources if not native_path(file, provider).is_file()]
         self.result["compactions"] = (None if missing else
-            sum(compactions(native_path(file, self.args.provider), self.args.provider) for file in self.native_files))
+            sum(compactions(native_path(file, provider), provider) for provider, file in self.native_sources))
         if missing:
             self.errors.append("capture: native transcripts unavailable: " + ", ".join(missing))
         self.result["native_calls"] = native_calls(entries)
@@ -415,6 +434,9 @@ class Battery:
             self.result["usage"] = [dict(r) for r in db.execute(
                 "SELECT * FROM turn_usage WHERE conversation_id=? ORDER BY at_ms", (self.conversation,))]
 
+    def cleanup_native(self):
+        pass
+
     def cleanup(self):
         from evidence import retain
         try:
@@ -423,6 +445,7 @@ class Battery:
             self.errors.append("capture: private evidence: " + str(error))
         self.deadline = max(self.deadline, time.monotonic() + 120)
         try:
+            self.cleanup_native()
             if self.proc and self.proc.poll() is None:
                 if self.conversation:
                     self.ipc.call({"method": "interrupt", "conversationId": self.conversation})
@@ -450,8 +473,8 @@ class Battery:
                 except ProcessLookupError:
                     pass
         trusted = smoke.trust_left(str(self.root))
-        for filename in self.native_files:
-            file = native_path(filename, self.args.provider)
+        for provider, filename in getattr(self, "native_sources", [(self.args.provider, file) for file in self.native_files]):
+            file = native_path(filename, provider)
             # Only exact files the run's own provider events identified, after IPC Delete.
             if file.exists():
                 file.unlink()
@@ -487,6 +510,7 @@ def native_path(filename, provider):
 
 def capture_roles(entries):
     """Use native model IDs, including a successor that ran on a different provider."""
+    from evidence import records
     parts, seen = {}, set()
     for entry in entries:
         event = entry["entry"].get("event") or {}
@@ -502,7 +526,7 @@ def capture_roles(entries):
             if provider == "claude" and any(
                     (row.get("message") or {}).get("model") == "<synthetic>" and
                     any((row.get("message") or {}).get("usage", {}).values())
-                    for row in (json.loads(line) for line in path.read_text().splitlines() if line.strip())):
+                    for row in records(path)):
                 value["list_price_usd"] = None
                 value["notes"].append("Synthetic successor usage present: model/price attribution unavailable")
         except (OSError, RuntimeError):
@@ -542,6 +566,21 @@ def arm_markdown(result):
                   f"native compactions: {result.get('compactions', 'unavailable')}.",
                   f"Handoff skill pinned to `{result.get('summary_commit', 'unavailable')}`.",
                   "Only the model-written document bootstraps each fresh CLI; all calls are included in role costs.", ""]
+    return lines
+
+
+def role_table(roles):
+    """Native billed categories stay separate; there is only one dollar source."""
+    lines = ["| Role | Native model(s) | Input | Cache write | Cache read | Cache hit ratio | Output | Native list-price USD |",
+             "|---|---|---:|---:|---:|---:|---:|---:|"]
+    for name, row in roles.items():
+        available = row.get("usage_available", True)
+        usage = row.get("usage", {})
+        values = [str(usage.get(key, 0)) if available else "n/a" for key in ("input", "cache_write", "cache_read")]
+        hit = row.get("cache_hit_ratio") if available else None
+        lines.append(f"| {name} | {', '.join(row.get('models', [])) or 'unknown'} | " + " | ".join(values) +
+                     f" | {format(hit, '.2%') if hit is not None else 'n/a'} | "
+                     f"{usage.get('output', 0) if available else 'n/a'} | {usd(row.get('list_price_usd'))} |")
     return lines
 
 
@@ -705,8 +744,9 @@ def report(result):
               "Nightly A/B, observed cold-return costs, and opted-in real-lineage samples are summarized by nightly.py (S25/L4). "
               "No fewer-tokens claim is established. Later seams share this session, so recall cannot be attributed to one seam alone."]
     if result.get("arm", "seam") == "seam" and rows.get("large_failure", {}).get("verdict") == "unknown":
-        lines += ["The middle marker of the >250 KB failing command was not recovered. The retained command output "
-                  "was already excerpted; lookup attempts returned that excerpt. This measures the existing output path's limit."]
+        lines += ["The middle marker of the >250 KB failing command was not recovered. "
+                  "This is a visibility diagnostic. Retained native output and lookup results establish "
+                  "where a marker was excerpted or whether retrieval was attempted."]
     lines += ["", "Run problems: " + ("; ".join(result["errors"]) or "none"),
               "Cleanup: " + ("; ".join(map(str, result.get("cleanup", []))) or "own sessions, project, daemon and scratch root removed"), ""]
     if any(step.get("timeout_view") == "failed" for step in result["steps"]):

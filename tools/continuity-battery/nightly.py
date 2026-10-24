@@ -14,7 +14,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools/bench"))
-from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
+from economics import combine, historical, mean_usd, ratio, usd
+from battery import NOTE, role_table
 from scoring import recall_rows
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
 ARMS = ("seam", "plain", "zed", "summary")
@@ -78,7 +79,10 @@ def metrics(result):
     roles = result.get("roles") or {"parent": historical(
         {"input": totals["input"], "cache_write": totals["cache_write"],
          "cache_read": totals["cached_input"], "output": totals["output"]}, [])}
-    return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
+    native_usd = combine(roles.values())["list_price_usd"]
+    # Keep the old UI field as an alias, never a second legacy dollar source.
+    totals["cost_usd"] = native_usd
+    return {"usage": totals, "roles": roles, "list_price_usd": native_usd,
             "run_kind": "fault-recovery" if any(not s.get("skipped") for s in result.get("seams", [])) else "continuity",
             "native_compaction_in_seam": result.get("arm") == "seam" and (result.get("compactions") or 0) > 0,
             "compactions": result.get("compactions"), "zed_compactions": result.get("zed_compactions"),
@@ -99,8 +103,7 @@ def metrics(result):
             "contradictions": list(items.values()).count("contradicted") if items else None,
             "unmarked_additions": len(judge["unmarked_additions"]) if "unmarked_additions" in judge else None,
             "open_items": sum(bool(opens.get(k)) for k in ("open_question", "open_promise")) if opens else None,
-            "cold_return_cost_usd": sum(row["cost_usd"] for row in cold)
-                                    if cold and all(row.get("cost_usd") is not None for row in cold) else None,
+            "cold_return_cost_usd": None,  # Native per-call cold-return attribution is not yet available.
             "cold_return_observations": len(cold),
             "task_passed": None if result.get("block") == "updates" else (
                 all(result.get("t1", {}).get(k) for k in ("jsdoc", "named", "spdx", "padding", "dates"))
@@ -200,7 +203,8 @@ def regressions(summary, previous=None):
             plain = next((p for p in provider["arms"] if p["arm"] == "plain" and p["block"] == row["block"]
                           and p["profile"] == row["profile"] and p["status"] == "complete"), {})
             cost, baseline = row.get("list_price_usd"), plain.get("list_price_usd")
-            if row["arm"] == "seam" and cost is not None and baseline:
+            same_run_kind = row.get("run_kind", "continuity") == plain.get("run_kind", "continuity")
+            if row["arm"] == "seam" and same_run_kind and cost is not None and baseline:
                 row["price_weighted_ratio"] = cost / baseline
                 if cost / baseline > (1.01 if row["profile"] == "short" else .95):
                     found.append(label + ": price-weighted token bar missed")
@@ -230,16 +234,16 @@ def prepare(summary):
                     "input": usage.get("input"), "cache_write": usage.get("cache_write"),
                     "cache_read": usage.get("cached_input"), "output": usage.get("output")}, [])}
                 row["list_price_usd"] = combine(row["roles"].values())["list_price_usd"]
-        keys = sorted({(r["block"], r["profile"], r["arm"]) for r in provider["arms"]
+        keys = sorted({(r["block"], r["profile"], r["arm"], r.get("run_kind", "continuity")) for r in provider["arms"]
                        if r["status"] == "complete"})
-        for block, profile, arm in keys:
-            rows = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"]) ==
-                    (block, profile, arm, "complete")]
-            plain = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"]) ==
-                     (block, profile, "plain", "complete")]
+        for block, profile, arm, run_kind in keys:
+            rows = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"], r.get("run_kind", "continuity")) ==
+                    (block, profile, arm, "complete", run_kind)]
+            plain = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"], r.get("run_kind", "continuity")) ==
+                     (block, profile, "plain", "complete", run_kind)]
             amount, baseline = mean_usd(rows), mean_usd(plain)
             aggregates.append({"provider": provider["provider"], "block": block, "profile": profile,
-                               "arm": arm, "mean_list_price_usd": amount,
+                               "arm": arm, "run_kind": run_kind, "mean_list_price_usd": amount,
                                "list_price_ratio": amount / baseline if amount is not None and baseline else None})
     summary["aggregate"] = aggregates
     comparisons = []
@@ -248,15 +252,15 @@ def prepare(summary):
     for provider in summary["providers"]:
         for block, profile in sorted({(r["block"], r["profile"]) for r in provider["arms"]}):
             pair = {arm: [r for r in provider["arms"] if r["arm"] == arm and r["block"] == block
-                          and r["profile"] == profile and r["status"] == "complete"] for arm in ("seam", "zed")}
+                          and r["profile"] == profile and r["status"] == "complete"
+                          and r.get("run_kind", "continuity") == "continuity"] for arm in ("seam", "zed")}
             check_keys = sorted({key for rows in pair.values() for row in rows for key in row.get("checks", {})})
             for key in ["recall", "task_passed", *check_keys, "list_price_usd"]:
                 def values(arm):
-                    return [r.get("usage", {}).get("cost_usd") if key == "reported_cost_usd" else
-                            r.get(key) if key in ("recall", "task_passed", "list_price_usd") else
+                    return [r.get(key) if key in ("recall", "task_passed", "list_price_usd") else
                             r.get("checks", {}).get(key) for r in pair[arm]]
                 left, right = mean(values("seam")), mean(values("zed"))
-                dollars = key in ("list_price_usd", "reported_cost_usd")
+                dollars = key == "list_price_usd"
                 qualified = bool(pair["seam"] and pair["zed"]) and (block != "decisions" or all(
                     r.get("contexts_before_checks") is not None and r["contexts_before_checks"] >= 3
                     for rows in pair.values() for r in rows))
@@ -306,7 +310,7 @@ def markdown(summary):
               "| Provider | Script | Size | Arm | Mean list-price USD | USD vs plain |",
               "|---|---|---|---|---:|---:|"]
     for row in summary["aggregate"]:
-        lines.append(f"| {row['provider']} | {row['block']} | {row['profile']} | {row['arm']} | "
+        lines.append(f"| {row['provider']} | {row['block']} | {row['profile']} | {row['arm']} ({row['run_kind']}) | "
                      f"{usd(row['mean_list_price_usd'])} | {ratio(row['list_price_ratio'])} |")
     lines += ["", "## Seam vs Zed", "",
               "Means of completed matching observations; higher survival is better, lower dollars is better. "
