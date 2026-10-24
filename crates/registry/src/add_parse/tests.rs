@@ -424,10 +424,7 @@ fn skills_sh_ids_links_and_lines() {
 
 #[test]
 fn folders() {
-    let root = std::env::temp_dir().join(format!(
-        "20261024-1114-plugins-redesign-w05-w05a-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("brigadier-add-folders-{}", std::process::id()));
     let one = root.join("one");
     let many = root.join("many");
     let empty = root.join("empty");
@@ -470,10 +467,7 @@ fn folders() {
 /// what Continue accepts can be added.
 #[test]
 fn folder_of_skills_gives_each_skill() {
-    let root = std::env::temp_dir().join(format!(
-        "20261024-1114-plugins-redesign-w10b-many-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("brigadier-add-many-{}", std::process::id()));
     for skill in ["b", "a"] {
         std::fs::create_dir_all(root.join(skill)).unwrap();
         std::fs::write(root.join(skill).join("SKILL.md"), "").unwrap();

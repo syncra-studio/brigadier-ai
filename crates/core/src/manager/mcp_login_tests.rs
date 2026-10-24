@@ -599,10 +599,7 @@ mod live {
     #[ignore = "runs the real claude and codex against a loopback OAuth server"]
     fn live_one_click_signs_both_clis_in_and_their_tools_list_signed() {
         let server = OAuthServer::start();
-        let root = PathBuf::from(format!(
-            "/tmp/20261024-1114-plugins-redesign-w05-w05c-signin-{}",
-            std::process::id()
-        ));
+        let root = PathBuf::from(format!("/tmp/brigadier-mcp-signin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (claude_dir, codex_home, project) = (
             root.join("claude"),
