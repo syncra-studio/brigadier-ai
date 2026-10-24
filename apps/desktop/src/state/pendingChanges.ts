@@ -12,7 +12,7 @@ export function pendingPaths(board: Board | null, conversationId: string | null)
   const requests = Object.values(board.requests).toSorted((a, b) => a.startedAtMs - b.startedAtMs);
   for (const entry of requests) {
     if (!entry.changes?.settled || entry.undo?.reverted) continue;
-    for (const file of entry.changes.stat.files) paths.set(file.path, (entry.review?.[file.path] ?? "pending") === "pending");
+    for (const file of entry.changes.stat.files) paths.set(file.path, entry.review?.[file.path] === "pending");
   }
   return [...paths].filter(([, pending]) => pending).map(([path]) => path).toSorted();
 }

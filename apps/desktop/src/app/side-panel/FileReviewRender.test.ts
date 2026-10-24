@@ -33,3 +33,12 @@ test("a file tab reviews its agents' changes: Keep and Undo per change, the bar'
   assert.deepEqual(seen.done.buttons, ["Keep all changes", "Review next file"]);
   assert.equal(seen.next, "file:src/total.ts");
 });
+
+test("snapshot turns show current file contents without Keep or Undo or pending review reads (issue 528)", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "file-review.html?snapshot=1", "file-review-result", 90000)) as Look & { code: string; asked: string[] };
+  assert.deepEqual(seen.buttons, []);
+  assert.deepEqual(seen.bars, []);
+  assert.equal(seen.diff, false);
+  assert.match(seen.code, /export const RATE = 0.2/);
+  assert.deepEqual(seen.asked, []);
+});

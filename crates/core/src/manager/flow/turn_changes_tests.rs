@@ -1,7 +1,7 @@
 //! Turn cards through the real CLI pump, git, cleanup ledger and confirmation.
 
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::work::ReviewScope;
+use crate::work::{FileReview, ReviewScope};
 use std::sync::Arc;
 
 fn script<F, Fut>(f: F) -> Script
@@ -29,7 +29,7 @@ fn git_out(repo: &std::path::Path, args: &[&str]) -> String {
 #[tokio::test]
 async fn turn_snapshot_revert_restores_the_start_tree_and_refuses_newer_edits() {
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w45-revert",
+        "20261022-0805-take-over-5-sessions-w178-revert",
         Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
@@ -51,6 +51,16 @@ async fn turn_snapshot_revert_restores_the_start_tree_and_refuses_newer_edits() 
     assert!(changes.settled);
     assert_eq!(changes.stat.files.len(), 2);
     assert_eq!(changes.stat.insertions, 2);
+    assert!(request.review.is_empty());
+    assert!(
+        flow.manager
+            .pending_changes(id.clone(), None)
+            .await
+            .unwrap()
+            .files
+            .is_empty(),
+        "snapshot turns do not leave files waiting for review (#528)"
+    );
     let review = flow
         .manager
         .review_diff(
@@ -98,7 +108,7 @@ async fn turn_snapshot_revert_restores_the_start_tree_and_refuses_newer_edits() 
 #[tokio::test]
 async fn archive_keeps_snapshot_refs_and_delete_removes_the_whole_namespace() {
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w45-refs",
+        "20261022-0805-take-over-5-sessions-w178-refs",
         Options::default(),
         script(|_| async { Reply::text("Looked.") }),
     )
@@ -138,7 +148,7 @@ async fn archive_keeps_snapshot_refs_and_delete_removes_the_whole_namespace() {
 #[tokio::test]
 async fn a_merge_groups_its_files_under_the_branch_and_keeps_only_parent_edits() {
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w45-merge",
+        "20261022-0805-take-over-5-sessions-w178-merge",
         Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
@@ -217,10 +227,10 @@ async fn a_merge_groups_its_files_under_the_branch_and_keeps_only_parent_edits()
 }
 
 #[tokio::test]
-async fn file_review_keeps_and_undoes_hunks_without_changing_the_turn_card() {
+async fn explicit_file_review_keeps_and_undoes_hunks_without_changing_the_turn_card() {
     let original = "old-a\n1\n2\n3\n4\n5\n6\nold-b\n";
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w45-hunks",
+        "20261022-0805-take-over-5-sessions-w178-hunks",
         Options {
             files: vec![("hunks.txt", original)],
             ..Default::default()
@@ -241,6 +251,14 @@ async fn file_review_keeps_and_undoes_hunks_without_changing_the_turn_card() {
     let board = flow.settled().await;
     let id = flow.conversation.clone();
     let request = board.latest_request().unwrap();
+    flow.core
+        .set_request_review(
+            &id,
+            &request.id,
+            std::collections::BTreeMap::from([("hunks.txt".into(), FileReview::Pending)]),
+        )
+        .await
+        .unwrap();
     let before = flow
         .manager
         .review_diff(
@@ -319,7 +337,7 @@ async fn steering_keeps_one_snapshot_pair_for_the_whole_cli_turn() {
     let ready = Arc::new(tokio::sync::Notify::new());
     let entered = ready.clone();
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w45-steer",
+        "20261022-0805-take-over-5-sessions-w178-steer",
         Options::default(),
         script(move |turn| {
             let entered = entered.clone();
@@ -371,7 +389,7 @@ async fn steering_keeps_one_snapshot_pair_for_the_whole_cli_turn() {
 async fn undoing_a_renamed_file_brings_back_its_old_path() {
     let text = "a line that stays\nand another\n";
     let flow = Flow::start(
-        "20261022-0805-take-over-5-sessions-w61-rename",
+        "20261022-0805-take-over-5-sessions-w178-rename",
         Options {
             files: vec![("original.txt", text)],
             ..Default::default()
@@ -386,8 +404,16 @@ async fn undoing_a_renamed_file_brings_back_its_old_path() {
     )
     .await;
     flow.say("Rename it.").await;
-    flow.settled().await;
+    let board = flow.settled().await;
     let id = flow.conversation.clone();
+    flow.core
+        .set_request_review(
+            &id,
+            &board.latest_request().unwrap().id,
+            std::collections::BTreeMap::from([("renamed.txt".into(), FileReview::Pending)]),
+        )
+        .await
+        .unwrap();
     let pending = flow
         .manager
         .pending_changes(id.clone(), None)

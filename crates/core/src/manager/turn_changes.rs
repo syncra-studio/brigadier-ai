@@ -329,7 +329,7 @@ impl SessionManager {
         })
     }
 
-    /// Existing file review reads the same immutable start/end trees as the turn card.
+    /// Only explicit pending review entries wait; snapshot turns alone create no review queue.
     pub async fn pending_changes(
         &self,
         id: ConversationId,
@@ -349,6 +349,9 @@ impl SessionManager {
             let Some(changes) = &request.changes else {
                 continue;
             };
+            if !changes.settled {
+                continue;
+            }
             let Some(turn) = self.snapshot_turn_record(&id, &request.id).await? else {
                 continue;
             };
@@ -357,11 +360,7 @@ impl SessionManager {
                     continue;
                 }
                 files.remove(&file.path);
-                if request
-                    .review
-                    .get(&file.path)
-                    .is_some_and(|review| *review != FileReview::Pending)
-                {
+                if request.review.get(&file.path) != Some(&FileReview::Pending) {
                     continue;
                 }
                 files.insert(

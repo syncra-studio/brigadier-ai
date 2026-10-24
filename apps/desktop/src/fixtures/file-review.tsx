@@ -72,6 +72,7 @@ function take(id: string, keep: boolean) {
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "getPendingChanges" && query.has("snapshot")) asked.push(req.method);
   if (req.method === "getPendingChanges") return { method: req.method, pending: { files: hunks.length > 0 ? [pendingFile()] : [] } };
   if (req.method === "keepChanges" || req.method === "undoPendingChanges") {
     asked.push(`${req.method} ${req.path ?? "all"} ${(req.hunks ?? ["file"]).join(",")}`);
@@ -93,6 +94,12 @@ useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
 }));
 setReview({ [PATH]: "pending", "src/total.ts": "pending" });
+if (query.has("snapshot")) {
+  const board = useBoard.getState().board!;
+  const first = { ...board.requests.r1!, review: {} };
+  const latest = { ...first, id: "r2", startedAtMs: 2 };
+  useBoard.setState({ board: { ...board, requests: { r1: first, r2: latest } } });
+}
 
 const tab = { kind: "file" as const, id: `file:${PATH}`, path: PATH, line: null, reveal: 0, preview: false, opener: null };
 
@@ -118,6 +125,10 @@ function look() {
 
 async function measure() {
   const out: Record<string, unknown> = {};
+  if (query.has("snapshot")) {
+    await until(() => !!document.querySelector("[data-slot=file-tab] [data-line]"));
+    return { ...look(), code: text("[data-slot=file-tab]"), asked };
+  }
   await until(() => changes().length === 3);
   out.first = look();
   // Scrolled to the end, the change in view is the first one there; back at the top, the first again.
