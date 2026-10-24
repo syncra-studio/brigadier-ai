@@ -1832,16 +1832,17 @@ fn mcp_prompt(name: &str) -> Option<(&str, &str)> {
         .filter(|(server, prompt)| !server.is_empty() && !prompt.is_empty())
 }
 
-/// Adds to what `initialize` listed ([`commands`]) the names `system/init` lists beside them
-/// ([`Output::Commands`]), an MCP prompt by the name `initialize` gives one
-/// (`github:triage (MCP)`, which runs it as its `mcp__` name does).
+/// Adds to what `initialize` listed ([`commands`]) the MCP prompts `system/init` lists beside
+/// them ([`Output::Commands`]), by the name `initialize` gives one (`github:triage (MCP)`, which
+/// runs it as its `mcp__` name does). Its other names are `initialize`'s commands again, some
+/// under a second name (`anthropic-skills:pdf` for `pdf`).
 pub fn merge_commands(known: &mut Vec<CliCommand>, names: Vec<String>) {
     for name in names {
-        let name = match mcp_prompt(&name) {
-            Some((server, prompt)) => format!("{server}:{prompt} (MCP)"),
-            None => name,
+        let Some((server, prompt)) = mcp_prompt(&name) else {
+            continue;
         };
-        if name.starts_with("__") || known.iter().any(|command| command.name == name) {
+        let name = format!("{server}:{prompt} (MCP)");
+        if known.iter().any(|command| command.name == name) {
             continue;
         }
         known.push(CliCommand {
@@ -2996,7 +2997,6 @@ mod tests {
                 ("compact", "/compact"),
                 ("grill-me", "/grill-me"),
                 ("w03p:greet (MCP)", "/w03p:greet (MCP)"),
-                ("late-skill", "/late-skill"),
             ]
         );
         assert_eq!(known[0].description.as_deref(), Some("Summarize"));
