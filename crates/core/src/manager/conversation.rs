@@ -139,6 +139,7 @@ pub(crate) struct Envelope {
 
 mod continue_on;
 pub(super) mod long;
+use long::thrashing;
 mod seam;
 mod watchdog;
 
@@ -3816,9 +3817,20 @@ impl SessionManager {
                 )
                 .await;
             }
+            // A long session's compaction failing, or its context too long: compaction first,
+            // the seam as the fallback (run2-D10).
+            ProviderEvent::Error { error }
+                if self.long_mode(conv, cli.provider).is_some()
+                    && !error.will_retry
+                    && (error.kind == ErrorKind::ContextWindow || thrashing(&error.message)) =>
+            {
+                conv.state.lock().await.turn_error = Some(error.message.clone());
+                self.long_error(conv, cli, error).await;
+            }
             // "Prompt is too long" past a seam: the generation ends without a note (S22).
             ProviderEvent::Error { error }
                 if self.seam_on(conv)
+                    && self.long_mode(conv, cli.provider).is_none()
                     && error.kind == ErrorKind::ContextWindow
                     && !error.will_retry =>
             {
@@ -4161,7 +4173,7 @@ impl SessionManager {
                     cli,
                     *tokens_after,
                     native_id.as_deref(),
-                    error.is_some(),
+                    error.as_deref(),
                 )
                 .await;
             }
@@ -4353,7 +4365,7 @@ impl SessionManager {
             // Before the next turn may start: a turn admitted in between would still run on
             // this CLI, past the seam.
             self.seam_turn_end(conv, cli).await;
-            self.long_turn_end(conv, cli).await;
+            self.long_turn_end(conv, cli, status).await;
         }
         if self.finish_thread_stall(conv).await {
             return;

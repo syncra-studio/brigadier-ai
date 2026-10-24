@@ -223,7 +223,10 @@ impl SessionManager {
         {
             self.arm_seam_hold(conv).await;
         }
-        let text = nudge(&note);
+        let mut text = nudge(&note);
+        if self.seam_config().long.is_some() {
+            text.push_str(crate::manager::seam::LONG_NOTE);
+        }
         let mut state = conv.state.lock().await;
         let running = cli
             .zip(state.cli.as_ref())
@@ -797,6 +800,7 @@ impl SessionManager {
             target_window: cli.session.context_window(),
         };
         let own = cli.session.native_id();
+        let long = self.seam_config().long.is_some();
         crate::manager::blocking(move || {
             let record = dir.record();
             let lineage: Vec<_> = read_lineage(&record)
@@ -844,6 +848,7 @@ impl SessionManager {
                 },
                 entries: &entries,
                 blobs: &blobs,
+                long,
             });
             if let Some(parent) = start.parent() {
                 std::fs::create_dir_all(parent)

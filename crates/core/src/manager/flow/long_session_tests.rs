@@ -554,3 +554,209 @@ async fn after_a_restart_a_put_back_that_never_arrived_goes_once() {
         1
     );
 }
+
+/// Waits until the session went on in a fresh one.
+async fn until_successor(flow: &Flow) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while read_seam(&record(flow)).generation < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a fresh session at the fallback");
+    flow.idle().await;
+}
+
+/// A Codex session whose compaction on "Grow." ends with `error` and `after` tokens.
+async fn codex_compacting(name: &str, error: Option<&str>, after: i64) -> (Flow, Inputs) {
+    let inputs: Inputs = Arc::default();
+    let seen = inputs.clone();
+    let error = error.map(str::to_owned);
+    let mut flow = Flow::start(
+        name,
+        options(ProviderKind::Codex),
+        script(move |turn| {
+            let (inputs, error) = (seen.clone(), error.clone());
+            async move {
+                inputs
+                    .lock()
+                    .unwrap()
+                    .push((turn.provider, turn.input.clone()));
+                if turn.input.starts_with(NUDGE_MARK) {
+                    std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                    return Reply::text("Handed off.");
+                }
+                if without_handoff(&turn.input).contains("Grow.") {
+                    turn.report_context(70_000).await;
+                    turn.emit(ProviderEvent::CompactionStarted { automatic: true })
+                        .await;
+                    turn.emit(ProviderEvent::CompactionEnded {
+                        automatic: true,
+                        tokens_before: Some(70_000),
+                        tokens_after: Some(after),
+                        error,
+                        native_id: Some("compaction-1".into()),
+                    })
+                    .await;
+                    return Reply::text("Grown.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse("native"));
+    write_ledger(&flow, LEDGER);
+    flow.say("Start.").await;
+    flow.settled().await;
+    flow.say("Grow.").await;
+    (flow, inputs)
+}
+
+#[tokio::test]
+async fn a_failed_compaction_sends_the_session_to_a_fresh_one_with_its_working_state() {
+    let (flow, inputs) = codex_compacting(
+        "long-codex-compaction-failed",
+        Some("the summary failed"),
+        12_000,
+    )
+    .await;
+    until_successor(&flow).await;
+    let seen = inputs.lock().unwrap().clone();
+    // The hand-off asks for the working state and the evidence's exact pointers (P3 b, e)…
+    let nudge = seen
+        .iter()
+        .find(|(_, input)| input.starts_with(NUDGE_MARK))
+        .expect("a nudge");
+    assert!(
+        nudge
+            .1
+            .contains("the last test you ran with its exact command")
+    );
+    assert!(
+        nudge
+            .1
+            .contains("`brigadier brain read <session> --item <id>`")
+    );
+    // …and the successor is told to look things up before calling them unknown (P3 a).
+    assert!(
+        seen.iter()
+            .any(|(_, input)| input.contains("Before you say something is unknown"))
+    );
+    let told = notices(&flow).await;
+    assert_eq!(told.len(), 1, "{told:?}");
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_context_still_above_half_the_point_after_compacting_sends_the_session_on() {
+    // 40k after compacting at a 60k point (the half is proposed, run2-D10).
+    let (flow, _) = codex_compacting("long-codex-churn", None, 40_000).await;
+    until_successor(&flow).await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_compaction_well_under_half_the_point_keeps_the_session() {
+    let (flow, _) = codex_compacting("long-codex-under-half", None, 25_000).await;
+    until_put_back(&flow, PutBackState::Received).await;
+    flow.idle().await;
+    assert_eq!(read_seam(&record(&flow)).generation, 1);
+    flow.stop().await;
+}
+
+/// A Claude session whose turns on "Overflow." fail as too long, `overflows` times, or with
+/// Claude's thrash stop.
+async fn claude_overflowing(name: &str, overflows: u32, message: &'static str) -> (Flow, Inputs) {
+    let inputs: Inputs = Arc::default();
+    let left = Arc::new(std::sync::atomic::AtomicU32::new(overflows));
+    let base = claude_thread(inputs.clone());
+    let options = options(ProviderKind::Claude);
+    let mut flow = Flow::start(
+        name,
+        options,
+        script(move |turn| {
+            let (base, left) = (base.clone(), left.clone());
+            async move {
+                let over = without_handoff(&turn.input).contains("Overflow.")
+                    && left
+                        .fetch_update(
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                            |n| n.checked_sub(1),
+                        )
+                        .is_ok();
+                if over {
+                    turn.emit(ProviderEvent::Error {
+                        error: brigadier_providers::ProviderError {
+                            kind: if message.starts_with("Prompt") {
+                                brigadier_providers::ErrorKind::ContextWindow
+                            } else {
+                                brigadier_providers::ErrorKind::Other
+                            },
+                            message: message.into(),
+                            will_retry: false,
+                            limit: None,
+                            code: None,
+                        },
+                    })
+                    .await;
+                    return Reply::failed(message);
+                }
+                base(turn).await
+            }
+        }),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse("native-full"));
+    flow.say("Start.").await;
+    flow.settled().await;
+    (flow, inputs)
+}
+
+#[tokio::test]
+async fn a_context_too_long_compacts_first_and_the_session_goes_on_when_that_recovers() {
+    let (flow, inputs) =
+        claude_overflowing("long-claude-too-long-once", 1, "Prompt is too long").await;
+    flow.say("Overflow.").await;
+    flow.idle().await;
+    flow.idle().await;
+    assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+    flow.say("After.").await;
+    flow.idle().await;
+    assert!(
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, input)| input.contains("After."))
+    );
+    assert_eq!(read_seam(&record(&flow)).generation, 1);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_context_still_too_long_after_compacting_goes_on_in_a_fresh_session() {
+    let (flow, _) = claude_overflowing("long-claude-too-long-twice", 2, "Prompt is too long").await;
+    flow.say("Overflow.").await;
+    flow.idle().await;
+    flow.idle().await;
+    assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
+    flow.say("Overflow.").await;
+    until_successor(&flow).await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn claudes_thrash_stop_sends_the_session_to_a_fresh_one() {
+    let (flow, _) = claude_overflowing(
+        "long-claude-thrash",
+        1,
+        "Autocompact is thrashing: the context refilled to the limit 3 times in a row",
+    )
+    .await;
+    flow.say("Overflow.").await;
+    until_successor(&flow).await;
+    assert!(flow.behavior.compactions.lock().unwrap().is_empty());
+    flow.stop().await;
+}

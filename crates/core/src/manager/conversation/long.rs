@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brigadier_providers::{NoticeLevel, ProviderKind, restore_mark};
+use brigadier_providers::{NoticeLevel, ProviderError, ProviderKind, TurnStatus, restore_mark};
 use serde::{Deserialize, Serialize};
 
 use super::{Cli, ConvLive, ConvState};
@@ -25,6 +25,15 @@ pub(super) struct LongLive {
     pub receipt_due: Option<String>,
     /// Why the session goes on in a fresh one (run2-D10), until its seam is under way.
     pub fallback: Option<String>,
+    /// Its context was too long for a turn and a compaction is to bring it back under: a
+    /// second time before a turn completes, the seam takes over (review item 5).
+    pub recovering: bool,
+}
+
+/// Claude's stop when its auto-compaction refills the context three times in a row
+/// ("Autocompact is thrashing", CLI-INTERNALS §1.1).
+pub(super) fn thrashing(message: &str) -> bool {
+    message.to_lowercase().contains("autocompact is thrashing")
 }
 
 /// `record/long.json`: where a long session's put-back stands, so a retry or a restart
@@ -104,9 +113,21 @@ this session its decisions are not put back word for word; its summary carries t
 impl SessionManager {
     /// A turn of a long session's CLI is ending: past the point, with Claude, its next turn
     /// compacts (run2-D5). Not after a compaction turn: its size is the one before.
-    pub(super) async fn long_turn_end(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) {
+    pub(super) async fn long_turn_end(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        status: TurnStatus,
+    ) {
         if self.long_mode(conv, cli.provider).is_none() {
             return;
+        }
+        {
+            // A turn that went through after a recovering compaction: recovered.
+            let mut state = conv.state.lock().await;
+            if status == TurnStatus::Completed && !state.compacting && state.turn_error.is_none() {
+                state.long.recovering = false;
+            }
         }
         self.long_receipts(conv, cli).await;
         if cli.provider != ProviderKind::Claude {
@@ -170,17 +191,36 @@ impl SessionManager {
         cli: &Arc<Cli>,
         tokens_after: Option<i64>,
         compaction: Option<&str>,
-        failed: bool,
+        error: Option<&str>,
     ) {
-        {
+        let window = {
             let mut state = conv.state.lock().await;
             let window = state.context.and_then(|(_, window)| window);
             state.context = tokens_after.map(|used| (used, window));
+            window
+        };
+        if let Some(error) = error {
+            let why = format!("its compaction failed: {error}");
+            return self.long_fallback(conv, cli, &why).await;
+        }
+        // Still above half its point after compacting, it would compact again almost at once:
+        // the churn the seam showed (DIAGNOSIS §1.3). Half is proposed (PROPOSALS §1, point 5)
+        // and waits for the test round.
+        if let Some(after) = tokens_after
+            && after > self.seam_config().threshold(window, None) / 2
+        {
+            return self
+                .long_fallback(
+                    conv,
+                    cli,
+                    "its context stayed above half its point after compacting",
+                )
+                .await;
         }
         let restores = self
             .long_mode(conv, cli.provider)
             .is_some_and(|mode| mode.restore);
-        let Some(compaction) = compaction.filter(|_| restores && !failed) else {
+        let Some(compaction) = compaction.filter(|_| restores) else {
             return;
         };
         match cli.provider {
@@ -329,6 +369,28 @@ impl SessionManager {
         let owed = conv.state.lock().await.long.fallback.clone();
         if let Some(why) = owed {
             self.long_fallback(conv, cli, &why).await;
+        }
+    }
+
+    /// A long session's turn failed past what compaction handles. Claude's thrash stop: the
+    /// seam. A context too long for the turn: the CLI compacts first, and only when that
+    /// doesn't bring it back under does the seam take the request on (review item 5).
+    pub(super) async fn long_error(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        error: &ProviderError,
+    ) {
+        if thrashing(&error.message) {
+            return self
+                .long_fallback(conv, cli, "its compaction kept refilling its context")
+                .await;
+        }
+        let first = !std::mem::replace(&mut conv.state.lock().await.long.recovering, true);
+        if first {
+            conv.state.lock().await.long.compact_due = true;
+        } else {
+            self.seam_too_long(conv).await;
         }
     }
 

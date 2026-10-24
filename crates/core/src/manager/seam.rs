@@ -299,6 +299,19 @@ pub(crate) fn nudge(note: &Path) -> String {
     )
 }
 
+/// What a hand-off note adds in a long session (P3 b and e, behind `BRIGADIER_LONG_SESSIONS`):
+/// there a seam is the rare fallback or a move to another CLI (run2-D10), and the successor
+/// starts from the working state and the evidence, not from a re-read.
+pub(crate) const LONG_NOTE: &str = "\nIn the note also name the files you changed, the last \
+test you ran with its exact command and result, any failure still open, and the next step you \
+can run. For each failed check and each worker claim you verified, one line: what it said and \
+the exact `brigadier brain read <session> --item <id>` that shows it.";
+
+/// What a successor is told of looking things up in a long session (P3 a).
+const LONG_LOOKUP: &str = "Before you say something is unknown, look it up: `brigadier brain \
+search \"<words>\"` finds it in this session's record and `brigadier brain read <session> --item \
+<id>` reads it whole.";
+
 /// The first line of seam `n`'s hand-off in session `key`: what recovery looks for in the
 /// successor's session.
 pub(crate) fn handoff_line(n: u32, key: &str) -> String {
@@ -345,6 +358,8 @@ pub(crate) struct Boot<'a> {
     /// The session's transcript, every generation, as `brigadier brain read` numbers it.
     pub entries: &'a [FileEntry],
     pub blobs: &'a Path,
+    /// A long session's seam (P3, behind `BRIGADIER_LONG_SESSIONS`).
+    pub long: bool,
 }
 
 /// Seam `n`'s hand-off, as the successor's first lines (S22b, §9.5 L2): the successor lines,
@@ -399,6 +414,10 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         handoff_line(boot.n, boot.key),
         successor_lines(boot.n + 1)
     );
+    if boot.long {
+        out.push_str(LONG_LOOKUP);
+        out.push('\n');
+    }
     if let Some(why) = boot.death {
         out.push_str(&death_line(why));
         out.push('\n');

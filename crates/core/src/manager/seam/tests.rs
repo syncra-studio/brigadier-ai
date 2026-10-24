@@ -75,6 +75,7 @@ fn boot_tail(
         death,
         entries,
         blobs: Path::new("/nowhere"),
+        long: false,
     })
 }
 
@@ -245,6 +246,7 @@ fn a_ledger_over_budget_carries_every_open_item_rule_and_decision_whole() {
         death: None,
         entries: &entries,
         blobs: Path::new("/nowhere"),
+        long: false,
     });
     let at = |needle: &str| {
         text.find(needle)

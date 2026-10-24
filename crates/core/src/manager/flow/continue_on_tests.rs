@@ -491,6 +491,7 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         death: None,
         entries: &entries,
         blobs: flow.core.store().blobs().root(),
+        long: false,
     });
     assert!(!size.contains("SECRET-ASSISTANT-DETAIL"));
     assert!(size.contains("brigadier brain read test"));
