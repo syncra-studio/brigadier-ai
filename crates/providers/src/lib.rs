@@ -196,6 +196,13 @@ pub trait ProviderSession: Send + Sync {
     /// Adds a message to the turn that is running now.
     fn steer(&self, input: TurnInput) -> BoxFuture<'_, Result<()>>;
 
+    /// Adds a message to the turn that is running now, never starting another one: false when
+    /// no turn runs to take it. Claude takes a message written mid-turn at its next step, and
+    /// can't refuse one written as its turn ends, so for it this is [`steer`](Self::steer).
+    fn steer_running(&self, input: TurnInput) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move { self.steer(input).await.map(|()| true) })
+    }
+
     /// Stops the running turn.
     fn interrupt(&self) -> BoxFuture<'_, Result<()>>;
 

@@ -2275,6 +2275,20 @@ impl ProviderSession for CodexSession {
         })
     }
 
+    fn steer_running(&self, input: TurnInput) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let Some(turn_id) = self.turn_id() else {
+                return Ok(false);
+            };
+            match self.steer_turn(turn_id, &input).await {
+                Ok(()) => Ok(true),
+                // The turn ended as the message went: it starts nothing.
+                Err(Error::Rejected(_)) if self.turn_id().is_none() => Ok(false),
+                Err(err) => Err(err),
+            }
+        })
+    }
+
     fn can_compact(&self) -> bool {
         self.compacts
     }
@@ -3862,5 +3876,120 @@ mod tests {
         } else {
             assert!(!line.contains(r#""one" = "#) && !line.contains(r#""two" = "#));
         }
+    }
+
+    /// A message steered with `steer_running` never starts a turn: with no turn running it is
+    /// refused before anything is sent, and a steer the app-server rejects as its turn ends
+    /// starts none either (run2-D46). `steer` still starts the next turn, as before.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn steering_only_into_a_running_turn_never_starts_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-steer-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let log = scratch.join("methods");
+        let binary = scratch.join("app-server");
+        // A turn starts at once; `turn/steer` ends it first, then refuses the steer.
+        std::fs::write(
+            &binary,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys
+log = open({log:?}, "a")
+def say(m):
+    print(json.dumps(m), flush=True)
+def turn(method, status):
+    say({{"method": method, "params": {{"threadId": "t", "turn": {{"id": "turn-1", "items": [],
+        "itemsView": "notLoaded", "status": status, "error": None, "startedAt": 1,
+        "completedAt": None, "durationMs": None}}}}}})
+for line in sys.stdin:
+    m = json.loads(line)
+    log.write(m.get("method", "") + "\n"); log.flush()
+    if m.get("method") == "start-a-turn":
+        turn("turn/started", "inProgress")
+    elif m.get("method") == "turn/steer":
+        turn("turn/completed", "completed")
+        say({{"id": m["id"], "error": {{"code": -32600, "message": "no active turn"}}}})
+    elif "id" in m:
+        say({{"id": m["id"], "result": {{"turn": {{"id": "turn-2", "items": [],
+            "itemsView": "notLoaded", "status": "inProgress", "error": None}}}}}})
+"#,
+                log = log.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(scratch.join("data")),
+        })
+        .unwrap();
+        let mut spec = brigadier_sandbox::SpawnSpec::new(&binary);
+        spec.cwd = Some(scratch.clone());
+        let process::Spawned { process, stdout } =
+            process::spawn(platform, &spec, process::Options::default()).unwrap();
+        let rpc = Arc::new(Rpc::new(process));
+        let (events_tx, mut events) = mpsc::channel(EVENTS);
+        tokio::spawn(async move { while events.recv().await.is_some() {} });
+        let shared = Arc::new(Shared {
+            approvals: Mutex::new(HashMap::new()),
+            turn_id: Mutex::new(None),
+            compact_asked: AtomicBool::new(false),
+            events: Events::new(events_tx, None),
+            thread: Mutex::new(Some("t".into())),
+            own_mcp: HashSet::new(),
+            mcp_listing: AtomicBool::new(false),
+            mcp_relist: Mutex::new(McpRelist::default()),
+        });
+        tokio::spawn(read_loop(
+            rpc.clone(),
+            stdout,
+            shared.clone(),
+            HashSet::new(),
+        ));
+        let session = CodexSession {
+            context_window: None,
+            thread_id: "t".into(),
+            rollout: None,
+            ephemeral: true,
+            compacts: false,
+            rpc: rpc.clone(),
+            shared: shared.clone(),
+            access: Access::Ask,
+            tools: ToolSet::Thread,
+            writable_roots: Vec::new(),
+            effort: None,
+            cwd: scratch.clone(),
+        };
+        let methods = || std::fs::read_to_string(&log).unwrap_or_default();
+        // No turn runs: refused, nothing sent.
+        assert!(
+            !session
+                .steer_running(TurnInput::text("Also CSV."))
+                .await
+                .unwrap()
+        );
+        assert_eq!(methods(), "");
+        // A turn runs, but ends as the steer goes: refused, and no turn starts.
+        rpc.notify("start-a-turn").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while session.turn_id().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !session
+                .steer_running(TurnInput::text("Also CSV."))
+                .await
+                .unwrap()
+        );
+        assert_eq!(methods(), "start-a-turn\nturn/steer\n");
+        // The plain steer starts the next turn, as it always did.
+        session.steer(TurnInput::text("Also CSV.")).await.unwrap();
+        assert_eq!(methods(), "start-a-turn\nturn/steer\nturn/start\n");
+        rpc.process.shutdown(EXIT_GRACE).await;
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }
