@@ -1100,6 +1100,12 @@ pub enum Request {
     GetIntegrations {
         project_id: Option<ProjectId>,
     },
+    /// Settings › Plugins: every skill and MCP server the agents have, where each is on and how
+    /// each agent stands with it, looking at project `projectId` when given (else at every
+    /// project).
+    GetPlugins {
+        project_id: Option<String>,
+    },
     /// Signs in to the remote MCP server `serverId` (an id of [`Request::GetIntegrations`]'s
     /// catalog, of `projectId`'s when given; a project the user doesn't trust is refused) once
     /// in Brigadier, in the user's browser. Answers at once with the sign-in's id; how it went
@@ -1798,6 +1804,9 @@ pub enum Response {
     },
     GetIntegrations {
         integrations: brigadier_core::manager::integrations::IntegrationsView,
+    },
+    GetPlugins {
+        plugins: brigadier_core::manager::plugins::PluginsView,
     },
     SignInMcpServer {
         id: String,

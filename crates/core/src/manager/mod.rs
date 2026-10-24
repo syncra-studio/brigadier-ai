@@ -66,6 +66,7 @@ mod outputs;
 mod page_tools;
 mod past_projects;
 mod plain_workers;
+pub mod plugins;
 mod preview;
 mod preview_ready;
 mod project_removal;

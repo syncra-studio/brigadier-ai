@@ -2411,6 +2411,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetIntegrations { project_id } => Response::GetIntegrations {
             integrations: daemon.sessions.integrations_view(project_id).await?,
         },
+        Request::GetPlugins { project_id } => Response::GetPlugins {
+            plugins: daemon.sessions.plugins_view(project_id).await?,
+        },
         Request::SignInMcpServer {
             server_id,
             project_id,
