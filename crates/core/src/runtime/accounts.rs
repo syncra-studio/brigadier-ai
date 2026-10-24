@@ -161,8 +161,14 @@ impl Runtime {
         let main = brigadier_providers::accounts::main_home(entry.provider, &self.env)
             .ok_or_else(|| Error::Invalid("no home folder for the CLI's own files".into()))?;
         let (kind, made) = (entry.provider, home.clone());
+        let main_file = brigadier_providers::accounts::main_config_file(&self.env)
+            .filter(|_| kind == ProviderKind::Claude);
         tokio::task::spawn_blocking(move || {
-            brigadier_providers::accounts::prepare_home(kind, &main, &made)
+            brigadier_providers::accounts::prepare_home(kind, &main, &made)?;
+            match main_file {
+                Some(file) => brigadier_providers::accounts::carry_servers(&file, &made),
+                None => Ok(()),
+            }
         })
         .await
         .map_err(|err| Error::Invalid(err.to_string()))?

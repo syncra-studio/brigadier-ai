@@ -110,6 +110,9 @@ pub struct Claude {
     /// An extra account's ([`crate::accounts`]): the user's own config directory, where its
     /// history and settings are (its own home links them).
     main_config: Option<PathBuf>,
+    /// An extra account's: the user's own config file, whose MCP servers each session copies
+    /// in first ([`crate::accounts::carry_servers`]).
+    main_config_file: Option<PathBuf>,
 }
 
 impl Claude {
@@ -118,6 +121,7 @@ impl Claude {
             platform,
             env,
             main_config: None,
+            main_config_file: None,
         }
     }
 
@@ -125,11 +129,26 @@ impl Claude {
     /// [`crate::accounts::prepare_home`]); `env` is the user's own environment.
     pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
         let main_config = crate::accounts::main_home(ProviderKind::Claude, env);
+        let main_config_file = crate::accounts::main_config_file(env);
         let env = Arc::new(env.for_account(ProviderKind::Claude, home));
         Self {
             platform,
             env,
             main_config,
+            main_config_file,
+        }
+    }
+
+    /// An extra account's session sees the user's own MCP servers: copied into its config
+    /// file before the CLI starts. A failure is logged; the session still starts.
+    async fn carry_servers(&self) {
+        let (Some(main), Some(home)) = (self.main_config_file.clone(), self.config_dir()) else {
+            return;
+        };
+        let carried =
+            tokio::task::spawn_blocking(move || crate::accounts::carry_servers(&main, &home)).await;
+        if let Ok(Err(err)) = carried {
+            tracing::warn!(error = %err, "could not copy the user's MCP servers to the account");
         }
     }
 
@@ -1206,6 +1225,7 @@ impl Provider for Claude {
                     "no saved Claude session {native_id} to resume"
                 )));
             }
+            self.carry_servers().await;
             let user_config = self.config_dir();
             let args = Self::session_args(
                 &spec,
@@ -1454,6 +1474,7 @@ impl Provider for Claude {
             // `--input-format`, `--include-partial-messages` and `--replay-user-messages`).
             // Its instructions are in the session record (`--system-prompt-snapshot`, on by
             // default), so `--append-system-prompt` isn't repeated.
+            self.carry_servers().await;
             let user_config = self.config_dir();
             let mut args = Self::session_flags(
                 &spec,

@@ -13,6 +13,9 @@
 //!
 //! A login in the environment would win over the home's own login, so an account's processes
 //! run without the variables in [`auth_vars`].
+//!
+//! Claude keeps the user's MCP servers in its config file, beside the login, so that file can't
+//! be linked: [`carry_servers`] copies the servers into the account's own file instead.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -56,7 +59,11 @@ pub fn shared(kind: ProviderKind) -> &'static [Shared] {
             Optional("agents"),
             Optional("commands"),
             Optional("skills"),
+            // The installed plugins, and the settings that enable them and name their
+            // marketplaces (`enabledPlugins`, `extraKnownMarketplaces`): the plugins folder
+            // alone loads none of them. Claude writes the settings through the link.
             Optional("plugins"),
+            Optional("settings.json"),
         ],
         ProviderKind::Codex => &[
             Dir("sessions"),
@@ -67,6 +74,9 @@ pub fn shared(kind: ProviderKind) -> &'static [Shared] {
             Optional("skills"),
             Optional("prompts"),
             Optional("rules"),
+            // The installed plugins (`config.toml` enables them) and the user's hooks.
+            Optional("plugins"),
+            Optional("hooks.json"),
         ],
     }
 }
@@ -149,6 +159,151 @@ pub fn prepare_home(kind: ProviderKind, main: &Path, home: &Path) -> io::Result<
         link_to(&target, &link, meta.is_dir())?;
     }
     Ok(())
+}
+
+/// Claude's config file for the user's own login, where their user servers (`mcpServers`) and
+/// each project's local ones (`projects.<path>.mcpServers`) are: `.claude.json` in
+/// `CLAUDE_CONFIG_DIR`, else in the home folder, as Claude Code itself picks it (an old
+/// `.config.json` in the config folder wins when present).
+pub fn main_config_file(env: &CliEnv) -> Option<PathBuf> {
+    let set = env
+        .var(home_var(ProviderKind::Claude))
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from);
+    let legacy = main_home(ProviderKind::Claude, env)?.join(".config.json");
+    if legacy.is_file() {
+        return Some(legacy);
+    }
+    Some(set.or_else(|| env.home())?.join(".claude.json"))
+}
+
+/// What [`carry_servers`] last copied from the main config file, kept in the account's home.
+const CARRIED: &str = ".brigadier-carried.json";
+
+/// Copies the user's MCP servers from the main config file `main` (read only) into the
+/// account's own `.claude.json` in `home`, leaving its login and everything else its own.
+/// Run before each session, so a server the user adds is there at the next start.
+///
+/// A three-way merge on what was copied last time: a server the account changed or added
+/// itself (a `claude mcp add` in one of its sessions) stays, one the main file added,
+/// changed or removed follows it there.
+pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
+    use serde_json::{Map, Value};
+    let read = |path: &Path| -> io::Result<Option<Value>> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    };
+    let main = read(main)?.unwrap_or_default();
+    let config_path = home.join(".claude.json");
+    let Some(Value::Object(mut config)) = read(&config_path)? else {
+        // Not made yet, or not an object: the CLI's to sort out.
+        return Ok(());
+    };
+    let carried_path = home.join(CARRIED);
+    let last = read(&carried_path).ok().flatten().unwrap_or_default();
+
+    let servers = |root: &Value, project: Option<&str>| -> Map<String, Value> {
+        let holder = match project {
+            Some(path) => root.get("projects").and_then(|all| all.get(path)),
+            None => Some(root),
+        };
+        holder
+            .and_then(|holder| holder.get("mcpServers"))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let merge =
+        |mine: &mut Map<String, Value>, theirs: &Map<String, Value>, was: &Map<String, Value>| {
+            let names: std::collections::BTreeSet<String> =
+                theirs.keys().chain(was.keys()).cloned().collect();
+            for name in names {
+                if mine.get(&name) != was.get(&name) {
+                    continue;
+                }
+                match theirs.get(&name) {
+                    Some(server) => mine.insert(name, server.clone()),
+                    None => mine.remove(&name),
+                };
+            }
+        };
+
+    let mut now = Map::new();
+    let main_user = servers(&main, None);
+    let mut user = servers(&Value::Object(config.clone()), None);
+    merge(&mut user, &main_user, &servers(&last, None));
+    now.insert("mcpServers".into(), Value::Object(main_user));
+
+    let mut projects: std::collections::BTreeSet<String> = Default::default();
+    for root in [&main, &last] {
+        if let Some(all) = root.get("projects").and_then(Value::as_object) {
+            projects.extend(all.keys().cloned());
+        }
+    }
+    let mut carried_projects = Map::new();
+    let mut project_servers = Vec::new();
+    for path in projects {
+        let theirs = servers(&main, Some(&path));
+        let was = servers(&last, Some(&path));
+        let had = servers(&Value::Object(config.clone()), Some(&path));
+        let mut mine = had.clone();
+        merge(&mut mine, &theirs, &was);
+        if !theirs.is_empty() {
+            carried_projects.insert(path.clone(), json_servers(theirs));
+        }
+        if mine != had {
+            project_servers.push((path, mine));
+        }
+    }
+    now.insert("projects".into(), Value::Object(carried_projects));
+
+    let before = Value::Object(config.clone());
+    config.insert("mcpServers".into(), Value::Object(user));
+    if !project_servers.is_empty() {
+        let all = config
+            .entry("projects")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(all) = all {
+            for (path, mine) in project_servers {
+                let project = all.entry(path).or_insert_with(|| Value::Object(Map::new()));
+                if let Value::Object(project) = project {
+                    project.insert("mcpServers".into(), Value::Object(mine));
+                }
+            }
+        }
+    }
+    let config = Value::Object(config);
+    if config != before {
+        write_private(&config_path, &config)?;
+    }
+    if last != Value::Object(now.clone()) {
+        write_private(&carried_path, &Value::Object(now))?;
+    }
+    Ok(())
+}
+
+fn json_servers(servers: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({ "mcpServers": servers })
+}
+
+/// Writes `value` to `path` whole (a temporary file renamed over it), owner-only.
+fn write_private(path: &Path, value: &serde_json::Value) -> io::Result<()> {
+    let text = serde_json::to_string_pretty(value)? + "\n";
+    let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::write(&temp, text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 /// Deletes an account's home. Links are removed, never followed: what they point to in the
@@ -391,5 +546,304 @@ mod tests {
             std::fs::read_to_string(home.join("config.toml")).unwrap(),
             "model = \"x\"\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_account_gets_the_users_servers_and_keeps_its_own() {
+        use serde_json::{Value, json};
+        let root = scratch("carry");
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        let main = main_dir.join(".claude.json");
+        let write = |path: &Path, value: Value| {
+            std::fs::write(path, serde_json::to_string(&value).unwrap()).unwrap()
+        };
+        let read = |path: &Path| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let server = |cmd: &str| json!({ "type": "stdio", "command": cmd, "args": [] });
+        write(
+            &main,
+            json!({
+                "oauthAccount": { "emailAddress": "main@example.com" },
+                "userID": "main-user",
+                "mcpServers": { "docs": server("docs"), "gone": server("gone") },
+                "projects": {
+                    "/work/a": { "mcpServers": { "db": server("db") }, "hasTrustDialogAccepted": true },
+                    "/work/b": { "allowedTools": [] }
+                }
+            }),
+        );
+        let home = root.join("account");
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        let config = home.join(".claude.json");
+        let mut own = read(&config);
+        own["oauthAccount"] = json!({ "emailAddress": "work@example.com" });
+        own["userID"] = json!("work-user");
+        write(&config, own);
+        let main_text = std::fs::read_to_string(&main).unwrap();
+
+        carry_servers(&main, &home).unwrap();
+        let got = read(&config);
+        assert_eq!(
+            got["mcpServers"],
+            json!({ "docs": server("docs"), "gone": server("gone") })
+        );
+        assert_eq!(
+            got["projects"]["/work/a"]["mcpServers"],
+            json!({ "db": server("db") })
+        );
+        // Only the servers: the login, the identity and the trust stay the account's own.
+        assert_eq!(got["oauthAccount"]["emailAddress"], "work@example.com");
+        assert_eq!(got["userID"], "work-user");
+        assert_eq!(
+            got["projects"]["/work/a"].get("hasTrustDialogAccepted"),
+            None
+        );
+        assert_eq!(got["projects"].get("/work/b"), None);
+        assert_eq!(got["hasCompletedOnboarding"], true);
+        // The main file is only read.
+        assert_eq!(std::fs::read_to_string(&main).unwrap(), main_text);
+
+        // A session on the account adds and changes servers of its own.
+        let mut own = read(&config);
+        own["mcpServers"]["mine"] = server("mine");
+        own["mcpServers"]["docs"] = server("docs-mine");
+        own["projects"]["/work/a"]["mcpServers"]["local"] = server("local");
+        write(&config, own);
+        // The user adds one, changes one and removes one in their own file.
+        let mut theirs = read(&main);
+        theirs["mcpServers"] = json!({ "docs": server("docs-2"), "new": server("new") });
+        theirs["projects"]["/work/a"]["mcpServers"]["db"] = server("db-2");
+        write(&main, theirs);
+
+        carry_servers(&main, &home).unwrap();
+        let got = read(&config);
+        assert_eq!(
+            got["mcpServers"],
+            json!({ "docs": server("docs-mine"), "mine": server("mine"), "new": server("new") })
+        );
+        assert_eq!(
+            got["projects"]["/work/a"]["mcpServers"],
+            json!({ "db": server("db-2"), "local": server("local") })
+        );
+        // Again: nothing to do, the file is left as it is.
+        let before = std::fs::metadata(&config).unwrap().modified().unwrap();
+        carry_servers(&main, &home).unwrap();
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().modified().unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn claudes_main_config_file_follows_its_config_dir_or_the_home() {
+        let set = CliEnv::from_vars([
+            (OsString::from("HOME"), OsString::from("/home/me")),
+            (OsString::from("CLAUDE_CONFIG_DIR"), OsString::from("/cfg")),
+        ]);
+        assert_eq!(
+            main_config_file(&set),
+            Some(PathBuf::from("/cfg/.claude.json"))
+        );
+        let unset = CliEnv::from_vars([(OsString::from("HOME"), OsString::from("/home/me"))]);
+        assert_eq!(
+            main_config_file(&unset),
+            Some(PathBuf::from("/home/me/.claude.json"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_account_shares_the_plugins_and_the_settings_that_enable_them() {
+        let root = scratch("plugins");
+        for (kind, names) in [
+            (ProviderKind::Claude, &["plugins", "settings.json"][..]),
+            (
+                ProviderKind::Codex,
+                &["plugins", "hooks.json", "config.toml"][..],
+            ),
+        ] {
+            let main = root.join(format!("{kind}-main"));
+            std::fs::create_dir_all(main.join("plugins")).unwrap();
+            for file in ["settings.json", "hooks.json", "config.toml"] {
+                std::fs::write(main.join(file), "").unwrap();
+            }
+            let home = root.join(format!("{kind}-account"));
+            prepare_home(kind, &main, &home).unwrap();
+            for name in names {
+                assert_eq!(
+                    std::fs::read_link(home.join(name)).unwrap(),
+                    main.join(name)
+                );
+            }
+        }
+    }
+
+    /// Real CLIs on throwaway homes: run with `--ignored`.
+    #[cfg(unix)]
+    mod live {
+        use super::*;
+        use std::process::Command;
+
+        fn root(name: &str) -> PathBuf {
+            let dir = PathBuf::from(format!(
+                "/tmp/20261024-1114-plugins-redesign-w05-w05c-{name}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("os-home")).unwrap();
+            std::fs::create_dir_all(dir.join("bin")).unwrap();
+            std::fs::create_dir_all(dir.join("project")).unwrap();
+            // A stdio MCP server that answers `initialize` and `tools/list`.
+            std::fs::write(
+                dir.join("bin/server.py"),
+                "import json, sys\nfor line in sys.stdin:\n    req = json.loads(line)\n    if 'id' not in req:\n        continue\n    m = req.get('method')\n    r = {}\n    if m == 'initialize':\n        r = {'protocolVersion': req['params']['protocolVersion'], 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '0.1.0'}}\n    elif m == 'tools/list':\n        r = {'tools': [{'name': 'probe', 'description': 'fixture', 'inputSchema': {'type': 'object', 'properties': {}}}]}\n    print(json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': r}), flush=True)\n",
+            )
+            .unwrap();
+            let market = dir.join("market");
+            std::fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+            std::fs::create_dir_all(market.join("alpha/.claude-plugin")).unwrap();
+            std::fs::write(
+                market.join(".claude-plugin/marketplace.json"),
+                r#"{"name":"w05c-local","owner":{"name":"w05c"},"plugins":[{"name":"alpha","source":"./alpha","description":"fixture"}]}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                market.join("alpha/.claude-plugin/plugin.json"),
+                r#"{"name":"alpha","version":"0.1.0","description":"fixture"}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                market.join("alpha/.mcp.json"),
+                format!(
+                    r#"{{"mcpServers":{{"shared":{{"command":"/usr/bin/python3","args":["{}","alpha"]}}}}}}"#,
+                    dir.join("bin/server.py").display()
+                ),
+            )
+            .unwrap();
+            dir
+        }
+
+        fn cli(dir: &Path, program: &str, var: &str, home: &Path, args: &[&str]) -> String {
+            let out = Command::new(program)
+                .args(args)
+                .current_dir(dir.join("project"))
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap())
+                .env("HOME", dir.join("os-home"))
+                .env(var, home)
+                .env("TERM", "dumb")
+                .env("NO_COLOR", "1")
+                .env("DISABLE_AUTOUPDATER", "1")
+                .output()
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!(
+                "$ {var}={} {program} {}\n{text}",
+                home.display(),
+                args.join(" ")
+            );
+            assert!(out.status.success(), "{program} {args:?} failed");
+            text
+        }
+
+        #[test]
+        #[ignore = "runs the real claude on throwaway homes"]
+        fn live_an_extra_claude_account_lists_the_users_servers_and_plugins() {
+            let dir = root("claude");
+            let main = dir.join("main");
+            let server = format!("/usr/bin/python3 {}", dir.join("bin/server.py").display());
+            let server: Vec<&str> = server.split(' ').collect();
+            let claude =
+                |home: &Path, args: &[&str]| cli(&dir, "claude", "CLAUDE_CONFIG_DIR", home, args);
+            let mut add = vec!["mcp", "add", "user-one", "--scope", "user", "--"];
+            add.extend(&server);
+            claude(&main, &add);
+            let mut add = vec!["mcp", "add", "local-one", "--scope", "local", "--"];
+            add.extend(&server);
+            add.push("local");
+            claude(&main, &add);
+            claude(
+                &main,
+                &[
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    dir.join("market").to_str().unwrap(),
+                ],
+            );
+            claude(&main, &["plugin", "install", "alpha@w05c-local"]);
+
+            let extra = dir.join("extra");
+            prepare_home(ProviderKind::Claude, &main, &extra).unwrap();
+            carry_servers(&main.join(".claude.json"), &extra).unwrap();
+            let listed = claude(&extra, &["mcp", "list"]);
+            for name in ["user-one:", "local-one:", "plugin:alpha:shared:"] {
+                assert!(listed.contains(name), "{name} missing:\n{listed}");
+            }
+            assert_eq!(listed.matches("Connected").count(), 3, "{listed}");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        #[ignore = "runs the real codex on throwaway homes"]
+        fn live_a_codex_mcp_add_on_an_account_survives_the_next_launch() {
+            let dir = root("codex");
+            let main = dir.join("main");
+            std::fs::create_dir_all(&main).unwrap();
+            let codex = |home: &Path, args: &[&str]| cli(&dir, "codex", "CODEX_HOME", home, args);
+            codex(
+                &main,
+                &["mcp", "add", "user-one", "--", "/usr/bin/python3", "x.py"],
+            );
+            codex(
+                &main,
+                &[
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    dir.join("market").to_str().unwrap(),
+                ],
+            );
+            codex(&main, &["plugin", "add", "alpha@w05c-local"]);
+            let main_text = std::fs::read_to_string(main.join("config.toml")).unwrap();
+
+            let extra = dir.join("extra");
+            prepare_home(ProviderKind::Codex, &main, &extra).unwrap();
+            let listed = codex(&extra, &["mcp", "list"]);
+            assert!(
+                listed.contains("user-one") && listed.contains("shared"),
+                "{listed}"
+            );
+            // Added inside a session on the account, as `codex mcp add` does there.
+            codex(
+                &extra,
+                &["mcp", "add", "in-session", "--", "/usr/bin/python3", "y.py"],
+            );
+            // The next launch prepares the home again.
+            prepare_home(ProviderKind::Codex, &main, &extra).unwrap();
+            for home in [&extra, &main] {
+                let listed = codex(home, &["mcp", "list", "--json"]);
+                assert!(listed.contains("\"in-session\""), "{listed}");
+            }
+            // It went in through Codex's own writer; the rest of the user's file is as it was.
+            let now = std::fs::read_to_string(main.join("config.toml")).unwrap();
+            let added =
+                "[mcp_servers.in-session]\ncommand = \"/usr/bin/python3\"\nargs = [\"y.py\"]\n\n";
+            assert_eq!(now.replace(added, ""), main_text, "{now}");
+            assert!(
+                std::fs::symlink_metadata(extra.join("config.toml"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 }
