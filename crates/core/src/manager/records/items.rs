@@ -121,6 +121,36 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                 {
                     continue;
                 }
+                // A message the user sent while a turn ran: Claude keeps it as an attachment,
+                // read as the user's as the display reader does (`session_file`). A background
+                // job's notice there is the CLI's line, not the user's.
+                if string(value, "type") == Some("attachment")
+                    && value.pointer("/attachment/type").and_then(Value::as_str)
+                        == Some("queued_command")
+                {
+                    let text = content(value.pointer("/attachment/prompt").unwrap_or(&Value::Null));
+                    if text.is_empty() || text.starts_with('<') {
+                        continue;
+                    }
+                    let native = value
+                        .pointer("/attachment/source_uuid")
+                        .or_else(|| value.get("uuid"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| anonymous(value, &mut occurrences));
+                    let at = positions.get(native.as_str()).copied();
+                    push(
+                        scoped(scope.as_deref(), &native),
+                        "user",
+                        None,
+                        "message",
+                        text,
+                        None,
+                        at_ms,
+                        at,
+                    );
+                    continue;
+                }
                 let Some(message) = value.get("message") else {
                     continue;
                 };

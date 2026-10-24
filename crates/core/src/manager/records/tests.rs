@@ -73,6 +73,31 @@ fn args(id: &str) -> RecordRead {
 }
 
 #[test]
+fn a_message_claude_queued_during_a_turn_is_the_users() {
+    let fixture = Fixture::new();
+    let claude = fixture.root.join("claude.jsonl");
+    let mut text = std::fs::read_to_string(&claude).unwrap();
+    text.push_str(concat!(
+        r#"{"type":"attachment","timestamp":"2026-10-22T10:05:00Z","uuid":"q-line","attachment":{"type":"queued_command","prompt":"Also check queuedneedle.","source_uuid":"q-source"}}"#,
+        "\n",
+        r#"{"type":"attachment","timestamp":"2026-10-22T10:06:00Z","uuid":"n-line","attachment":{"type":"queued_command","prompt":"<task-notification>queuedneedle job done</task-notification>"}}"#,
+        "\n"
+    ));
+    std::fs::write(&claude, text).unwrap();
+    let brain = fixture.brain();
+    sync_session(&brain, &fixture.session).unwrap();
+    let hits = brain
+        .search_records_filtered("queuedneedle", Some("session"), 30, Some("user"), None)
+        .unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    let output = read_items(&fixture.session, &args(hits[0].item_id.as_ref().unwrap())).unwrap();
+    assert_eq!(
+        output.split_once('\n').unwrap().1,
+        "Also check queuedneedle.\n"
+    );
+}
+
+#[test]
 fn exact_items_cover_both_clis_failed_outputs_filters_and_saved_files() {
     let fixture = Fixture::new();
     let brain = fixture.brain();
