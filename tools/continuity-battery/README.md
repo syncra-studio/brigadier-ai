@@ -89,13 +89,16 @@ CLI's own default. It installs no seam or standing ledger instructions. The deci
 block scores a plain CLI's own decision by its announced choice and applied separator;
 only Brigadier's arm is also checked for its ledger marker. No `/compact` is sent.
 
-The workflow runs all four arms for short recall (nine filler turns), long recall (90),
+The workflow supports all four arms for short recall (nine filler turns), long recall (90),
 decision survival (90), and updates (short: nine; long: 90), with matching filler schedules within each provider.
-Manual dispatches accept an `arms` string (default `seam,plain,zed,summary`), for example
+Manual dispatches and reusable calls accept an `arms` string (default `seam,plain,zed`), for example
 `gh workflow run continuity-battery.yml -R syncra-studio/brigadier-ai --ref main -f arms=seam`.
 Only the selected arms run on both providers. Omitted arms are labelled "not run on this
-dispatch" in the report and cannot trigger regression issues. Nightly calls always run
-all four arms; an absent selected arm still makes its provider incomplete.
+dispatch" in the report and cannot trigger regression issues. Nightly selects its arms with
+`jobs.continuity.with.arms` in `nightly.yml`; tonight it includes `summary` on both providers
+(D72). Remove `,summary` from that one line after the comparison. An absent selected arm still
+makes its provider incomplete. Zed's long recall and decision profiles remain dispatch-only
+(`zed_long`); its updates profiles run with the other arms.
 The long schedule supplies over 400k inert input tokens at ordinary tokenization;
 the metered usage and observed compactions/seams are reported rather than assumed.
 The three-context decision bar is unqualified if fewer than three native compactions
