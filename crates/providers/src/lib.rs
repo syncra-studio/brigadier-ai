@@ -206,7 +206,9 @@ pub trait ProviderSession: Send + Sync {
 
     /// Compacts the conversation now, in a turn of its own that replies nothing: it reports
     /// [`ProviderEvent::CompactionStarted`], then [`ProviderEvent::CompactionEnded`].
-    fn compact(&self) -> BoxFuture<'_, Result<()>> {
+    /// `instructions`: what the summary must keep, for a CLI whose compaction takes them
+    /// (Claude's `/compact <instructions>`); one that takes none ignores them.
+    fn compact(&self, _instructions: Option<String>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Err(Error::Invalid("this CLI cannot compact its context".into())) })
     }
 

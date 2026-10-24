@@ -596,6 +596,8 @@ pub(crate) struct FakeBehavior {
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next login check of an extra account signals the first and waits for the second.
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
+    pub compactions: Mutex<Vec<Option<String>>>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -1322,6 +1324,48 @@ impl ProviderSession for FakeSession {
         }
         drop(running);
         self.send(input)
+    }
+
+    fn can_compact(&self) -> bool {
+        true
+    }
+
+    /// Compacts in a turn of its own, to 20k, as Claude's `/compact` does.
+    fn compact(
+        &self,
+        instructions: Option<String>,
+    ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        self.behavior.compactions.lock().unwrap().push(instructions);
+        let tx = self.sender();
+        Box::pin(async move {
+            let Some(tx) = tx else {
+                return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
+            };
+            tokio::spawn(async move {
+                let _ = tx.send(ProviderEvent::TurnStarted { turn_id: None }).await;
+                let _ = tx
+                    .send(ProviderEvent::CompactionStarted { automatic: false })
+                    .await;
+                let _ = tx
+                    .send(ProviderEvent::CompactionEnded {
+                        automatic: false,
+                        tokens_before: None,
+                        tokens_after: Some(20_000),
+                        error: None,
+                        native_id: Some(uuid::Uuid::new_v4().to_string()),
+                    })
+                    .await;
+                let _ = tx
+                    .send(ProviderEvent::TurnCompleted {
+                        turn_id: None,
+                        status: TurnStatus::Completed,
+                        duration_ms: Some(1),
+                        usage: None,
+                    })
+                    .await;
+            });
+            Ok(())
+        })
     }
 
     fn interrupt(&self) -> BoxFuture<'_, brigadier_providers::Result<()>> {

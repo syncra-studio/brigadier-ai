@@ -184,6 +184,29 @@ test("a compaction in a turn shows in it, and images in the user's message are i
   assert.deepEqual(block?.user?.kind === "message" && block.user.message.attachments.map((ref) => [ref.name, ref.mime]), [["Image", "image/png"]]);
 });
 
+test("a long session's /compact is never a bubble: its turn shows the compaction's divider", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Grow", 1000),
+        user("u2", "/compact Besides your usual summary, keep these exactly", 3000),
+        at({ type: "compactionEnded", automatic: false, tokensBefore: 200, tokensAfter: 20, error: null }, 3500),
+        user("u3", "After", 5000),
+      ],
+      turns: [turn("u1", 1000, 2000, "done"), turn("u2", 3000, 4000, "done"), turn("u3", 5000, 6000, "done")],
+    },
+    "conv",
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.compactions.length]),
+    [
+      ["u1", "message", [], 0],
+      ["u2", null, [], 1],
+      ["u3", "message", [], 0],
+    ],
+  );
+});
+
 test("a background job's end Claude took up shows the CLI's notice line before its reply, in view once the work folds", () => {
   const line = 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)';
   const [block] = cliBlocks(

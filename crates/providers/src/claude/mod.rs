@@ -499,7 +499,7 @@ impl Claude {
 
 /// The session's own variables on top of the CLI environment: its env, what its MCP config
 /// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
-fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
+fn session_env(spec: &SessionSpec, hooks_on: bool, backstop: Option<i64>) -> Vec<(String, String)> {
     let mut env = spec.env.clone();
     // Workers (including lean research and fusion) and one-shots use short cache writes;
     // user sessions, Chats and their successors keep the CLI default (D63).
@@ -546,10 +546,33 @@ fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
         env.push(("MCP_TOOL_TIMEOUT".into(), ms.clone()));
         env.push(("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".into(), ms));
     }
-    if !spec.auto_compact {
+    if !compacts(spec) {
         env.push(("DISABLE_AUTO_COMPACT".into(), "1".into()));
     }
+    if let Some(window) = backstop {
+        env.push(("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), window.to_string()));
+    }
     env
+}
+
+/// Whether Claude may compact the session's context: a Chat's, or a long session's thread,
+/// which compacts in place (run2-D2, run2-D5).
+fn compacts(spec: &SessionSpec) -> bool {
+    spec.auto_compact || spec.native_compaction.is_some()
+}
+
+/// The auto-compact window a long session sets as a backstop just above where Brigadier asks
+/// Claude to compact (run2-D5), unless the user's own compaction setup wins (G17): a window
+/// they set, in their environment or the settings it loads, or auto-compaction switched off.
+fn backstop(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> Option<i64> {
+    const WINDOW: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+    let window = spec.native_compaction.as_ref()?.backstop_window?;
+    let theirs = std::env::var_os(WINDOW).is_some()
+        || spec.env.iter().any(|(name, _)| name == WINDOW)
+        || setting(spec, cwd, user_config, &format!("/env/{WINDOW}")).is_some()
+        || setting(spec, cwd, user_config, "/autoCompactWindow").is_some()
+        || setting(spec, cwd, user_config, "/autoCompactEnabled") == Some(Value::Bool(false));
+    (!theirs).then_some(window)
 }
 
 /// The variable that holds value `key` of the session's server `server` in Claude's
@@ -846,8 +869,8 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         settings["hooks"]["Stop"] = stop;
     }
     // A session that must not compact refuses Claude's own compaction: the seam starts its
-    // successor instead (STRIP-DOWN-PLAN S22).
-    if !spec.auto_compact {
+    // successor instead (STRIP-DOWN-PLAN S22). A long session's thread compacts (run2-D5).
+    if !compacts(spec) {
         settings["hooks"]["PreCompact"] = refuse_compaction_hook();
     }
     // A session that calls `brigadier` reaches the daemon's socket under Claude's own sandbox
@@ -902,11 +925,24 @@ fn auto_memory(file: &Path) -> Option<bool> {
 /// overrides project, which overrides user (code.claude.com/docs/en/settings). For a worker
 /// whose setup is not linked yet, read its trusted project's files at their source.
 fn hooks_disabled(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> bool {
-    let read = |path: &Path| -> Option<bool> {
+    setting(spec, cwd, user_config, "/disableAllHooks")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+/// The value at JSON `pointer` in the settings sources this session loads, the one that wins:
+/// local overrides project, which overrides user ([`hooks_disabled`]).
+fn setting(
+    spec: &SessionSpec,
+    cwd: &Path,
+    user_config: Option<&Path>,
+    pointer: &str,
+) -> Option<Value> {
+    let read = |path: &Path| -> Option<Value> {
         serde_json::from_str::<Value>(&std::fs::read_to_string(path).ok()?)
             .ok()?
-            .get("disableAllHooks")?
-            .as_bool()
+            .pointer(pointer)
+            .cloned()
     };
     let user_setup = spec.tools.user_setup();
     let mut off = user_config
@@ -930,7 +966,7 @@ fn hooks_disabled(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) ->
             }
         }
     }
-    off.unwrap_or(false)
+    off
 }
 
 /// The daemon's socket, for a session given `brigadier` (its environment names its session): in
@@ -1312,7 +1348,11 @@ impl Provider for Claude {
             process_spec.args = args.into_iter().map(Into::into).collect();
             process_spec.cwd = Some(cwd.clone());
             let hooks_on = !hooks_disabled(&spec, &cwd, user_config.as_deref());
-            let mut env = session_env(&spec, hooks_on);
+            let mut env = session_env(
+                &spec,
+                hooks_on,
+                backstop(&spec, &cwd, user_config.as_deref()),
+            );
             // Claude keeps its own temp files, and points sandboxed commands' TMPDIR, under
             // `CLAUDE_CODE_TMPDIR` (`/tmp` by default). A session with a TMPDIR of its own
             // gets a short folder of its own there, removed with it.
@@ -1379,7 +1419,7 @@ impl Provider for Claude {
                 stdout,
                 shared.clone(),
                 parser_rx,
-                !spec.auto_compact && hooks_on,
+                !compacts(&spec) && hooks_on,
                 spec.mcp_servers
                     .iter()
                     .map(|server| server.name.clone())
@@ -1488,7 +1528,11 @@ impl Provider for Claude {
             let hooks_on = !hooks_disabled(&spec, &cwd, user_config.as_deref());
             crate::cli::apply_session_env(
                 &mut process,
-                &session_env(&spec, hooks_on),
+                &session_env(
+                    &spec,
+                    hooks_on,
+                    backstop(&spec, &cwd, user_config.as_deref()),
+                ),
                 &spec.unset_env,
             );
             Ok(TerminalCommand {
@@ -1677,7 +1721,10 @@ impl Replayer for ClaudeReplayer {
             if sent["type"] == "control_request" && sent["request"]["subtype"] == "interrupt" {
                 self.parser.interrupt_requested();
             }
-            if sent["type"] == "user" && sent["message"]["content"][0]["text"] == "/compact" {
+            let text = sent["message"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
+            if sent["type"] == "user" && (text == "/compact" || text.starts_with("/compact ")) {
                 self.parser.compact_requested();
             }
             let answered = sent["response"]["request_id"].as_str().unwrap_or_default();
@@ -1869,7 +1916,7 @@ impl ProviderSession for ClaudeSession {
         self.compacts
     }
 
-    fn compact(&self) -> BoxFuture<'_, Result<()>> {
+    fn compact(&self, instructions: Option<String>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             if !self.compacts {
                 return Err(Error::Invalid(format!(
@@ -1881,9 +1928,14 @@ impl ProviderSession for ClaudeSession {
                     "Claude is still answering; compact once it is done".into(),
                 ));
             }
-            // Claude runs the slash command when it arrives as a message.
+            // Claude runs the slash command when it arrives as a message; what follows the
+            // command is what its summary must keep (run2-D7).
+            let command = match instructions.filter(|text| !text.trim().is_empty()) {
+                Some(text) => format!("/compact {text}"),
+                None => "/compact".to_owned(),
+            };
             let _ = self.parser.send(ParserCommand::Compacting);
-            self.write_message(TurnInput::text("/compact")).await
+            self.write_message(TurnInput::text(command)).await
         })
     }
 
@@ -2117,7 +2169,7 @@ mod tests {
             env: vec![("TMPDIR".into(), "/tmp/brigadier-t".into())],
             ..spec(Path::new("/tmp"), &[])
         };
-        let env = session_env(&thread, true);
+        let env = session_env(&thread, true, None);
         for name in [
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
             "BASH_DEFAULT_TIMEOUT_MS",
@@ -2691,7 +2743,7 @@ for line in sys.stdin:
                             1
                         );
                     }
-                    let env = session_env(&spec, true);
+                    let env = session_env(&spec, true, None);
                     let ttl = env
                         .iter()
                         .rev()
@@ -3078,7 +3130,7 @@ for line in sys.stdin:
             }]}])
         );
         assert!(
-            session_env(&worker, true)
+            session_env(&worker, true, None)
                 .iter()
                 .any(|(name, value)| name == "BRIGADIER_STOP_GRANT" && value == "brg_stop")
         );
@@ -3196,7 +3248,7 @@ for line in sys.stdin:
                 .map(|pair| &pair[1])
                 .collect();
             assert_eq!(given, [text], "{tools:?}");
-            let set = session_env(&session, true);
+            let set = session_env(&session, true, None);
             for pair in &env {
                 assert!(set.contains(pair), "{tools:?}: {pair:?}");
             }
@@ -3428,6 +3480,54 @@ for line in sys.stdin:
             r#"{"availableModels": ["claude-fable-5-1"]}"#,
         );
         assert_eq!(held(worktree), SubAgents::Off);
+    }
+
+    /// A long session's thread compacts in place (run2-D5): no refusing hook, auto-compaction
+    /// on with Brigadier's backstop window just above its own point, and idle compaction still
+    /// off (run2-D12). The user's own window, or their auto-compaction switched off, wins
+    /// (G17): no backstop then.
+    #[test]
+    fn a_long_session_compacts_in_place_with_a_backstop_unless_the_user_set_their_own() {
+        let cwd = Temp::new();
+        let home = Temp::new();
+        let long = SessionSpec {
+            auto_compact: false,
+            tools: ToolSet::Thread,
+            native_compaction: Some(crate::model::NativeCompaction {
+                backstop_window: Some(250_000),
+                ..crate::model::NativeCompaction::default()
+            }),
+            ..spec(cwd.path(), &[])
+        };
+        let layer = settings(&long, &SubAgents::Any, false);
+        assert!(layer["hooks"].get("PreCompact").is_none(), "{layer}");
+        assert_eq!(layer["idleCompaction"], json!(false));
+        let window = backstop(&long, cwd.path(), Some(home.path()));
+        assert_eq!(window, Some(250_000));
+        let env = session_env(&long, true, window);
+        assert!(env.contains(&("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), "250000".into())));
+        assert!(!env.iter().any(|(name, _)| name == "DISABLE_AUTO_COMPACT"));
+        for theirs in [
+            r#"{"autoCompactEnabled": false}"#,
+            r#"{"autoCompactWindow": 400000}"#,
+            r#"{"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300k"}}"#,
+        ] {
+            std::fs::write(home.path().join("settings.json"), theirs).unwrap();
+            assert_eq!(
+                backstop(&long, cwd.path(), Some(home.path())),
+                None,
+                "{theirs}"
+            );
+        }
+        // Off, as before: no backstop, and Claude's own compaction refused.
+        let seam = SessionSpec {
+            native_compaction: None,
+            ..long
+        };
+        assert_eq!(backstop(&seam, cwd.path(), None), None);
+        assert!(
+            session_env(&seam, true, None).contains(&("DISABLE_AUTO_COMPACT".into(), "1".into()))
+        );
     }
 
     /// BUILD-PLAN D2.3: a session that must not compact refuses Claude's compaction with a
@@ -4268,7 +4368,7 @@ for line in sys.stdin:
             tools: ToolSet::Lean,
             ..spec(&dir, &[])
         };
-        let env = session_env(&spec, true);
+        let env = session_env(&spec, true, None);
         let value = |name: &str| {
             env.iter()
                 .find(|(key, _)| key == name)
@@ -4283,7 +4383,7 @@ for line in sys.stdin:
         assert_eq!(value("MCP_TOOL_TIMEOUT"), None);
         let mut long = spec.clone();
         long.mcp_servers[1].tool_timeout_secs = Some(120);
-        let env = session_env(&long, true);
+        let env = session_env(&long, true, None);
         for name in ["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"] {
             assert!(env.contains(&(name.into(), "120000".into())), "{env:?}");
         }

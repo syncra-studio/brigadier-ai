@@ -79,7 +79,9 @@ impl SessionManager {
         provider: ProviderKind,
     ) -> Option<LongSessions> {
         let mode = self.seam_config().long?;
-        (conv.kind == ConversationKind::Session && provider == ProviderKind::Codex).then_some(mode)
+        (conv.kind == ConversationKind::Session
+            && matches!(provider, ProviderKind::Claude | ProviderKind::Codex))
+        .then_some(mode)
     }
 
     /// How the CLI of `conv` on `provider` compacts in place, for its session spec.
@@ -90,11 +92,49 @@ impl SessionManager {
     ) -> Option<NativeCompaction> {
         self.long_mode(conv, provider)?;
         let config = self.seam_config();
-        Some(NativeCompaction {
-            backstop_window: None,
-            codex_limit: config.tokens_set.then_some(config.tokens),
-            restore: None,
+        Some(match provider {
+            ProviderKind::Claude => NativeCompaction {
+                backstop_window: Some(backstop_window(config.tokens)),
+                ..NativeCompaction::default()
+            },
+            _ => NativeCompaction {
+                codex_limit: config.tokens_set.then_some(config.tokens),
+                ..NativeCompaction::default()
+            },
         })
+    }
+}
+
+/// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point
+/// `point` (run2-D5): Claude compacts by itself ≈20k below its window, so this one has it
+/// compact ≈30k past the point. Claude takes windows of 100k to 1M.
+fn backstop_window(point: i64) -> i64 {
+    (point + 50_000).clamp(100_000, 1_000_000)
+}
+
+/// What Claude's summary must keep when Brigadier asks it to compact (run2-D7, D71): the
+/// words after `/compact`. Exact pointers back to the evidence, so each fact can be read again
+/// word for word, and never a secret.
+pub(crate) const COMPACT_INSTRUCTIONS: &str = "\
+Besides your usual summary, keep these exactly, each under its own heading: \
+the open items and what is still to do; \
+every decision, rule and preference the user gave, in their words, with its ledger id (L<n>) when it has one; \
+every command that failed, with the command line and its error lines word for word; \
+claims you checked and how (what you ran or read, and what it showed); \
+the files you changed; \
+the last test you ran: its exact command and result; \
+the next step; \
+the skills in use. \
+For each fact, keep the exact pointer to where its evidence lives: file paths with line numbers, \
+commit hashes, command lines, and Brain ids as `brigadier brain search` and `brigadier brain read` show them, \
+so it can be read again word for word. \
+Never copy a secret (a key, token or password) into the summary.";
+
+impl LongSessions {
+    /// The words after Claude's `/compact` in this mode: `None` without them (run2-D7's arm
+    /// off, as in `native-bare`).
+    pub(crate) fn compact_instructions(self) -> Option<String> {
+        self.instructions.then(|| COMPACT_INSTRUCTIONS.to_owned())
     }
 }
 

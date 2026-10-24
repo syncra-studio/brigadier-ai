@@ -2272,7 +2272,7 @@ impl ProviderSession for CodexSession {
         self.compacts
     }
 
-    fn compact(&self) -> BoxFuture<'_, Result<()>> {
+    fn compact(&self, _instructions: Option<String>) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             if !self.compacts {
                 return Err(Error::Invalid(format!(

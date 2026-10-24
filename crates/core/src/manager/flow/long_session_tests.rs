@@ -175,3 +175,108 @@ async fn with_the_switch_off_a_codex_session_still_goes_on_at_its_seam() {
     assert!(breaches(&flow).await >= 1);
     flow.stop().await;
 }
+
+/// Claude's thread: "Grow." passes the point and the turn ends there, as a turn does past
+/// 200k; a nudge writes its hand-off note; anything else is a short answer.
+fn claude_thread(inputs: Inputs) -> Script {
+    script(move |turn| {
+        let inputs = inputs.clone();
+        async move {
+            inputs
+                .lock()
+                .unwrap()
+                .push((turn.provider, turn.input.clone()));
+            if turn.input.starts_with(NUDGE_MARK) {
+                std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                return Reply::text("Handed off.");
+            }
+            if without_handoff(&turn.input).contains("Grow.") {
+                turn.report_context(70_000).await;
+                return Reply::text("Grown.");
+            }
+            Reply {
+                text: "Done.".into(),
+                context_tokens: Some(30_000),
+                ..Reply::default()
+            }
+        }
+    })
+}
+
+/// Runs a Claude session in `arm` through a turn past the point and one after it: what each
+/// compaction was told to keep.
+async fn claude_compactions(arm: &str) -> Vec<Option<String>> {
+    let inputs: Inputs = Arc::default();
+    let options = options(ProviderKind::Claude);
+    let behavior = options.behavior.clone();
+    let mut flow = Flow::start("long-claude", options, claude_thread(inputs.clone())).await;
+    switch(&mut flow, LongSessions::parse(arm));
+    flow.say("Start.").await;
+    flow.settled().await;
+    assert!(behavior.compactions.lock().unwrap().is_empty());
+    flow.say("Grow.").await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while behavior.compactions.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a compaction at the point");
+    flow.idle().await;
+    flow.say("After.").await;
+    flow.idle().await;
+    // The same CLI session goes on: no hand-off, no successor, no breach.
+    let seen = inputs.lock().unwrap().clone();
+    assert!(
+        seen.iter().all(|(_, input)| !input.starts_with(NUDGE_MARK)),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|(_, input)| input.contains("After.")),
+        "{seen:?}"
+    );
+    let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
+    assert_eq!((file.generation, file.phase), (1, Phase::Live));
+    assert_eq!(breaches(&flow).await, 0);
+    // Claude may compact by itself as a backstop just above the point (run2-D5).
+    let specs = flow.specs();
+    let (_, spec) = specs
+        .iter()
+        .rev()
+        .find(|(kind, _)| *kind == ProviderKind::Claude)
+        .unwrap();
+    let native = spec.native_compaction.clone().expect("compacts natively");
+    assert_eq!(native.backstop_window, Some(110_000));
+    flow.stop().await;
+    behavior.compactions.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_claude_session_compacts_once_at_its_point_with_what_its_summary_must_keep() {
+    let compactions = claude_compactions("native-full").await;
+    assert_eq!(
+        compactions,
+        vec![Some(
+            crate::manager::long_sessions::COMPACT_INSTRUCTIONS.to_owned()
+        )]
+    );
+    let instructions = compactions[0].clone().unwrap();
+    for kept in [
+        "open items",
+        "decision",
+        "failed",
+        "files you changed",
+        "last test",
+        "next step",
+        "skills",
+        "brigadier brain read",
+        "Never copy a secret",
+    ] {
+        assert!(instructions.contains(kept), "{kept}");
+    }
+}
+
+#[tokio::test]
+async fn a_bare_claude_session_compacts_at_its_point_without_instructions() {
+    assert_eq!(claude_compactions("native-bare").await, vec![None]);
+}

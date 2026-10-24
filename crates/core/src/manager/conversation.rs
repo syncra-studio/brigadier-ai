@@ -138,6 +138,7 @@ pub(crate) struct Envelope {
 }
 
 mod continue_on;
+mod long;
 mod seam;
 mod watchdog;
 
@@ -314,6 +315,8 @@ struct ConvState {
     after_limit: bool,
     /// Where the session's seam stands, as far as `record/seam.json` needn't keep it (S22).
     seam: seam::SeamLive,
+    /// A long session's compaction in place (run2-D5).
+    long: long::LongLive,
 }
 
 impl ConvState {
@@ -1793,7 +1796,7 @@ impl SessionManager {
             }
             self.set_run(&id, RunState::Running, None).await;
             cli.session
-                .compact()
+                .compact(None)
                 .await
                 .map_err(|err| Error::Provider(err.to_string()))
         }
@@ -2012,6 +2015,16 @@ impl SessionManager {
                 || state.hand_over.is_some()
                 || self.admit().is_err()
             {
+                return;
+            }
+            // A long session's compaction comes first: the context it frees is for what waits.
+            if session
+                && !state.seam.held
+                && let Some(cli) = Self::take_due_compaction(&mut state)
+            {
+                drop(state);
+                self.set_run(&conv.id, RunState::Starting, None).await;
+                self.long_compact(&conv, &cli).await;
                 return;
             }
             // At a seam only the hand-off turn runs; the rest waits for the successor.
@@ -4136,6 +4149,11 @@ impl SessionManager {
             // A long session compacts in place: its thread shows the CLI's own divider.
             ProviderEvent::CompactionStarted { .. }
                 if self.long_mode(conv, cli.provider).is_some() => {}
+            ProviderEvent::CompactionEnded { tokens_after, .. }
+                if self.long_mode(conv, cli.provider).is_some() =>
+            {
+                self.long_compacted(conv, *tokens_after).await;
+            }
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>
             {
@@ -4324,6 +4342,7 @@ impl SessionManager {
             // Before the next turn may start: a turn admitted in between would still run on
             // this CLI, past the seam.
             self.seam_turn_end(conv, cli).await;
+            self.long_turn_end(conv, cli).await;
         }
         if self.finish_thread_stall(conv).await {
             return;

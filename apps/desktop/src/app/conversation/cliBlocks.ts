@@ -410,7 +410,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const own = !!asked && carried.has(asked.itemId);
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && workerNotices(asked.text);
-    if (asked && (own || news || nudges.has(asked.itemId))) {
+    // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
+    // divider, never the command or what its summary must keep.
+    const compacting = !!asked && /^\/compact(\s|$)/.test(asked.text);
+    if (asked && (own || compacting || news || nudges.has(asked.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
@@ -419,7 +422,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text }));
-      else if (!own) block?.nudges.push(position);
+      else if (!own && !compacting) block?.nudges.push(position);
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
