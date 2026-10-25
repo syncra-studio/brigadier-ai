@@ -103,13 +103,20 @@ pub enum CliRequest {
     /// The calling session's judgment of a message the user queued while it works
     /// (run2-D40).
     Queue { id: String, judgment: Judgment },
-    /// A question on a card for the user, answered when they answer it.
+    /// Questions on one card for the user, answered together when they answer it.
     Ask {
-        question: String,
-        /// Recommended first; none for a free answer.
-        options: Vec<String>,
+        /// One or more, in the order asked.
+        questions: Vec<AskItem>,
         title: Option<String>,
     },
+}
+
+/// One question of a `brigadier ask` card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskItem {
+    pub question: String,
+    /// Recommended first; none for a free answer.
+    pub options: Vec<String>,
 }
 
 /// The kept tools behind `brigadier` (STRIP-DOWN-PLAN S13, S16c), by subcommand.
@@ -970,13 +977,39 @@ pub struct LedgerNoId {
     pub entry: String,
 }
 
-/// `brigadier ask`: the user's answer.
+/// `brigadier ask`: the user's answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskOutput {
+    /// The first question's answer: the only one, when one question was asked.
+    pub answer: String,
+    /// The first question's chosen option's index (0 is the first), or none for an answer in
+    /// their own words.
+    pub option: Option<u32>,
+    /// Every question with its answer, in the order asked.
+    pub answers: Vec<AskAnswer>,
+}
+
+/// One question of a `brigadier ask` card, and the user's answer to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskAnswer {
+    pub question: String,
     pub answer: String,
     /// The chosen option's index (0 is the first), or none for an answer in their own words.
     pub option: Option<u32>,
+}
+
+impl AskOutput {
+    /// The output for `answers`, the first one's also at the top.
+    pub fn of(answers: Vec<AskAnswer>) -> Self {
+        let first = answers.first();
+        Self {
+            answer: first.map(|first| first.answer.clone()).unwrap_or_default(),
+            option: first.and_then(|first| first.option),
+            answers,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -224,19 +224,29 @@ mod tests {
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
-        // Grilling is part of the brigade (run2-D32): look-ups first, one question at a time
-        // with a recommendation, the shared understanding said back; workers' questions it
-        // answers itself when it can; what the user always decides.
+        // Grilling is part of the brigade (run2-D32): look-ups first, then every question it
+        // can ask on one card, each with a recommendation, a next round only for what hangs on
+        // those answers (the user: never one question at a time); the shared understanding
+        // said back; workers' questions it answers itself when it can; what the user always
+        // decides.
+        assert!(!SKILL.contains("one question at a time"));
         for line in [
             "## Ask the user: grilling",
             "First answer all you can yourself (the code, the ledger, a web search, a research worker).",
-            "Ask one question at a time (`brigadier ask`), in plain words, your recommended answer first",
+            "Ask all you can at once on one `brigadier ask` card, in plain words, each with your recommended answer first and why; a next round only for questions that hang on those answers, never one card per question.",
+            "`brigadier ask --question Q [--option O]… [--question …]`",
             "Say the shared understanding back in a few lines, then start.",
             "answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once",
-            "Always ask the user, unless they already said so: spending money; a push, publish or release; credentials or sign-ups; changing a decision they settled.",
+            "Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
+        // Where work lands (the user): workers merge into the session's branch, and all work
+        // stays there, a New worktree's or a Local checkout's; at the end the session asks
+        // before a push or a merge into the base branch, never landing on it by itself.
+        assert!(SKILL.contains("merge your branch into mine"));
+        assert!(SKILL.contains("All work stays on your branch; at the end ask the user whether to push, and in a New worktree whether to merge it into its base branch."));
+        assert!(!SKILL.contains("land on what the user chose"));
         // The reply after a block of work (run2-D27).
         assert!(SKILL.contains("After a block of work, at most 3 to 5 short lines"));
     }

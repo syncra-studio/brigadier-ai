@@ -455,15 +455,27 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "ask",
-        summary: "Ask the user on a card and wait for the answer.",
-        details: "The card always takes a free-text answer next to any options. Give 2 to 4 \
-                  options or none, the recommended one first, so \"yes\" takes it. Waits \
-                  until the user answers; run it in the background for a long wait.",
+        summary: "Ask the user questions on one card and wait for the answers.",
+        details: "Ask everything you can at once: one card per round, never one card per \
+                  question; only questions that depend on its answers wait for the next \
+                  round. One question: `brigadier ask \"<question>\" --option A --option B`. \
+                  Several (up to 6): `--question \"<q>\"` for each, each followed by its own \
+                  `--option`s. Each question takes 2 to 4 options or none, the recommended \
+                  one first, so \"yes\" takes it; the card always takes a free-text answer \
+                  too. Prints every question with its answer, once the user answers them \
+                  all; run it in the background for a long wait.",
         args: &[
+            Arg::Flag {
+                long: "question",
+                value: Some("TEXT"),
+                help: "A question of the card, each followed by its own --options.",
+                choices: &[],
+                repeat: true,
+            },
             Arg::Flag {
                 long: "option",
                 value: Some("TEXT"),
-                help: "An option to offer; repeat for more, recommended first.",
+                help: "An option for the question before it, recommended first.",
                 choices: &[],
                 repeat: true,
             },
@@ -472,7 +484,11 @@ pub const COMMANDS: &[Command] = &[
                 "TEXT",
                 "A few words over the card (\"Round 2 · Budget\").",
             ),
-            rest("question", "The question.", true),
+            rest(
+                "question",
+                "One question, as words (instead of --question).",
+                false,
+            ),
         ],
         available: true,
         schema: include_str!("../schemas/ask.schema.json"),

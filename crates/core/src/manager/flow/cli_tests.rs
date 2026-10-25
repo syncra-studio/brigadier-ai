@@ -1081,7 +1081,7 @@ pub(super) fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Valu
 /// alone. A worker keeps its previews, and doesn't ask the user or act in the app.
 #[tokio::test]
 async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
-    use brigadier_cli::protocol::Tool;
+    use brigadier_cli::protocol::{AskItem, Tool};
     let answers = Answers::default();
     let script: Script = {
         let answers = answers.clone();
@@ -1108,8 +1108,10 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                         brigadier(
                             &turn,
                             CliRequest::Ask {
-                                question: "May I?".into(),
-                                options: Vec::new(),
+                                questions: vec![AskItem {
+                                    question: "May I?".into(),
+                                    options: Vec::new(),
+                                }],
                                 title: None,
                             },
                         )
@@ -1173,8 +1175,10 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                     brigadier(
                         &turn,
                         CliRequest::Ask {
-                            question: "Ship it today?".into(),
-                            options: vec!["Yes".into(), "Not yet".into()],
+                            questions: vec![AskItem {
+                                question: "Ship it today?".into(),
+                                options: vec!["Yes".into(), "Not yet".into()],
+                            }],
                             title: Some("Release".into()),
                         },
                     )
@@ -1185,9 +1189,31 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                     brigadier(
                         &turn,
                         CliRequest::Ask {
-                            question: "Which colour?".into(),
-                            options: vec!["Red".into(), "Green".into()],
+                            questions: vec![AskItem {
+                                question: "Which colour?".into(),
+                                options: vec!["Red".into(), "Green".into()],
+                            }],
                             title: None,
+                        },
+                    )
+                    .await,
+                );
+                keep(
+                    "ask round",
+                    brigadier(
+                        &turn,
+                        CliRequest::Ask {
+                            questions: vec![
+                                AskItem {
+                                    question: "Ship it today?".into(),
+                                    options: vec!["Yes".into(), "Not yet".into()],
+                                },
+                                AskItem {
+                                    question: "Which size?".into(),
+                                    options: Vec::new(),
+                                },
+                            ],
+                            title: Some("Round 2".into()),
                         },
                     )
                     .await,
@@ -1206,7 +1232,7 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
     };
     let flow = Flow::start("cli-tools", Options::default(), script).await;
     flow.say("Use the tools.").await;
-    for answer in ["Yes", "Blue, please"] {
+    for given in [&["Yes"][..], &["Blue, please"], &["Not yet", "Large"]] {
         let board = flow
             .until("a card", |board| {
                 board.questions.values().any(|question| question.is_open())
@@ -1221,14 +1247,25 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
         // Options as given, the recommended (first) one marked.
         assert_eq!(
             card.items[0].options[0].label,
-            if answer == "Yes" { "Yes" } else { "Red" }
+            if given[0] == "Blue, please" {
+                "Red"
+            } else {
+                "Yes"
+            }
         );
         assert_eq!(card.items[0].recommended, Some(0));
+        // A round's questions on one card, each with its own options.
+        assert_eq!(card.items.len(), given.len());
+        if given.len() > 1 {
+            assert_eq!(card.title.as_deref(), Some("Round 2"));
+            assert_eq!(card.items[1].text, "Which size?");
+            assert!(card.items[1].options.is_empty());
+        }
         flow.manager
             .answer_question(
                 flow.conversation.clone(),
                 card.id,
-                vec![answer.into()],
+                given.iter().map(|answer| answer.to_string()).collect(),
                 None,
             )
             .await
@@ -1281,11 +1318,21 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
     // never into the thread as a message.
     assert_eq!(
         answers["ask options"],
-        json!({"answer": "Yes", "option": 0})
+        json!({"answer": "Yes", "option": 0,
+               "answers": [{"question": "Ship it today?", "answer": "Yes", "option": 0}]})
     );
     assert_eq!(
         answers["ask free"],
-        json!({"answer": "Blue, please", "option": null})
+        json!({"answer": "Blue, please", "option": null,
+               "answers": [{"question": "Which colour?", "answer": "Blue, please",
+                            "option": null}]})
+    );
+    // A round's answers come back together, each with its question.
+    assert_eq!(
+        answers["ask round"],
+        json!({"answer": "Not yet", "option": 1,
+               "answers": [{"question": "Ship it today?", "answer": "Not yet", "option": 1},
+                           {"question": "Which size?", "answer": "Large", "option": null}]})
     );
     assert_eq!(answers.get("other thread turns"), None);
     let messages = flow

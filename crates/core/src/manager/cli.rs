@@ -428,11 +428,7 @@ impl SessionManager {
             CliRequest::Tool { tool, action, args } => {
                 Ok(self.cli_tool(caller, tool, &action, args).await)
             }
-            CliRequest::Ask {
-                question,
-                options,
-                title,
-            } => self.cli_ask(caller, question, options, title).await,
+            CliRequest::Ask { questions, title } => self.cli_ask(caller, questions, title).await,
             CliRequest::Why { path, line } => self.cli_why(&path, line).await,
         };
         reply.unwrap_or_else(failed)

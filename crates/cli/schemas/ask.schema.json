@@ -3,19 +3,48 @@
   "title": "brigadier ask --json",
   "type": "object",
   "required": [
-    "answer"
+    "answer",
+    "answers"
   ],
   "additionalProperties": false,
   "properties": {
     "answer": {
-      "type": "string"
+      "type": "string",
+      "description": "The first question's answer: the only one, when one question was asked."
     },
     "option": {
       "type": [
         "integer",
         "null"
       ],
-      "description": "The chosen option's index (0 is the first), or null for a free-text answer."
+      "description": "The first question's chosen option's index (0 is the first), or null for a free-text answer."
+    },
+    "answers": {
+      "type": "array",
+      "description": "Every question with its answer, in the order asked.",
+      "items": {
+        "type": "object",
+        "required": [
+          "question",
+          "answer"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "option": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The chosen option's index (0 is the first), or null for a free-text answer."
+          }
+        }
+      }
     }
   }
 }

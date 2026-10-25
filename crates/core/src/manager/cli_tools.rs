@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
-use brigadier_cli::protocol::{AskOutput, CliReply, ErrorCode, LedgerOutput, Tool, ToolOutput};
+use brigadier_cli::protocol::{
+    AskAnswer, AskItem, AskOutput, CliReply, ErrorCode, LedgerOutput, Tool, ToolOutput,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -261,12 +263,12 @@ impl SessionManager {
         }
     }
 
-    /// `brigadier ask`: a card for the user, and their answer once they give it.
+    /// `brigadier ask`: one card for the user with every question, and their answers once they
+    /// give them.
     pub(super) async fn cli_ask(
         &self,
         caller: &CliCaller,
-        question: String,
-        options: Vec<String>,
+        questions: Vec<AskItem>,
         title: Option<String>,
     ) -> Result<CliReply> {
         // Workers are read-only to the user (G19.Q6): their session asks for them.
@@ -278,17 +280,21 @@ impl SessionManager {
             ));
         }
         let ask = AskUser {
-            questions: vec![AskQuestion {
-                question,
-                recommended: (!options.is_empty()).then_some(0),
-                options: options
-                    .iter()
-                    .map(|label| AskOption {
-                        label: label.clone(),
-                        description: None,
-                    })
-                    .collect(),
-            }],
+            questions: questions
+                .iter()
+                .map(|item| AskQuestion {
+                    question: item.question.clone(),
+                    recommended: (!item.options.is_empty()).then_some(0),
+                    options: item
+                        .options
+                        .iter()
+                        .map(|label| AskOption {
+                            label: label.clone(),
+                            description: None,
+                        })
+                        .collect(),
+                })
+                .collect(),
             task: None,
             title: title
                 .as_deref()
@@ -323,20 +329,32 @@ impl SessionManager {
             }
         }
         let board = self.core.board(&caller.conversation_id).await?;
-        let answer = board
-            .questions
-            .get(&card.id)
-            .and_then(|card| {
-                card.answers
-                    .first()
-                    .cloned()
-                    .or_else(|| card.answer.clone())
-            })
-            .unwrap_or_default();
-        let option = options
+        let answered = board.questions.get(&card.id);
+        let answers = card
+            .items
             .iter()
-            .position(|label| *label == answer)
-            .map(|index| index as u32);
-        Ok(CliReply::ok(&AskOutput { answer, option }))
+            .enumerate()
+            .map(|(index, item)| {
+                let answer = answered
+                    .and_then(|card| {
+                        card.answers.get(index).cloned().or_else(|| {
+                            // A card stored without per-question answers has its one answer.
+                            (index == 0).then(|| card.answer.clone()).flatten()
+                        })
+                    })
+                    .unwrap_or_default();
+                let option = item
+                    .options
+                    .iter()
+                    .position(|option| option.label == answer)
+                    .map(|index| index as u32);
+                AskAnswer {
+                    question: item.text.clone(),
+                    answer,
+                    option,
+                }
+            })
+            .collect();
+        Ok(CliReply::ok(&AskOutput::of(answers)))
     }
 }
