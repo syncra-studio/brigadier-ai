@@ -36,6 +36,7 @@ mod codex_children;
 mod computer_host;
 mod models;
 mod open_in_app;
+mod orphans;
 mod terminal_run;
 pub use computer_host::ComputerNews;
 mod computer_use;

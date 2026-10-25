@@ -1294,7 +1294,10 @@ impl CleanupLedger {
 }
 
 /// Every event of `stream`, oldest first.
-async fn read_stream(core: &Core, stream: String) -> Result<Vec<brigadier_store::StoredEvent>> {
+pub(crate) async fn read_stream(
+    core: &Core,
+    stream: String,
+) -> Result<Vec<brigadier_store::StoredEvent>> {
     let mut events = Vec::new();
     let mut after = 0;
     loop {

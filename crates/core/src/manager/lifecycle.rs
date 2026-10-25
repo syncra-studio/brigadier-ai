@@ -232,6 +232,12 @@ impl SessionManager {
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
         }
+        // What sessions deleted before Delete took all of them left behind (D3), in the
+        // background: on a first launch there may be many.
+        let manager = self.arc();
+        self.spawn(async move {
+            crate::heap(|| manager.sweep_orphans()).await;
+        });
         self.sweep_test_data().await;
     }
 
@@ -1462,7 +1468,9 @@ impl SessionManager {
             let leftovers = ledger.dispose(&owner).await;
             if !leftovers.is_clean() {
                 crate::logging::private_trace!(private_logs, warn, "some of a deleted conversation is retried at the next launch"; conversation = %id, owner, ?leftovers);
+                // The rest waits for the retry, which checks it again as it is then.
                 failed.push(owner);
+                break;
             }
         }
         for task in &tasks {
@@ -1667,6 +1675,53 @@ impl SessionManager {
         }
         spaces.sort();
         spaces.dedup();
+        // Worktrees its CLIs made, in its folder or on a branch of its namespace, go first:
+        // their branches go then (its own and its workers' worktrees went already).
+        let folder = self.session_dir(id).root().to_path_buf();
+        let repos: std::collections::BTreeSet<String> =
+            spaces.iter().map(|(repo, _)| repo.clone()).collect();
+        for repo in repos {
+            if !Path::new(&repo).exists() {
+                continue;
+            }
+            let in_space: Vec<String> = spaces
+                .iter()
+                .filter(|(there, _)| *there == repo)
+                .map(|(_, space)| space.clone())
+                .collect();
+            let (git, at, folder) = (self.git.clone(), PathBuf::from(&repo), folder.clone());
+            let made: Vec<PathBuf> = blocking(move || {
+                let repo = git.open(&at).map_err(git_error)?;
+                let main = repo.root().to_path_buf();
+                Ok(repo
+                    .worktrees()
+                    .map_err(git_error)?
+                    .into_iter()
+                    .filter(|worktree| {
+                        worktree.path != main
+                            && (worktree.path.starts_with(&folder)
+                                || worktree.branch.as_ref().is_some_and(|branch| {
+                                    in_space
+                                        .iter()
+                                        .any(|space| branch.starts_with(space.as_str()))
+                                }))
+                    })
+                    .map(|worktree| worktree.path)
+                    .collect())
+            })
+            .await?;
+            for path in made {
+                ledger
+                    .record(
+                        &doomed,
+                        Artifact::Worktree {
+                            repo: repo.clone(),
+                            path: path.to_string_lossy().into_owned(),
+                        },
+                    )
+                    .await?;
+            }
+        }
         for (repo, namespace) in spaces {
             ledger
                 .record(&doomed, Artifact::GitBranches { repo, namespace })

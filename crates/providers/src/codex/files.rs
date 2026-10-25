@@ -103,8 +103,13 @@ fn remove_log_rows(db: &Path, thread_id: &str) -> Result<()> {
         .map_err(sqlite)?
         .is_some();
     if names_threads {
+        // Nor a copy in the freed pages or the write-ahead log (D8).
+        conn.execute_batch("PRAGMA secure_delete = ON")
+            .map_err(sqlite)?;
         conn.execute("DELETE FROM logs WHERE thread_id = ?1", [thread_id])
             .map_err(sqlite)?;
+        // A Codex writing logs meanwhile keeps the log busy: its next checkpoint empties it.
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
     }
     Ok(())
 }

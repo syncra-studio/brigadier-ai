@@ -2097,6 +2097,11 @@ impl Flow {
             .id
     }
 
+    /// The flow's own folder: its repository, data folder and sessions' folders.
+    pub fn scratch(&self) -> &Path {
+        &self.dir
+    }
+
     /// Sends the user's message.
     pub async fn say(&self, text: &str) {
         self.say_to(&self.conversation, text).await;
@@ -2522,3 +2527,6 @@ mod worktree_copies_tests;
 
 #[cfg(unix)]
 mod archive_delete_tests;
+
+#[cfg(unix)]
+mod delete_leak_tests;
