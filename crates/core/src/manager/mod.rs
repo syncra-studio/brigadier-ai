@@ -26,6 +26,7 @@ pub(crate) mod browser_tool;
 mod cards;
 mod cli;
 mod cli_commands;
+mod cli_context;
 mod cli_ledger;
 mod cli_thread;
 mod cli_tools;

@@ -109,6 +109,77 @@ pub enum CliRequest {
         questions: Vec<AskItem>,
         title: Option<String>,
     },
+    /// Everything the calling thread or worker needs about its job, on pull (D13): the parts
+    /// listed with their sizes, or one part.
+    Context {
+        /// Absent: the overview.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        part: Option<ContextPart>,
+        /// `skills`: the one skill to print whole.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// `transcript`: search for these words.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grep: Option<String>,
+        /// `transcript`: the last N items.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last: Option<u32>,
+        /// `transcript`: one exact item, as a search hit names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
+    },
+}
+
+/// One part of `brigadier context`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContextPart {
+    Brief,
+    Decisions,
+    Open,
+    Ledger,
+    Checkpoint,
+    Transcript,
+    Skills,
+    Mcps,
+    Project,
+    Routing,
+}
+
+impl ContextPart {
+    /// Every part, in the order the overview lists them.
+    pub const ALL: [ContextPart; 10] = [
+        Self::Brief,
+        Self::Decisions,
+        Self::Open,
+        Self::Ledger,
+        Self::Checkpoint,
+        Self::Transcript,
+        Self::Skills,
+        Self::Mcps,
+        Self::Project,
+        Self::Routing,
+    ];
+
+    /// Its subcommand's word.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Brief => "brief",
+            Self::Decisions => "decisions",
+            Self::Open => "open",
+            Self::Ledger => "ledger",
+            Self::Checkpoint => "checkpoint",
+            Self::Transcript => "transcript",
+            Self::Skills => "skills",
+            Self::Mcps => "mcps",
+            Self::Project => "project",
+            Self::Routing => "routing",
+        }
+    }
+
+    pub fn of_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|part| part.word() == word)
+    }
 }
 
 /// One question of a `brigadier ask` card.
@@ -979,6 +1050,89 @@ pub struct LedgerNoId {
     /// From 1.
     pub line: u32,
     pub entry: String,
+}
+
+/// `brigadier context`: the overview, or one part. `text` is what it prints; the lists beside
+/// it hold the same, by item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextOutput {
+    /// `overview`, or the part's word.
+    pub part: String,
+    pub text: String,
+    /// The overview: each part, with its size and the command that opens it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<ContextPartSize>,
+    /// `decisions`, `open` and `ledger`: each entry, verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<ContextEntry>,
+    /// `skills` and `mcps`: each skill or server.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ContextItem>,
+    /// `project`: the checkout's own instruction files, whole.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<ContextFile>,
+    /// `routing`: what `brigadier models --json` prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<crate::models::ModelsOutput>,
+}
+
+/// One part as the overview lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPartSize {
+    pub part: String,
+    pub summary: String,
+    /// How many entries, items or files it holds, where it counts any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<u32>,
+    pub lines: u32,
+    /// About how many tokens its text is (a token per four characters).
+    pub tokens: u32,
+    pub command: String,
+}
+
+/// One entry of a ledger, or a card waiting on the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextEntry {
+    /// `L12`; a card's id; none for a ledger entry written without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// `rule`, `decision`, `open`, `close`, `other`, `question` or `approval`.
+    pub kind: String,
+    /// Whose it is: `session` (a worker's session's, read-only to it), `own` (the caller's
+    /// own ledger, when it is a worker) or `card`.
+    pub source: String,
+    /// Verbatim.
+    pub text: String,
+}
+
+/// One skill or MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextItem {
+    /// What `brigadier context skills <name>` takes; a server's name as its tools know it.
+    pub name: String,
+    /// `skill` or `server`.
+    pub kind: String,
+    /// A skill's description; a server's origin.
+    pub detail: String,
+    /// The caller has it: a server its CLI runs, or will once it starts.
+    pub has: bool,
+    /// A server its CLI reported: `connected`, `connecting`, `needsAuth` or `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// One instruction file of the checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextFile {
+    /// From the checkout's root.
+    pub path: String,
+    pub lines: u32,
+    pub text: String,
 }
 
 /// `brigadier ask`: the user's answers.

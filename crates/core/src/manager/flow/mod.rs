@@ -2381,6 +2381,8 @@ mod computer_host_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod computer_use_tests;
 #[cfg(unix)]
+mod context_tests;
+#[cfg(unix)]
 mod continue_on_tests;
 #[cfg(unix)]
 mod engine_tests;

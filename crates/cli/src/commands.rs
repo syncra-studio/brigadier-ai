@@ -113,6 +113,64 @@ const fn choice(
 /// Every subcommand, in the order help lists them.
 pub const COMMANDS: &[Command] = &[
     Command {
+        name: "context",
+        summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
+                  transcript, skills, MCP servers, project, routing.",
+        details: "Nothing of it is put into your conversation (D13): run `brigadier context` \
+                  when you start and after any compaction, then open what you need. Alone it \
+                  lists each part with its size and the command that opens it. `brief`: your \
+                  task as `brigadier start` gave it, or a session's first request. \
+                  `decisions`: the rules and decisions still standing, quoted with their ids. \
+                  `open`: open items and the cards waiting on the user. `ledger`: the whole \
+                  ledger. A worker reads its session's ledger (read-only) and then its own. \
+                  `checkpoint`: the session's checkpoint. `transcript`: your own records, the \
+                  last items, `--grep` hits or one `--item`. `skills [<name>]`: the skills of \
+                  your agent's setup, or one skill's whole text. `mcps`: the MCP servers that \
+                  exist and which you have (a worker has only the ones it was started with, \
+                  D18). `project`: the checkout's own CLAUDE.md and AGENTS.md (D17) and the \
+                  project's facts. `routing`: `brigadier models`' guidance.",
+        args: &[
+            Arg::Positional {
+                name: "part",
+                help: "The part to open; none lists them.",
+                required: false,
+                rest: false,
+                choices: &[
+                    "brief",
+                    "decisions",
+                    "open",
+                    "ledger",
+                    "checkpoint",
+                    "transcript",
+                    "skills",
+                    "mcps",
+                    "project",
+                    "routing",
+                ],
+            },
+            Arg::Positional {
+                name: "name",
+                help: "skills: the skill to print whole.",
+                required: false,
+                rest: false,
+                choices: &[],
+            },
+            flag(
+                "grep",
+                "TEXT",
+                "transcript: search your records for these words.",
+            ),
+            flag("last", "N", "transcript: the last N items (20 by default)."),
+            flag(
+                "item",
+                "ID",
+                "transcript: one exact item, as a search hit names it.",
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/context.schema.json"),
+    },
+    Command {
         name: "sessions",
         summary: "List this project's sidebar sessions (--all: every project's, and Chats).",
         details: "Each row: id, state, title, branch, lines added and removed, and how many \

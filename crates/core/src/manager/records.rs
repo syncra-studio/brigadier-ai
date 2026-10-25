@@ -253,6 +253,58 @@ impl SessionManager {
     }
 }
 
+impl SessionManager {
+    /// Session `key`'s records (a session's short id, a worker's `<short>/<n>-<task8>`), of
+    /// `conversation`'s project.
+    fn record_session(&self, conversation: &ConversationId, key: &str) -> Result<RecordSession> {
+        let project = self.project_of(conversation).ok_or_else(|| {
+            Error::Invalid("this conversation has no project, so no records to read".into())
+        })?;
+        self.record_sessions(&project)
+            .into_iter()
+            .find(|session| session.key == key)
+            .ok_or_else(|| Error::Invalid("no transcript yet".into()))
+    }
+
+    /// `brigadier context transcript --last N`: the last `last` items of session `key`'s
+    /// transcript, verbatim, as `transcript read` gives a span.
+    pub(crate) async fn records_last(
+        &self,
+        conversation: &ConversationId,
+        key: &str,
+        last: u32,
+    ) -> Result<String> {
+        let session = self.record_session(conversation, key)?;
+        blocking(move || {
+            let count = transcript_len(&session) as i64;
+            if count == 0 {
+                return Ok("No transcript yet.\n".to_owned());
+            }
+            let from = (count - i64::from(last).min(READ_MAX)).max(0);
+            read_span(&session, from, count - 1)
+        })
+        .await
+    }
+
+    /// How many items session `key`'s transcript holds; none when it keeps none yet.
+    pub(crate) async fn records_len(&self, conversation: &ConversationId, key: &str) -> usize {
+        let Ok(session) = self.record_session(conversation, key) else {
+            return 0;
+        };
+        blocking(move || Ok(transcript_len(&session)))
+            .await
+            .unwrap_or(0)
+    }
+}
+
+/// How many items `session`'s transcript holds.
+fn transcript_len(session: &RecordSession) -> usize {
+    let files = transcript_stamp(&session.record)
+        .map(|(_, files)| files)
+        .unwrap_or_default();
+    transcript(&files).len()
+}
+
 /// Whether session `key` is `scope` or one of its workers.
 fn within(key: &str, scope: &str) -> bool {
     key == scope

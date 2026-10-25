@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier context --json",
+  "type": "object",
+  "required": ["part", "text"],
+  "additionalProperties": false,
+  "properties": {
+    "part": {"enum": ["overview", "brief", "decisions", "open", "ledger", "checkpoint", "transcript", "skills", "mcps", "project", "routing"]},
+    "text": {"type": "string", "description": "What it prints without --json."},
+    "parts": {
+      "type": "array",
+      "description": "The overview: each part, its size and the command that opens it.",
+      "items": {
+        "type": "object",
+        "required": ["part", "summary", "lines", "tokens", "command"],
+        "additionalProperties": false,
+        "properties": {
+          "part": {"type": "string"},
+          "summary": {"type": "string"},
+          "entries": {"type": "integer", "minimum": 0, "description": "How many entries, items or files it holds, where it counts any."},
+          "lines": {"type": "integer", "minimum": 0},
+          "tokens": {"type": "integer", "minimum": 0, "description": "About how many tokens its text is (a token per four characters)."},
+          "command": {"type": "string"}
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "description": "decisions, open and ledger: each entry, verbatim.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "source", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["rule", "decision", "open", "close", "other", "question", "approval"]},
+          "source": {"enum": ["session", "own", "card"], "description": "session: the session's ledger (read-only to a worker); own: a worker's own ledger; card: a card waiting on the user."},
+          "text": {"type": "string"}
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "skills and mcps: each skill or server.",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "detail", "has"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"enum": ["skill", "server"]},
+          "detail": {"type": "string"},
+          "has": {"type": "boolean"},
+          "status": {"enum": ["connected", "connecting", "needsAuth", "failed"]}
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "description": "project: the checkout's own instruction files, whole.",
+      "items": {
+        "type": "object",
+        "required": ["path", "lines", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string"},
+          "lines": {"type": "integer", "minimum": 0},
+          "text": {"type": "string"}
+        }
+      }
+    },
+    "models": {"type": "object", "description": "routing: what `brigadier models --json` prints."}
+  }
+}

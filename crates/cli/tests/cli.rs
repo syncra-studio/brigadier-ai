@@ -564,6 +564,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     .collect(),
             })
         }
+        CliRequest::Context { part, name, .. } => CliReply::ok(&context_sample(*part, name)),
         CliRequest::Ask { questions, .. } => CliReply::ok(&AskOutput::of(
             questions
                 .iter()
@@ -579,6 +580,89 @@ fn sample(request: &CliRequest) -> CliReply {
                 .collect(),
         )),
     }
+}
+
+/// What the daemon answers `brigadier context [<part>]`, in the shapes it sends.
+fn context_sample(part: Option<ContextPart>, name: &Option<String>) -> ContextOutput {
+    let mut output = ContextOutput {
+        part: part.map_or("overview", ContextPart::word).into(),
+        text: format!("{} text\n", part.map_or("overview", ContextPart::word)),
+        parts: Vec::new(),
+        entries: Vec::new(),
+        items: Vec::new(),
+        files: Vec::new(),
+        models: None,
+    };
+    match part {
+        None => {
+            output.parts = ContextPart::ALL
+                .into_iter()
+                .map(|part| ContextPartSize {
+                    part: part.word().into(),
+                    summary: "What it holds".into(),
+                    entries: (part != ContextPart::Brief).then_some(2),
+                    lines: 4,
+                    tokens: 30,
+                    command: format!("brigadier context {}", part.word()),
+                })
+                .collect();
+        }
+        Some(ContextPart::Decisions | ContextPart::Open | ContextPart::Ledger) => {
+            output.entries = vec![
+                ContextEntry {
+                    id: Some("L3".into()),
+                    kind: "rule".into(),
+                    source: "session".into(),
+                    text: "- L3 · 10-25 11:00 · gen 1 · Rule from the user: \"no tabs\"".into(),
+                },
+                ContextEntry {
+                    id: None,
+                    kind: "other".into(),
+                    source: "own".into(),
+                    text: "- Ruled out: the cache".into(),
+                },
+                ContextEntry {
+                    id: Some("card-1".into()),
+                    kind: "question".into(),
+                    source: "card".into(),
+                    text: "Ship it?".into(),
+                },
+            ];
+        }
+        Some(ContextPart::Skills) if name.is_none() => {
+            output.items = vec![ContextItem {
+                name: "tools:review".into(),
+                kind: "skill".into(),
+                detail: "Reviews a diff.".into(),
+                has: true,
+                status: None,
+            }];
+        }
+        Some(ContextPart::Mcps) => {
+            output.items = vec![ContextItem {
+                name: "pencil".into(),
+                kind: "server".into(),
+                detail: "Claude Code (user)".into(),
+                has: false,
+                status: Some("connected".into()),
+            }];
+        }
+        Some(ContextPart::Project) => {
+            output.files = vec![ContextFile {
+                path: "CLAUDE.md".into(),
+                lines: 1,
+                text: "Use tabs.\n".into(),
+            }];
+        }
+        Some(ContextPart::Routing) => {
+            let CliReply::Ok { output: models } = sample(&CliRequest::Models) else {
+                unreachable!()
+            };
+            output.models = Some(serde_json::from_value(models).unwrap());
+        }
+        Some(_) => {}
+    }
+    output
 }
 
 /// The schema file named after `command`.
@@ -732,6 +816,21 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["ledger", "close", "L3", "asked", "again", "--json"],
         &["checkpoint", "set", "Goal:", "ship.", "--json"],
         &["checkpoint", "show", "--json"],
+        &["context", "--json"],
+        &["context", "brief", "--json"],
+        &["context", "decisions", "--json"],
+        &["context", "open", "--json"],
+        &["context", "ledger", "--json"],
+        &["context", "checkpoint", "--json"],
+        &["context", "transcript", "--json"],
+        &["context", "transcript", "--grep", "cache", "--json"],
+        &["context", "transcript", "--last", "5", "--json"],
+        &["context", "transcript", "--item", "u-1", "--json"],
+        &["context", "skills", "--json"],
+        &["context", "skills", "tools:review", "--json"],
+        &["context", "mcps", "--json"],
+        &["context", "project", "--json"],
+        &["context", "routing", "--json"],
         &[
             "ledger",
             "check",
@@ -1202,5 +1301,98 @@ fn ledger_add_prints_its_id_reads_stdin_and_show_close_and_check_pass_their_word
             1,
             "{output:?}"
         );
+    }
+}
+
+/// `brigadier context` is one front door (D13): each part goes to the daemon as one request
+/// with its own arguments and prints the text the daemon wrote; arguments of another part are
+/// refused before any call.
+#[test]
+fn context_sends_each_part_and_prints_its_text() {
+    fn answer(request: &CliRequest) -> CliReply {
+        let CliRequest::Context {
+            part,
+            name,
+            grep,
+            last,
+            item,
+        } = request
+        else {
+            panic!("expected a context call: {request:?}");
+        };
+        let mut output = context_sample(*part, name);
+        output.text = format!(
+            "{} name={name:?} grep={grep:?} last={last:?} item={item:?}\n",
+            output.part
+        );
+        CliReply::ok(&output)
+    }
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["context"],
+            "overview name=None grep=None last=None item=None\n",
+        ),
+        (
+            &["context", "decisions"],
+            "decisions name=None grep=None last=None item=None\n",
+        ),
+        (
+            &["context", "skills", "tools:review"],
+            "skills name=Some(\"tools:review\") grep=None last=None item=None\n",
+        ),
+        (
+            &["context", "transcript", "--grep", "the cache"],
+            "transcript name=None grep=Some(\"the cache\") last=None item=None\n",
+        ),
+        (
+            &["context", "transcript", "--last", "5"],
+            "transcript name=None grep=None last=Some(5) item=None\n",
+        ),
+        (
+            &["context", "transcript", "--item", "u-1"],
+            "transcript name=None grep=None last=None item=Some(\"u-1\")\n",
+        ),
+    ];
+    let dir = DataDir::new("context");
+    let daemon = stand_in_daemon(&dir.0, cases.len(), answer);
+    for (words, printed) in cases {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert!(output.status.success(), "{words:?}: {output:?}");
+        assert_eq!(stdout(&output), *printed, "{words:?}");
+    }
+    daemon.join().unwrap();
+
+    for words in [
+        vec!["context", "nothing"],
+        vec!["context", "brief", "extra"],
+        vec!["context", "skills", "a", "b"],
+        vec!["context", "ledger", "--grep", "x"],
+        vec!["context", "--last", "3"],
+        vec!["context", "transcript", "--last", "0"],
+        vec!["context", "transcript", "--grep", "x", "--item", "u-1"],
+    ] {
+        let output = brigadier(None, None, &words);
+        assert_eq!(output.status.code(), Some(2), "{words:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{words:?}");
+    }
+
+    let help = stdout(&brigadier(None, None, &["context", "--help"]));
+    for word in [
+        "brief",
+        "decisions",
+        "open",
+        "ledger",
+        "checkpoint",
+        "transcript",
+        "skills",
+        "mcps",
+        "project",
+        "routing",
+        "after any compaction",
+        "--grep TEXT",
+        "--last N",
+        "--item ID",
+    ] {
+        assert!(help.contains(word), "{word} missing from:\n{help}");
     }
 }

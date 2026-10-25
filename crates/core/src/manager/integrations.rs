@@ -17,13 +17,13 @@ use crate::model::{ConversationId, ProjectId};
 use crate::{Error, Result};
 
 /// Brigadier's own servers' names, which a lean worker keeps.
-const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
+pub(crate) const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
 
 fn provider(agent: Agent) -> ProviderKind {
     super::mcp_login::provider(agent)
 }
 
-fn agent(provider: ProviderKind) -> Agent {
+pub(crate) fn agent(provider: ProviderKind) -> Agent {
     match provider {
         ProviderKind::Claude => Agent::Claude,
         ProviderKind::Codex => Agent::Codex,

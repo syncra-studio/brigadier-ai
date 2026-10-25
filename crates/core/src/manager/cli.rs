@@ -430,6 +430,13 @@ impl SessionManager {
             }
             CliRequest::Ask { questions, title } => self.cli_ask(caller, questions, title).await,
             CliRequest::Why { path, line } => self.cli_why(&path, line).await,
+            CliRequest::Context {
+                part,
+                name,
+                grep,
+                last,
+                item,
+            } => self.cli_context(caller, part, name, grep, last, item).await,
         };
         reply.unwrap_or_else(failed)
     }

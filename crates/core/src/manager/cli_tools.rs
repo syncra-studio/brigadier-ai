@@ -232,7 +232,8 @@ impl SessionManager {
     }
 
     /// `brigadier brain search|read` and `transcript search|read` (S18): the records, as the
-    /// thread's own; workers, Chats and tab chats don't have them.
+    /// thread's own. A worker has `transcript` within its own records, so it can follow its
+    /// own search hits (D13); Chats and tab chats have neither.
     async fn cli_records(
         &self,
         caller: &CliCaller,
@@ -241,11 +242,18 @@ impl SessionManager {
         action: &str,
         given: Value,
     ) -> CliReply {
-        if !matches!(role, Some(Role::Orchestrator { .. })) || caller.task_id.is_some() {
-            return not_theirs();
-        }
         let id = &caller.conversation_id;
-        let own = matches!(tool, Tool::Transcript).then(|| id.short().to_owned());
+        let own = match (role, &caller.task_id, tool) {
+            (Some(Role::Orchestrator { .. }), None, Tool::Brain) => None,
+            (Some(Role::Orchestrator { .. }), None, _) => Some(id.short().to_owned()),
+            (Some(Role::Worker { .. }), Some(task), Tool::Transcript) => {
+                match self.worker_records_key(id, task).await {
+                    Ok(key) => Some(key),
+                    Err(err) => return CliReply::error(ErrorCode::Failed, err.to_string()),
+                }
+            }
+            _ => return not_theirs(),
+        };
         let answer = match action {
             "search" => match args(given) {
                 Ok(search) => self.records_search(id, own, search).await,

@@ -6,7 +6,8 @@ use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::{
-    Agent, Answer, AskItem, Capability, CliRequest, Judgment, Permission, StartRequest, Tool,
+    Agent, Answer, AskItem, Capability, CliRequest, ContextPart, Judgment, Permission,
+    StartRequest, Tool,
 };
 
 /// What the command line asks for.
@@ -441,6 +442,44 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             questions: ask_questions(args).map_err(error)?,
             title: args.flag("title").map(str::to_owned),
         },
+        "context" => {
+            let part = args.one("part").and_then(ContextPart::of_word);
+            let given = |name: &str| {
+                args.flag(name)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            };
+            let name = args.one("name").map(str::to_owned);
+            if name.is_some() && part != Some(ContextPart::Skills) {
+                return Err(error("only `context skills` takes a name".into()));
+            }
+            let (grep, last, item) = (given("grep"), number("last")?, given("item"));
+            if (grep.is_some() || last.is_some() || item.is_some())
+                && part != Some(ContextPart::Transcript)
+            {
+                return Err(error(
+                    "--grep, --last and --item go with `context transcript`".into(),
+                ));
+            }
+            if [grep.is_some(), last.is_some(), item.is_some()]
+                .into_iter()
+                .filter(|given| *given)
+                .count()
+                > 1
+            {
+                return Err(error(
+                    "give one of --grep, --last and --item at a time".into(),
+                ));
+            }
+            CliRequest::Context {
+                part,
+                name,
+                grep,
+                last,
+                item,
+            }
+        }
         name if Tool::of_command(name).is_some() => tool_request(command, args)?,
         other => return Err(error(format!("{other} has no request yet"))),
     }))
