@@ -1006,6 +1006,37 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         net.contains("[worker events wn-") && net.contains("finished · Hi."),
         "{net}"
     );
+
+    // The thread shows "Messaged ‹worker›" for the message that reached one, and "Stopped
+    // ‹worker›" for the close; an answer to a permission prompt, and a refused send or close,
+    // file nothing.
+    use crate::work::OrchestratorStepKind;
+    let steps: Vec<OrchestratorStepKind> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => match step.kind {
+                kind @ (OrchestratorStepKind::Messaged { .. }
+                | OrchestratorStepKind::Stopped { .. }) => Some(kind),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        vec![
+            OrchestratorStepKind::Messaged {
+                task_id: a.id.clone(),
+                text: Some("And stop.".into()),
+            },
+            OrchestratorStepKind::Stopped {
+                task_id: a.id.clone(),
+                reason: "Closed by its session.".into(),
+            },
+        ]
+    );
     flow.stop().await;
 }
 

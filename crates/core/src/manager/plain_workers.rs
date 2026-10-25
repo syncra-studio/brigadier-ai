@@ -798,7 +798,18 @@ impl SessionManager {
                 message: None,
             }));
         }
-        let queued = self.send_plain(&task, text.unwrap_or_default()).await?;
+        let text = text.unwrap_or_default();
+        let step = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
+        let queued = self.send_plain(&task, text).await?;
+        // "Messaged ‹worker›" in its session's thread, opening to what it said.
+        self.orchestrator_step(
+            &caller.conversation_id,
+            crate::work::OrchestratorStepKind::Messaged {
+                task_id: task.id.clone(),
+                text: Some(step),
+            },
+        )
+        .await;
         Ok(CliReply::ok(&SendOutput {
             id: shown,
             queued,
