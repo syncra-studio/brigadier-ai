@@ -33,8 +33,9 @@ export function ChatTab({
 }) {
   const id = conversation.id;
   const archived = conversation.lifecycle === "archived";
-  // The session in front is open: it is never unread, so its only mark here is the spinner.
-  const working = useSidebarIndicators(id).working && !archived;
+  // An open session keeps a waiting-card dot; Done has already been read.
+  const mark = useSidebarIndicators(id);
+  const showingMark = (mark.working || mark.unread) && !archived;
   return (
     <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
       <div
@@ -72,10 +73,10 @@ export function ChatTab({
             compact
             className={cn(
               "col-start-1 row-start-1",
-              working && "invisible group-hover/tab:visible group-has-[:focus-visible]/tab:visible aria-expanded:visible",
+              showingMark && "invisible group-hover/tab:visible group-has-[:focus-visible]/tab:visible aria-expanded:visible",
             )}
           />
-          {working && (
+          {showingMark && (
             <span className="pointer-events-none col-start-1 row-start-1 group-hover/tab:invisible group-has-[:focus-visible]/tab:invisible group-has-[[aria-expanded=true]]/tab:invisible">
               <SidebarActivityMark conversationId={id} unread={false} />
             </span>

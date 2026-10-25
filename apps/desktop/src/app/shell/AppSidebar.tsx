@@ -97,7 +97,7 @@ function useInboxSections(): Sections {
     [projects, sessions],
   );
   const needs = useTabStates(ids)
-    .map((state) => (state === "needsYou" ? "1" : "0"))
+    .map((state) => (state === "needsYou" || state === "failed" ? "1" : "0"))
     .join("");
   return useMemo(() => {
     const needing = new Set(ids.filter((_, index) => needs[index] === "1"));

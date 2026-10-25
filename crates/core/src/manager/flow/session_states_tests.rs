@@ -415,3 +415,68 @@ async fn activity_keeps_a_sessions_live_workers_after_its_own_turn_ends() {
     }
     flow.stop().await;
 }
+
+/// An idle, unchanged session is Done because its CLI turn ended, even after reconnect/restart.
+#[tokio::test]
+async fn an_unchanged_turns_end_is_in_live_news_and_the_reconnect_snapshot() {
+    use std::time::Duration;
+    let mut flow = Flow::start(
+        "states-done-without-git",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Answered without changing a file.") }),
+    )
+    .await;
+    assert!(
+        flow.manager
+            .activity()
+            .await
+            .iter()
+            .all(|entry| entry.turn_ended_at_ms.is_none())
+    );
+    let mut news = flow.manager.subscribe_thread_news();
+    flow.say("Just answer.").await;
+    flow.idle().await;
+    let at = loop {
+        let sent = tokio::time::timeout(Duration::from_secs(20), news.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if sent.conversation_id == flow.conversation
+            && sent.ended == Some(crate::thread_view::TurnEnd::Done)
+        {
+            break sent
+                .turn_ended_at_ms
+                .expect("the live turn end's timestamp");
+        }
+    };
+    let snapshot = flow.manager.activity().await;
+    let own = snapshot
+        .iter()
+        .find(|entry| entry.conversation_id == flow.conversation)
+        .unwrap();
+    assert!(!own.turn_open && !own.workers_working && !own.failed && !own.stopped);
+    assert_eq!(own.turn_ended_at_ms, Some(at));
+    assert_eq!(
+        flow.settled_state(&flow.conversation).await,
+        None,
+        "nothing changed or merged"
+    );
+    flow.restart().await;
+    let snapshot = flow.manager.activity().await;
+    let own = snapshot
+        .iter()
+        .find(|entry| entry.conversation_id == flow.conversation)
+        .unwrap();
+    assert_eq!(
+        own.turn_ended_at_ms,
+        Some(at),
+        "the timestamp comes from its turn record"
+    );
+    flow.stop().await;
+}

@@ -44,7 +44,7 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null, "a worker's server");
   applyActivityEvents([servers(null, [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, "signIn");
-  assert.deepEqual(sessionStatus(row("c4"), null, undefined), { state: "needsYou", reason: "sign-in" });
+  assert.deepEqual(sessionStatus(row("c4"), null), { state: "needsYou", reason: "sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
 });
@@ -68,7 +68,7 @@ test("a stopped turn is named through reconnect and clears when another turn ope
 test("a failed or cut-off last turn reads Failed until the next turn opens; a failed run too", () => {
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   applyActivityNews({ conversationId: "c5", entries: [], ended: "interrupted" });
-  assert.deepEqual(sessionStatus(row("c5"), null, undefined), { state: "failed", reason: null });
+  assert.deepEqual(sessionStatus(row("c5"), null), { state: "failed", reason: null });
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   assert.equal(row("c5").awaiting, null);
   applyActivityNews({ conversationId: "c5", entries: [], ended: "done" });
@@ -90,26 +90,40 @@ test("unopened sessions fold worker news directly into activity, keep Working un
   const id = "unopened";
   applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true), { ...workerRow(false), id: "other" }] });
   assert.equal(row(id).running, true);
-  assert.equal(tabState(row(id), false, "merged"), "working");
-  assert.deepEqual(sessionStatus(row(id), null, { state: "merged" }), { state: "working", reason: null });
+  assert.equal(tabState(row(id), false, false, true), "working");
+  assert.deepEqual(sessionStatus(row(id), null, false, true), { state: "working", reason: null });
   assert.deepEqual(sidebarIndicators(row(id), false, true), { working: true, error: false, unread: false });
   applyActivityNews({ conversationId: id, entries: [], opened: true });
   applyActivityNews({ conversationId: id, entries: [], ended: "done" });
   assert.equal(row(id).running, true, "the session ending its turn does not end its workers");
   applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(false)] });
-  assert.equal(tabState(row(id), false, "merged"), "merged");
+  assert.equal(tabState(row(id), false, false, true), "done");
   applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true)] });
   applyActivityNews({ conversationId: id, entries: [], workers: [] });
   assert.deepEqual(sidebarIndicators(row(id), false, false), { working: false, error: false, unread: false });
 });
 
-test("the reconnect snapshot restores live worker activity without a thread view, with Question and Needs you taking precedence", () => {
+test("the reconnect snapshot restores live worker activity without a thread view, with waiting cards taking precedence", () => {
   const snapshot = fromSnapshot({ conversationId: "snapshot", run: "idle", tasks: [], approvals: [], questions: [], workersWorking: true });
   useActivity.setState({ byConversation: { snapshot } });
   assert.equal(row("snapshot").running, true);
-  assert.equal(tabState(row("snapshot"), false, "merged"), "working");
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, { state: "merged" }), { state: "question", reason: null });
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, { state: "merged" }), { state: "needsYou", reason: "approval" });
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, { state: "merged" }), { state: "needsYou", reason: "sign-in" });
+  assert.equal(tabState(row("snapshot"), false, false, true), "working");
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, false, true), { state: "needsYou", reason: "question" });
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, false, true), { state: "needsYou", reason: "approval" });
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "needsYou", reason: "sign-in" });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
+});
+
+
+test("turn-end timestamps survive snapshots and worker-only news, independent of finished requests", () => {
+  const snapshot = fromSnapshot({ conversationId: "done", run: "idle", tasks: [], approvals: [], questions: [], turnEndedAtMs: 123 });
+  useActivity.setState({ byConversation: { done: snapshot } });
+  assert.equal(snapshot.turnEndedAtMs, 123);
+  assert.equal(tabState(row("done"), false, false, snapshot.turnEndedAtMs !== undefined), "done");
+  applyActivityNews({ conversationId: "done", entries: [], workers: [workerRow(false)] });
+  assert.equal(useActivity.getState().byConversation.done?.turnEndedAtMs, 123);
+  applyActivityNews({ conversationId: "done", entries: [], opened: true });
+  assert.equal(row("done").running, true);
+  applyActivityNews({ conversationId: "done", entries: [], ended: "done", turnEndedAtMs: 456 });
+  assert.equal(useActivity.getState().byConversation.done?.turnEndedAtMs, 456);
 });

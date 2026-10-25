@@ -529,6 +529,7 @@ impl SessionManager {
             entries: Vec::new(),
             opened: false,
             ended: None,
+            turn_ended_at_ms: None,
             context: None,
             background: None,
             mcp: None,

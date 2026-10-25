@@ -142,6 +142,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         entries: std::mem::take(&mut news.entries),
         opened: news.opened,
         ended: None,
+        turn_ended_at_ms: None,
         context: None,
         background: None,
         mcp: None,
@@ -152,6 +153,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         entries: later,
         opened: false,
         ended: news.ended.take(),
+        turn_ended_at_ms: news.turn_ended_at_ms.take(),
         context: news.context.take(),
         background: news.background.take(),
         mcp: news.mcp.take(),
@@ -164,6 +166,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
 fn items_only(news: &ThreadNews) -> bool {
     !news.opened
         && news.ended.is_none()
+        && news.turn_ended_at_ms.is_none()
         && news.context.is_none()
         && news.background.is_none()
         && news.mcp.is_none()
@@ -205,6 +208,7 @@ mod tests {
             }],
             opened: false,
             ended: None,
+            turn_ended_at_ms: None,
             context: None,
             background: None,
             mcp: None,
@@ -215,6 +219,7 @@ mod tests {
     fn ended(conversation: &str) -> ThreadNews {
         ThreadNews {
             ended: Some(TurnEnd::Done),
+            turn_ended_at_ms: Some(20),
             entries: Vec::new(),
             ..delta(conversation, "", "")
         }
@@ -312,6 +317,7 @@ mod tests {
             ("b", "uno ")
         );
         assert_eq!(first[2].ended, Some(TurnEnd::Done));
+        assert_eq!(first[2].turn_ended_at_ms, Some(20));
         let second = news_of(&frames[1]);
         assert_eq!((second.len(), texts(&second[0]).as_str()), (1, "two"));
         assert!(matches!(frames[2], ServerFrame::Closing));
@@ -422,6 +428,7 @@ mod tests {
         assert_eq!(words, [big.len(), 4, big.len()]);
         assert!(frames.len() >= 2, "{} frames", frames.len());
         assert_eq!(news.last().unwrap().ended, Some(TurnEnd::Done));
+        assert_eq!(news.last().unwrap().turn_ended_at_ms, Some(20));
         assert!(news[..news.len() - 1].iter().all(|one| one.ended.is_none()));
     }
 }

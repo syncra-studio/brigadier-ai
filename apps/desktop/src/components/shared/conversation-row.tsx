@@ -1,4 +1,4 @@
-import { memo, useState, type MouseEvent } from "react";
+import { memo, useEffect, useState, type MouseEvent } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
@@ -9,9 +9,10 @@ import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/compone
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { archive, archiveAll, openConversation, setPinned } from "@/state/actions";
-import { lastFinished, unread, useLastOpened } from "@/state/lastOpened";
+import { markOpened, unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
+import { useActivity } from "@/state/activity";
 
 /** What the rows can ask the sidebar to do. */
 export type RowActions = {
@@ -37,12 +38,15 @@ const hideOnRowHover =
 /** A row's state word and mark, with its reason on hover; otherwise its unread dot. */
 export function RowStatus({ conversationId }: { conversationId: string }) {
   const seen = useLastOpened((s) => s.at[conversationId]);
-  const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));
+  const finishedAtMs = useActivity((s) => s.byConversation[conversationId]?.turnEndedAtMs);
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
+  useEffect(() => {
+    if (open) markOpened(conversationId, Math.max(Date.now(), finishedAtMs ?? 0));
+  }, [conversationId, open, finishedAtMs]);
   const isUnread = unread(finishedAtMs, seen, open);
   const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
   return <SessionStatusLabel conversationId={conversationId} className={hideOnRowHover}
-    rowIndicator={mark} fallback={isUnread ? <span data-slot="row-status" data-status="unread" className={hideOnRowHover}>{mark}</span> : null} />;
+    rowIndicator={mark} />;
 }
 
 /**

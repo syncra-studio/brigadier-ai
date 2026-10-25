@@ -233,6 +233,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ended: Option<TurnEnd>,
+    /// When that turn ended, from the same clock as its turn record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_ended_at_ms: Option<i64>,
     /// How full its model's context is, as its CLI just said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -261,6 +265,8 @@ pub struct CliTurn {
     /// How the last turn ended; none when there is none, or it began and never ended (a crash).
     #[serde(default)]
     pub last_end: Option<TurnEnd>,
+    #[serde(default)]
+    pub turn_ended_at_ms: Option<i64>,
 }
 
 /// A conversation's live turn: the stream's items since it began.
@@ -578,12 +584,11 @@ pub(crate) fn read_turns(record: &Path) -> Vec<TurnRecord> {
         .collect()
 }
 
-/// How the last turn of `record/turns.jsonl` ended: its last line's end, none when that line
-/// is a turn's start (it never ended) or there is none.
-pub(crate) fn last_end(record: &Path) -> Option<TurnEnd> {
+/// The last line of `record/turns.jsonl`: its turn's start or end and recorded timestamp.
+pub(crate) fn last_turn(record: &Path) -> Option<TurnRecord> {
     let turns = std::fs::read_to_string(record.join("turns.jsonl")).ok()?;
     let last = turns.lines().rev().find(|line| !line.trim().is_empty())?;
-    serde_json::from_str::<TurnRecord>(last).ok()?.end
+    serde_json::from_str::<TurnRecord>(last).ok()
 }
 
 /// Adds a turn's end to `record/turns.jsonl`.

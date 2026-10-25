@@ -226,6 +226,7 @@ impl Board {
                 run: self.run,
                 turn_open: turn.open,
                 workers_working: false,
+                turn_ended_at_ms: turn.turn_ended_at_ms,
                 tasks,
                 titles,
                 approvals,
@@ -1135,6 +1136,7 @@ pub(crate) fn activity_of(
     activity.stopped = !working && last_end == Some(TurnEnd::Stopped);
     (working
         || activity.run == RunState::Running
+        || activity.turn_ended_at_ms.is_some()
         || activity.failed
         || activity.stopped
         || !activity.tasks.is_empty()
@@ -1211,6 +1213,7 @@ mod shared_states_tests {
                     run: case.run,
                     turn_open: case.turn.open,
                     workers_working: false,
+                    turn_ended_at_ms: case.turn.turn_ended_at_ms,
                     tasks: case.tasks,
                     titles: Vec::new(),
                     approvals: case.approvals.into_iter().collect(),
@@ -1245,6 +1248,7 @@ mod tab_state_tests {
     const IDLE: CliTurn = CliTurn {
         open: false,
         last_end: None,
+        turn_ended_at_ms: None,
     };
 
     fn id() -> ConversationId {
@@ -1271,6 +1275,7 @@ mod tab_state_tests {
         let stopped = CliTurn {
             open: false,
             last_end: Some(TurnEnd::Stopped),
+            turn_ended_at_ms: Some(100),
         };
         assert!(board.activity(&id(), stopped).unwrap().stopped);
         let next = CliTurn {
@@ -1282,8 +1287,12 @@ mod tab_state_tests {
         let done = CliTurn {
             open: false,
             last_end: Some(TurnEnd::Done),
+            turn_ended_at_ms: Some(200),
         };
-        assert!(board.activity(&id(), done).is_none());
+        assert_eq!(
+            board.activity(&id(), done).unwrap().turn_ended_at_ms,
+            Some(200)
+        );
     }
 
     /// A session's open workers come with their titles, for their rows under its sidebar row;

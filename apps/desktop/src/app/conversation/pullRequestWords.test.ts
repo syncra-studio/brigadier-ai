@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PULL_REQUEST_STATE_WORDS, PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
-import { SESSION_STATUS_WORDS } from "@/state/tabStates";
 import type { PullRequest } from "@/ipc/generated";
 
 const base: PullRequest = { number: 7, title: "Add notes", url: "https://github.com/o/n/pull/7", state: "open", ci: "passing", approved: true, mergeable: true };
@@ -33,10 +32,8 @@ test("no checks is not green", () => {
   assert.equal(pullRequestLook(pr).word, "Review needed");
 });
 
-test("a session's row and tab name a draft, merged or closed PR in the card's own word (issue 551)", () => {
+test("the context card keeps its git PR words", () => {
   for (const state of ["draft", "merged", "closed"] as const) {
     assert.equal(PULL_REQUEST_STATE_WORDS[state], pullRequestLook({ ...base, state }).word, state);
   }
-  assert.equal(SESSION_STATUS_WORDS.prDraft, "Draft");
-  assert.equal(SESSION_STATUS_WORDS.prOpen, "PR open");
 });

@@ -19,6 +19,10 @@ turnOpen?: boolean,
  */
 workersWorking?: boolean, 
 /**
+ * When its last recorded CLI turn ended; absent before any turn ended.
+ */
+turnEndedAtMs?: number, 
+/**
  * Its tasks that are not over, with their state.
  */
 tasks: Array<[TaskId, TaskState]>, 
