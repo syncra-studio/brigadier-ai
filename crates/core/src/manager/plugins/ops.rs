@@ -337,8 +337,8 @@ fn has_server(catalog: &Catalog, adapter: &dyn AgentAdapter, name: &str) -> bool
         .any(|server| server.name == name && server.plugin.is_none() && adapter.owns(server.source))
 }
 
-const USE_EVERYWHERE_FIRST: &str =
-    "Use everywhere first: then every agent can turn it on or off per project.";
+const ADD_TO_EVERY_AGENT_FIRST: &str =
+    "Add to every agent first: then every agent can turn it on or off per project.";
 
 /// Turns the item `key` on or off: in `project`, else in every project; for one agent only
 /// when `only`.
@@ -375,10 +375,10 @@ pub(crate) fn switch(
                 adapter
                     .set_server(&name, &place, on)
                     .map(Some)
-                    .map_err(|_| USE_EVERYWHERE_FIRST.to_owned())
+                    .map_err(|err| err.0)
             })
         }
-        Target::Skill(_) | Target::Other(_) => return Err(USE_EVERYWHERE_FIRST.to_owned()),
+        Target::Skill(_) | Target::Other(_) => return Err(ADD_TO_EVERY_AGENT_FIRST.to_owned()),
     })
 }
 
@@ -923,6 +923,19 @@ fn find(ctx: &Ctx<'_>, target: &Target) -> Result<Found, String> {
     Ok(found)
 }
 
+/// Leaves out of `found` what sits in a folder that isn't one of `projects`: an agent's own copy
+/// there stays as it is, and the Library's copy isn't turned on there, so it never reaches
+/// further than it was (kept only to such folders, it is off in every project).
+fn within_projects(found: &mut Found, projects: &[PathBuf]) {
+    let project = |path: &PathBuf| projects.contains(path);
+    found
+        .servers
+        .retain(|(_, folder, _)| folder.as_ref().is_none_or(project));
+    if let Some(kept_to) = &mut found.projects {
+        kept_to.retain(project);
+    }
+}
+
 fn skill_found(name: &str, skill: &Skill) -> Found {
     Found {
         name: name.to_owned(),
@@ -971,7 +984,8 @@ fn lists(ctx: &Ctx<'_>, agent: Agent, id: &str, projects: Option<&[PathBuf]>) ->
 /// has the copy staged, and comes back if any agent doesn't end up with it (D5). Its key.
 pub(crate) fn use_everywhere(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
     let target = target(key)?;
-    let found = find(ctx, &target)?;
+    let mut found = find(ctx, &target)?;
+    within_projects(&mut found, ctx.projects);
     let name = found.name.clone();
     if ctx.library.entry(&name).is_some() {
         return Err(LibraryError::NameTaken(name).to_string());

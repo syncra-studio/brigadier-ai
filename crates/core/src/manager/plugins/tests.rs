@@ -476,3 +476,45 @@ fn an_agents_own_item_switched_off_everywhere_stays_as_an_off_row() {
     }
     let _ = std::fs::remove_dir_all(home);
 }
+
+#[test]
+fn a_claude_server_kept_to_a_folder_that_isnt_a_project_says_where_it_is_on() {
+    let home = home("foreign-folder");
+    let project = home.join("project");
+    let foreign = home.join("clients/freelogo-fos-2026");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&foreign).unwrap();
+    write(
+        &home.join(".claude.json"),
+        &serde_json::json!({"projects": {
+            foreign.display().to_string(): {"mcpServers": {"codescene": {"command": "codescene-mcp"}}}
+        }})
+        .to_string(),
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let projects = [ProjectCatalog {
+        id: "p".to_owned(),
+        name: "project".to_owned(),
+        catalog: Catalog::read(&roots, Some(&project)),
+        path: project.clone(),
+    }];
+    let user = Catalog::read(&roots, None);
+    let view = build(&user, &projects, &[], &Unknown, None);
+    let codescene = item(&view, "server:codescene");
+    assert_eq!(codescene.on_in, [foreign.display().to_string()]);
+    assert!(!codescene.everywhere);
+    // Claude Code can't keep its own server to a project: the switch asks to add it to every
+    // agent first.
+    assert!(!codescene.switchable);
+    assert_eq!(
+        states(codescene),
+        [AgentItemState::Off, AgentItemState::Missing]
+    );
+    // Looking at the project, it's off there.
+    let here = build(&user, &projects, &[], &Unknown, Some(&project));
+    assert_eq!(
+        states(item(&here, "server:codescene")),
+        [AgentItemState::Off, AgentItemState::Missing]
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}

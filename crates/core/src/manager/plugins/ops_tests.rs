@@ -396,10 +396,89 @@ fn an_agents_own_skill_or_another_apps_server_goes_through_use_everywhere() {
     for key in ["skill:grill", "other:desktop:figma"] {
         assert_eq!(
             switch(&ctx, key, Some(&fx.project), false, None),
-            Err(USE_EVERYWHERE_FIRST.to_owned())
+            Err(ADD_TO_EVERY_AGENT_FIRST.to_owned())
         );
     }
     assert!(switch(&ctx, "nonsense", None, true, None).is_err());
+}
+
+#[test]
+fn a_claude_server_switched_in_a_project_says_what_claude_code_needs() {
+    let fx = Fixture::new("claude-server", None, None);
+    write(
+        &fx.home.join(".claude.json"),
+        r#"{"mcpServers": {"codescene": {"command": "codescene-mcp"}}}"#,
+    );
+    let projects = [fx.project.clone()];
+    let said = std::sync::Mutex::new(Vec::new());
+    let report = |agent: Agent, step: PluginStep| said.lock().unwrap().push((agent, step));
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &report,
+        binary: &|_| None,
+    };
+    assert_eq!(
+        switch(&ctx, "server:codescene", Some(&fx.project), true, None),
+        Ok(false)
+    );
+    let said = said.into_inner().unwrap();
+    // Claude Code's own words, not a made-up one.
+    assert!(
+        said.contains(&(
+            Agent::Claude,
+            PluginStep::Failed {
+                reason: "Claude Code can turn it on or off per project once it's in your Library."
+                    .to_owned()
+            }
+        ))
+    );
+    assert!(ADD_TO_EVERY_AGENT_FIRST.starts_with("Add to every agent first"));
+}
+
+#[test]
+fn add_to_every_agent_leaves_a_copy_in_a_folder_that_isnt_a_project_as_it_is() {
+    let fx = Fixture::new("foreign", None, None);
+    let foreign = fx.home.join("clients/freelogo-fos-2026");
+    std::fs::create_dir_all(&foreign).unwrap();
+    write(
+        &fx.home.join(".claude.json"),
+        &serde_json::json!({"projects": {
+            foreign.display().to_string(): {"mcpServers": {"codescene": {"command": "codescene-mcp"}}},
+            fx.project.display().to_string(): {"mcpServers": {"codescene": {"command": "codescene-mcp"}}}
+        }})
+        .to_string(),
+    );
+    let projects = [fx.project.clone()];
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &|_, _| {},
+        binary: &|_| None,
+    };
+    let mut found = find(&ctx, &Target::Server("codescene".to_owned())).unwrap();
+    assert_eq!(found.projects.as_ref().map(Vec::len), Some(2));
+    within_projects(&mut found, &projects);
+    // The project's copy moves and the copy goes on there; the other folder's stays.
+    assert_eq!(found.projects, Some(vec![fx.project.clone()]));
+    assert_eq!(
+        found
+            .servers
+            .iter()
+            .map(|(agent, folder, _)| (*agent, folder.clone()))
+            .collect::<Vec<_>>(),
+        [(Agent::Claude, Some(fx.project.clone()))]
+    );
+    // Kept only to that folder: nothing moves and the copy is on nowhere.
+    let mut only = find(&ctx, &Target::Server("codescene".to_owned())).unwrap();
+    within_projects(&mut only, &[]);
+    assert_eq!((only.projects, only.servers.len()), (Some(Vec::new()), 0));
 }
 
 #[test]

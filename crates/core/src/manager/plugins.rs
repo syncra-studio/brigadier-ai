@@ -339,6 +339,10 @@ struct Presence {
     server_id: Option<String>,
     /// Sources that hold it: whether every agent with it can switch it per project.
     switchable: bool,
+    /// A source of it whose agent can switch it per project ([`switchable_source`]), and one
+    /// whose agent can't.
+    switch_source: bool,
+    switchless_source: bool,
     /// The skills it holds, by name.
     skills: Vec<String>,
     problem: Option<String>,
@@ -484,6 +488,11 @@ fn gather(
         presence.remote = remote;
         push(&mut presence.files, server.file.display().to_string());
         let owned_by_switchless = !switchable_source(server.source);
+        if owned_by_switchless {
+            presence.switchless_source = true;
+        } else {
+            presence.switch_source = true;
+        }
         for adapter in agents {
             let agent = adapter.agent();
             if catalog.server_native(server, &session(agent, project)) {
@@ -568,6 +577,8 @@ fn gather(
         }
         push(&mut presence.files, server.file.display().to_string());
         push(&mut presence.anywhere, agent);
+        presence.switch_source |= switchable_source(server.source);
+        presence.switchless_source |= !switchable_source(server.source);
     }
     for skill in &catalog.off.skills {
         let Some(skill) = skill.user_installed() else {
@@ -647,6 +658,26 @@ pub(crate) fn build(
             &agents,
         );
     }
+    // An agent's own server kept to a folder that isn't one of the user's projects (Claude's
+    // local scope): on there, so the page says so, though no project's sessions get it.
+    for server in &user.servers {
+        let Some(folder) = &server.project else {
+            continue;
+        };
+        if server.plugin.is_some()
+            || provider_server(server)
+            || projects.iter().any(|project| project.path == *folder)
+        {
+            continue;
+        }
+        let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
+            continue;
+        };
+        let at = entry(key, &mut items);
+        let presence = &mut items[at].1;
+        presence.note(agent, Some(folder));
+        push(&mut presence.native, (agent, server.name.clone(), None));
+    }
     // A Library item none of the agents has yet.
     for entry in library {
         let key = Key {
@@ -698,11 +729,19 @@ pub(crate) fn build(
             let on_in: Vec<String> = if everywhere {
                 Vec::new()
             } else {
-                projects
+                let mut on_in: Vec<String> = projects
                     .iter()
                     .filter(|project| !in_project(&project.path).is_empty())
                     .map(|project| project.path.display().to_string())
-                    .collect()
+                    .collect();
+                // Then the folders that aren't projects.
+                for (path, _) in &presence.here {
+                    let path = path.display().to_string();
+                    if !on_in.contains(&path) {
+                        on_in.push(path);
+                    }
+                }
+                on_in
             };
             let off_in: Vec<String> = if everywhere {
                 projects
@@ -796,7 +835,11 @@ pub(crate) fn build(
                     })
                     .collect(),
                 attention,
-                switchable: library || presence.switchable,
+                // A server only Claude Code's own setup holds can't be kept to a project, even
+                // where it is on nowhere yet.
+                switchable: library
+                    || (presence.switchable
+                        && !(presence.switchless_source && !presence.switch_source)),
                 update_available: false,
                 can_undo: false,
                 server_id: presence.server_id,
