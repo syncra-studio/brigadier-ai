@@ -476,14 +476,15 @@ test("a turn's user message and its steers take the Brigadier requests the turn 
   assert.deepEqual(block.steers.map((steer) => steer.message.id), ["r2"]);
 });
 
-test("a turn that carries an earlier turn's request keeps its own message, so the tree has no loop", () => {
-  // A Codex background terminal that ends after its turn: the note of its end starts a turn of
-  // the same request.
+test("a Codex command's end after its turn is one plain line, a turn more of the block that started it, like Claude's (D21)", () => {
+  // A Codex background terminal that ends after its turn: Brigadier's note of its end starts a
+  // turn of the same request.
+  const woke = "[your background command `sleep 60` finished after your turn · exit 0]\nxyz";
   const noted: ThreadView = {
     entries: [
       user("u1", "Start it in the background", 1000),
       at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
-      user("u2", "[your background command `sleep 60` finished after your turn · exit 0]", 61_000),
+      user("u2", woke, 61_000),
       at({ type: "message", itemId: "a2", role: "assistant", text: "It finished." }, 61_100),
     ],
     turns: [
@@ -492,13 +493,47 @@ test("a turn that carries an earlier turn's request keeps its own message, so th
     ],
   };
   const tree = cliThreadTree(noted, "conv", [stored("r1", 900)], {}, [], NO_BOARD, { state: "idle", error: null });
-  // Brigadier's note of the end is no bubble (run2-D44); the CLI's reply to it shows.
+  // Brigadier's note of the end is no bubble (run2-D44), nor a block of its own; the CLI's reply to it shows.
   assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId]), [
     ["r1", null],
     ["request:u1", "r1"],
-    ["request:u2", "request:u1"],
   ]);
-  assert.equal(tree.nodes.filter((node) => node.kind === "user").length, 1, "one turn of the user's");
+  const blocks = cliBlocks(noted, "conv");
+  assert.equal(blocks.length, 1);
+  const [block] = blocks;
+  assert.ok(block);
+  assert.deepEqual(block.texts.map((text) => text.messageId), ["a1", "a2"]);
+  assert.deepEqual(block.worked, [{ fromMs: 1000, toMs: 1200 }, { fromMs: 61_000, toMs: 61_200 }]);
+  assert.deepEqual(block.taskNotices, [{ position: 2, text: "Background command finished · exit 0", detail: woke, inWork: true }]);
+  const sequence = blockSequence({ ...block, steers: [] });
+  assert.deepEqual(sequence.map((entry) => entry.kind), ["text", "taskNotice", "text"]);
+  const answer = answerIndex(block.texts, true);
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
+  assert.deepEqual(parts.map((part) => part.type), ["work"]);
+});
+
+test("a Codex command's end after a later message of the user's stays a turn of its own, with its line, so the tree has no loop", () => {
+  const woke = "[your background command `sleep 60` finished after your turn · exit 1]\nFAIL";
+  const noted: ThreadView = {
+    entries: [
+      user("u1", "Start it in the background", 1000),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
+      user("u2", "And the docs", 5000),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Done." }, 5100),
+      user("u3", woke, 61_000),
+      at({ type: "message", itemId: "a3", role: "assistant", text: "It failed." }, 61_100),
+    ],
+    turns: [
+      { ...turn("u1", 1000, 1200, "done"), requests: ["r1"] },
+      { ...turn("u2", 5000, 5200, "done"), requests: ["r2"] },
+      { ...turn("u3", 61_000, 61_200, "done"), requests: ["r1"] },
+    ],
+  };
+  const tree = cliThreadTree(noted, "conv", [stored("r1", 900), stored("r2", 4900)], {}, [], NO_BOARD, { state: "idle", error: null });
+  assert.deepEqual(tree.nodes.filter((node) => node.kind === "user").map((node) => node.id), ["r1", "r2"]);
+  const blocks = cliBlocks(noted, "conv");
+  assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"], ["u2", "message"], ["u3", null]]);
+  assert.deepEqual(blocks[2]?.taskNotices, [{ position: 4, text: "Background command failed · exit 1", detail: woke, inWork: true }]);
 });
 
 const decision = (requestId: string | null, atMs: number) =>

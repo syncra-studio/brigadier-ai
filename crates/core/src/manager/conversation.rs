@@ -26,9 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use brigadier_providers::{
-    Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
-    LimitHit, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
-    Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput, TurnStatus,
+    Access, ApprovalDecision, Artifact, BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus,
+    Decider, ErrorKind, InputFile, InputPart, ItemStatus, LimitHit, Origin, OutputHook,
+    ProviderEvent, ProviderKind, ProviderSession, Role as ProviderRole, SessionSpec, Started,
+    TextPhase, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -220,6 +221,11 @@ struct ConvState {
     /// Codex shell commands still running after the turn that started them ended, by item,
     /// with their words: each one's end comes to the thread as a message.
     lingering: HashMap<String, String>,
+    /// The Codex background terminals of the thread's own shell `/ps` lists now, by process,
+    /// each with its item. Codex ends a command's item as its process exits, so only
+    /// a command whose item still runs at its turn's end lingers; its terminal's leaving the
+    /// list ends it too, should its item's end not come (D21).
+    terminals: HashMap<String, String>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -503,6 +509,13 @@ impl Background {
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a Codex command whose terminal left `/ps` waits for its item's end, which brings
+/// its exit code and output (Codex drains the output first), before it ends without them.
+#[cfg(not(test))]
+const TERMINAL_ITEM_WAIT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const TERMINAL_ITEM_WAIT: Duration = Duration::from_millis(300);
 
 /// A conversation's live state.
 pub(crate) struct ConvLive {
@@ -3547,6 +3560,7 @@ impl SessionManager {
             // of those still running, in the request they served.
             let background = state.background.take_if(|jobs| jobs.of(&cli));
             state.unowned_turn = false;
+            state.terminals.clear();
             let mut words: Vec<String> =
                 std::mem::take(&mut state.lingering).into_values().collect();
             words.sort();
@@ -3715,7 +3729,7 @@ impl SessionManager {
         if !own_shell {
             return;
         }
-        let ended = {
+        {
             let mut state = conv.state.lock().await;
             if status == ItemStatus::InProgress {
                 let words = brigadier_providers::policy::unwrapped_command(command);
@@ -3725,17 +3739,10 @@ impl SessionManager {
                 return;
             }
             state.command_words.remove(item);
-            let Some(words) = state.lingering.remove(item) else {
+            if !state.lingering.contains_key(item) {
                 return;
-            };
-            let request = state.lingering_request.clone();
-            // Its message carries the request now.
-            if state.lingering.is_empty() {
-                state.lingering_request = None;
             }
-            (words, request)
-        };
-        let (words, request) = ended;
+        }
         let status = exit.map_or_else(
             || format!("{status:?}").to_lowercase(),
             |code| format!("exit {code}"),
@@ -3746,6 +3753,56 @@ impl SessionManager {
             chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
                 .iter()
                 .collect()
+        };
+        self.lingering_ended(conv, item, &status, tail).await;
+    }
+
+    /// A Codex background terminal of the thread's own shell was listed, or left the list
+    /// (`/ps`): one that leaves it ends its command as its item's end does (D21).
+    async fn terminal_seen(&self, conv: &Arc<ConvLive>, own_shell: bool, task: &BackgroundTask) {
+        if !own_shell || task.kind != BackgroundTaskKind::Terminal {
+            return;
+        }
+        let item = {
+            let mut state = conv.state.lock().await;
+            if task.status == BackgroundTaskStatus::Running {
+                if let Some(item) = &task.item_id {
+                    state.terminals.insert(task.id.clone(), item.clone());
+                }
+                return;
+            }
+            let Some(item) = state.terminals.remove(&task.id) else {
+                return;
+            };
+            if !state.lingering.contains_key(&item) {
+                return;
+            }
+            item
+        };
+        let (manager, conv) = (self.arc(), conv.clone());
+        self.spawn(async move {
+            tokio::time::sleep(TERMINAL_ITEM_WAIT).await;
+            manager
+                .lingering_ended(&conv, &item, "completed", String::new())
+                .await;
+        });
+    }
+
+    /// A lingering Codex command ended (`status`, its output's `tail`): the thread hears of
+    /// it once, in the request that started it, from its item's end or its terminal's,
+    /// whichever comes first.
+    async fn lingering_ended(&self, conv: &Arc<ConvLive>, item: &str, status: &str, tail: String) {
+        let (words, request) = {
+            let mut state = conv.state.lock().await;
+            let Some(words) = state.lingering.remove(item) else {
+                return;
+            };
+            let request = state.lingering_request.clone();
+            // Its message carries the request now.
+            if state.lingering.is_empty() {
+                state.lingering_request = None;
+            }
+            (words, request)
         };
         let text = self.hide_secrets(&conv.id, tail.into_bytes()).await;
         let envelope = Envelope {
@@ -4059,6 +4116,14 @@ impl SessionManager {
                 {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
+            }
+            ProviderEvent::BackgroundTask { task } => {
+                self.terminal_seen(
+                    conv,
+                    conv.kind == ConversationKind::Session || cli.launch.is_some(),
+                    task,
+                )
+                .await;
             }
             // A Codex thread's own shell commands and edits come as items of their own, not as
             // tool calls: the live line names them the same way.

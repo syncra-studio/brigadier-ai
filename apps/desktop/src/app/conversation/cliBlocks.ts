@@ -39,6 +39,9 @@ const CARRY_ON = "Carry on from the hand-off note.";
 const BRIGADIER_SAYS =
   /^\[(?:message from session |decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier: this conversation continues |Your last turn stopped early)/;
 
+/** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
+const CODEX_WAKE = /^\[your background command /;
+
 /** A notice the CLI starts a turn of its own with, not the user's: a background job's end. */
 const CLI_NOTICE = /^(?:<task-notification>|\[your background command )/;
 
@@ -575,10 +578,18 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
     // its word to carry on, no bubble; the successor's work shows.
     const own = !!asked && (carried.has(asked.itemId) || (brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
+    // Brigadier's word that a Codex command ended after its turn: its one plain line (D21).
+    const woke = !!asked && says && CODEX_WAKE.test(asked.text);
+    const before = block;
     if (asked && (own || compacting || news || unshown || says)) {
-      // Brigadier's word of what workers did that the block before started: a turn more of
-      // that block, never one of its own (a message the user typed still starts one).
-      const joins = !!news && startsTurn(entry) && !!block && !internal.has(block) && startedIn(block, asked.text);
+      // Brigadier's word of what workers did that the block before started, or that a command
+      // it started ended (D21): a turn more of that block, never one of its own (a message the
+      // user typed still starts one).
+      const joins =
+        startsTurn(entry) &&
+        !!before &&
+        !internal.has(before) &&
+        ((!!news && startedIn(before, asked.text)) || (woke && carries.some((request) => before.requestIds.includes(request))));
       if (joins && block) {
         const last = turnOf.get(block);
         joined.set(block, [...(joined.get(block) ?? []), ...(last ? [last] : [])]);
@@ -594,6 +605,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text, ...(joins && { inWork: true }) }));
+      if (woke) block?.taskNotices.push({ position, text: wakeWords(asked.text), detail: asked.text, inWork: true });
       return;
     }
     if (startsTurn(entry) && event.type === "message") {

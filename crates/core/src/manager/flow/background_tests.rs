@@ -240,6 +240,162 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
+/// How a lingering Codex command's end reaches Brigadier: its item's end and its terminal
+/// leaving `/ps`, in either order, or the terminal's leaving alone.
+#[derive(Clone, Copy, Debug)]
+enum TerminalEnd {
+    ItemFirst,
+    TerminalFirst,
+    TerminalOnly,
+}
+
+/// A Codex command outliving its turn as a background terminal: whichever of its item's end
+/// and its terminal's leaving the list comes first, the thread hears of it once, with the
+/// item's exit code when it comes, in the request that started it (D21).
+async fn a_codex_terminal_ends_once(end: TerminalEnd) {
+    let go = Arc::new(tokio::sync::Notify::new());
+    let release = go.clone();
+    let inputs: Log = Log::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        &format!("codex-terminal-{end:?}"),
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (go, log) = (go.clone(), log.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("finished after your turn") {
+                    return Reply::text("It printed xyz.");
+                }
+                let events = turn.events.clone();
+                let command = |status, exit_code, output: Option<&str>| {
+                    brigadier_providers::ProviderEvent::Command {
+                        item_id: "cmd-1".into(),
+                        command: "/bin/zsh -lc 'sleep 70 && echo xyz'".into(),
+                        cwd: None,
+                        status,
+                        exit_code,
+                        output: output.map(str::to_owned),
+                        duration_ms: None,
+                        kept: None,
+                    }
+                };
+                let terminal =
+                    |status, ended_at_ms| brigadier_providers::ProviderEvent::BackgroundTask {
+                        task: brigadier_providers::BackgroundTask {
+                            id: "4242".into(),
+                            item_id: Some("cmd-1".into()),
+                            kind: brigadier_providers::BackgroundTaskKind::Terminal,
+                            label: "sleep 70 && echo xyz".into(),
+                            status,
+                            started_at_ms: 1,
+                            ended_at_ms,
+                            output_file: None,
+                            summary: None,
+                            last_line: None,
+                        },
+                    };
+                let _ = events
+                    .send(command(
+                        brigadier_providers::ItemStatus::InProgress,
+                        None,
+                        None,
+                    ))
+                    .await;
+                let _ = events
+                    .send(terminal(
+                        brigadier_providers::BackgroundTaskStatus::Running,
+                        None,
+                    ))
+                    .await;
+                tokio::spawn(async move {
+                    go.notified().await;
+                    let item = command(
+                        brigadier_providers::ItemStatus::Completed,
+                        Some(0),
+                        Some("xyz\n"),
+                    );
+                    let gone = terminal(
+                        brigadier_providers::BackgroundTaskStatus::Completed,
+                        Some(2),
+                    );
+                    let order = match end {
+                        TerminalEnd::ItemFirst => vec![item, gone],
+                        TerminalEnd::TerminalFirst => vec![gone, item],
+                        TerminalEnd::TerminalOnly => vec![gone],
+                    };
+                    for event in order {
+                        let _ = events.send(event).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                });
+                Reply::text("Started it; it runs in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start the command.").await;
+    rested(&flow).await;
+    let board = flow.board().await;
+    let root = board.requests.keys().next().unwrap().clone();
+    assert_eq!(board.requests[&root].state, RequestState::Working);
+
+    release.notify_one();
+    flow.until("the command's end to be told", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("finished after your turn"))
+    })
+    .await;
+    // Past the wait for an item's end that a terminal's leaving starts: nothing more is told.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let board = flow.settled().await;
+    assert_eq!(board.requests[&root].state, RequestState::Done);
+    let told: Vec<String> = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|input| input.contains("finished after your turn"))
+        .cloned()
+        .collect();
+    let expected = match end {
+        TerminalEnd::TerminalOnly => {
+            "[your background command `sleep 70 && echo xyz` finished after your turn · completed]"
+        }
+        _ => {
+            "[your background command `sleep 70 && echo xyz` finished after your turn · exit 0]\nxyz"
+        }
+    };
+    assert_eq!(told.len(), 1, "{end:?}: {told:#?}");
+    assert!(told[0].starts_with(expected), "{end:?}: {told:#?}");
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("It printed xyz.".into(), Some(root))),
+        "{answers:?}"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_codex_terminal_ends_once_when_its_item_ends_first() {
+    a_codex_terminal_ends_once(TerminalEnd::ItemFirst).await;
+}
+
+#[tokio::test]
+async fn a_codex_terminal_ends_once_when_it_leaves_the_list_first() {
+    a_codex_terminal_ends_once(TerminalEnd::TerminalFirst).await;
+}
+
+#[tokio::test]
+async fn a_codex_terminal_leaving_the_list_ends_its_command_without_its_item() {
+    a_codex_terminal_ends_once(TerminalEnd::TerminalOnly).await;
+}
+
 /// A CLI that ends while a job of its own still runs takes the job with it: the thread hears
 /// so in the job's request, and answers.
 #[tokio::test]
