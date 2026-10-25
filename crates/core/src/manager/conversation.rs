@@ -2766,7 +2766,8 @@ impl SessionManager {
             stop_hook: None,
             lean_worker: false,
             native_compaction: self.native_compaction(conv, choice.provider),
-            temp_tag: None,
+            // Its temp folder names it, so Delete and the sweep find it (D7).
+            temp_tag: Some(conv.id.short().to_owned()),
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);

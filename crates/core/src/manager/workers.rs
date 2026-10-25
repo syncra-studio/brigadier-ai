@@ -743,7 +743,8 @@ impl SessionManager {
             stop_hook: None,
             lean_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
             native_compaction: None,
-            temp_tag: None,
+            // Its temp folder names its session, so Delete and the sweep find it (D7).
+            temp_tag: Some(task.conversation_id.short().to_owned()),
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
@@ -1089,6 +1090,8 @@ impl SessionManager {
                             path: worktree.to_string_lossy().into_owned(),
                         },
                     )
+                    .await?;
+                self.note_branch_namespace(conversation_id, repo, branch)
                     .await?;
                 let (git, repo_path, path, base_name, name, from) = (
                     self.git.clone(),

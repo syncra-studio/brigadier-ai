@@ -425,6 +425,8 @@ impl SessionManager {
             task.number,
             &task.title,
         );
+        self.note_branch_namespace(&task.conversation_id, &repo, &branch)
+            .await?;
         let worktree = worker_dir;
         let warmed = self
             .make_worktree(

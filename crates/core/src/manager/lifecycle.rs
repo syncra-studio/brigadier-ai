@@ -58,6 +58,17 @@ impl SessionManager {
                     .map_err(|err| err.to_string())?
                 })
             }));
+        let space_git = self.git.clone();
+        self.runtime
+            .ledger()
+            .set_git_remover(Arc::new(move |artifact: Artifact| {
+                let git = space_git.clone();
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || remove_git_leftover(&git, artifact))
+                        .await
+                        .map_err(|err| err.to_string())?
+                })
+            }));
         let git = self.git.clone();
         self.runtime.ledger().set_worktree_remover(Arc::new(
             move |repo: PathBuf, path: PathBuf| {
@@ -1564,6 +1575,70 @@ impl SessionManager {
         {
             tracing::warn!("could not empty the routing write-ahead log after a tab chat");
         }
+    }
+}
+
+/// Removes a deleted session's branch namespace or a Local checkout file it made, for the
+/// cleanup ledger ([`crate::ledger::GitRemover`]): `Ok(Some(why))` when it stays on purpose.
+fn remove_git_leftover(
+    git: &brigadier_git::Git,
+    artifact: Artifact,
+) -> std::result::Result<Option<String>, String> {
+    let (repo, what) = match &artifact {
+        Artifact::GitBranches { repo, .. } | Artifact::CheckoutFile { repo, .. } => {
+            (PathBuf::from(repo), &artifact)
+        }
+        _ => return Err("not a git leftover".into()),
+    };
+    let repo = match git.open(&repo) {
+        Ok(repo) => repo,
+        // The repository itself is gone (moved or removed by the user): nothing is left in it.
+        Err(_) if !repo.exists() => return Ok(None),
+        Err(err) => return Err(err.to_string()),
+    };
+    match what {
+        Artifact::GitBranches { namespace, .. } => {
+            let mut removal = repo
+                .remove_namespace(namespace)
+                .map_err(|err| err.to_string())?;
+            if !removal.checked_out.is_empty() {
+                // A worktree whose folder went with the session's (one its CLI made there)
+                // still holds its branch in git's records: those records go, then the branch.
+                let worktrees = repo.worktrees().map_err(|err| err.to_string())?;
+                let gone = worktrees.iter().any(|worktree| {
+                    worktree
+                        .branch
+                        .as_ref()
+                        .is_some_and(|branch| removal.checked_out.contains(branch))
+                        && !worktree.path.exists()
+                });
+                if gone {
+                    repo.prune_worktrees().map_err(|err| err.to_string())?;
+                    removal = repo
+                        .remove_namespace(namespace)
+                        .map_err(|err| err.to_string())?;
+                }
+            }
+            if removal.checked_out.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(format!(
+                    "{} stays: a worktree has it out",
+                    removal.checked_out.join(", ")
+                )))
+            }
+        }
+        Artifact::CheckoutFile { path, blob, .. } => {
+            let removed = repo
+                .remove_untracked_if(path, &brigadier_git::Oid(blob.clone()))
+                .map_err(|err| err.to_string())?;
+            if removed || !repo.root().join(path).exists() {
+                Ok(None)
+            } else {
+                Ok(Some(format!("{path} stays: it changed since the session made it")))
+            }
+        }
+        _ => Err("not a git leftover".into()),
     }
 }
 
