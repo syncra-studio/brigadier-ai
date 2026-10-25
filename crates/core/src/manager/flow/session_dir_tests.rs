@@ -213,13 +213,15 @@ async fn a_delete_cut_off_removes_the_folder_at_the_next_start() {
     std::fs::write(held.join("note.md"), "kept").unwrap();
     std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o500)).unwrap();
     flow.manager.delete(id.clone()).await.unwrap();
-    super::eventually("the session to go", || flow.core.conversation(&id).is_err()).await;
     flow.manager.cleanup_finished(&id).await;
     assert!(dir.root().exists(), "the folder stays while it can't go");
     let owner = crate::manager::session_dir::folder_owner(&id);
     assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
+    // Still marked as being deleted (hidden), so the next start finishes it (D4).
+    assert!(flow.core.conversation(&id).is_ok_and(|c| c.deleting));
     std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o700)).unwrap();
     flow.crash().await;
+    super::eventually("the session to go", || flow.core.conversation(&id).is_err()).await;
     assert!(!dir.root().exists(), "the next start finishes the delete");
     assert!(flow.manager.runtime.ledger().artifacts(&owner).is_empty());
     flow.stop().await;

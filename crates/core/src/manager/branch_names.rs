@@ -27,7 +27,11 @@ pub(crate) fn branch_namespace(conversation: &ConversationId, branch: &str) -> O
     let at = branch.find(&format!("{short}/"))?;
     let before = &branch[..at];
     // The short id starts a name part, after the prefix: not the tail of a longer one.
-    if before.chars().next_back().is_some_and(|c| c.is_ascii_hexdigit()) {
+    if before
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_hexdigit())
+    {
         return None;
     }
     Some(branch[..at + short.len() + 1].to_owned())
@@ -144,8 +148,14 @@ mod tests {
         );
         assert_eq!(task_branch("", &id, 4, "!!"), "70d02049/task-4");
         let space = |branch: &str| super::branch_namespace(&id, branch);
-        assert_eq!(space("brigadier/70d02049/task-3-x").as_deref(), Some("brigadier/70d02049/"));
-        assert_eq!(space("sg-70d02049/session").as_deref(), Some("sg-70d02049/"));
+        assert_eq!(
+            space("brigadier/70d02049/task-3-x").as_deref(),
+            Some("brigadier/70d02049/")
+        );
+        assert_eq!(
+            space("sg-70d02049/session").as_deref(),
+            Some("sg-70d02049/")
+        );
         assert_eq!(space("70d02049/fork").as_deref(), Some("70d02049/"));
         assert_eq!(space("brigadier/a70d02049/session"), None);
         assert_eq!(space("feature/login"), None);

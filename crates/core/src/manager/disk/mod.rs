@@ -490,6 +490,9 @@ impl SessionManager {
                         Some(("session-snapshots", id)) => {
                             records.conversation(id).is_some() || records.task(id).is_some()
                         }
+                        // A session's branch namespaces go only with its Delete, or with the
+                        // launch sweep's checks once it is gone (D3): never offered here.
+                        Some(("session-branches", _)) => true,
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
                             | "checks" | "preview" | "preview-data" | "session-folder" | "lineage",
@@ -1897,7 +1900,7 @@ impl Scanner<'_> {
                 Some((
                     "orch" | "session" | "workers" | "thread-temp" | "background" | "checks"
                     | "preview" | "preview-data" | "session-folder" | "lineage"
-                    | "session-snapshots",
+                    | "session-snapshots" | "session-branches" | "delete" | "traces",
                     _,
                 )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),

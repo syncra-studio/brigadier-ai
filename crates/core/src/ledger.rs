@@ -720,7 +720,9 @@ impl CleanupLedger {
         if ended > 0 {
             tracing::info!(ended, "ended CLI processes left by a previous daemon");
         }
-        let disposing: Vec<String> = self.state().disposing.iter().cloned().collect();
+        let mut disposing: Vec<String> = self.state().disposing.iter().cloned().collect();
+        // A deleted conversation's records go once the rest of it has.
+        disposing.sort_by_key(|owner| owner.starts_with(TRACES_OWNER));
         let git_engine = self
             .worktrees
             .lock()

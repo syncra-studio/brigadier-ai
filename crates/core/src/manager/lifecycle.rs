@@ -1409,6 +1409,11 @@ impl SessionManager {
         let private_logs = conversation.tab_chat.is_some();
         // What its browser tab sent goes now, however it is deleted (its tab closed, New chat).
         self.tab_chats.forget_page(&id);
+        // What it leaves in Brigadier's own records goes last (D8), named while all of it is
+        // still known. A tab chat leaves none: its records are its own.
+        if !private_logs {
+            self.record_traces(&conversation, delete_branches).await?;
+        }
         let drained = self.drain(&id).await;
         self.delete_side_chats(&id).await;
         self.wind_down_for(&conversation, true).await;
@@ -1418,70 +1423,16 @@ impl SessionManager {
         }
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
         self.forget_worker_rows(&id, &tasks);
-        // A repository that is gone (moved or removed by the user) has no branches left to
-        // delete.
-        if delete_branches
-            && let Some(Setup::Session {
-                repo, environment, ..
-            }) = &conversation.setup
-            && std::path::Path::new(repo).exists()
-        {
-            let mut branches: Vec<String> = tasks
-                .iter()
-                .filter_map(|task| task.workspace.as_ref().and_then(|w| w.branch.clone()))
-                .collect();
-            if let Environment::NewWorktree { branch, .. } = environment
-                && self
-                    .runtime
-                    .ledger()
-                    .branch_ownership()
-                    .owns(Path::new(repo), branch)
-            {
-                branches.push(branch.clone());
-            }
-            let (git, repo) = (self.git.clone(), PathBuf::from(repo));
-            for branch in &branches {
-                self.forget_branch(&repo, branch);
-            }
-            let _lane = self.closing.lane.lock().await;
-            blocking(move || {
-                let repo = git.open(&repo).map_err(git_error)?;
-                for branch in branches {
-                    if repo.branch_tip(&branch).map_err(git_error)?.is_some()
-                        && let Err(err) = repo.delete_branch(&branch, true)
-                    {
-                        tracing::warn!(branch, error = %err, "could not delete a branch");
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-        }
-        // A Chat's workers branched in the repositories they were started in (S28).
-        if delete_branches && matches!(conversation.setup, Some(Setup::Chat { .. })) {
-            for task in &tasks {
-                let (Some(repo), Some(branch)) = (
-                    task.plain.as_ref().and_then(|plain| plain.repo.clone()),
-                    task.workspace.as_ref().and_then(|w| w.branch.clone()),
-                ) else {
-                    continue;
-                };
-                if !Path::new(&repo).exists() {
-                    continue;
-                }
-                let (git, repo) = (self.git.clone(), PathBuf::from(repo));
-                self.forget_branch(&repo, &branch);
-                let _lane = self.closing.lane.lock().await;
-                blocking(move || {
-                    let repo = git.open(&repo).map_err(git_error)?;
-                    if repo.branch_tip(&branch).map_err(git_error)?.is_some()
-                        && let Err(err) = repo.delete_branch(&branch, true)
-                    {
-                        tracing::warn!(branch, error = %err, "could not delete a branch");
-                    }
-                    Ok(())
-                })
-                .await?;
+        let ledger = self.runtime.ledger().clone();
+        let doomed = delete_owner(&id);
+        let spaces = super::branch_names::branches_owner(&id);
+        if delete_branches {
+            self.record_branch_removal(&conversation, &tasks).await?;
+        } else {
+            // Its branches stay (a project removal records those it leaves itself): the
+            // namespaces it made them in are forgotten, nothing is touched.
+            for artifact in ledger.artifacts(&spaces) {
+                ledger.unrecord(&spaces, artifact).await?;
             }
         }
         if !delete_branches && record_kept {
@@ -1502,12 +1453,17 @@ impl SessionManager {
         self.forget_brain_conversation(&id, conversation.project_id.clone())
             .await;
         self.forget_routing(&id, &tasks).await;
-        // Its CLI session files go, then its folder with its records (S7, S8): Archive keeps
-        // both.
+        // Its CLI session files go, then its branches, then its folder with its records (S7,
+        // S8): Archive keeps them. Whatever fails stays recorded, and the `deleting` mark with
+        // it: the next launch finishes the delete (D4).
+        let mut failed = Vec::new();
         let lineage = crate::ledger::lineage_owner(&id.0);
-        let leftovers = self.runtime.ledger().dispose(&lineage).await;
-        if !leftovers.is_clean() {
-            crate::logging::private_trace!(private_logs, warn, "some of its CLI session files will be retried at the next launch"; conversation = %id, ?leftovers);
+        for owner in [lineage, doomed, spaces] {
+            let leftovers = ledger.dispose(&owner).await;
+            if !leftovers.is_clean() {
+                crate::logging::private_trace!(private_logs, warn, "some of a deleted conversation is retried at the next launch"; conversation = %id, owner, ?leftovers);
+                failed.push(owner);
+            }
         }
         for task in &tasks {
             self.forget_brain_conversation(
@@ -1518,7 +1474,15 @@ impl SessionManager {
             self.delete_turn_snapshots(&ConversationId(task.id.0.clone()))
                 .await?;
         }
-        self.remove_session_dir(&id).await;
+        if !failed.is_empty() {
+            return Err(Error::Invalid(format!(
+                "could not remove all of it yet: {}",
+                failed.join(", ")
+            )));
+        }
+        if !self.remove_session_dir(&id).await {
+            return Err(Error::Invalid("could not remove its folder yet".into()));
+        }
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
         self.delete_turn_snapshots(&id).await?;
@@ -1538,10 +1502,223 @@ impl SessionManager {
                 crate::logging::private_trace!(private_logs, warn, "could not collect blobs"; conversation = %id, error = %err)
             }
         }
-        if conversation.tab_chat.is_some() {
+        // Last, its traces in Brigadier's own records and logs: a failure stays recorded and
+        // the launch sweep finishes it.
+        let traces = crate::ledger::traces_owner(&id.0);
+        let leftovers = ledger.dispose(&traces).await;
+        if !leftovers.is_clean() {
+            tracing::warn!(
+                ?leftovers,
+                "a deleted conversation's records are retried at the next launch"
+            );
+        }
+        if conversation.tab_chat.is_some() || leftovers.is_clean() {
             self.scrub_databases().await;
         }
         Ok(true)
+    }
+
+    /// Records, before anything of it goes, what a deleted conversation left in Brigadier's
+    /// own records ([`Artifact::Traces`]): its id, its side chats' and tasks', its and their
+    /// CLI sessions', and its folder, worktrees, temp folders and, when they go
+    /// (`with_branches`), its branch namespaces: kept branches keep their records.
+    async fn record_traces(&self, conversation: &Conversation, with_branches: bool) -> Result<()> {
+        let id = &conversation.id;
+        let owner = crate::ledger::traces_owner(&id.0);
+        let ledger = self.runtime.ledger();
+        // A retry: named already, while all of it was there.
+        if !ledger.artifacts(&owner).is_empty() {
+            return Ok(());
+        }
+        let tasks = self.core.tasks(id).await.unwrap_or_default();
+        let mut ids = std::collections::BTreeSet::from([id.0.clone()]);
+        ids.extend(self.side_chats(id).into_iter().map(|side| side.id.0));
+        ids.extend(tasks.iter().map(|task| task.id.0.clone()));
+        let folder = self.session_dir(id).root().to_string_lossy().into_owned();
+        let mut needles = std::collections::BTreeSet::from([folder]);
+        if let Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path), ..
+                },
+            ..
+        }) = &conversation.setup
+        {
+            needles.insert(path.clone());
+        }
+        for task in &tasks {
+            let Some(workspace) = &task.workspace else {
+                continue;
+            };
+            needles.extend(workspace.worktree.clone());
+            needles.extend(
+                workspace
+                    .branch
+                    .as_deref()
+                    .filter(|_| with_branches)
+                    .and_then(|branch| super::branch_names::branch_namespace(id, branch)),
+            );
+        }
+        let named = |owner: &str| ids.iter().any(|id| owner.contains(id.as_str()));
+        let mut natives = Vec::new();
+        for (holder, artifacts, _) in ledger.owners() {
+            if !named(&holder) {
+                continue;
+            }
+            for artifact in artifacts {
+                match artifact {
+                    Artifact::ClaudeSession { session_id, .. } => natives.push(session_id),
+                    Artifact::CodexThread { thread_id, .. } => natives.push(thread_id),
+                    Artifact::ClaudeTempDir { path }
+                    | Artifact::Worktree { path, .. }
+                    | Artifact::ScratchDir { path } => {
+                        needles.insert(path);
+                    }
+                    Artifact::GitBranches { namespace, .. } if with_branches => {
+                        needles.insert(namespace);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // The CLI sessions that ran in its folders, whoever holds their files now.
+        let places: Vec<&String> = needles.iter().filter(|n| n.starts_with('/')).collect();
+        for (native, session) in ledger.native_sessions() {
+            if session.cwd.is_some_and(|cwd| {
+                places
+                    .iter()
+                    .any(|place| Path::new(&cwd).starts_with(place))
+            }) {
+                natives.push(native);
+            }
+        }
+        ids.extend(natives);
+        ledger
+            .record(
+                &owner,
+                Artifact::Traces {
+                    conversation: id.0.clone(),
+                    ids: ids.into_iter().collect(),
+                    needles: needles.into_iter().collect(),
+                },
+            )
+            .await
+    }
+
+    /// Records, for a delete that takes its branches, what it made in its repositories: the
+    /// branch namespaces it and its workers used (D7: the recorded ones, and those its branch
+    /// names show), and in a Local checkout the untracked files its turns made (D5), named
+    /// with their content before its turn snapshots go. Branches outside a namespace (the
+    /// user named them) go here, when Brigadier made them.
+    async fn record_branch_removal(
+        &self,
+        conversation: &Conversation,
+        tasks: &[Task],
+    ) -> Result<()> {
+        let id = &conversation.id;
+        let ledger = self.runtime.ledger().clone();
+        let doomed = delete_owner(id);
+        let mut spaces: Vec<(String, String)> = ledger
+            .artifacts(&super::branch_names::branches_owner(id))
+            .into_iter()
+            .filter_map(|artifact| match artifact {
+                Artifact::GitBranches { repo, namespace } => Some((repo, namespace)),
+                _ => None,
+            })
+            .collect();
+        let mut loose: Vec<(String, String)> = Vec::new();
+        let mut add =
+            |repo: &str, branch: &str| match super::branch_names::branch_namespace(id, branch) {
+                Some(space) => spaces.push((repo.to_owned(), space)),
+                None => loose.push((repo.to_owned(), branch.to_owned())),
+            };
+        match &conversation.setup {
+            Some(Setup::Session {
+                repo, environment, ..
+            }) => {
+                for task in tasks {
+                    if let Some(branch) = task.workspace.as_ref().and_then(|w| w.branch.as_deref())
+                    {
+                        add(repo, branch);
+                    }
+                }
+                if let Environment::NewWorktree { branch, .. } = environment
+                    && self
+                        .runtime
+                        .ledger()
+                        .branch_ownership()
+                        .owns(Path::new(repo), branch)
+                {
+                    add(repo, branch);
+                }
+            }
+            // A Chat's workers branched in the repositories they were started in (S28).
+            Some(Setup::Chat { .. }) => {
+                for task in tasks {
+                    if let (Some(repo), Some(branch)) = (
+                        task.plain.as_ref().and_then(|plain| plain.repo.as_deref()),
+                        task.workspace.as_ref().and_then(|w| w.branch.as_deref()),
+                    ) {
+                        add(repo, branch);
+                    }
+                }
+            }
+            None => {}
+        }
+        spaces.sort();
+        spaces.dedup();
+        for (repo, namespace) in spaces {
+            ledger
+                .record(&doomed, Artifact::GitBranches { repo, namespace })
+                .await?;
+        }
+        if let Some(Setup::Session {
+            repo,
+            environment: Environment::LocalCheckout { .. },
+            ..
+        }) = &conversation.setup
+            && Path::new(repo).exists()
+        {
+            let (git, at, session) = (self.git.clone(), PathBuf::from(repo), id.0.clone());
+            let files = blocking(move || {
+                git.open(&at)
+                    .and_then(|repo| repo.session_added_files(&session))
+                    .map_err(git_error)
+            })
+            .await?;
+            for (path, blob) in files {
+                ledger
+                    .record(
+                        &doomed,
+                        Artifact::CheckoutFile {
+                            repo: repo.clone(),
+                            path,
+                            blob: blob.0,
+                        },
+                    )
+                    .await?;
+            }
+        }
+        // Branches Brigadier made outside a namespace go as they did, with their config.
+        for (repo, branch) in loose {
+            if !Path::new(&repo).exists() {
+                continue;
+            }
+            let (git, repo) = (self.git.clone(), PathBuf::from(repo));
+            self.forget_branch(&repo, &branch);
+            let _lane = self.closing.lane.lock().await;
+            blocking(move || {
+                let repo = git.open(&repo).map_err(git_error)?;
+                if repo.branch_tip(&branch).map_err(git_error)?.is_some() {
+                    repo.delete_branch(&branch, true).map_err(git_error)?;
+                } else {
+                    repo.remove_branch_config(&branch).map_err(git_error)?;
+                }
+                Ok(())
+            })
+            .await?;
+        }
+        Ok(())
     }
 }
 
@@ -1635,11 +1812,18 @@ fn remove_git_leftover(
             if removed || !repo.root().join(path).exists() {
                 Ok(None)
             } else {
-                Ok(Some(format!("{path} stays: it changed since the session made it")))
+                Ok(Some(format!(
+                    "{path} stays: it changed since the session made it"
+                )))
             }
         }
         _ => Err("not a git leftover".into()),
     }
+}
+
+/// The cleanup-ledger owner of what a delete takes from the conversation's repositories.
+pub(super) fn delete_owner(id: &ConversationId) -> String {
+    format!("delete:{id}")
 }
 
 fn being_deleted() -> Error {
