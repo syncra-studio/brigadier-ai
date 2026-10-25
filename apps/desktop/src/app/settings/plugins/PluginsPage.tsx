@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
@@ -56,8 +56,24 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
 }) {
   const [tab, setTab] = useState<PluginKind>(() => (useReveal.getState().label === "Skills" ? "skill" : "server"));
   const [query, setQuery] = useState("");
-  const selected = useApp((s) => s.selection.type === "settings" && s.selection.page === "plugins" ? s.selection.detail?.plugin : undefined);
+  const selection = useApp((s) => s.selection);
+  const selected = selection.type === "settings" && selection.page === "plugins" ? selection.detail?.plugin : undefined;
   const [open, setOpen] = useState<Open | null>(null);
+  const liveDialog = useRef<Open | null>(null);
+  const setDialog = useCallback((dialog: Open | null) => {
+    liveDialog.current = dialog;
+    setOpen(dialog);
+  }, []);
+  useEffect(() => {
+    // Leaving a visit invalidates its dialog even if Back restores the same selection object.
+    const unsubscribe = useApp.subscribe((state, previous) => {
+      if (state.selection !== previous.selection) setDialog(null);
+    });
+    return () => {
+      liveDialog.current = null;
+      unsubscribe();
+    };
+  }, [setDialog]);
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
     if (label === "Skills" || label === "MCP servers") {
@@ -79,7 +95,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   const flip = (item: PluginItemView, on: boolean, where: string | null = focus?.id ?? null) => {
     if (!adapter) return;
     if (!item.switchable) {
-      setOpen({ type: "useEverywhere", key: item.key, after: { projectId: where, on } });
+      setDialog({ type: "useEverywhere", key: item.key, after: { projectId: where, on } });
       return;
     }
     action.run(async () => {
@@ -115,10 +131,10 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
             await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
             refresh();
           }),
-          onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key }) : undefined,
-          onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
+          onSignIn: adapter.signIn ? () => setDialog({ type: "signIn", key: current.key }) : undefined,
+          onUseEverywhere: () => setDialog({ type: "useEverywhere", key: current.key }),
           onAddMissing: () => addMissing(current),
-          onRemove: () => setOpen({ type: "remove", key: current.key }),
+          onRemove: () => setDialog({ type: "remove", key: current.key }),
           onRetry: refresh,
           onUpdate: () => action.run(async () => {
             await checked(view, () => adapter.update(current.key));
@@ -136,7 +152,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
       <SettingsPage
         title="Plugins"
         description={PLUGINS_DESCRIPTION}
-        actions={<Button size="sm" disabled={!adapter} onClick={() => setOpen({ type: "add", projectId: focus?.id ?? null })}>Add</Button>}
+        actions={<Button size="sm" disabled={!adapter} onClick={() => setDialog({ type: "add", projectId: focus?.id ?? null })}>Add</Button>}
       >
         <ListBody
           view={view}
@@ -154,14 +170,14 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           onOpen={(item) => select({ type: "settings", page: "plugins", detail: { plugin: item.key } })}
           onFlip={(item, on) => flip(item, on)}
           onAddMissing={addMissing}
-          onDialog={setOpen}
+          onDialog={setDialog}
         />
       </SettingsPage>
     );
   }
 
   const target = open && open.type !== "add" ? find(open.key) : undefined;
-  const close = () => setOpen(null);
+  const close = () => setDialog(null);
   return (
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
@@ -194,7 +210,11 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           adapter={adapter}
           onClose={close}
           onRemoved={() => {
-            openSettings("plugins");
+            if (liveDialog.current === open && useApp.getState().selection === selection) {
+              close();
+              // The removed detail cannot be revisited; keep any existing Forward entries.
+              select({ type: "settings", page: "plugins" }, "replace");
+            }
             refresh();
           }}
         />

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
+import { GeneralPage } from "@/app/settings/GeneralPage";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
@@ -10,6 +11,8 @@ import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
 import type { AgentItemState, PluginAttention, PluginItemView, PluginKind, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { useApp } from "@/state/store";
+import { openSettings, stepHistory } from "@/state/actions";
+import { useHistory } from "@/state/history";
 
 /*
  * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, and G2A: G2's Advanced open) for shots; ?agents=2 keeps to the
@@ -18,6 +21,9 @@ import { useApp } from "@/state/store";
  * (PluginsRender.test.ts reads it).
  */
 const params = new URLSearchParams(location.search);
+const deferredRemoval = params.get("drive") === "removal";
+let finishRemoval: (() => void) | null = null;
+let reads = 0;
 if (params.has("drive") || params.has("state")) {
   const still = document.createElement("style");
   still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
@@ -136,7 +142,10 @@ const spec = (key: string) => items.find((item) => item.key === key) ?? elsewher
 const toggle = (list: string[] = [], path: string, add: boolean) => (add ? [...new Set([...list, path])] : list.filter((entry) => entry !== path));
 
 const adapter: PluginsAdapter = {
-  read: async (projectId) => view(projectId),
+  read: async (projectId) => {
+    reads++;
+    return view(projectId);
+  },
   subscribe: (onChange) => {
     listeners.add(onChange);
     return () => listeners.delete(onChange);
@@ -197,8 +206,10 @@ const adapter: PluginsAdapter = {
   },
   remove: async (key) => {
     calls.push(`removePlugin ${key}`);
+    if (deferredRemoval) await new Promise<void>((resolve) => { finishRemoval = resolve; });
     items = items.filter((item) => item.key !== key);
-    changed();
+    // The deferred drive relies on completion to refresh, rather than a subscription event.
+    if (!deferredRemoval) changed();
     return ok();
   },
   update: async (key) => {
@@ -555,12 +566,68 @@ async function drive(setKey: (key: number) => void) {
   return seen;
 }
 
+/** A removal can complete after dismissal, after leaving and returning, or while still live. */
+const removalSnapshot = () => ({
+  selection: useApp.getState().selection,
+  history: useHistory.getState(),
+  title: text(main().querySelector("h1")),
+  dialog: text(document.querySelector("[data-dialog] h2")),
+});
+
+async function driveRemoval(setKey: (key: number) => void) {
+  const seen: Record<string, unknown> = {};
+  for (const scenario of ["cancel", "close-general", "close-back", "navigate-back", "active"] as const) {
+    await reset(setKey);
+    useHistory.setState({ entries: [], index: -1 });
+    await OPENERS.D1!();
+    await pause();
+    if (scenario === "active") {
+      // Successful active removal must replace detail without dropping this Forward entry.
+      openSettings("general");
+      await pause();
+      stepHistory(-1);
+      await pause();
+    }
+    click("Remove linear");
+    await pause();
+    click("Remove", document.querySelector("[data-dialog]")!);
+    await pause();
+    if (!finishRemoval) throw new Error("Removal did not wait for its deferred answer");
+    const pending = {
+      cancel: all<HTMLButtonElement>("[data-dialog] button").find((node) => text(node) === "Cancel")?.disabled,
+      close: document.querySelector<HTMLButtonElement>('[data-dialog] button[aria-label="Close"]')?.disabled,
+    };
+    if (scenario === "cancel") click("Cancel");
+    if (scenario.startsWith("close-")) click("Close", document.querySelector("[data-dialog]")!);
+    await pause();
+    if (["close-general", "close-back", "navigate-back"].includes(scenario)) {
+      openSettings("general");
+      await pause();
+      if (scenario.endsWith("back")) {
+        stepHistory(-1);
+        await pause();
+      }
+    }
+    const before = removalSnapshot();
+    const beforeReads = reads;
+    finishRemoval();
+    finishRemoval = null;
+    await pause(150);
+    seen[scenario] = {
+      pending, before, after: removalSnapshot(), refreshed: reads > beforeReads,
+      removed: !usePlugins.getState().view.items.some((item) => item.key === "server:linear"),
+    };
+  }
+  return seen;
+}
+
 function Fixture() {
+  const selection = useApp((state) => state.selection);
   const [key, setKey] = useState(0);
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) {
-      void drive(setKey).then((value) => setResult(JSON.stringify(value))).catch((cause: unknown) => setResult(JSON.stringify({ error: String(cause) })));
+      void (deferredRemoval ? driveRemoval(setKey) : drive(setKey)).then((value) => setResult(JSON.stringify(value))).catch((cause: unknown) => setResult(JSON.stringify({ error: String(cause) })));
     } else {
       const state = params.get("state");
       if (state && OPENERS[state]) {
@@ -578,7 +645,8 @@ function Fixture() {
             <div className="relative flex min-w-0 flex-1 flex-col">
               <SettingsTitlebarStrip><TerminalButton /></SettingsTitlebarStrip>
               <main className="bg-background border-divider rounded-e-page min-h-0 flex-1 overflow-hidden border-l">
-                <PluginsPage key={key} />
+                {deferredRemoval && selection.type === "settings" && selection.page === "general"
+                  ? <GeneralPage /> : <PluginsPage key={key} />}
               </main>
               <Toaster className="top-titlebar pt-2" />
             </div>

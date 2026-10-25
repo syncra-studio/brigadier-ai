@@ -128,13 +128,13 @@ export function RemoveDialog({ view, item, adapter, onClose, onRemoved }: {
   item: PluginItemView;
   adapter: PluginsAdapter;
   onClose: () => void;
+  /** Completion owns closing/navigation; it may outlive this dialog or its Settings visit. */
   onRemoved: () => void;
 }) {
   const action = useAction();
   const signsIn = item.agents.some((entry) => entry.state.type === "needsSignIn") || (item.remote && item.kind === "server");
   const remove = () => action.run(async () => {
     await checked(view, () => adapter.remove(item.key));
-    onClose();
     onRemoved();
   });
   return (
