@@ -18,10 +18,17 @@ use crate::manager::plugins::{
 
 /// A Keychain that remembers, in memory.
 #[derive(Default)]
-struct Kept(Mutex<BTreeMap<String, BTreeMap<String, String>>>);
+struct Kept(
+    Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    std::sync::atomic::AtomicBool,
+    std::sync::atomic::AtomicBool,
+);
 
 impl SecretSink for Kept {
     fn store(&self, server: &str, name: &str, value: &Secret) -> Result<(), String> {
+        if self.2.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err("injected Keychain write failure".into());
+        }
         self.0
             .lock()
             .unwrap()
@@ -44,6 +51,9 @@ impl Secrets for Kept {
     }
 
     fn forget(&self, server: &str) -> Result<(), String> {
+        if self.1.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err("injected Keychain delete failure".into());
+        }
         self.0.lock().unwrap().remove(server);
         Ok(())
     }
@@ -487,7 +497,7 @@ fn a_copy_goes_when_its_agent_gets_its_own_original() {
     write(
         &config,
         &format!(
-            "{text}\n[mcp_servers.docs]\ncommand = \"/opt/docs-mcp\"\nargs = [\"--port\", \"1\"]\n"
+            "{text}\n[mcp_servers.docs]\ncommand = \"/opt/docs-mcp\"\nargs = [\"--port\", \"1\"]\nenv = {{ TOKEN = \"abc123\" }}\n"
         ),
     );
     home.sync().unwrap();
@@ -642,7 +652,11 @@ fn scope_and_switch_move_a_codex_original_and_its_copy_together() {
     home.with(|ctx, run| set_scope(ctx, key, Some(std::slice::from_ref(&one)), run))
         .unwrap();
     // Codex: off in two by its own file; Claude Code's copy on only in one.
-    assert_eq!(codex_switch_in(&home.projects[1], "pg"), Some(false));
+    assert_ne!(codex_switch_in(&home.projects[1], "pg"), Some(true));
+    assert_eq!(
+        read_toml(&config)["mcp_servers"]["pg"]["enabled"].as_bool(),
+        Some(false)
+    );
     let claude = home.placed(Agent::Claude, "pg");
     assert_eq!(
         (claude.global, claude.on_in.clone()),
@@ -956,4 +970,653 @@ fn no_plugins_code_writes_the_agents_own_configs() {
             );
         }
     }
+}
+
+#[test]
+fn review_error_details_do_not_expand_secrets() {
+    let mut home = Home::new("review-secret-display", &[]);
+    home.roots
+        .vars
+        .insert("REVIEW_SECRET".into(), "SENTINEL_PRIVATE_TOKEN".into());
+    write(
+        &home.home.join(".claude.json"),
+        r#"{"mcpServers": {
+        "command": {"type":"unknown", "command":"${REVIEW_SECRET}"},
+        "address": {"url":"${REVIEW_SECRET}://invalid"}}}"#,
+    );
+    let display = serde_json::to_string(&home.view()).unwrap();
+    assert!(!display.contains("SENTINEL_PRIVATE_TOKEN"), "{display}");
+    assert!(display.contains("${REVIEW_SECRET}"));
+}
+
+#[test]
+fn review_failed_pack_keeps_previous_secrets() {
+    let home = Home::new("review-failed-pack", &[]);
+    write(&home.home.join(".claude.json"), CLAUDE_DOCS);
+    home.sync().unwrap();
+    let installed = snapshot(&home.library.entry("docs").unwrap().dir);
+    write(
+        &home.library.root().join("plugins/.docs.new"),
+        "block staging",
+    );
+    write(
+        &home.home.join(".claude.json"),
+        &CLAUDE_DOCS.replace("abc123", "rotated"),
+    );
+    home.sync().unwrap();
+    assert!(home.sharing().failed.contains_key("server:docs"));
+    assert_eq!(
+        home.secrets
+            .load("docs/docs")
+            .unwrap()
+            .get("TOKEN")
+            .map(String::as_str),
+        Some("abc123")
+    );
+    assert_eq!(
+        snapshot(&home.library.entry("docs").unwrap().dir),
+        installed
+    );
+}
+
+#[test]
+fn review_partial_legacy_restore_can_retry() {
+    let home = Home::new("review-legacy-retry", &[]);
+    let from = home.home.join(".claude/skills/old");
+    let second = home.home.join(".claude/skills/second");
+    let kept = home.library.root().join(".moved/old/skill-0");
+    let kept_second = home.library.root().join(".moved/old/skill-1");
+    write(&kept.join("SKILL.md"), "---\nname: old\n---\nkept\n");
+    write(&kept_second.join("SKILL.md"), "second kept");
+    write(&second.join("SKILL.md"), "conflict");
+    home.with(|ctx, run| {
+        ops::add(
+            ctx,
+            &kept.display().to_string(),
+            Some("old"),
+            None,
+            false,
+            &ops::AddOptions::default(),
+            run,
+        )
+    })
+    .unwrap();
+    write(
+        &ops::moved_file(&home.library, "old"),
+        &serde_json::json!({"originals": [
+            {"kind":"skill", "from":from, "kept":kept},
+            {"kind":"skill", "from":second, "kept":kept_second}
+        ]})
+        .to_string(),
+    );
+    assert!(home.with(|ctx, run| remove(ctx, "lib:old", run)).is_err());
+    let checkpoint: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ops::moved_file(&home.library, "old")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(checkpoint["restored"], serde_json::json!([0]));
+    assert!(from.join("SKILL.md").exists());
+    assert!(home.library.entry("old").is_some());
+    write(
+        &ops::moved_file(&home.library, "old"),
+        "interrupted journal",
+    );
+    assert!(home.with(|ctx, run| remove(ctx, "lib:old", run)).is_err());
+    assert!(home.library.entry("old").is_some());
+    write(
+        &ops::moved_file(&home.library, "old"),
+        &checkpoint.to_string(),
+    );
+    std::fs::remove_dir_all(&second).unwrap();
+    home.with(|ctx, run| remove(ctx, "lib:old", run)).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(second.join("SKILL.md")).unwrap(),
+        "second kept"
+    );
+    assert!(home.library.entry("old").is_none());
+}
+
+fn codex_pg(home: &Home) {
+    let config = home.home.join(".codex/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &format!("{text}\n[mcp_servers.pg]\ncommand = \"/opt/pg-mcp\"\n"),
+    );
+}
+
+#[test]
+fn review_scope_survives_sync() {
+    let home = Home::new("review-scope-sync", &["one", "two"]);
+    codex_pg(&home);
+    home.sync().unwrap();
+    home.with(|ctx, run| set_scope(ctx, "server:pg", Some(&home.projects[..1]), run))
+        .unwrap();
+    home.sync().unwrap();
+    let new = home.home.join("new-unselected");
+    std::fs::create_dir_all(&new).unwrap();
+    let catalog = Catalog::read(&home.roots, Some(&new));
+    for agent in [Agent::Claude, Agent::Codex] {
+        let session = brigadier_registry::Session {
+            agent,
+            project: Some(&new),
+            cwd: &new,
+            in_checkout: true,
+        };
+        assert!(
+            !catalog
+                .servers
+                .iter()
+                .any(|server| server.name == "pg" && catalog.server_native(server, &session)),
+            "Only some projects copy loads in a new unselected folder for {agent:?}"
+        );
+    }
+    assert!(!home.placed(Agent::Claude, "pg").global);
+    assert_eq!(home.placed(Agent::Claude, "pg").on_in, home.projects[..1]);
+}
+
+#[test]
+fn review_scope_back_to_all_stays_switchable() {
+    let home = Home::new("review-scope-back", &["one", "two"]);
+    codex_pg(&home);
+    home.sync().unwrap();
+    home.with(|ctx, run| set_scope(ctx, "server:pg", Some(&home.projects[..1]), run))
+        .unwrap();
+    home.with(|ctx, run| set_scope(ctx, "server:pg", None, run))
+        .unwrap();
+    assert!(home.item("server:pg").locked.is_none());
+    home.with(|ctx, run| switch(ctx, "server:pg", false, run))
+        .unwrap();
+    assert!(!home.item("server:pg").on);
+    // An independent project definition still locks it, even at the same endpoint.
+    write(
+        &home.projects[1].join(".codex/config.toml"),
+        "[mcp_servers.pg]\ncommand = \"/opt/pg-mcp\"\n",
+    );
+    assert!(home.item("server:pg").locked.is_some());
+}
+
+#[test]
+fn review_project_alias_does_not_suppress_other_projects() {
+    let home = Home::new("review-alias-scope", &["one", "two"]);
+    write(
+        &home.home.join(".claude.json"),
+        r#"{"mcpServers":{"docs":{"url":"https://example.org/mcp"}}}"#,
+    );
+    write(
+        &home.projects[0].join(".codex/config.toml"),
+        "[mcp_servers.docs-alt]\nurl = \"https://example.org/mcp\"\n",
+    );
+    let before = snapshot(&home.projects[0].join(".codex/config.toml"));
+    home.sync().unwrap();
+    let placed = home.placed(Agent::Codex, "docs");
+    assert!(
+        placed.has && placed.on_in.contains(&home.projects[1]),
+        "{placed:?}"
+    );
+    assert!(
+        !placed.on_in.contains(&home.projects[0]),
+        "alias and copy both load: {placed:?}"
+    );
+    let after = snapshot(&home.projects[0].join(".codex/config.toml"));
+    assert!(
+        after[0].1.starts_with(&before[0].1),
+        "original definition changed"
+    );
+}
+
+#[test]
+fn review_credentials_make_definitions_different() {
+    let home = Home::new("review-credentials", &[]);
+    for (claude, codex) in [
+        (
+            r#"{"url":"https://example.org/mcp", "headers":{"Authorization":"Bearer tenant-a"}}"#,
+            "url = \"https://example.org/mcp\"\nhttp_headers = { Authorization = \"Bearer tenant-b\" }",
+        ),
+        (
+            r#"{"command":"/opt/mcp", "env":{"TOKEN":"tenant-a"}}"#,
+            "command = \"/opt/mcp\"\nenv = { TOKEN = \"tenant-b\" }",
+        ),
+        (
+            r#"{"url":"https://example.org/mcp", "oauth":{"clientId":"client-a"}}"#,
+            "url = \"https://example.org/mcp\"\noauth = { client_id = \"client-b\" }",
+        ),
+    ] {
+        write(
+            &home.home.join(".claude.json"),
+            &format!(r#"{{"mcpServers":{{"docs":{claude}}}}}"#),
+        );
+        write(
+            &home.home.join(".codex/config.toml"),
+            &format!("[mcp_servers.docs]\n{codex}\n"),
+        );
+        home.sync().unwrap();
+        assert!(
+            matches!(
+                home.item("server:docs").problem,
+                Some(PluginProblem::Conflict { .. })
+            ),
+            "different credentials were silently merged"
+        );
+        assert!(home.library.entries().is_empty());
+        let display = serde_json::to_string(&home.view()).unwrap();
+        assert!(!display.contains("tenant-a") && !display.contains("tenant-b"));
+    }
+}
+
+#[test]
+fn review_rename_skill_keeps_decline() {
+    let home = Home::new("review-rename-decline", &[]);
+    let dir = home.home.join(".claude/skills/original");
+    write(&dir.join("SKILL.md"), "---\nname: first\n---\nbody\n");
+    home.sync().unwrap();
+    home.with(|ctx, run| remove(ctx, "skill:first", run))
+        .unwrap();
+    write(&dir.join("SKILL.md"), "---\nname: second\n---\nchanged\n");
+    home.sync().unwrap();
+    assert!(
+        home.library.entries().is_empty(),
+        "renaming an original re-shares a removed skill"
+    );
+    assert!(matches!(
+        home.item("skill:second").problem,
+        Some(PluginProblem::OnlyIn {
+            reason: OnlyInReason::Removed,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn review_disabled_project_original_is_in_inventory() {
+    let home = Home::new("review-disabled-project", &["one"]);
+    let original = home.projects[0].join(".codex/config.toml");
+    write(
+        &original,
+        "[mcp_servers.quiet]\ncommand = \"/opt/quiet\"\nenabled = false\n",
+    );
+    let before = snapshot(&original);
+    home.sync().unwrap();
+    let item = home.item("server:quiet");
+    assert!(!item.on);
+    assert!(item.locked.is_some());
+    assert_eq!(snapshot(&original), before);
+    assert!(!home.placed(Agent::Claude, "quiet").global);
+}
+
+#[test]
+fn review_added_server_shows_secret_names() {
+    let home = Home::new("review-added-names", &[]);
+    home.with(|ctx, run| {
+        ops::add(
+            ctx,
+            r#"{"mcpServers":{
+        "stdio":{"command":"/opt/mcp", "env":{"TOKEN":"private-env"}},
+        "remote":{"url":"https://example.org/mcp", "headers":{"Authorization":"private-header"}}
+    }}"#,
+            None,
+            None,
+            false,
+            &ops::AddOptions::default(),
+            run,
+        )
+    })
+    .unwrap();
+    for (key, name) in [("lib:stdio", "TOKEN"), ("lib:remote", "Authorization")] {
+        let details = home.with(|ctx, _| details(ctx, key)).unwrap();
+        match details.server.as_ref().unwrap() {
+            PluginServerSettings::Stdio { env_names, .. } => assert_eq!(env_names, &[name]),
+            PluginServerSettings::Http { header_names, .. } => assert_eq!(header_names, &[name]),
+        }
+        let display = serde_json::to_string(&details).unwrap();
+        assert!(!display.contains("private-env") && !display.contains("private-header"));
+    }
+}
+
+#[test]
+fn review_all_problem_reasons_sort_before_healthy_rows() {
+    let home = Home::new("review-problem-sort", &[]);
+    write(
+        &home.home.join(".claude.json"),
+        r#"{"mcpServers":{
+        "aaa-healthy":{"url":"https://example.org/mcp"},
+        "zzz-unshareable":{"command":"${MISSING}"},
+        "zzz-removed":{"command":"/opt/removed"}
+    }}"#,
+    );
+    home.sync().unwrap();
+    home.with(|ctx, run| remove(ctx, "server:zzz-removed", run))
+        .unwrap();
+    let view = home.view();
+    let healthy = view
+        .items
+        .iter()
+        .position(|row| row.key == "server:aaa-healthy")
+        .unwrap();
+    assert!(healthy > 0);
+    for (at, row) in view.items.iter().enumerate() {
+        if row.problem.is_some() {
+            assert!(at < healthy, "{} sorted after a healthy row", row.key);
+        }
+    }
+}
+
+#[test]
+fn review_import_preserves_arguments_env_headers_and_other_app_file() {
+    let mut home = Home::new("review-import", &["one", "two"]);
+    let file = home.home.join("other-app/config.json");
+    home.roots.desktop_config = Some(file.clone());
+    write(
+        &file,
+        r#"{"mcpServers":{
+        "stdio":{"command":"/opt/with spaces/mcp", "args":["one two", "a\"b", "--path", "/some folder"], "env":{"TOKEN":"private-env"}},
+        "remote":{"url":"https://example.org/mcp", "headers":{"Authorization":"Bearer private-header"}}
+    }}"#,
+    );
+    let before = snapshot(&file);
+    for name in ["stdio", "remote"] {
+        let key = home
+            .view()
+            .elsewhere
+            .iter()
+            .find(|row| row.name == name)
+            .unwrap()
+            .key
+            .clone();
+        let imported = home
+            .with(|ctx, run| import(ctx, &key, None, Some(&home.projects[..1]), run))
+            .unwrap();
+        assert_eq!(imported, format!("lib:{name}"));
+        assert!(home.view().elsewhere.iter().all(|row| row.key != key));
+        for agent in [Agent::Claude, Agent::Codex] {
+            let placed = home.placed(agent, name);
+            assert!(
+                !placed.global && placed.on_in == home.projects[..1],
+                "{placed:?}"
+            );
+        }
+    }
+    assert_eq!(
+        home.secrets.load("stdio/stdio").unwrap()["TOKEN"],
+        "private-env"
+    );
+    assert_eq!(
+        home.secrets.load("remote/remote").unwrap()["Authorization"],
+        "Bearer private-header"
+    );
+    let settings = home
+        .with(|ctx, _| details(ctx, "lib:stdio"))
+        .unwrap()
+        .server
+        .unwrap();
+    assert!(
+        matches!(settings, PluginServerSettings::Stdio {command,args,..}
+        if command == "/opt/with spaces/mcp" && args == ["one two", "a\"b", "--path", "/some folder"])
+    );
+    assert_eq!(snapshot(&file), before);
+    for (_, bytes) in snapshot(&home.home.join(".brigadier")) {
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("private-env") && !text.contains("private-header"));
+    }
+}
+
+#[test]
+fn review_import_clash_requires_name_and_rejects_agent_entries() {
+    let mut home = Home::new("review-import-clash", &[]);
+    let file = home.home.join("other-app/config.json");
+    home.roots.desktop_config = Some(file.clone());
+    write(&file, r#"{"mcpServers":{"docs":{"command":"other-mcp"}}}"#);
+    let key = home.view().elsewhere[0].key.clone();
+    write(&home.home.join(".claude.json"), CLAUDE_DOCS);
+    let error = home
+        .with(|ctx, run| import(ctx, &key, None, None, run))
+        .unwrap_err();
+    assert!(error.contains("docs"), "{error}");
+    assert!(home.library.entries().is_empty());
+    assert!(home.sharing().imported.is_empty());
+    home.with(|ctx, run| import(ctx, &key, Some("renamed"), None, run))
+        .unwrap();
+    assert!(home.library.entry("renamed").is_some());
+    assert!(
+        home.with(|ctx, run| import(ctx, "other:claude:user:docs", Some("fake"), None, run))
+            .is_err()
+    );
+    assert!(home.library.entry("fake").is_none());
+}
+
+// Jobs share their serialization queue; these tests wait for their own background work to end.
+static BACKGROUND: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+fn stub_job_setup(home: &Home, script: &str) -> super::super::jobs::Setup {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = home.home.join("stub-cli");
+    write(&binary, script);
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = binary.clone();
+    super::super::jobs::Setup {
+        registry: brigadier_registry::Registry::new(home.roots.clone()),
+        library: home.library.clone(),
+        cli: binary,
+        projects: home.projects.clone(),
+        binary: std::sync::Arc::new(move |_| Some(path.clone())),
+    }
+}
+
+fn until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    done()
+}
+
+#[test]
+#[cfg(unix)]
+fn review_removed_original_schedules_its_confirming_pass() {
+    let _serial = BACKGROUND.lock().unwrap();
+    let home = Home::new("review-confirm-pass", &[]);
+    tidy(&home.home, "body");
+    home.sync().unwrap();
+    std::fs::remove_dir_all(home.home.join(".claude/skills/tidy")).unwrap();
+    // One event only. No watcher, request, or hand-run second pass follows it.
+    super::super::jobs::request_sync(stub_job_setup(&home, "#!/bin/sh\nexit 0\n"), true);
+    assert!(
+        until(|| home.library.entry("tidy").is_none()),
+        "the confirming absent pass was never scheduled"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn review_stalled_background_cli_releases_the_job_queue() {
+    let _serial = BACKGROUND.lock().unwrap();
+    let home = Home::new("review-stalled-job", &[]);
+    write(
+        &home.home.join(".claude.json"),
+        &CLAUDE_DOCS.replace("abc123", &"x".repeat(1024 * 1024)),
+    );
+    let setup = stub_job_setup(
+        &home,
+        "#!/bin/sh\nif [ \"$1\" = secret ]; then\n  : > \"$HOME/entered\"\n  exec /bin/sleep 30\nfi\nexit 0\n",
+    );
+    super::super::jobs::request_sync(setup.clone(), true);
+    assert!(
+        until(|| home.home.join("entered").exists()),
+        "state: {:?}, files: {:?}",
+        home.sharing(),
+        snapshot(&home.home)
+            .iter()
+            .map(|(p, _)| p)
+            .collect::<Vec<_>>()
+    );
+    let job = super::super::jobs::start(
+        setup,
+        super::super::jobs::Action::Remove {
+            key: "missing".into(),
+        },
+    );
+    assert!(
+        until(|| super::super::jobs::job(&job).is_some_and(|job| job.finished)),
+        "a stalled background sync kept the queue"
+    );
+    assert!(super::super::jobs::job(&job).unwrap().error.is_some());
+}
+
+#[test]
+fn review_each_repository_is_read_and_project_ids_stay_unique() {
+    use crate::model::{FolderTrust, Project, ProjectId, ProjectPrefs, ProjectRepo};
+    let home = Home::new("review-multi-repo", &["one", "two"]);
+    write(
+        &home.projects[1].join(".mcp.json"),
+        r#"{"mcpServers":{"second":{"url":"https://example.org/mcp"}}}"#,
+    );
+    let project = Project {
+        id: ProjectId("p".into()),
+        name: "Multiple".into(),
+        created_at_ms: 0,
+        prefs: ProjectPrefs::default(),
+        repos: home
+            .projects
+            .iter()
+            .map(|path| ProjectRepo {
+                path: path.display().to_string(),
+                name: "repo".into(),
+            })
+            .collect(),
+        trust: home
+            .projects
+            .iter()
+            .map(|path| FolderTrust {
+                path: path.display().to_string(),
+                trusted: true,
+                decided_at_ms: 0,
+            })
+            .collect(),
+    };
+    let repos = super::super::trusted_repos(&[project]);
+    assert_eq!(repos.len(), 2);
+    let catalogs: Vec<ProjectCatalog> = repos
+        .into_iter()
+        .map(|(id, name, path)| {
+            let catalog = Catalog::read(&home.roots, Some(&path));
+            ProjectCatalog {
+                id,
+                name,
+                path,
+                catalog,
+            }
+        })
+        .collect();
+    let user = Catalog::read(&home.roots, None);
+    let model = model::model(&user, &catalogs, &[], &Sharing::default(), &home.home);
+    let view = build(&model, &catalogs, &Sharing::default(), &Unknown, &[], None).view;
+    assert!(view.items.iter().any(|row| row.key == "server:second"));
+    assert_eq!(view.projects.len(), 1);
+}
+
+#[test]
+fn review_aliases_in_different_scopes_cover_both_agents_in_each_project() {
+    let home = Home::new("review-alias-union", &["one", "two"]);
+    write(
+        &home.projects[0].join(".mcp.json"),
+        r#"{"mcpServers":{"first":{"url":"https://example.org/mcp"}}}"#,
+    );
+    write(
+        &home.projects[1].join(".codex/config.toml"),
+        "[mcp_servers.second]\nurl = \"https://example.org/mcp\"\n",
+    );
+    home.sync().unwrap();
+    for agent in [Agent::Claude, Agent::Codex] {
+        for path in &home.projects {
+            let catalog = Catalog::read(&home.roots, Some(path));
+            let session = brigadier_registry::Session {
+                agent,
+                cwd: path,
+                project: Some(path),
+                in_checkout: true,
+            };
+            let loaded: Vec<_> = catalog
+                .servers
+                .iter()
+                .filter(|server| catalog.server_native(server, &session))
+                .collect();
+            assert_eq!(
+                loaded.len(),
+                1,
+                "{agent:?} in {}: {loaded:?}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn review_project_change_during_sync_reads_the_latest_roots() {
+    let _serial = BACKGROUND.lock().unwrap();
+    let home = Home::new("review-latest-roots", &["one", "two"]);
+    write(&home.home.join(".claude.json"), CLAUDE_DOCS);
+    write(
+        &home.projects[1].join(".mcp.json"),
+        r#"{"mcpServers":{"second":{"url":"https://example.org/mcp"}}}"#,
+    );
+    let setup = stub_job_setup(
+        &home,
+        "#!/bin/sh\nif [ \"$1\" = secret ]; then : > \"$HOME/entered\"; exec /bin/sleep 30; fi\nexit 0\n",
+    );
+    let mut first = setup.clone();
+    first.projects.truncate(1);
+    super::super::jobs::request_sync(first, true);
+    assert!(until(|| home.home.join("entered").exists()));
+    super::super::jobs::request_sync(setup, false);
+    assert!(
+        until(|| home.library.entry("second").is_some()),
+        "sync kept the old project's repository list"
+    );
+    let job = super::super::jobs::start(
+        stub_job_setup(&home, "#!/bin/sh\nexit 0\n"),
+        super::super::jobs::Action::Remove {
+            key: "missing".into(),
+        },
+    );
+    assert!(until(
+        || super::super::jobs::job(&job).is_some_and(|job| job.finished)
+    ));
+}
+
+#[test]
+fn review_failed_secret_commit_keeps_previous_credentials_and_reports_deletion_failure() {
+    let home = Home::new("review-secret-commit", &[]);
+    write(&home.home.join(".claude.json"), CLAUDE_DOCS);
+    home.sync().unwrap();
+    write(
+        &home.home.join(".claude.json"),
+        &CLAUDE_DOCS.replace("abc123", "rotated"),
+    );
+    home.secrets
+        .1
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    home.sync().unwrap();
+    assert!(
+        home.sharing().failed["server:docs"]
+            .reason
+            .contains("delete failure")
+    );
+    assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "abc123");
+    home.secrets
+        .2
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    home.sync().unwrap();
+    assert!(
+        home.sharing().failed["server:docs"]
+            .reason
+            .contains("write failure")
+    );
+    assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "abc123");
+    home.sync().unwrap();
+    assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "rotated");
 }

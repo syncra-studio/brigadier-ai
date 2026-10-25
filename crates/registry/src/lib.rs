@@ -260,6 +260,9 @@ pub struct Server {
     /// Some value of it comes from the environment (`${VAR}`, Codex's `env_vars`,
     /// `env_http_headers`, `bearer_token_env_var`).
     pub templated: bool,
+    /// A project's Codex entry that only switches the user's server of its name (no command or
+    /// url of its own): the user's server, switched in that project.
+    pub overrides_user: bool,
 }
 
 /// A server's command, arguments, address and working folder as its config writes them.

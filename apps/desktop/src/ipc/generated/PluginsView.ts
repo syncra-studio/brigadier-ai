@@ -12,8 +12,8 @@ export type PluginsView = {
  */
 projects: Array<PluginProjectView>, 
 /**
- * In the order shown: items with a problem that needs the user first (needs sign-in,
- * won't start, two setups of one name, update ready, couldn't share), then A–Z.
+ * In the order shown: items with a problem first (any of [`PluginProblem`]'s), then
+ * A–Z.
  */
 items: Array<PluginItemView>, 
 /**

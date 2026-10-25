@@ -31,8 +31,8 @@ use share::Sharing;
 pub struct PluginsView {
     /// The projects the scope picker offers: the user's trusted ones.
     pub projects: Vec<PluginProjectView>,
-    /// In the order shown: items with a problem that needs the user first (needs sign-in,
-    /// won't start, two setups of one name, update ready, couldn't share), then A–Z.
+    /// In the order shown: items with a problem first (any of [`PluginProblem`]'s), then
+    /// A–Z.
     pub items: Vec<PluginItemView>,
     /// Servers only other apps have (Claude Desktop, Cursor): no agent uses them until brought
     /// in.
@@ -362,6 +362,38 @@ pub(crate) struct Built {
     pub library: Vec<LibraryRow>,
 }
 
+/// Each of `ids` once, in order.
+fn distinct(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in ids {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// Every repository folder of `projects` that the user trusts: id, name and folder. A project
+/// of several repositories has a line for each (review #12).
+pub(crate) fn trusted_repos(projects: &[crate::model::Project]) -> Vec<(String, String, PathBuf)> {
+    projects
+        .iter()
+        .flat_map(|project| {
+            project
+                .repos
+                .iter()
+                .filter(|repo| project.counts_trusted(&repo.path))
+                .map(|repo| {
+                    (
+                        project.id.to_string(),
+                        project.name.clone(),
+                        PathBuf::from(&repo.path),
+                    )
+                })
+        })
+        .collect()
+}
+
 /// The project id of folder `path`, when it is one of the user's projects.
 fn project_id(projects: &[ProjectCatalog], path: &Path) -> Option<String> {
     projects
@@ -401,10 +433,9 @@ pub(crate) fn build(
         let scope = if !on {
             match sharing.off_scopes.get(&key) {
                 Some(Some(paths)) => PluginScope::SomeProjects {
-                    project_ids: paths
-                        .iter()
-                        .filter_map(|path| project_id(projects, path))
-                        .collect(),
+                    project_ids: distinct(
+                        paths.iter().filter_map(|path| project_id(projects, path)),
+                    ),
                     folders: Vec::new(),
                 },
                 _ => PluginScope::AllProjects,
@@ -422,7 +453,7 @@ pub(crate) fn build(
                 }
             }
             PluginScope::SomeProjects {
-                project_ids: on_in.iter().map(|project| project.id.clone()).collect(),
+                project_ids: distinct(on_in.iter().map(|project| project.id.clone())),
                 folders,
             }
         };
@@ -483,7 +514,7 @@ pub(crate) fn build(
             .copied()
             .filter(|agent| !holders.contains(agent))
             .collect();
-        let declined = sharing.is_declined(row.kind, &row.key.name, row.endpoint().as_deref());
+        let declined = sharing.is_declined(row);
         let failure = sharing.failed.get(&key);
         let only_in = |reason: OnlyInReason, why: String| PluginProblem::OnlyIn {
             message: format!("Only in {}: {why}", labels(&holders)),
@@ -549,19 +580,8 @@ pub(crate) fn build(
                 )
             })
         };
-        let urgent = matches!(
-            problem,
-            Some(
-                PluginProblem::NeedsSignIn { .. }
-                    | PluginProblem::WontStart { .. }
-                    | PluginProblem::Conflict { .. }
-                    | PluginProblem::UpdateReady { .. }
-                    | PluginProblem::OnlyIn {
-                        reason: OnlyInReason::Failed,
-                        ..
-                    }
-            )
-        );
+        // Every row with a problem comes first (L5 Q6).
+        let urgent = problem.is_some();
         let own = !row.own.sources.is_empty();
         let removal = match (&row.lib, own) {
             (Some(_), true) => PluginRemoval::Copies,
@@ -630,9 +650,12 @@ pub(crate) fn build(
     });
     Built {
         view: PluginsView {
+            // One line a project: its first repository's.
             projects: projects
                 .iter()
-                .map(|project| PluginProjectView {
+                .enumerate()
+                .filter(|(at, project)| !projects[..*at].iter().any(|known| known.id == project.id))
+                .map(|(_, project)| PluginProjectView {
                     id: project.id.clone(),
                     name: project.name.clone(),
                     path: project.path.display().to_string(),
@@ -758,48 +781,27 @@ impl super::SessionManager {
         Library::in_home(&self.registry().roots().home, self.brigadier_cli())
     }
 
-    /// The user's trusted projects: id, name and folder (its first repository).
+    /// The user's trusted repositories: project id, name and folder, a line for each of a
+    /// project's repositories the user trusts.
     pub(crate) fn plugin_projects(&self) -> Vec<(String, String, PathBuf)> {
-        self.core
-            .catalog()
-            .projects
-            .into_iter()
-            .filter_map(|project| {
-                let path = project.repos.first()?.path.clone();
-                project.counts_trusted(&path).then(|| {
-                    (
-                        project.id.to_string(),
-                        project.name.clone(),
-                        PathBuf::from(path),
-                    )
-                })
-            })
-            .collect()
+        trusted_repos(&self.core.catalog().projects)
     }
 
-    /// Every repository folder of the user's trusted projects: what the watcher looks at.
+    /// Every trusted repository folder: what sharing reads and the watcher looks at.
     fn plugin_repos(&self) -> Vec<PathBuf> {
         let mut repos: Vec<PathBuf> = self
-            .core
-            .catalog()
-            .projects
+            .plugin_projects()
             .into_iter()
-            .filter(|project| {
-                project
-                    .repos
-                    .first()
-                    .is_some_and(|repo| project.counts_trusted(&repo.path))
-            })
-            .flat_map(|project| {
-                project
-                    .repos
-                    .into_iter()
-                    .map(|repo| PathBuf::from(repo.path))
-            })
+            .map(|(_, _, path)| path)
             .collect();
         repos.sort();
         repos.dedup();
         repos
+    }
+
+    /// The user's projects changed (added, removed, trusted): the watcher and sharing follow.
+    pub(crate) fn plugin_projects_changed(&self) {
+        self.request_plugin_sync(false);
     }
 
     /// The page and the CLI's Library rows, with each agent's state where `focus` (a project
@@ -866,16 +868,20 @@ impl super::SessionManager {
             return Err(crate::Error::Invalid("no projects picked".to_owned()));
         }
         let projects = self.plugin_projects();
-        ids.into_iter()
-            .map(|id| {
-                projects
-                    .iter()
-                    .find(|(known, _, _)| *known == id)
-                    .map(|(_, _, path)| path.clone())
-                    .ok_or_else(|| crate::Error::Invalid(format!("no project {id}")))
-            })
-            .collect::<crate::Result<Vec<PathBuf>>>()
-            .map(Some)
+        let mut paths = Vec::new();
+        for id in ids {
+            let found: Vec<PathBuf> = projects
+                .iter()
+                .filter(|(known, _, _)| *known == id)
+                .map(|(_, _, path)| path.clone())
+                .collect();
+            if found.is_empty() {
+                return Err(crate::Error::Invalid(format!("no project {id}")));
+            }
+            // Every repository of the project.
+            paths.extend(found);
+        }
+        Ok(Some(paths))
     }
 
     fn plugin_setup(&self) -> jobs::Setup {
@@ -964,6 +970,19 @@ impl super::SessionManager {
         }))
     }
 
+    /// Brings another app's server (`key`: an `elsewhere` entry's) to every agent, as Add does
+    /// a pasted one: in every project (`project_ids` `None`) or in exactly those; `name`
+    /// replaces its own on a clash. Its job's id.
+    pub fn import_plugin(
+        &self,
+        key: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+    ) -> crate::Result<String> {
+        let scope = self.plugin_scope(project_ids)?;
+        Ok(self.plugin_job(jobs::Action::Import { key, name, scope }))
+    }
+
     /// Removes what Brigadier made for item `key`: its copies (the agents' own entry stays,
     /// and it isn't shared again), or an item added through Brigadier whole. Its job's id.
     pub fn remove_plugin(&self, key: String) -> String {
@@ -1041,6 +1060,10 @@ impl super::SessionManager {
     /// Asks for a sharing pass (one more after the running one, if one runs); `retry`: try
     /// again what failed with the same inputs.
     fn request_plugin_sync(&self, retry: bool) {
+        // Tests share nothing behind their back.
+        if cfg!(test) {
+            return;
+        }
         self.registry().watch_projects(&self.plugin_repos());
         jobs::request_sync(self.plugin_setup(), retry);
     }

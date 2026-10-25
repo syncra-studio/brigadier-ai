@@ -47,6 +47,8 @@ pub(crate) struct Sharing {
     pub off_scopes: BTreeMap<String, Option<Vec<PathBuf>>>,
     /// The last share that failed, by page key.
     pub failed: BTreeMap<String, Failure>,
+    /// Other apps' servers brought in (`other:<id>`): no longer offered for import.
+    pub imported: Vec<String>,
 }
 
 /// A Library plugin made from an agent's own item.
@@ -78,6 +80,32 @@ pub(crate) struct Declined {
     /// A server's endpoint: the same server renamed stays declined.
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// A skill's folder: the same skill renamed in it stays declined.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+impl Declined {
+    /// What remembers `row` as removed.
+    fn of(row: &Row) -> Self {
+        Self {
+            kind: row.kind,
+            name: row.key.name.clone(),
+            endpoint: row.endpoint(),
+            source: row.skill_dirs().into_iter().next(),
+        }
+    }
+
+    /// Whether it is `row`: by name, by endpoint, or by the folder it was found in.
+    fn is(&self, row: &Row) -> bool {
+        self.kind == row.kind
+            && (self.name == row.key.name
+                || (self.endpoint.is_some() && self.endpoint == row.endpoint())
+                || self
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| row.skill_dirs().contains(source)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,12 +154,13 @@ impl Sharing {
             .map_err(|err| format!("Brigadier couldn't save {}: {err}", file.display()))
     }
 
-    pub fn is_declined(&self, kind: PluginKind, name: &str, endpoint: Option<&str>) -> bool {
-        self.declined.iter().any(|declined| {
-            declined.kind == kind
-                && (declined.name == name
-                    || (endpoint.is_some() && declined.endpoint.as_deref() == endpoint))
-        })
+    pub fn is_declined(&self, row: &Row) -> bool {
+        self.declined.iter().any(|declined| declined.is(row))
+    }
+
+    /// Whether a removed original still waits for its confirming pass (review #11).
+    pub fn confirming(&self) -> bool {
+        self.items.values().any(|record| record.absent_passes == 1)
     }
 }
 
@@ -293,15 +322,74 @@ fn pack(
     replace: bool,
 ) -> Result<library::Packed, String> {
     let (item, dir) = item_of(origin, name);
-    if replace && let Origin::Server { server, .. } = origin {
-        // Its values are replaced whole: one the original no longer has doesn't stay behind.
-        let _ = ctx.secrets.forget(&format!("{lib}/{}", server.name));
-    }
     let mut taken = ops::server_names(ctx, Some(lib));
     taken.retain(|known| known != name);
-    ctx.library
-        .pack(lib, &item, dir.as_deref(), &taken, replace, ctx.secrets)
-        .map_err(|err| err.to_string())
+    // Its values wait aside until the pack holds: one that fails keeps the installed copy's
+    // values as they were (review #3).
+    let staged = Staged::default();
+    let packed = ctx
+        .library
+        .pack(lib, &item, dir.as_deref(), &taken, replace, &staged)
+        .map_err(|err| err.to_string())?;
+    staged.commit(
+        ctx.secrets,
+        if replace {
+            packed.server.as_deref().map(|name| format!("{lib}/{name}"))
+        } else {
+            None
+        },
+    )?;
+    Ok(packed)
+}
+
+/// Values a pack gives, kept aside until it holds.
+#[derive(Default)]
+struct Staged(std::sync::Mutex<Vec<(String, String, brigadier_registry::Secret)>>);
+
+impl Staged {
+    /// Replace only after packing succeeds. A failed Keychain write restores the previous
+    /// values, including those removed by the new definition.
+    fn commit(self, secrets: &dyn ops::Secrets, replacing: Option<String>) -> Result<(), String> {
+        let previous = replacing
+            .as_deref()
+            .map(|server| secrets.load(server))
+            .transpose()?;
+        if let Some(server) = &replacing {
+            secrets.forget(server)?;
+        }
+        for (server, name, value) in self.0.into_inner().unwrap_or_else(|p| p.into_inner()) {
+            if let Err(error) = secrets.store(&server, &name, &value) {
+                if let (Some(server), Some(previous)) = (&replacing, &previous) {
+                    secrets.forget(server)?;
+                    for (name, value) in previous {
+                        secrets.store(
+                            server,
+                            name,
+                            &brigadier_registry::Secret::new(value.clone()),
+                        )?;
+                    }
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl library::SecretSink for Staged {
+    fn store(
+        &self,
+        server: &str,
+        name: &str,
+        value: &brigadier_registry::Secret,
+    ) -> Result<(), String> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).push((
+            server.to_owned(),
+            name.to_owned(),
+            value.clone(),
+        ));
+        Ok(())
+    }
 }
 
 /// A free Library name for `row`, whose Claude form (`plugin_<lib>_<server>`) no server of
@@ -363,20 +451,37 @@ fn own_places(row: &Row, agent: Agent) -> (bool, Vec<PathBuf>) {
 /// every agent's together), less where that agent has its own; none for an agent its own
 /// entries cover everywhere, or that has the same server under another name (review #6).
 fn wanted(row: &Row, projects: &[PathBuf]) -> Vec<(Agent, Placed)> {
-    let global = !row.own.everywhere.is_empty();
+    let global = !row.own.everywhere.is_empty()
+        || row
+            .equivalent
+            .iter()
+            .any(|(_, scope, on)| scope.is_none() && *on);
     let on_in: Vec<PathBuf> = projects
         .iter()
-        .filter(|path| row.own.here.iter().any(|(at, _)| at == *path))
+        .filter(|path| {
+            global
+                || row.own.here.iter().any(|(at, _)| at == *path)
+                || row
+                    .equivalent
+                    .iter()
+                    .any(|(_, scope, on)| scope.as_ref() == Some(*path) && *on)
+        })
         .cloned()
         .collect();
     adapters()
         .into_iter()
         .map(|adapter| {
             let agent = adapter.agent();
-            if row.equivalent.contains(&agent) {
-                return (agent, Placed::none());
+            // Its own entries, and the same server under another name, each where it is.
+            let (mut own_global, mut own_projects) = own_places(row, agent);
+            for (twin, project, _) in &row.equivalent {
+                if *twin == agent {
+                    match project {
+                        None => own_global = true,
+                        Some(path) => own_projects.push(path.clone()),
+                    }
+                }
             }
-            let (own_global, own_projects) = own_places(row, agent);
             if own_global {
                 return (agent, Placed::none());
             }
@@ -520,10 +625,7 @@ fn sync_row(
         return Ok(());
     };
     let endpoint = row.endpoint();
-    if row.conflict
-        || sharing.is_declined(row.kind, &row.key.name, endpoint.as_deref())
-        || cant_share(row).is_some()
-    {
+    if row.conflict || sharing.is_declined(row) || cant_share(row).is_some() {
         return Ok(());
     }
     let wants = wanted(row, ctx.projects);
@@ -668,6 +770,75 @@ fn find(ctx: &Ctx<'_>, sharing: &Sharing, key: &str) -> Result<(Catalogs, Row), 
     Ok((catalogs, row))
 }
 
+/// Whether `library`'s sharing waits for a confirming pass (a removed original read once).
+pub(crate) fn confirming(library: &Library) -> bool {
+    Sharing::load(library).is_ok_and(|sharing| sharing.confirming())
+}
+
+/// Brings another app's server (`key`: `other:<id>`, as the page's `elsewhere` lists it) to
+/// every agent, as Add does a pasted server: packed into the Library (its values to the
+/// Keychain), on in every project or in `scope`. The other app's file is only read. `name`
+/// replaces its own on a clash. Its key.
+pub(crate) fn import(
+    ctx: &Ctx<'_>,
+    key: &str,
+    name: Option<&str>,
+    scope: Option<&[PathBuf]>,
+    run: Runner<'_>,
+) -> Result<String, String> {
+    if scope.is_some_and(<[PathBuf]>::is_empty) {
+        return Err("Pick a project, or All projects.".to_owned());
+    }
+    let id = key
+        .strip_prefix("other:")
+        .ok_or_else(|| format!("Brigadier doesn't know \"{key}\"."))?;
+    let catalog = Catalog::read(ctx.roots, None);
+    let server = catalog
+        .servers
+        .iter()
+        .chain(&catalog.off.servers)
+        .find(|server| {
+            server.id == id
+                && matches!(
+                    server.source,
+                    brigadier_registry::Source::Desktop | brigadier_registry::Source::CursorUser
+                )
+        })
+        .ok_or_else(|| "It's gone from the app it was in.".to_owned())?;
+    if server.templated {
+        return Err(
+            "It reads ${VAR} values from your shell, so Brigadier can't bring it in as it is."
+                .to_owned(),
+        );
+    }
+    let name = name.map_or_else(|| server.name.clone(), str::to_owned);
+    let mut spec = spec_of(server);
+    spec.name.clone_from(&name);
+    let mut sharing = Sharing::load(ctx.library)?;
+    let staged = Staged::default();
+    let packed = ctx
+        .library
+        .pack(
+            &name,
+            &Item::Server(spec),
+            None,
+            &ops::server_names(ctx, None),
+            false,
+            &staged,
+        )
+        .map_err(|err| err.to_string())?;
+    staged.commit(ctx.secrets, None)?;
+    sharing.imported.push(key.to_owned());
+    sharing.save(ctx.library)?;
+    let want = Placed::at(scope, ctx.projects);
+    let wants: Vec<(Agent, Placed)> = adapters()
+        .into_iter()
+        .map(|adapter| (adapter.agent(), want.clone()))
+        .collect();
+    ops::change(ctx, &packed.entry.id(), &wants, run)?;
+    Ok(format!("lib:{name}"))
+}
+
 /// The Library plugin page key `key` names: its copy, or the Library item itself.
 pub(crate) fn library_of(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
     let sharing = Sharing::load(ctx.library)?;
@@ -721,11 +892,14 @@ fn codex_server_steps(
         .servers
         .iter()
         .any(|server| server.name == name && codex.owns(server.source));
+    // Only some projects is on only there: off in the user's own config, on by each picked
+    // project's file, so a folder that isn't picked (a new one too) doesn't load it (review #5).
+    let everywhere = on && scope.is_none();
     let mut steps = Vec::new();
-    if on == off_now {
+    if everywhere == off_now {
         steps.extend(
             codex
-                .set_server(name, &Place::Everywhere, on)
+                .set_server(name, &Place::Everywhere, everywhere)
                 .map_err(unsupported)?,
         );
     }
@@ -733,12 +907,16 @@ fn codex_server_steps(
         if !codex.trusts(&project.catalog, &project.path) {
             continue;
         }
-        let want = on && scope.is_none_or(|scope| scope.contains(&project.path));
+        let here = on && scope.is_some_and(|scope| scope.contains(&project.path));
         let now = codex_switch_in(&project.path, name);
-        if (want && now == Some(false))
-            || (!want && now != Some(false) && on)
-            || (!on && now == Some(true))
-        {
+        let want = if everywhere {
+            (now == Some(false)).then_some(true)
+        } else if here {
+            (now != Some(true)).then_some(true)
+        } else {
+            (now == Some(true)).then_some(false)
+        };
+        if let Some(want) = want {
             steps.extend(
                 codex
                     .set_server(name, &ops::just_me(&project.path), want)
@@ -873,11 +1051,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
     let mut sharing = Sharing::load(ctx.library)?;
     let (_, row) = find(ctx, &sharing, key)?;
     let own = !row.own.sources.is_empty();
-    let declined = Declined {
-        kind: row.kind,
-        name: row.key.name.clone(),
-        endpoint: row.endpoint(),
-    };
+    let declined = Declined::of(&row);
     let Some(lib) = row.lib.clone() else {
         if own && row.key.kind != KeyKind::Plugin {
             // Its copies went already: what's left is to remember.
@@ -891,7 +1065,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
                 .to_owned(),
         );
     };
-    let legacy = ops::read_moved(ctx.library, &lib);
+    let legacy = ops::read_moved(ctx.library, &lib)?;
     // Written down before anything goes: an interrupted removal finishes, and is never undone
     // by sharing it again (review #15).
     if own || legacy.is_some() {
@@ -902,6 +1076,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
                 kind: row.kind,
                 name: lib.clone(),
                 endpoint: None,
+                source: None,
             }
         };
         if !sharing.declined.contains(&declined) {
@@ -920,17 +1095,29 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
             }
         }
         sharing.save(ctx.library)?;
-        let mut errors = Vec::new();
-        for original in &moved.originals {
-            if let Err(err) = original.restore(ctx) {
-                errors.push(err);
+        // Each original back in turn, written down as it goes: a Remove tried again after one
+        // couldn't go back skips those already back (review #4).
+        let mut moved = moved.clone();
+        for at in 0..moved.originals.len() {
+            if moved.restored.contains(&at) {
+                continue;
             }
+            let original = &moved.originals[at];
+            if !original.back() {
+                original.restore(ctx).map_err(|err| {
+                    format!(
+                        "Not every original could be put back, so Brigadier kept its copy: {err}"
+                    )
+                })?;
+            }
+            moved.restored.push(at);
+            ops::write_moved(ctx.library, &lib, &moved)?;
         }
-        if !errors.is_empty() {
-            return Err(format!(
-                "Not every original could be put back, so Brigadier kept its copy: {}",
-                errors.join(" ")
-            ));
+        // Their values were kept until every original was back.
+        for original in &moved.originals {
+            if let Some(secrets) = original.secrets() {
+                ctx.secrets.forget(secrets)?;
+            }
         }
     }
     if !sharing.pending_removal.contains(&lib) {
@@ -961,12 +1148,7 @@ pub(crate) fn share_again(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(
     if let Some(why) = cant_share(&row) {
         return Err(format!("It can't be shared: {why}."));
     }
-    let endpoint = row.endpoint();
-    sharing.declined.retain(|declined| {
-        !(declined.kind == row.kind
-            && (declined.name == row.key.name
-                || (endpoint.is_some() && declined.endpoint == endpoint)))
-    });
+    sharing.declined.retain(|declined| !declined.is(&row));
     let key = row.key.text();
     sharing.failed.remove(&key);
     sharing.save(ctx.library)?;
@@ -1064,6 +1246,13 @@ pub(crate) fn details(ctx: &Ctx<'_>, key: &str) -> Result<PluginItemDetails, Str
                             .is_some_and(|plugin| plugin.id == plugin_id(lib))
                     })
                     .map(settings);
+                // Its values are in the Keychain: the Library keeps their names (review #14).
+                let names = ctx.library.value_names(lib);
+                match &mut server {
+                    Some(PluginServerSettings::Stdio { env_names, .. }) => *env_names = names,
+                    Some(PluginServerSettings::Http { header_names, .. }) => *header_names = names,
+                    None => {}
+                }
             }
         }
     }

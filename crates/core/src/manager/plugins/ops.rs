@@ -829,7 +829,16 @@ pub(crate) fn check_add(home: &Path, text: &str, name: Option<&str>) -> PluginAd
 pub(super) fn server_names(ctx: &Ctx<'_>, except: Option<&str>) -> Vec<String> {
     let mut names = Vec::new();
     for project in std::iter::once(None).chain(ctx.projects.iter().map(|p| Some(p.as_path()))) {
-        for server in ctx.read(project).servers {
+        let catalog = ctx.read(project);
+        for server in catalog.servers.into_iter().chain(catalog.off.servers) {
+            if matches!(
+                server.source,
+                brigadier_registry::Source::Desktop
+                    | brigadier_registry::Source::CursorUser
+                    | brigadier_registry::Source::CursorProject
+            ) {
+                continue;
+            }
             let ours = except.is_some_and(|name| {
                 server
                     .plugin
@@ -1036,6 +1045,25 @@ pub(crate) fn add(
 #[serde(rename_all = "camelCase")]
 pub(super) struct Moved {
     pub originals: Vec<Original>,
+    /// Which of them a Remove has put back already, by index.
+    #[serde(default)]
+    pub restored: Vec<usize>,
+}
+
+/// Keeps what Remove did of `moved` (Library item `name`'s), for a Remove tried again.
+pub(super) fn write_moved(library: &Library, name: &str, moved: &Moved) -> Result<(), String> {
+    let file = moved_file(library, name);
+    let text = serde_json::to_string_pretty(moved).map_err(|err| err.to_string())?;
+    let temp = file.with_extension("json.new");
+    (|| {
+        use std::io::Write;
+        let mut staged = std::fs::File::create(&temp)?;
+        staged.write_all(text.as_bytes())?;
+        staged.sync_all()
+    })()
+    .and_then(|()| std::fs::rename(&temp, &file))
+    .and_then(|()| std::fs::File::open(file.parent().unwrap())?.sync_all())
+    .map_err(|err| format!("Couldn't keep track of {name}'s originals: {err}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1080,14 +1108,46 @@ pub(super) enum SavedTransport {
 }
 
 impl Original {
-    /// Puts it back as it was.
+    /// Already where it was: a skill's folder back, its kept copy gone.
+    pub fn back(&self) -> bool {
+        match self {
+            Self::Skill { from, kept } => {
+                from.symlink_metadata().is_ok()
+                    && kept
+                        .symlink_metadata()
+                        .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+            }
+            Self::Server { .. } => false,
+        }
+    }
+
+    /// Where a server's values are kept until it is back.
+    pub fn secrets(&self) -> Option<&str> {
+        match self {
+            Self::Server { secrets, .. } => Some(secrets),
+            Self::Skill { .. } => None,
+        }
+    }
+
+    /// Puts it back as it was (a server's values stay kept: [`Self::secrets`]).
     pub fn restore(&self, ctx: &Ctx<'_>) -> Result<(), String> {
         match self {
             Self::Skill { from, kept } => {
+                if self.back() {
+                    return Ok(());
+                }
+                if from.symlink_metadata().is_ok() {
+                    return Err(format!(
+                        "Couldn't put {} back: something is already there.",
+                        from.display()
+                    ));
+                }
                 if let Some(dir) = from.parent() {
                     std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
                 }
                 std::fs::rename(kept, from)
+                    .and_then(|()| std::fs::File::open(from.parent().unwrap())?.sync_all())
+                    .and_then(|()| std::fs::File::open(kept.parent().unwrap())?.sync_all())
                     .map_err(|err| format!("Couldn't put {} back: {err}.", from.display()))
             }
             Self::Server {
@@ -1098,16 +1158,11 @@ impl Original {
                 secrets,
             } => {
                 let mut values = ctx.secrets.load(secrets)?;
-                let mut take = |names: &[String]| -> Vec<(String, Secret)> {
-                    names
-                        .iter()
-                        .map(|name| {
-                            (
-                                name.clone(),
-                                Secret::new(values.remove(name).unwrap_or_default()),
-                            )
-                        })
-                        .collect()
+                let mut take = |names: &[String]| -> Result<Vec<(String, Secret)>, String> {
+                    names.iter().map(|name| {
+                        let value = values.remove(name).ok_or_else(|| format!("Couldn't put the server back: its saved value {name} is missing."))?;
+                        Ok((name.clone(), Secret::new(value)))
+                    }).collect()
                 };
                 let transport = match transport {
                     SavedTransport::Stdio {
@@ -1118,12 +1173,12 @@ impl Original {
                     } => TransportSpec::Stdio {
                         command: command.clone(),
                         args: args.clone(),
-                        env: take(env),
+                        env: take(env)?,
                         cwd: cwd.clone(),
                     },
                     SavedTransport::Http { url, headers } => TransportSpec::Http {
                         url: url.clone(),
-                        headers: take(headers),
+                        headers: take(headers)?,
                     },
                 };
                 let spec = ServerSpec {
@@ -1135,9 +1190,64 @@ impl Original {
                 let agent = adapter(
                     agent_of(*agent).ok_or("Brigadier no longer drives the agent it came from.")?,
                 );
+                // A crash after the CLI restored it but before the checkpoint must be safe
+                // to retry. An independently changed entry is never overwritten.
+                let catalog = ctx.read(project.as_deref());
+                if let Some(existing) =
+                    catalog
+                        .servers
+                        .iter()
+                        .chain(&catalog.off.servers)
+                        .find(|server| {
+                            server.name == *name
+                                && server.project == *project
+                                && server.plugin.is_none()
+                                && agent.owns(server.source)
+                        })
+                {
+                    let same_values = |a: &[(String, Secret)], b: &[(String, Secret)]| {
+                        a.len() == b.len() && a.iter().all(|value| b.contains(value))
+                    };
+                    let same = match (&spec.transport, &existing.transport) {
+                        (
+                            TransportSpec::Stdio {
+                                command,
+                                args,
+                                env,
+                                cwd,
+                            },
+                            brigadier_registry::Transport::Stdio {
+                                command: other,
+                                args: other_args,
+                                env: other_env,
+                                cwd: other_cwd,
+                                ..
+                            },
+                        ) => {
+                            command == existing.written.command.as_ref().unwrap_or(other)
+                                && args == other_args
+                                && cwd == other_cwd
+                                && same_values(env, other_env)
+                        }
+                        (
+                            TransportSpec::Http { url, headers },
+                            brigadier_registry::Transport::Http {
+                                url: other,
+                                headers: other_headers,
+                            },
+                        ) => url == other && same_values(headers, other_headers),
+                        _ => false,
+                    };
+                    return if same && existing.oauth.is_none() {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Couldn't put {name} back: a different server is already there."
+                        ))
+                    };
+                }
                 let steps = agent.add_server(name, &spec, &place).map_err(|err| err.0)?;
                 ctx.run(agent, &steps)?;
-                let _ = ctx.secrets.forget(secrets);
                 Ok(())
             }
         }
@@ -1152,8 +1262,20 @@ pub(super) fn moved_file(library: &Library, name: &str) -> PathBuf {
     moved_dir(library).join(format!("{name}.json"))
 }
 
-pub(super) fn read_moved(library: &Library, name: &str) -> Option<Moved> {
-    serde_json::from_str(&std::fs::read_to_string(moved_file(library, name)).ok()?).ok()
+pub(super) fn read_moved(library: &Library, name: &str) -> Result<Option<Moved>, String> {
+    let file = moved_file(library, name);
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "Couldn't read the saved originals of {name}: {err}"
+            ));
+        }
+    };
+    serde_json::from_str(&text).map(Some).map_err(|_| {
+        format!("Couldn't read the saved originals of {name}; Brigadier kept its copy.")
+    })
 }
 
 /// The steps that take Library plugin `id` away from `adapter`'s agent: off in each project
@@ -1215,11 +1337,13 @@ pub(super) fn remove_library_with(
         ));
     }
     let servers = server_names_of(ctx, name);
-    ctx.library.remove(name).map_err(|err| err.to_string())?;
-    let _ = ctx.library.set_origin(name, None);
     for server in servers {
-        let _ = ctx.secrets.forget(&format!("{name}/{server}"));
+        ctx.secrets.forget(&format!("{name}/{server}"))?;
     }
+    ctx.library.remove(name).map_err(|err| err.to_string())?;
+    ctx.library
+        .set_origin(name, None)
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 

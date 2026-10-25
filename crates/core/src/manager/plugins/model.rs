@@ -154,9 +154,46 @@ impl Origin {
     }
 }
 
-/// What a server reaches, as written: its command, arguments and folder, or its address. Two
-/// servers of one endpoint are the same server under two names.
+/// What a server is: what it reaches, as written (its command, arguments and folder, or its
+/// address), and what it signs in with (its values' names and hashes, its OAuth client). Two
+/// servers alike in all of it are the same server, whatever their names; one name over two
+/// that differ in any of it is two setups.
 pub(crate) fn endpoint(server: &Server) -> String {
+    let mut text = reach(server);
+    let values = match &server.transport {
+        Transport::Stdio { env, .. } => env,
+        Transport::Http { headers, .. } => headers,
+    };
+    let mut values: Vec<String> = values
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{name}={}",
+                brigadier_registry::library::hash_text(value.expose())
+            )
+        })
+        .collect();
+    values.sort();
+    for value in values {
+        text.push('\0');
+        text.push_str(&value);
+    }
+    if let Some(oauth) = &server.oauth {
+        text.push_str(&format!(
+            "\0oauth {} {}",
+            oauth.client_id.as_deref().unwrap_or_default(),
+            oauth
+                .client_secret
+                .as_ref()
+                .map(|secret| brigadier_registry::library::hash_text(secret.expose()))
+                .unwrap_or_default()
+        ));
+    }
+    text
+}
+
+/// What a server reaches, as written.
+fn reach(server: &Server) -> String {
     let written = &server.written;
     match &server.transport {
         Transport::Http { url, .. } => {
@@ -464,7 +501,10 @@ fn gather(
         presence.kind = Some(PluginKind::Server);
         (presence.detail, presence.url) = server_detail(server);
         push(&mut presence.files, server.file.display().to_string());
+        // A project's entry that only switches the user's server is that server, not one of
+        // the project's own: it neither counts as an original nor locks the row.
         if server.plugin.is_none()
+            && !server.overrides_user
             && let Some(agent) = owner(server.source)
         {
             presence.lock(server_lock(server, home));
@@ -640,8 +680,8 @@ pub(crate) struct Row {
     pub lib: Option<String>,
     /// Where the Library plugin is.
     pub copy: Presence,
-    /// Agents with the same server under another name.
-    pub equivalent: Vec<Agent>,
+    /// Agents with the same server under another name, and where (`None`: every project).
+    pub equivalent: Vec<(Agent, Option<PathBuf>, bool)>,
     /// Two different setups go by its name.
     pub conflict: bool,
 }
@@ -651,7 +691,7 @@ impl Row {
     /// marketplace's plugin) the plugin.
     pub fn holders(&self) -> Vec<Agent> {
         let mut agents = self.own.own_agents();
-        for agent in &self.equivalent {
+        for (agent, _, _) in &self.equivalent {
             push(&mut agents, *agent);
         }
         if self.key.kind == KeyKind::Plugin {
@@ -690,6 +730,18 @@ impl Row {
             || !self.own.here.is_empty()
             || !self.copy.everywhere.is_empty()
             || !self.copy.here.is_empty()
+    }
+
+    /// The folders of its own skills.
+    pub fn skill_dirs(&self) -> Vec<String> {
+        self.own
+            .sources
+            .iter()
+            .filter_map(|source| match source {
+                Origin::Skill { skill, .. } => Some(skill.dir.display().to_string()),
+                Origin::Server { .. } => None,
+            })
+            .collect()
     }
 
     /// The endpoint of its first own server.
@@ -847,14 +899,22 @@ pub(crate) fn model(
     }
     // The same server under another name, per agent; two different setups of one name; an
     // unrecorded Library item of the same kind and name.
-    let endpoints: Vec<(Agent, String, String)> = rows
+    let endpoints: Vec<_> = rows
         .iter()
-        .flat_map(|row| row.own.sources.iter())
-        .filter_map(|source| match source {
-            Origin::Server { agent, server } => {
-                Some((*agent, server.name.clone(), endpoint(server)))
-            }
-            Origin::Skill { .. } => None,
+        .flat_map(|row| {
+            row.own.sources.iter().filter_map(|source| match source {
+                Origin::Server { agent, server } => Some((
+                    *agent,
+                    server.name.clone(),
+                    endpoint(server),
+                    server.project.clone(),
+                    match &server.project {
+                        None => row.own.everywhere.contains(agent),
+                        Some(path) => row.own.here.contains(&(path.clone(), *agent)),
+                    },
+                )),
+                Origin::Skill { .. } => None,
+            })
         })
         .collect();
     let standalone: Vec<(PluginKind, String)> = rows
@@ -864,9 +924,9 @@ pub(crate) fn model(
         .collect();
     for row in &mut rows {
         if let Some(mine) = row.endpoint() {
-            for (agent, name, other) in &endpoints {
+            for (agent, name, other, project, on) in &endpoints {
                 if *other == mine && *name != row.key.name {
-                    push(&mut row.equivalent, *agent);
+                    push(&mut row.equivalent, (*agent, project.clone(), *on));
                 }
             }
         }
@@ -879,5 +939,7 @@ pub(crate) fn model(
                 && !row.own.sources.is_empty()
                 && standalone.contains(&(row.kind, row.key.name.clone())));
     }
+    // What the user brought in is an item now, not another app's only.
+    elsewhere.retain(|entry| !sharing.imported.contains(&entry.key));
     Model { rows, elsewhere }
 }

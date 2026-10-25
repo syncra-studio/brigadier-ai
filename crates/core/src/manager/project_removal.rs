@@ -122,6 +122,7 @@ impl SessionManager {
             Ok(())
         })
         .await;
+        self.plugin_projects_changed();
         Ok(RemoveProjectReport {
             kept_branches: kept,
             brain_trashed_bytes,

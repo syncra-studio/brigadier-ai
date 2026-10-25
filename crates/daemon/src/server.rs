@@ -2480,6 +2480,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .sessions
                 .add_plugin(text, name, project_ids, values)?,
         },
+        Request::ImportPlugin {
+            key,
+            name,
+            project_ids,
+        } => Response::ImportPlugin {
+            job: daemon.sessions.import_plugin(key, name, project_ids)?,
+        },
         Request::RemovePlugin { key } => Response::RemovePlugin {
             job: daemon.sessions.remove_plugin(key),
         },

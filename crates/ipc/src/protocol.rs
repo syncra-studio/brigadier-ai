@@ -1170,6 +1170,16 @@ pub enum Request {
         #[ts(optional)]
         values: Option<std::collections::BTreeMap<String, String>>,
     },
+    /// Brings another app's server (`key`: an `elsewhere` entry's, `other:<id>`) to every agent,
+    /// as [`Request::AddPlugin`] does a pasted one: its values to the Keychain, that app's file
+    /// only read. In every project (`projectIds` null) or exactly `projectIds`; `name` replaces
+    /// its own name on a clash (a clash without one fails the job, saying why). Afterwards it
+    /// is an item, no longer in `elsewhere`. Answers with a job.
+    ImportPlugin {
+        key: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+    },
     /// Removes what Brigadier made for item `key`: its copies (the agents' own entry stays as
     /// it is, and it isn't shared again until [`Request::SharePlugin`]), or an item added
     /// through Brigadier from every agent. Answers with a job.
@@ -1930,6 +1940,9 @@ pub enum Response {
     AddPlugin {
         job: String,
     },
+    ImportPlugin {
+        job: String,
+    },
     RemovePlugin {
         job: String,
     },
@@ -2556,5 +2569,36 @@ mod send_defaults_tests {
                 matches!(request, Request::SendMessage { mentions, steer: false, queue_index: None, .. } if mentions.is_empty())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_import_tests {
+    use super::*;
+
+    #[test]
+    fn import_plugin_round_trips_nullable_name_and_project_scope() {
+        for (name, projects) in [
+            (serde_json::Value::Null, serde_json::Value::Null),
+            (
+                serde_json::json!("renamed"),
+                serde_json::json!(["project with spaces"]),
+            ),
+        ] {
+            let wire = serde_json::json!({"method":"importPlugin", "key":"other:desktop:with spaces", "name":name, "projectIds":projects});
+            let request: Request = serde_json::from_value(wire.clone()).unwrap();
+            assert!(
+                matches!(&request, Request::ImportPlugin {key,..} if key == "other:desktop:with spaces")
+            );
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
+        let response = serde_json::to_value(Response::ImportPlugin {
+            job: "plugin-job-test".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"method":"importPlugin", "job":"plugin-job-test"})
+        );
     }
 }

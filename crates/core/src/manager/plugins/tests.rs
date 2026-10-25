@@ -144,12 +144,12 @@ fn codex_provider_plugins_hide_skills_servers_and_problems_even_when_off() {
     assert_eq!(
         keys,
         [
-            "server:curated-broken",
-            "server:curated-remote-broken",
             "plugin:curated",
+            "server:curated-broken",
             "plugin:curated-off",
             "plugin:curated-off/curated-off-server",
             "plugin:curated-remote",
+            "server:curated-remote-broken",
             "plugin:curated-remote/curated-remote-server",
             "plugin:curated/curated-server",
             "plugin:official",

@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::adapter::{AgentAdapter, Place, Step, Unsupported};
+use crate::adapter::{AgentAdapter, CLI_TIMEOUT, Place, Step, Unsupported, output_within};
 use crate::item::{Item, ServerSpec, SkillSource, SkillSpec, TransportSpec};
 use crate::{Agent, Secret};
 
@@ -120,6 +120,7 @@ pub struct Origin {
 }
 
 /// The Library at a folder.
+#[derive(Clone)]
 pub struct Library {
     root: PathBuf,
     /// The `brigadier` CLI, by absolute path: neither agent passes its own PATH on reliably.
@@ -185,6 +186,23 @@ impl Library {
         self.entries().into_iter().find(|entry| entry.name == name)
     }
 
+    /// The names of plugin `name`'s server's values (env or headers), kept in the Keychain:
+    /// what its settings show, never the values.
+    pub fn value_names(&self, name: &str) -> Vec<String> {
+        std::fs::read_to_string(self.plugin_dir(name).join(".brigadier.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|meta| {
+                meta.get("values")?.as_array().map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|name| name.as_str().map(str::to_owned))
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
     /// A name for a new plugin made from an item called `name`: `name` itself when it can be
     /// one and is free, else it with other characters as `-`, then `-2`, `-3`… until free.
     pub fn fresh_name(&self, name: &str) -> String {
@@ -237,6 +255,7 @@ impl Library {
             std::fs::remove_dir_all(&staging).map_err(io)?;
         }
         std::fs::create_dir_all(&staging).map_err(io)?;
+        let mut values: Vec<String> = Vec::new();
         let (description, server) = match item {
             Item::Server(spec) => {
                 if taken.contains(&spec.name) {
@@ -245,6 +264,13 @@ impl Library {
                 }
                 check_name(&spec.name)?;
                 self.write_server(name, &dir, &staging, spec, secrets)?;
+                values = match &spec.transport {
+                    TransportSpec::Stdio { env, .. } => env,
+                    TransportSpec::Http { headers, .. } => headers,
+                }
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
                 (
                     format!("The {} MCP server.", spec.name),
                     Some(spec.name.clone()),
@@ -289,7 +315,7 @@ impl Library {
         )?;
         write_json(
             &staging.join(".brigadier.json"),
-            &json!({ "version": version, "hash": hash }),
+            &json!({ "version": version, "hash": hash, "values": values }),
         )?;
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(io)?;
@@ -546,12 +572,11 @@ pub fn fetch_skill(source: &SkillSource, scratch: &Path) -> Result<PathBuf, Stri
     if let Some(rev) = &rev {
         git.args(["--branch", rev]);
     }
-    let out = git
-        .arg(&url)
-        .arg(&checkout)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|err| format!("Couldn't run git: {err}."))?;
+    let out = output_within(
+        git.arg(&url).arg(&checkout).env("GIT_TERMINAL_PROMPT", "0"),
+        CLI_TIMEOUT,
+    )
+    .map_err(|err| format!("Couldn't run git: {err}."))?;
     if !out.status.success() {
         return Err(format!("Couldn't download {url}."));
     }
@@ -603,12 +628,14 @@ pub fn skill_name(dir: &Path) -> Option<String> {
 
 /// The commit [`fetch_skill`] fetched into `scratch`, for a Git or skills.sh source.
 pub fn fetched_commit(scratch: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(scratch.join("checkout"))
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
+    let out = output_within(
+        Command::new("git")
+            .arg("-C")
+            .arg(scratch.join("checkout"))
+            .args(["rev-parse", "HEAD"]),
+        CLI_TIMEOUT,
+    )
+    .ok()?;
     let commit = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     (out.status.success() && !commit.is_empty()).then_some(commit)
 }
@@ -616,11 +643,13 @@ pub fn fetched_commit(scratch: &Path) -> Option<String> {
 /// The commit `source`'s repository is at now (its branch or tag, else its default branch).
 pub fn latest_commit(source: &SkillSource) -> Result<String, String> {
     let (url, rev) = remote(source).ok_or("A folder has no newer version.")?;
-    let out = Command::new("git")
-        .args(["ls-remote", &url, rev.as_deref().unwrap_or("HEAD")])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|err| format!("Couldn't run git: {err}."))?;
+    let out = output_within(
+        Command::new("git")
+            .args(["ls-remote", &url, rev.as_deref().unwrap_or("HEAD")])
+            .env("GIT_TERMINAL_PROMPT", "0"),
+        CLI_TIMEOUT,
+    )
+    .map_err(|err| format!("Couldn't run git: {err}."))?;
     if !out.status.success() {
         return Err(format!("Couldn't reach {url}."));
     }

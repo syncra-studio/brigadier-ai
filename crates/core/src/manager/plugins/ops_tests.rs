@@ -320,6 +320,7 @@ fn an_original_server_is_saved_without_its_values_and_put_back_with_them() {
     };
     let text = serde_json::to_string(&Moved {
         originals: vec![original.clone()],
+        restored: vec![],
     })
     .unwrap();
     assert!(!text.contains("hunter2"));
@@ -348,7 +349,10 @@ fn an_original_server_is_saved_without_its_values_and_put_back_with_them() {
         table["mcp_servers"]["pg"]["env"]["PGPASS"].as_str(),
         Some("hunter2")
     );
-    assert!(fx.secrets.load("pg/original-0").unwrap().is_empty());
+    assert_eq!(
+        fx.secrets.load("pg/original-0").unwrap()["PGPASS"],
+        "hunter2"
+    );
 
     // A skill moved aside comes back to where it was.
     let from = fx.home.join(".claude/skills/grill");
@@ -1015,5 +1019,55 @@ fn add_shared_installs_in_the_form_the_project_commits() {
             &run
         )
         .is_err()
+    );
+}
+
+#[test]
+fn review_legacy_server_restore_is_idempotent_and_retains_secrets() {
+    let fx = Fixture::new("review-restored-server", None, None);
+    fx.secrets
+        .store("legacy/original-0", "TOKEN", &Secret::new("saved-value"))
+        .unwrap();
+    let original = Original::Server {
+        agent: ProviderKind::Codex,
+        name: "legacy".into(),
+        project: Some(fx.project.clone()),
+        transport: SavedTransport::Stdio {
+            command: "/opt/mcp".into(),
+            args: vec!["two words".into()],
+            env: vec!["TOKEN".into()],
+            cwd: None,
+        },
+        secrets: "legacy/original-0".into(),
+    };
+    let projects = [fx.project.clone()];
+    let ctx = Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects: &projects,
+        report: &|_, _| {},
+        binary: &|_| None,
+    };
+    original.restore(&ctx).unwrap();
+    let file = fx.project.join(".codex/config.toml");
+    let before = std::fs::read(&file).unwrap();
+    // Restart in the gap between successful restore and its durable checkpoint.
+    original.restore(&ctx).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        fx.secrets.load("legacy/original-0").unwrap()["TOKEN"],
+        "saved-value"
+    );
+    write(
+        &file,
+        "[mcp_servers.legacy]\ncommand = \"somebody-elses-command\"\n",
+    );
+    assert!(original.restore(&ctx).is_err());
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("somebody-elses-command")
     );
 }

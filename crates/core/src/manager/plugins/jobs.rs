@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use brigadier_registry::Agent;
+use brigadier_registry::adapter::{output_within, wait_within};
 use brigadier_registry::library::{Library, SecretSink};
 
 use brigadier_registry::library::Entry;
@@ -25,10 +26,30 @@ static JOBS: LazyLock<Mutex<HashMap<String, PluginJobView>>> = LazyLock::new(Def
 /// Held while a job (or a sharing pass) changes the agents' configs.
 static RUNNING: Mutex<()> = Mutex::new(());
 /// A sharing pass runs, and another was asked for meanwhile.
-static SYNC: Mutex<(bool, bool)> = Mutex::new((false, false));
+static SYNC: Mutex<SyncState> = Mutex::new(SyncState {
+    running: false,
+    pending: None,
+});
+
+struct SyncState {
+    running: bool,
+    pending: Option<(Setup, bool)>,
+}
 /// Whether each Library item's source has moved on, and when that was read.
 static UPDATES: LazyLock<Mutex<HashMap<String, (Instant, bool)>>> = LazyLock::new(Default::default);
 const UPDATES_FRESH: Duration = Duration::from_secs(60 * 60);
+/// How long one `brigadier secret` call may take.
+const SECRET_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
+/// When a removed original waits for its confirming pass, how long until that pass.
+const CONFIRM_AFTER: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(15)
+};
 
 /// The values of `brigadier secret`, kept in the Keychain by the `brigadier` CLI.
 struct CliSecrets {
@@ -61,43 +82,56 @@ impl SecretSink for CliSecrets {
             .stdout(Stdio::null())
             .spawn()
             .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        // The deadline includes writing stdin: a CLI that never reads a large value must
+        // not block the queue before wait_within can start.
+        let value = value.clone();
+        let (send, receive) = std::sync::mpsc::channel();
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(value.expose().as_bytes())
-                .map_err(|err| err.to_string())?;
+            std::thread::spawn(move || {
+                let _ = send.send(stdin.write_all(value.expose().as_bytes()));
+            });
         }
-        let out = child.wait_with_output().map_err(|err| err.to_string())?;
+        let out = wait_within(child, SECRET_TIMEOUT).map_err(|err| err.to_string())?;
         if out.status.success() {
-            Ok(())
+            receive
+                .recv_timeout(SECRET_TIMEOUT)
+                .map_err(|_| "Couldn't save the value in the Keychain.".to_owned())?
+                .map_err(|_| "Couldn't save the value in the Keychain.".to_owned())
         } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+            Err("Brigadier couldn't save the value in the Keychain.".to_owned())
         }
     }
 }
 
 impl Secrets for CliSecrets {
     fn load(&self, server: &str) -> Result<BTreeMap<String, String>, String> {
-        let out = self
-            .command(&["secret", "headers", server])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        let out = output_within(
+            self.command(&["secret", "headers", server])
+                .stdin(Stdio::null()),
+            SECRET_TIMEOUT,
+        )
+        .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
         if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+            return Err(
+                "Brigadier couldn't read the server's values from the Keychain.".to_owned(),
+            );
         }
-        serde_json::from_slice(&out.stdout).map_err(|err| err.to_string())
+        serde_json::from_slice(&out.stdout).map_err(|_| {
+            "Brigadier couldn't read the server's values from the Keychain.".to_owned()
+        })
     }
 
     fn forget(&self, server: &str) -> Result<(), String> {
-        let out = self
-            .command(&["secret", "remove", server])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        let out = output_within(
+            self.command(&["secret", "remove", server])
+                .stdin(Stdio::null()),
+            SECRET_TIMEOUT,
+        )
+        .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
         if out.status.success() {
             Ok(())
         } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+            Err("Brigadier couldn't remove the server's values from the Keychain.".to_owned())
         }
     }
 }
@@ -130,6 +164,12 @@ pub(crate) enum Action {
     Update {
         key: String,
     },
+    /// Brings another app's server (`other:<id>`) to every agent.
+    Import {
+        key: String,
+        name: Option<String>,
+        scope: Option<Vec<PathBuf>>,
+    },
     /// A skill file was saved: its copies follow.
     FollowSkill {
         key: String,
@@ -138,6 +178,7 @@ pub(crate) enum Action {
 }
 
 /// What the actions run with.
+#[derive(Clone)]
 pub(crate) struct Setup {
     pub registry: Arc<brigadier_registry::Registry>,
     pub library: Library,
@@ -259,6 +300,10 @@ fn run(ctx: &Ctx<'_>, action: &Action) -> (Result<Vec<String>, String>, Option<S
             });
             (done.map(|()| vec![key.clone()]), None)
         }
+        Action::Import { key, name, scope } => (
+            share::import(ctx, key, name.as_deref(), scope.as_deref(), &cli).map(|key| vec![key]),
+            None,
+        ),
         Action::FollowSkill { key, path } => (
             share::follow_skill(ctx, key, path, &cli).map(|()| done(key)),
             None,
@@ -268,14 +313,15 @@ fn run(ctx: &Ctx<'_>, action: &Action) -> (Result<Vec<String>, String>, Option<S
 
 /// Asks for a sharing pass over every item: now, or once the running one ends (passes asked
 /// for meanwhile are one). `retry`: try again what failed with the same inputs.
-pub(crate) fn request_sync(setup: Setup, retry: bool) {
+pub(crate) fn request_sync(mut setup: Setup, retry: bool) {
     {
         let mut state = lock(&SYNC);
-        if state.0 {
-            state.1 = true;
+        if state.running {
+            let retry = retry || state.pending.as_ref().is_some_and(|(_, retry)| *retry);
+            state.pending = Some((setup, retry));
             return;
         }
-        state.0 = true;
+        state.running = true;
     }
     std::thread::spawn(move || {
         let mut retry = retry;
@@ -290,13 +336,23 @@ pub(crate) fn request_sync(setup: Setup, retry: bool) {
                 }
             }
             setup.registry.refresh();
+            // A removed original waits for a second clean read: that pass comes by itself, not
+            // only with the next change (review #11).
+            let confirming = share::confirming(&setup.library);
+            if confirming && lock(&SYNC).pending.is_none() {
+                std::thread::sleep(CONFIRM_AFTER);
+            }
             let mut state = lock(&SYNC);
-            if state.1 {
-                state.1 = false;
+            if let Some((latest, requested_retry)) = state.pending.take() {
+                setup = latest;
+                retry = requested_retry;
+                continue;
+            }
+            if confirming {
                 retry = false;
                 continue;
             }
-            state.0 = false;
+            state.running = false;
             break;
         }
     });
