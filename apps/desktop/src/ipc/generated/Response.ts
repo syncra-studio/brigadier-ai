@@ -18,6 +18,7 @@ import type { ContinueWhen } from "./ContinueWhen";
 import type { ConventionsExport } from "./ConventionsExport";
 import type { Conversation } from "./Conversation";
 import type { ConversationActivity } from "./ConversationActivity";
+import type { ConversationId } from "./ConversationId";
 import type { ConversationStatus } from "./ConversationStatus";
 import type { ConversationView } from "./ConversationView";
 import type { DaemonActivity } from "./DaemonActivity";
@@ -96,7 +97,12 @@ import type { WorkspaceTree } from "./WorkspaceTree";
 /**
  * Results, tagged with the method of the request they answer.
  */
-export type Response = { "method": "getCatalog", catalog: Catalog, } | { "method": "getActivity", activity: Array<ConversationActivity>, } | { "method": "getSettledTabs", tabs: Array<SettledTab>, } | { "method": "getMergeUndo", 
+export type Response = { "method": "getCatalog", catalog: Catalog, } | { "method": "getActivity", activity: Array<ConversationActivity>, } | { "method": "getSettledTabs", tabs: Array<SettledTab>, 
+/**
+ * Open sessions with nothing left to merge: no commit beyond their base or its
+ * upstream, nothing uncommitted (D61). Settled or not.
+ */
+landed: Array<ConversationId>, } | { "method": "getMergeUndo", 
 /**
  * None: never reverted.
  */

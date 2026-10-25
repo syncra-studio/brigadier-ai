@@ -303,6 +303,170 @@ async fn a_session_that_changed_nothing_never_reads_ready_or_merged() {
     flow.stop().await;
 }
 
+/// D61: the thread pushes its session's work to origin's main itself while the local main
+/// lags behind it. Its work is on the base as its remote has it: nothing is ahead, the session
+/// reads merged, and Archive takes its clean worktree like any merged one's.
+#[tokio::test]
+async fn work_the_thread_pushed_to_the_remote_base_reads_merged_and_archives() {
+    let flow = Flow::start(
+        "harness-w38-pushed-to-main",
+        Options::default(),
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("Noted.");
+            }
+            let workspace = turn.cwd.clone();
+            if turn.input.contains("Write the notes.") {
+                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                git(&workspace, &["add", "NOTES.md"]);
+                git(&workspace, &["commit", "-q", "-m", "Add notes"]);
+                return Reply::text("Committed.");
+            }
+            if turn.input.contains("Push it to main.") {
+                git(&workspace, &["push", "-q", "origin", "HEAD:main"]);
+                return Reply::text("Pushed to main.");
+            }
+            Reply::text("Noted.")
+        }),
+    )
+    .await;
+    let root = flow.repo.parent().unwrap().to_path_buf();
+    let origin = root.join("origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    let id = flow.conversation.clone();
+    let mine = || async {
+        flow.manager
+            .settled_tabs()
+            .await
+            .into_iter()
+            .find(|tab| tab.conversation_id == id)
+            .map(|tab| (tab.state, tab.ahead))
+    };
+
+    flow.say("Write the notes.").await;
+    flow.settled().await;
+    assert_eq!(
+        mine().await,
+        Some((TabState::Ready, Some(1))),
+        "unpushed: one commit to merge"
+    );
+
+    flow.say("Push it to main.").await;
+    flow.settled().await;
+    assert_ne!(
+        git(&flow.repo, &["rev-parse", "main"]),
+        git(&flow.repo, &["rev-parse", "origin/main"]),
+        "the local main lags"
+    );
+    assert_eq!(
+        mine().await,
+        Some((TabState::Merged, Some(0))),
+        "on origin's main: nothing left to merge"
+    );
+
+    let work = flow.manager.session_dir(&id).work();
+    assert!(work.join(".git").is_file());
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    assert!(
+        !work.exists(),
+        "its work is on origin's main: the clean worktree goes"
+    );
+    flow.stop().await;
+}
+
+/// D61: a session never marked ready whose thread commits and pushes to origin's main in one
+/// turn has nothing left to merge, though it never reads ready or merged (#495); an edit left
+/// uncommitted after that has something again.
+#[tokio::test]
+async fn work_committed_and_pushed_in_one_turn_leaves_nothing_to_merge() {
+    let flow = Flow::start(
+        "harness-w38-commit-and-push",
+        Options::default(),
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("Noted.");
+            }
+            let workspace = turn.cwd.clone();
+            if turn.input.contains("Ship the notes.") {
+                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                git(&workspace, &["add", "NOTES.md"]);
+                git(&workspace, &["commit", "-q", "-m", "Add notes"]);
+                git(&workspace, &["push", "-q", "origin", "HEAD:main"]);
+                return Reply::text("Pushed to main.");
+            }
+            if turn.input.contains("Draft more.") {
+                std::fs::write(workspace.join("NOTES.md"), "notes\nmore\n").unwrap();
+                return Reply::text("Drafted, not committed.");
+            }
+            Reply::text("Noted.")
+        }),
+    )
+    .await;
+    let root = flow.repo.parent().unwrap().to_path_buf();
+    let origin = root.join("origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    let id = flow.conversation.clone();
+    let marks = || async {
+        let (tabs, landed) = flow.manager.tab_marks().await;
+        (
+            tabs.iter().any(|tab| tab.conversation_id == id),
+            landed.contains(&id),
+        )
+    };
+
+    flow.say("Look around.").await;
+    flow.settled().await;
+    assert_eq!(marks().await, (false, true), "nothing of its own yet");
+
+    flow.say("Ship the notes.").await;
+    let board = flow.settled().await;
+    assert!(board.ready.is_empty(), "never ready: {:?}", board.ready);
+    assert_ne!(
+        git(&flow.repo, &["rev-parse", "main"]),
+        git(&flow.repo, &["rev-parse", "origin/main"]),
+        "the local main lags"
+    );
+    assert_eq!(
+        marks().await,
+        (false, true),
+        "not settled (#495), and nothing left to merge"
+    );
+
+    flow.say("Draft more.").await;
+    flow.settled().await;
+    assert_eq!(
+        marks().await,
+        (false, false),
+        "an uncommitted edit to merge"
+    );
+    flow.stop().await;
+}
+
 /// `gh pr list`'s answer: pull request #7 of `head` in `state`, merged as `merge_commit`.
 fn pr_list(state: &str, head: &str, merge_commit: Option<&str>) -> String {
     serde_json::json!([{

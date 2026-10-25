@@ -1460,6 +1460,9 @@ pub enum Response {
     },
     GetSettledTabs {
         tabs: Vec<SettledTab>,
+        /// Open sessions with nothing left to merge: no commit beyond their base or its
+        /// upstream, nothing uncommitted (D61). Settled or not.
+        landed: Vec<ConversationId>,
     },
     GetMergeUndo {
         /// None: never reverted.

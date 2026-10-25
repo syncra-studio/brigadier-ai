@@ -25,6 +25,9 @@ pub struct Repo {
 
 /// The message of a [`Repo::snapshot_files`] snapshot.
 const SNAPSHOT: &str = "Brigadier snapshot of the checkout's files";
+/// How many of a base's commits [`Repo::landed_in`] looks for a branch's content in, newest
+/// first: one merge each.
+const CONTENT_COMMITS: usize = 64;
 
 /// A lock per repository (common git dir), each made on first use and dropped when unused.
 type RepoLocks = OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>>;
@@ -401,30 +404,188 @@ impl Repo {
     }
     /// Whether every commit of `tip` is in local branch `into` or in its upstream (`origin/<into>`
     /// when none is set): reachable from it, or there as the same change (a cherry-pick), as
-    /// `git cherry` tells. A stale local branch doesn't hide work that landed upstream. A merge
-    /// commit of its own has no patch to match (its resolution may be new work): never landed.
+    /// `git cherry` tells, or its content there (D62, [`Self::content_in`]): a rebased or
+    /// squashed copy, edited further since. A stale local branch doesn't hide work that landed
+    /// upstream (D61). A merge commit of its own counts by its content, a resolution of its own
+    /// included.
     pub fn landed_in(&self, tip: &Oid, into: &str) -> Result<bool> {
         valid_oid(tip)?;
         let mut bases = vec![self.branch_commit(into)?];
         bases.extend(self.upstream_tip(into)?);
+        bases.dedup();
         for base in bases {
             let range = format!("{}..{}", base.0, tip.0);
             let merges = self.cmd(
                 &["rev-list", "--merges", "--max-count=1", &range, "--"],
                 true,
             )?;
-            if !merges.trim_ascii().is_empty() {
-                continue;
+            if merges.trim_ascii().is_empty() {
+                let out = self.cmd(&["cherry", &base.0, &tip.0], true)?;
+                if !out
+                    .split(|byte| *byte == b'\n')
+                    .any(|line| line.starts_with(b"+"))
+                {
+                    return Ok(true);
+                }
             }
-            let out = self.cmd(&["cherry", &base.0, &tip.0], true)?;
-            if !out
-                .split(|byte| *byte == b'\n')
-                .any(|line| line.starts_with(b"+"))
-            {
+            if self.content_in(&base, tip)? {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// Whether every file `tip` changed since it left `base` has, in one of `base`'s commits
+    /// since, a version that merging `tip`'s change into leaves as it is: the change is there,
+    /// as a rebased, squashed or cherry-picked copy, even one edited further after. The newest
+    /// [`CONTENT_COMMITS`] commits that touch those files are looked at; past them it reads
+    /// not there.
+    fn content_in(&self, base: &Oid, tip: &Oid) -> Result<bool> {
+        let fork = self.merge_base(base, tip)?;
+        let names = |out: &[u8]| -> Result<BTreeSet<String>> {
+            parse::fields(out)
+                .filter(|name| !name.is_empty())
+                .map(|name| parse::text(name).map(str::to_owned))
+                .collect()
+        };
+        let mut left = names(&self.cmd(
+            &[
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                &fork.0,
+                &tip.0,
+                "--",
+            ],
+            true,
+        )?)?;
+        // Nothing changed in sum: nothing of it is missing.
+        if left.is_empty() {
+            return Ok(true);
+        }
+        let mut args = vec![
+            "--literal-pathspecs".to_owned(),
+            "rev-list".to_owned(),
+            format!("--max-count={CONTENT_COMMITS}"),
+            format!("{}..{}", fork.0, base.0),
+            "--".to_owned(),
+        ];
+        args.extend(left.iter().cloned());
+        let commits = self.cmd(&args, true)?;
+        for line in commits.split(|byte| *byte == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            let commit = parse::oid(line)?;
+            let (tree, conflicts) = self.marked_merge_from(Some(&fork), &commit, tip)?;
+            let changed = names(&self.cmd(
+                &[
+                    "diff-tree",
+                    "-r",
+                    "--name-only",
+                    "--no-renames",
+                    "-z",
+                    &commit.0,
+                    &tree.0,
+                    "--",
+                ],
+                true,
+            )?)?;
+            let conflicts = conflicts.unwrap_or_default();
+            left.retain(|name| changed.contains(name) || conflicts.contains(name));
+            if left.is_empty() {
+                return Ok(true);
+            }
+        }
+        // A file both sides changed on the same lines (a generated one of one long line): its
+        // change looked for word by word.
+        let mut tries = CONTENT_COMMITS;
+        for name in std::mem::take(&mut left) {
+            let mut found = false;
+            let commits = self.cmd(
+                &[
+                    "--literal-pathspecs",
+                    "rev-list",
+                    &format!("--max-count={tries}"),
+                    &format!("{}..{}", fork.0, base.0),
+                    "--",
+                    &name,
+                ],
+                true,
+            )?;
+            let base_text = self
+                .file_at(&fork, &name)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let theirs = self.file_at(tip, &name).ok().flatten().unwrap_or_default();
+            for line in commits.split(|byte| *byte == b'\n') {
+                if line.is_empty() || tries == 0 {
+                    continue;
+                }
+                tries -= 1;
+                let commit = parse::oid(line)?;
+                let ours = self
+                    .file_at(&commit, &name)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                if self
+                    .holds_change(&base_text, &ours, &theirs)
+                    .unwrap_or(false)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether `ours` already holds the change from `base` to `theirs`, word by word: merging
+    /// it in is clean and changes nothing. Never for binary content.
+    fn holds_change(&self, base: &[u8], ours: &[u8], theirs: &[u8]) -> Result<bool> {
+        if [base, ours, theirs].iter().any(|text| text.contains(&0)) {
+            return Ok(false);
+        }
+        // One word, run of other characters or line break a line, so git merges word by word.
+        let words = |text: &[u8]| {
+            let class = |byte: u8| match byte {
+                b'\n' => 0,
+                byte if byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80 => 1,
+                _ => 2,
+            };
+            let mut out = Vec::with_capacity(text.len() * 2);
+            for (at, byte) in text.iter().enumerate() {
+                if at > 0 && (class(*byte) != class(text[at - 1]) || *byte == b'\n') {
+                    out.push(b'\n');
+                }
+                out.push(if *byte == b'\n' { b'$' } else { *byte });
+            }
+            out.push(b'\n');
+            out
+        };
+        let ours = words(ours);
+        // A private folder of its own, removed when dropped.
+        let scratch = TempIndex::new()?;
+        let [base_file, ours_file, theirs_file] =
+            ["base", "ours", "theirs"].map(|name| scratch.path.with_file_name(name));
+        fs::write(&base_file, words(base))?;
+        fs::write(&ours_file, &ours)?;
+        fs::write(&theirs_file, words(theirs))?;
+        let args = [
+            "merge-file".as_ref(),
+            "-p".as_ref(),
+            ours_file.as_os_str(),
+            base_file.as_os_str(),
+            theirs_file.as_os_str(),
+        ];
+        let out = self.git.run(None, &args, true, &[], None)?;
+        Ok(out.status.code() == Some(0) && out.stdout == ours)
     }
 
     /// The commit local branch `branch`'s upstream is at, else `origin/<branch>`'s; none when
@@ -2095,16 +2256,24 @@ impl Repo {
     /// Merges two commits without touching any checkout: the merged tree, with conflict markers
     /// left in conflicted files, and the conflicted paths (`None` when the merge is clean).
     fn marked_merge(&self, left: &Oid, right: &Oid) -> Result<(Oid, Option<Vec<String>>)> {
+        self.marked_merge_from(None, left, right)
+    }
+
+    /// [`Self::marked_merge`] from merge base `base` when given, else from git's own.
+    fn marked_merge_from(
+        &self,
+        base: Option<&Oid>,
+        left: &Oid,
+        right: &Oid,
+    ) -> Result<(Oid, Option<Vec<String>>)> {
         valid_oid(left)?;
         valid_oid(right)?;
-        let args = [
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            "-z",
-            &left.0,
-            &right.0,
-        ];
+        let mut args = vec!["merge-tree", "--write-tree", "--name-only", "-z"];
+        let from = base.map(|base| format!("--merge-base={}", base.0));
+        if let Some(from) = &from {
+            args.push(from);
+        }
+        args.extend([left.0.as_str(), right.0.as_str()]);
         let out = self.run(&args, false)?;
         if !matches!(out.status.code(), Some(0 | 1)) {
             return Err(failure(&args, &out));
@@ -3247,11 +3416,102 @@ pub(crate) mod tests {
             "merge",
             "--quiet",
             "--no-ff",
-            "--no-edit",
+            "--no-commit",
             picked.0.as_str(),
         ]);
+        fs::write(root.join("e.txt"), "resolved\n").expect("a file");
+        run(&["add", "e.txt"]);
+        run(&["commit", "--quiet", "--no-edit"]);
         let merged = repo.resolve("HEAD").expect("HEAD");
-        assert!(!landed(&merged), "its merge commit is nowhere upstream");
+        assert!(
+            !landed(&merged),
+            "its merge commit holds a change of its own, nowhere upstream"
+        );
+    }
+
+    /// D62: a branch whose work landed upstream as a rebased, squashed copy, edited further
+    /// there since, has landed though no commit of it is there by ancestry or patch (its own
+    /// merge of main included); a change of its own still hasn't.
+    #[test]
+    fn a_rebased_copy_edited_further_upstream_has_landed() {
+        let (dir, git) = test_git("landed-content");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        let lines = |edits: &[(usize, &str)]| {
+            let mut all: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
+            for (at, text) in edits {
+                all[at - 1] = (*text).to_owned();
+            }
+            all.join("\n") + "\n"
+        };
+        fs::write(root.join("a.txt"), lines(&[])).expect("a file");
+        // A generated file of one long line, which both sides change.
+        fs::write(root.join("gen.ts"), "type R = { a: A } | { b: B };\n").expect("a file");
+        repo.commit_changes("Base", true).expect("a commit");
+        run(&["branch", "-M", "main"]);
+        // The work: two edits, with main merged in between (a merge commit of its own).
+        run(&["checkout", "--quiet", "-b", "work"]);
+        fs::write(root.join("a.txt"), lines(&[(2, "TWO")])).expect("a change");
+        fs::write(
+            root.join("gen.ts"),
+            "type R = { a: A } | { b: B } | { c: C };\n",
+        )
+        .expect("a change");
+        repo.commit_changes("Two", true).expect("a commit");
+        run(&["checkout", "--quiet", "main"]);
+        fs::write(root.join("x.txt"), "x\n").expect("a file");
+        repo.commit_changes("Add x", true).expect("a commit");
+        run(&["checkout", "--quiet", "work"]);
+        run(&["merge", "--quiet", "--no-ff", "--no-edit", "main"]);
+        fs::write(root.join("a.txt"), lines(&[(2, "TWO"), (9, "NINE")])).expect("a change");
+        let work = repo.commit_changes("Nine", true).expect("a commit");
+        // Upstream: someone else's edit, then the work squashed onto it with a conflict-free
+        // rebase, then line two edited again.
+        run(&["checkout", "--quiet", "-b", "upstream", "main"]);
+        fs::write(root.join("a.txt"), lines(&[(5, "FIVE")])).expect("a change");
+        fs::write(
+            root.join("gen.ts"),
+            "type R = { z: Z } | { a: A } | { b: B };\n",
+        )
+        .expect("a change");
+        repo.commit_changes("Five", true).expect("a commit");
+        fs::write(
+            root.join("gen.ts"),
+            "type R = { z: Z } | { a: A } | { b: B } | { c: C };\n",
+        )
+        .expect("a change");
+        fs::write(
+            root.join("a.txt"),
+            lines(&[(2, "TWO"), (5, "FIVE"), (9, "NINE")]),
+        )
+        .expect("a change");
+        repo.commit_changes("Two and nine", true).expect("a commit");
+        fs::write(
+            root.join("a.txt"),
+            lines(&[(2, "TWO again"), (5, "FIVE"), (9, "NINE")]),
+        )
+        .expect("a change");
+        repo.commit_changes("Two again", true).expect("a commit");
+        let upstream = repo.resolve("HEAD").expect("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+        let landed = |tip: &Oid| repo.landed_in(tip, "main").expect("landed");
+        assert!(!landed(&work), "no upstream: the stale main lacks it");
+        run(&[
+            "update-ref",
+            "refs/remotes/origin/main",
+            upstream.0.as_str(),
+        ]);
+        assert!(landed(&work), "its content is on origin/main");
+        run(&["checkout", "--quiet", "work"]);
+        fs::write(
+            root.join("a.txt"),
+            lines(&[(2, "TWO"), (7, "SEVEN"), (9, "NINE")]),
+        )
+        .expect("a change");
+        let more = repo.commit_changes("Seven", true).expect("a commit");
+        assert!(!landed(&more), "line seven landed nowhere");
     }
 
     #[test]

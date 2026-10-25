@@ -1272,9 +1272,10 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 outcome: send_outcome(outcome),
             }
         }
-        Request::GetSettledTabs => Response::GetSettledTabs {
-            tabs: sessions.settled_tabs().await,
-        },
+        Request::GetSettledTabs => {
+            let (tabs, landed) = sessions.tab_marks().await;
+            Response::GetSettledTabs { tabs, landed }
+        }
         Request::GetMergeUndo {
             conversation_id,
             merge_commit,
