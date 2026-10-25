@@ -90,6 +90,9 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.match(l2.sections.flatMap((entry) => entry.rows).find((entry) => entry.name === "higgsfield")!.line, /Images, video/);
   // A plugin's skills are one row, with their count.
   assert.deepEqual([row(skills, "higgsfield").kind, row(skills, "impeccable").kind], ["Plugin · 9 skills", "Skill"]);
+  // Another agent's plugin has no places to pick: a plain Global tag, no picker.
+  assert.deepEqual([row(skills, "higgsfield").chips, row(skills, "higgsfield").picker], [["Global"], null]);
+  assert.deepEqual([row(skills, "impeccable").chips, row(skills, "impeccable").picker], [[], "Global"]);
   // Only one agent has it: the row keeps its own line, no yellow one.
   assert.deepEqual([row(skills, "grill-me").line, row(skills, "grill-me").tone], ["Asks hard questions about a plan.", "muted"]);
   assert.deepEqual(names(section(l2, "Only in some projects").rows), ["delegator"]);

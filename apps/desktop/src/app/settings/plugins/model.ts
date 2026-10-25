@@ -17,8 +17,8 @@ export type Row = {
   /** Its switch: on where the page looks. */
   on: boolean;
   line: Line;
-  /** Project tags: where it's on, or off. */
-  chips: { text: string; off: boolean }[];
+  /** Project tags: where it's on, or off; `global` for every project. */
+  chips: { text: string; off: boolean; global?: boolean }[];
   /** The place picker's tag, where the row has one: Global, or the projects (folders) it's on in. */
   places?: Places;
 };
@@ -76,6 +76,9 @@ function problem(item: PluginItemView): Line | null {
   return null;
 }
 
+/** Another agent's plugin: it has no places of its own to pick. */
+const plugin = (item: PluginItemView) => item.key.startsWith("plugin:");
+
 /** Off in every project: on nowhere. */
 const nowhere = (item: PluginItemView) => !item.everywhere && item.onIn.length === 0;
 
@@ -107,7 +110,9 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
         description: "On in every project, and in new ones you add. Turn one off to stop it everywhere.",
         rows: items.filter((item) => item.everywhere || nowhere(item)).map((item) => {
           const on = isOn(item, null);
-          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips: on ? offChips(view, item) : [], ...(on ? { places: "global" as const } : {}) };
+          // Another agent's plugin has no places to pick: a plain Global tag.
+          const chips = on && plugin(item) ? [...offChips(view, item), { text: "Global", off: false, global: true }] : on ? offChips(view, item) : [];
+          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips, ...(on && !plugin(item) ? { places: "global" as const } : {}) };
         }),
       },
       {
@@ -115,13 +120,14 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
         title: "Only in some projects",
         description: "Each one is on only in the projects on its tag. Click the tag to change where.",
         rows: items.filter((item) => !item.everywhere && item.onIn.length > 0).map((item) => {
-          // The projects it's on in go on the picker; a folder that isn't a project is a plain tag.
-          const projects = item.onIn.filter((path) => isProject(view, path));
+          // The projects it's on in go on the picker; a folder that isn't a project, or any folder of
+          // another agent's plugin, is a plain tag.
+          const projects = plugin(item) ? [] : item.onIn.filter((path) => isProject(view, path));
           return {
             item,
             on: true,
             line: problem(item) ?? about(item),
-            chips: item.onIn.filter((path) => !isProject(view, path)).map((path) => ({ text: projectName(view, path), off: false })),
+            chips: item.onIn.filter((path) => !projects.includes(path)).map((path) => ({ text: projectName(view, path), off: false })),
             ...(projects.length ? { places: projects } : {}),
           };
         }),

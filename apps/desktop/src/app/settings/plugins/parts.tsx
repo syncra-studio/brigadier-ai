@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/controls";
-import { ChevronDown, ChevronRight, Folder, Globe, Plugin, ProviderGlyph, Sparkle, Spinner, Terminal } from "@/components/icons";
+import { ChevronDown, ChevronRight, Folder, Folders, Globe, Plugin, ProviderGlyph, Sparkle, Spinner, Terminal } from "@/components/icons";
 import { SettingsCard } from "@/components/shared";
 import type { AgentItemState, PluginAgentView, PluginItemView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -68,10 +68,11 @@ export function ItemMark({ item, large = false }: { item: Pick<PluginItemView, "
 }
 
 /** A project tag: where it's on, or "Off in steady-app". */
-function ScopeChip({ children }: { children: ReactNode }) {
+function ScopeChip({ global = false, children }: { global?: boolean; children: ReactNode }) {
+  const Icon = global ? Folders : Folder;
   return (
     <span data-slot="scope-chip" className="bg-foreground/5 text-foreground/65 rounded-capsule flex h-pill shrink-0 items-center gap-1 px-2 text-xs">
-      <Folder aria-hidden className="size-3" />
+      <Icon aria-hidden className="size-3" />
       {children}
     </span>
   );
@@ -84,7 +85,7 @@ export function PluginRow({ view, item, line, dim = false, chips = [], picker, l
   line: Line;
   /** Off where the page looks. */
   dim?: boolean;
-  chips?: { text: string }[];
+  chips?: { text: string; global?: boolean }[];
   /** The place picker, after the tags. */
   picker?: ReactNode;
   lit?: (state: AgentItemState) => boolean;
@@ -113,7 +114,7 @@ export function PluginRow({ view, item, line, dim = false, chips = [], picker, l
       )}
       <span className={cn("flex shrink-0 items-center gap-3", dim && "opacity-50")}>
         <AgentStrip view={view} item={item} lit={dim ? () => false : (lit ?? has)} />
-        {chips.map((chip) => <ScopeChip key={chip.text}>{chip.text}</ScopeChip>)}
+        {chips.map((chip) => <ScopeChip key={chip.text} global={chip.global ?? false}>{chip.text}</ScopeChip>)}
         {picker}
       </span>
       {end}

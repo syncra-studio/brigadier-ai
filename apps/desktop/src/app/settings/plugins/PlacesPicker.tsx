@@ -13,7 +13,8 @@ const ROW = "rounded-control hover:bg-foreground/5 flex w-full shrink-0 items-ce
 /**
  * A row's project tag as the place picker: Global at the top, then the projects to check, several
  * at a time. Each pick applies at once; the last project checked stays (its switch turns it off).
- * Only a Library item has places; any other item is added to every agent first.
+ * Only a Library item has places; an agent's own item is added to every agent first (another
+ * agent's plugin has no picker).
  */
 export function PlacesPicker({ view, item, places, busy, onPlaces, onEveryAgent }: {
   view: PluginsView;
