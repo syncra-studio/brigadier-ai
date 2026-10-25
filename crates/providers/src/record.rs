@@ -75,6 +75,7 @@ pub struct Line {
 pub struct Recorder {
     started: Instant,
     lines: mpsc::Sender<Line>,
+    writer: std::thread::JoinHandle<()>,
 }
 
 impl Recorder {
@@ -100,7 +101,7 @@ impl Recorder {
             .map(|redactor| DeltaStreams::new(header.provider, redactor));
         let scrubber = Scrubber::new(redactor);
         let path = path.to_owned();
-        std::thread::Builder::new()
+        let writer = std::thread::Builder::new()
             .name("cli-recorder".into())
             .spawn(move || {
                 for line in rx {
@@ -128,6 +129,7 @@ impl Recorder {
         Ok(Self {
             started: Instant::now(),
             lines,
+            writer,
         })
     }
 
@@ -137,6 +139,13 @@ impl Recorder {
             dir,
             line: line.to_owned(),
         });
+    }
+
+    /// Waits until every queued line has been scrubbed and written. Recording tools use this
+    /// before reading back a scrubbed native transcript (D9(c)); live adapters need not wait.
+    pub fn finish(self) -> std::thread::Result<()> {
+        drop(self.lines);
+        self.writer.join()
     }
 }
 

@@ -1,0 +1,63 @@
+{
+  "note": "CLI-reported cumulative totals, not additive. See ../usage.json for final session totals including compaction and resume. Codex reports no dollar cost.",
+  "reports": [
+    {
+      "cacheWrite1hTokens": 5736,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 5736,
+      "cachedInputTokens": 24582,
+      "costUsd": 0.00144992,
+      "inputTokens": 4,
+      "modelCalls": 2,
+      "outputTokens": 113,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 10871,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 10871,
+      "cachedInputTokens": 35786,
+      "costUsd": 0.0034164449999999997,
+      "inputTokens": 6,
+      "modelCalls": 3,
+      "outputTokens": 117,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 10871,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 10871,
+      "cachedInputTokens": 35786,
+      "costUsd": 0.0034164449999999997,
+      "inputTokens": 6,
+      "modelCalls": 4,
+      "outputTokens": 117,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 249,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 249,
+      "cachedInputTokens": 16384,
+      "costUsd": 0.003632285,
+      "inputTokens": 2,
+      "modelCalls": 1,
+      "outputTokens": 4,
+      "reasoningTokens": 0
+    }
+  ],
+  "nativeTotals": {
+    "modelUsage": {
+      "claude-haiku-5-5": {
+        "cacheCreationInputTokens": 11231,
+        "cacheReadInputTokens": 67191,
+        "costUSD": 0.003632285,
+        "inputTokens": 2170,
+        "outputTokens": 1011,
+        "thinkingTokens": 163,
+        "webSearchRequests": 0
+      }
+    },
+    "costUsd": 0.003632285
+  }
+}

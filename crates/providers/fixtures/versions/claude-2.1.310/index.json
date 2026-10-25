@@ -1,0 +1,79 @@
+{
+  "provider": "claude",
+  "cliVersion": "2.1.310",
+  "limit": {
+    "status": "missing",
+    "reason": "D25/D29: record only if a real limit happens anyway; never spend usage to trigger it."
+  },
+  "reusedRecordings": [],
+  "scenarios": {
+    "plain": {
+      "recording": "../../claude-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "plain.view.json",
+      "historyRecordings": [
+        "../../claude-plan-questions.jsonl"
+      ]
+    },
+    "tools": {
+      "recording": "../../claude-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "tools.view.json",
+      "historyRecordings": [
+        "../../claude-plan-questions.jsonl"
+      ]
+    },
+    "background": {
+      "recording": "lifecycle.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "background.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "interrupt": {
+      "recording": "lifecycle.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "interrupt.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "compaction": {
+      "recording": "lifecycle.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "compaction.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "resume": {
+      "recording": "resume.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "resume.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "plan": {
+      "recording": "../../claude-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "plan.view.json",
+      "historyRecordings": [
+        "../../claude-plan-questions.jsonl"
+      ]
+    },
+    "question": {
+      "recording": "../../claude-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "question.view.json",
+      "historyRecordings": [
+        "../../claude-plan-questions.jsonl"
+      ]
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "provider": "codex",
+  "cliVersion": "0.164.0",
+  "limit": {
+    "status": "missing",
+    "reason": "D25/D29: record only if a real limit happens anyway; never spend usage to trigger it."
+  },
+  "reusedRecordings": [],
+  "scenarios": {
+    "plain": {
+      "recording": "../../codex-plan-questions.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "plain.view.json",
+      "nativeRecording": "lifecycle.jsonl",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "tools": {
+      "recording": "../../codex-plan-questions.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "tools.view.json",
+      "nativeRecording": "lifecycle.jsonl",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "background": {
+      "recording": "lifecycle.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "background.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "interrupt": {
+      "recording": "../../codex-plan-questions.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "interrupt.view.json",
+      "nativeRecording": "interrupt.jsonl",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "compaction": {
+      "recording": "lifecycle.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "compaction.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "resume": {
+      "recording": "resume.jsonl",
+      "native": "lifecycle.native.jsonl",
+      "view": "resume.view.json",
+      "historyRecordings": [
+        "lifecycle.jsonl",
+        "interrupt.jsonl",
+        "resume.jsonl"
+      ]
+    },
+    "plan": {
+      "recording": "../../codex-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "plan.view.json",
+      "nativeRecording": "plan-question.jsonl",
+      "historyRecordings": [
+        "plan-question.jsonl"
+      ]
+    },
+    "question": {
+      "recording": "../../codex-plan-questions.jsonl",
+      "native": "plan-question.native.jsonl",
+      "view": "question.view.json",
+      "nativeRecording": "plan-question.jsonl",
+      "historyRecordings": [
+        "plan-question.jsonl"
+      ]
+    }
+  }
+}

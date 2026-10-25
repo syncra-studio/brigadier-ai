@@ -1,0 +1,355 @@
+{
+  "events": [
+    {
+      "itemId": "01a172ec-a073-70e0-acef-4bb677b216fc",
+      "role": "user",
+      "text": "Reply OK.",
+      "type": "message"
+    },
+    {
+      "itemId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+      "phase": "answer",
+      "text": "OK",
+      "type": "messageDelta"
+    },
+    {
+      "itemId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+      "role": "assistant",
+      "text": "OK",
+      "type": "message"
+    },
+    {
+      "durationMs": 2886,
+      "status": "completed",
+      "turnId": "01a172ec-9a27-7f60-a44c-1095ecdbde30",
+      "type": "turnCompleted",
+      "usage": null
+    }
+  ],
+  "live": {
+    "entries": [
+      {
+        "atMs": 1792929287868,
+        "event": {
+          "itemId": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+          "role": "user",
+          "text": "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929290727,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addee0a99708191aa0e6b1585e45dc8",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792929290736,
+        "event": {
+          "durationMs": 4017,
+          "status": "completed",
+          "turnId": "01a172e9-ca3c-7472-bbe4-2c821daf32bf",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929291437,
+        "event": {
+          "command": "sleep 2",
+          "cwd": "/private/tmp/20261025-1046-harness-research-w17-codex/lifecycle",
+          "durationMs": 1858,
+          "exitCode": 0,
+          "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
+          "output": "",
+          "status": "completed",
+          "type": "command"
+        }
+      },
+      {
+        "atMs": 1792929292467,
+        "event": {
+          "automatic": true,
+          "error": null,
+          "tokensAfter": null,
+          "tokensBefore": null,
+          "type": "compactionEnded"
+        }
+      },
+      {
+        "atMs": 1792929292474,
+        "event": {
+          "durationMs": 1734,
+          "status": "completed",
+          "turnId": "01a172e9-d9f3-7960-b0b4-3a16aebfdf58",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929469113,
+        "event": {
+          "itemId": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+          "role": "user",
+          "text": "Run sleep 30 using your shell tool.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929470386,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addeebe078c8191a5a9d4a51be755d8",
+          "role": "assistant",
+          "text": "I’ll start the 30-second sleep in the shell and return as soon as the command yields.",
+          "type": "message"
+        },
+        "phase": "commentary"
+      },
+      {
+        "atMs": 1792929470757,
+        "event": {
+          "durationMs": 2855,
+          "status": "interrupted",
+          "turnId": "01a172ec-8dfb-7ba0-8e08-3b0aa8200db6",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929470759,
+        "event": {
+          "command": "sleep 30",
+          "cwd": "/private/tmp/20261025-1046-harness-research-w17-codex-fill/lifecycle",
+          "durationMs": 7,
+          "exitCode": -1,
+          "itemId": "exec-bbe5117c-a183-4207-905d-7fe4059c2b77",
+          "output": "",
+          "status": "failed",
+          "type": "command"
+        }
+      },
+      {
+        "atMs": 1792929472627,
+        "event": {
+          "itemId": "01a172ec-a073-70e0-acef-4bb677b216fc",
+          "role": "user",
+          "text": "Reply OK.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929473876,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792929473904,
+        "event": {
+          "durationMs": 2886,
+          "status": "completed",
+          "turnId": "01a172ec-9a27-7f60-a44c-1095ecdbde30",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      }
+    ],
+    "turns": [
+      {
+        "end": "done",
+        "endedAtMs": 1792929292475,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929287868,
+        "userMessage": "01a172e9-cebc-7651-93a0-58aaf65398d5"
+      },
+      {
+        "end": "stopped",
+        "endedAtMs": 1792929470750,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929469113,
+        "userMessage": "01a172ec-92b8-7920-8a80-a0df5d72173e"
+      },
+      {
+        "end": "done",
+        "endedAtMs": 1792929473906,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929472627,
+        "userMessage": "01a172ec-a073-70e0-acef-4bb677b216fc"
+      }
+    ]
+  },
+  "persisted": {
+    "entries": [
+      {
+        "atMs": 1792929287868,
+        "event": {
+          "itemId": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+          "role": "user",
+          "text": "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929290727,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addee0a99708191aa0e6b1585e45dc8",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792929290736,
+        "event": {
+          "durationMs": 4017,
+          "status": "completed",
+          "turnId": "01a172e9-ca3c-7472-bbe4-2c821daf32bf",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929291437,
+        "event": {
+          "command": "sleep 2",
+          "cwd": "/private/tmp/20261025-1046-harness-research-w17-codex/lifecycle",
+          "durationMs": 1858,
+          "exitCode": 0,
+          "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
+          "output": "",
+          "status": "completed",
+          "type": "command"
+        }
+      },
+      {
+        "atMs": 1792929292467,
+        "event": {
+          "automatic": true,
+          "error": null,
+          "tokensAfter": null,
+          "tokensBefore": null,
+          "type": "compactionEnded"
+        }
+      },
+      {
+        "atMs": 1792929292474,
+        "event": {
+          "durationMs": 1734,
+          "status": "completed",
+          "turnId": "01a172e9-d9f3-7960-b0b4-3a16aebfdf58",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929469113,
+        "event": {
+          "itemId": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+          "role": "user",
+          "text": "Run sleep 30 using your shell tool.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929470386,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addeebe078c8191a5a9d4a51be755d8",
+          "role": "assistant",
+          "text": "I’ll start the 30-second sleep in the shell and return as soon as the command yields.",
+          "type": "message"
+        },
+        "phase": "commentary"
+      },
+      {
+        "atMs": 1792929470757,
+        "event": {
+          "durationMs": 2855,
+          "status": "interrupted",
+          "turnId": "01a172ec-8dfb-7ba0-8e08-3b0aa8200db6",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      },
+      {
+        "atMs": 1792929470759,
+        "event": {
+          "command": "sleep 30",
+          "cwd": "/private/tmp/20261025-1046-harness-research-w17-codex-fill/lifecycle",
+          "durationMs": 7,
+          "exitCode": -1,
+          "itemId": "exec-bbe5117c-a183-4207-905d-7fe4059c2b77",
+          "output": "",
+          "status": "failed",
+          "type": "command"
+        }
+      },
+      {
+        "atMs": 1792929472627,
+        "event": {
+          "itemId": "01a172ec-a073-70e0-acef-4bb677b216fc",
+          "role": "user",
+          "text": "Reply OK.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792929473876,
+        "event": {
+          "itemId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792929473904,
+        "event": {
+          "durationMs": 2886,
+          "status": "completed",
+          "turnId": "01a172ec-9a27-7f60-a44c-1095ecdbde30",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      }
+    ],
+    "turns": [
+      {
+        "end": "done",
+        "endedAtMs": 1792929292475,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929287868,
+        "userMessage": "01a172e9-cebc-7651-93a0-58aaf65398d5"
+      },
+      {
+        "end": "stopped",
+        "endedAtMs": 1792929470750,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929469113,
+        "userMessage": "01a172ec-92b8-7920-8a80-a0df5d72173e"
+      },
+      {
+        "end": "done",
+        "endedAtMs": 1792929473906,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792929472627,
+        "userMessage": "01a172ec-a073-70e0-acef-4bb677b216fc"
+      }
+    ]
+  }
+}

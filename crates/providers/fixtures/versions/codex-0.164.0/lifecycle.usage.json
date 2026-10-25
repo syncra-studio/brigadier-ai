@@ -1,0 +1,49 @@
+{
+  "note": "CLI-reported cumulative totals, not additive. See ../usage.json for final session totals including compaction and resume. Codex reports no dollar cost.",
+  "reports": [
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 31232,
+      "costUsd": null,
+      "inputTokens": 6023,
+      "modelCalls": 1,
+      "outputTokens": 102,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 31232,
+      "costUsd": null,
+      "inputTokens": 6023,
+      "modelCalls": 1,
+      "outputTokens": 102,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 43648,
+      "costUsd": null,
+      "inputTokens": 6307,
+      "modelCalls": 2,
+      "outputTokens": 107,
+      "reasoningTokens": 0
+    }
+  ],
+  "nativeTotals": {
+    "tokens": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 43648,
+      "input_tokens": 49955,
+      "output_tokens": 107,
+      "reasoning_output_tokens": 0,
+      "total_tokens": 50062
+    },
+    "costUsd": null
+  }
+}

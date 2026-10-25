@@ -1,0 +1,48 @@
+{
+  "scope": "Only new w17 captures; existing plan/question recordings reused without new spend. Cumulative session totals, not a sum of intermediate reports.",
+  "claude": {
+    "model": "claude-haiku-5-5",
+    "source": "claude-2.1.310/lifecycle.native.jsonl final cost-state",
+    "tokens": {
+      "cacheCreationInputTokens": 11231,
+      "cacheReadInputTokens": 67191,
+      "costUSD": 0.003632285,
+      "inputTokens": 2170,
+      "outputTokens": 1011,
+      "thinkingTokens": 163,
+      "webSearchRequests": 0
+    },
+    "costUsd": 0.003632285
+  },
+  "codex": {
+    "model": "gpt-6-luna",
+    "sessions": {
+      "resume": {
+        "cacheWriteInputTokens": 0,
+        "cachedInputTokens": 43648,
+        "inputTokens": 49955,
+        "outputTokens": 107,
+        "reasoningOutputTokens": 0,
+        "totalTokens": 50062
+      },
+      "plan-question": {
+        "cacheWriteInputTokens": 0,
+        "cachedInputTokens": 24064,
+        "inputTokens": 27917,
+        "outputTokens": 75,
+        "reasoningOutputTokens": 0,
+        "totalTokens": 27992
+      }
+    },
+    "totals": {
+      "cacheWriteInputTokens": 0,
+      "cachedInputTokens": 67712,
+      "inputTokens": 77872,
+      "outputTokens": 182,
+      "reasoningOutputTokens": 0,
+      "totalTokens": 78054
+    },
+    "costUsd": null,
+    "note": "No dollar cost is reported by Codex. Includes the resumed initial capture; it was not recorded again."
+  }
+}

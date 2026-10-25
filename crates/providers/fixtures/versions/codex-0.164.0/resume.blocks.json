@@ -1,0 +1,128 @@
+{
+  "live": [
+    {
+      "key": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+      "state": "done",
+      "user": "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addee0a99708191aa0e6b1585e45dc8",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
+          "name": "shell",
+          "detail": "sleep 2",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792929293295,
+          "exit": 0,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+      "state": "stopped",
+      "user": "Run sleep 30 using your shell tool.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addeebe078c8191a5a9d4a51be755d8",
+          "text": "I’ll start the 30-second sleep in the shell and return as soon as the command yields."
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "exec-bbe5117c-a183-4207-905d-7fe4059c2b77",
+          "name": "shell",
+          "detail": "sleep 30",
+          "status": "failed",
+          "stopped": true,
+          "throughPosition": 0,
+          "endedAtMs": 1792929470766,
+          "exit": -1,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
+      "state": "done",
+      "user": "Reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+      "state": "done",
+      "user": "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addee0a99708191aa0e6b1585e45dc8",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
+          "name": "shell",
+          "detail": "sleep 2",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792929293295,
+          "exit": 0,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+      "state": "stopped",
+      "user": "Run sleep 30 using your shell tool.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addeebe078c8191a5a9d4a51be755d8",
+          "text": "I’ll start the 30-second sleep in the shell and return as soon as the command yields."
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "exec-bbe5117c-a183-4207-905d-7fe4059c2b77",
+          "name": "shell",
+          "detail": "sleep 30",
+          "status": "failed",
+          "stopped": true,
+          "throughPosition": 0,
+          "endedAtMs": 1792929470766,
+          "exit": -1,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
+      "state": "done",
+      "user": "Reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_0354663fad4e9c2a016addeec1c1648191a1a9b3e756efc9b1",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    }
+  ]
+}

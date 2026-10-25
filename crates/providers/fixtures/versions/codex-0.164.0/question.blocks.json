@@ -1,0 +1,30 @@
+{
+  "live": [
+    {
+      "key": "01a172ec-aada-7c72-ad79-69d831194b29",
+      "state": "done",
+      "user": "Use request_user_input to ask Ready? with Yes/No options, then propose a one-line plan to create ok.txt. Do not implement it.",
+      "texts": [
+        {
+          "messageId": "msg_0599c9e2e9fd5ae8016addeec521f481919744c4992a2e5cc5",
+          "text": "Create `ok.txt`."
+        }
+      ],
+      "steps": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "01a172ec-aada-7c72-ad79-69d831194b29",
+      "state": "done",
+      "user": "Use request_user_input to ask Ready? with Yes/No options, then propose a one-line plan to create ok.txt. Do not implement it.",
+      "texts": [
+        {
+          "messageId": "msg_0599c9e2e9fd5ae8016addeec521f481919744c4992a2e5cc5",
+          "text": "Create `ok.txt`."
+        }
+      ],
+      "steps": []
+    }
+  ]
+}

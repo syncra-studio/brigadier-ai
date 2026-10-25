@@ -1,0 +1,140 @@
+{
+  "live": [
+    {
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
+      "state": "done",
+      "user": "Run sleep 2 with Bash run_in_background=true, reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgNuekfpevNiRAF6V3kbZ:0",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
+          "name": "shell",
+          "detail": "sleep 2",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792929168189,
+          "exit": 0,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "user": "/compact",
+      "texts": [
+        {
+          "messageId": "msg_011CgNuf9SJ99eDwGKWFnjTR:0",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "user": "Run sleep 30 using your shell tool.",
+      "texts": [],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_01JD5GDqUCUrri3WkpCYQuch",
+          "name": "shell",
+          "detail": "sleep 30",
+          "status": "failed",
+          "stopped": true,
+          "throughPosition": 0,
+          "endedAtMs": 1792929175460,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
+      "state": "done",
+      "user": "Reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgNug8wK3GCU3bRAbKjap:0",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
+      "state": "done",
+      "user": "Run sleep 2 with Bash run_in_background=true, reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgNuekfpevNiRAF6V3kbZ:0",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
+          "name": "shell",
+          "detail": "sleep 2",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792929168189,
+          "exit": 0,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "user": "/compact",
+      "texts": [
+        {
+          "messageId": "msg_011CgNuf9SJ99eDwGKWFnjTR:0",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "user": "Run sleep 30 using your shell tool.",
+      "texts": [],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_01JD5GDqUCUrri3WkpCYQuch",
+          "name": "shell",
+          "detail": "sleep 30",
+          "status": "failed",
+          "stopped": true,
+          "throughPosition": 0,
+          "endedAtMs": 1792929175460,
+          "item": "command"
+        }
+      ]
+    },
+    {
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
+      "state": "done",
+      "user": "Reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgNug8wK3GCU3bRAbKjap:0",
+          "text": "OK"
+        }
+      ],
+      "steps": []
+    }
+  ]
+}

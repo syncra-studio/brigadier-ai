@@ -21,6 +21,10 @@ use ts_rs::TS;
 use crate::model::ConversationId;
 use crate::work::{CardId, DiffStat, TaskId};
 
+#[cfg(test)]
+#[path = "version_fixture_tests.rs"]
+mod version_fixture_tests;
+
 /// A conversation's thread as its CLI keeps it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

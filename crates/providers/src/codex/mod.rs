@@ -1129,6 +1129,9 @@ impl Provider for Codex {
         Box::new(CodexReplayer {
             parser: Parser::replay(),
             asked: HashSet::new(),
+            terminal_lists: HashSet::new(),
+            terminals: HashMap::new(),
+            openings: HashSet::new(),
         })
     }
 
@@ -1994,14 +1997,30 @@ struct CodexReplayer {
     parser: Parser,
     /// Approval requests not answered yet.
     asked: HashSet<String>,
+    terminal_lists: HashSet<String>,
+    terminals: HashMap<String, BackgroundTask>,
+    openings: HashSet<String>,
 }
 
 impl Replayer for CodexReplayer {
     fn feed(&mut self, dir: Direction, line: &str) -> Vec<ProviderEvent> {
         if dir == Direction::In {
-            // The only thing Brigadier sends that the output does not show is an approval's
-            // answer: a response to Codex's request.
+            // Correlate control replies and approvals with what Brigadier sent.
             let sent: Value = serde_json::from_str(line).unwrap_or_default();
+            // D9(c): polling responses are part of the recorded protocol too. Reuse the
+            // live adapter's parser rather than dropping background tasks in the Inspector.
+            if sent["method"] == "thread/backgroundTerminals/list" {
+                self.terminal_lists.insert(sent["id"].to_string());
+            }
+            if sent["method"] == "thread/compact/start" {
+                self.parser.compact_requested();
+            }
+            if matches!(
+                sent["method"].as_str(),
+                Some("thread/start" | "thread/resume" | "thread/fork")
+            ) {
+                self.openings.insert(sent["id"].to_string());
+            }
             let answered = format!("codex-{}", sent["id"]);
             let result = &sent["result"];
             if sent.get("method").is_some() || result.is_null() || !self.asked.remove(&answered) {
@@ -2025,6 +2044,33 @@ impl Replayer for CodexReplayer {
                 decision,
                 decided_by: Decider::Recorded,
             }];
+        }
+        let received: Value = serde_json::from_str(line).unwrap_or_default();
+        if self.openings.remove(&received["id"].to_string())
+            && let Some(thread) = received.pointer("/result/thread")
+        {
+            // Resume need not send thread/started. Its response holds the same native Thread
+            // schema; replay it through that parser path (D9(c)). It suppresses repeats itself.
+            return self
+                .parser
+                .feed(&json!({"method":"thread/started", "params":{"thread":thread}}).to_string())
+                .into_iter()
+                .filter_map(|output| match output {
+                    Output::Event(event) => Some(event),
+                    _ => None,
+                })
+                .collect();
+        }
+        if self.terminal_lists.remove(&received["id"].to_string()) {
+            let Some(listed) = received.get("result") else {
+                // A failed poll says nothing about whether the existing terminals ended.
+                return Vec::new();
+            };
+            // The Replayer API takes no clock; replay task times are offsets from zero.
+            return parse::background_terminals(listed, &mut self.terminals, 0)
+                .into_iter()
+                .map(|task| ProviderEvent::BackgroundTask { task })
+                .collect();
         }
         let events: Vec<ProviderEvent> = self
             .parser

@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "current": {
+    "claude": "2.1.310",
+    "codex": "0.164.0"
+  },
+  "historicalLimits": [
+    {
+      "recording": "../claude-api-error-limit.jsonl",
+      "provider": "claude",
+      "cliVersion": null,
+      "provenance": "Derived failure envelope; original fixture supplies no CLI version. Preserved without relabelling."
+    },
+    {
+      "recording": "../claude-result-limit.jsonl",
+      "provider": "claude",
+      "cliVersion": null,
+      "provenance": "Derived failure envelope; original fixture supplies no CLI version. Preserved without relabelling."
+    },
+    {
+      "recording": "../claude-gateway-limit.jsonl",
+      "provider": "claude",
+      "cliVersion": null,
+      "provenance": "Derived failure envelope; original fixture supplies no CLI version. Preserved without relabelling."
+    }
+  ],
+  "historicalRecordings": [
+    {
+      "recording": "../claude-steer-interrupt-approvals.jsonl",
+      "provider": "claude",
+      "cliVersion": "2.1.281"
+    },
+    {
+      "recording": "../claude-thinking-read.jsonl",
+      "provider": "claude",
+      "cliVersion": "2.1.281"
+    },
+    {
+      "recording": "../codex-steer-interrupt-escalation.jsonl",
+      "provider": "codex",
+      "cliVersion": "0.156.1"
+    },
+    {
+      "recording": "../codex-thread-reads.jsonl",
+      "provider": "codex",
+      "cliVersion": "0.160.1"
+    },
+    {
+      "recording": "../claude-thread-reads.jsonl",
+      "provider": "claude",
+      "cliVersion": "2.1.292"
+    }
+  ]
+}
