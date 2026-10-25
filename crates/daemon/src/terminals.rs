@@ -1118,6 +1118,7 @@ mod tests {
             data_dir: Some(data.to_path_buf()),
         })
         .unwrap();
+        let processes = platform.clone();
         let terminals = Terminals::with_platform(platform);
         let mut feed = terminals.subscribe();
         let command = TerminalCommand {
@@ -1160,12 +1161,15 @@ mod tests {
 
         TerminalHost::terminate(&terminals, &started.id).await;
         assert!(started.exited.await.is_ok(), "told of its end");
-        let alive = std::process::Command::new("kill")
-            .args(["-0", &child.to_string()])
-            .status()
-            .unwrap()
-            .success();
-        assert!(!alive, "its child went with it");
+        // Killed with the tree, the child may answer for a moment more: its kill still on its
+        // way, or ended and not yet reaped by launchd, which took it in.
+        let processes = processes.processes();
+        let gone = || !processes.is_alive(child) || processes.is_zombie(child);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !gone() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(gone(), "its child went with it");
         // Ending one that already ended returns at once.
         tokio::time::timeout(
             Duration::from_secs(1),
