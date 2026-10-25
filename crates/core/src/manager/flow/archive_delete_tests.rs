@@ -122,6 +122,7 @@ async fn retention(delete_directly: bool) {
                 session_id: format!("second-{n}"),
                 file: Some(file.to_string_lossy().into_owned()),
                 started_at: crate::now_ms(),
+                forgotten: false,
             },
         )
         .await

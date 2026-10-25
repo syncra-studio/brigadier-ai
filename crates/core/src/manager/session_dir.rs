@@ -142,6 +142,10 @@ pub(crate) struct LineageEntry {
     /// The CLI's session file (Claude's JSONL, Codex's rollout), when it said where.
     pub file: Option<String>,
     pub started_at: i64,
+    /// Gone for good (a Chat's rework, the upgrade pass): never resumed, and the next turn
+    /// starts a fresh session (#540).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forgotten: bool,
 }
 
 /// Adds a CLI session start to the `lineage.json` in `record`: a session's or a worker's.
@@ -152,8 +156,15 @@ pub(crate) async fn note_lineage_at(record: PathBuf, entry: LineageEntry) -> Res
             .iter_mut()
             .find(|known| known.provider == entry.provider && known.session_id == entry.session_id)
         {
-            Some(known) if known.file.is_some() || entry.file.is_none() => return Ok(()),
-            Some(known) => known.file = entry.file,
+            Some(known) if !known.forgotten && (known.file.is_some() || entry.file.is_none()) => {
+                return Ok(());
+            }
+            Some(known) => {
+                known.forgotten = false;
+                if known.file.is_none() {
+                    known.file = entry.file;
+                }
+            }
             None => lineage.push(entry),
         }
         std::fs::create_dir_all(&record).map_err(|err| Error::Invalid(err.to_string()))?;
@@ -162,6 +173,34 @@ pub(crate) async fn note_lineage_at(record: PathBuf, entry: LineageEntry) -> Res
         write_atomic(&record.join("lineage.json"), text.as_bytes())
     })
     .await
+}
+
+/// Marks every CLI session in the `lineage.json` in `record` forgotten: none is resumed.
+pub(crate) async fn forget_lineage_at(record: PathBuf) -> Result<()> {
+    blocking(move || {
+        let mut lineage = read_lineage(&record);
+        if lineage.iter().all(|entry| entry.forgotten) {
+            return Ok(());
+        }
+        for entry in &mut lineage {
+            entry.forgotten = true;
+        }
+        let text = serde_json::to_string_pretty(&lineage)
+            .map_err(|err| Error::Invalid(err.to_string()))?;
+        write_atomic(&record.join("lineage.json"), text.as_bytes())
+    })
+    .await
+}
+
+/// The CLI session a turn on `provider` resumes, from the `lineage.json` in `record`: the
+/// newest of that provider's, unless it was forgotten (#540).
+pub(crate) fn resumed_session(record: &Path, provider: ProviderKind) -> Option<String> {
+    read_lineage(record)
+        .into_iter()
+        .rev()
+        .find(|entry| entry.provider == provider)
+        .filter(|entry| !entry.forgotten)
+        .map(|entry| entry.session_id)
 }
 
 /// `record/lineage.json`'s sessions; none when it is missing or unreadable.

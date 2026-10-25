@@ -199,10 +199,6 @@ macro_rules! side_chat_thread {
     };
 }
 
-/// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
-/// starts over from the transcript instead of resuming.
-pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
-
 /// A turn's input after its account hit its usage limit mid-turn and the session resumed on
 /// another account: the CLI already holds the user's message and what the turn did.
 pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its account hit a usage limit. You now run on another account, in the same session. Carry on from where you stopped. Don't redo anything you already did.]";

@@ -31,7 +31,6 @@ use brigadier_providers::{
     ProviderEvent, ProviderKind, ProviderSession, Role as ProviderRole, SessionSpec, Started,
     TextPhase, ToolSet, TurnInput, TurnStatus,
 };
-use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -4374,8 +4373,10 @@ impl SessionManager {
                     session_id: native_id.clone(),
                     file: file.clone(),
                     started_at: now_ms(),
+                    forgotten: false,
                 };
                 self.note_lineage(&conv.id, entry, conv.private_logs).await;
+                conv.native_ids().started(cli.provider, native_id.clone());
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -5389,70 +5390,36 @@ impl SessionManager {
             },
             None => None,
         };
-        let found = self.read_native_id(id, provider).await?;
+        let found = self.read_native_id(id, provider).await;
         if let (Some(conv), Some(seen)) = (conv, seen) {
             conv.native_ids().learned(seen, provider, found.clone());
         }
         found
     }
 
-    /// The session a turn on `provider` resumes, from the log: the newest `SessionStarted` of
-    /// that provider, unless a reset came after it. Pages back as far as it must (a busy
-    /// thread logs hundreds of events between starts). `None` (outer): the log can't be read.
+    /// The session a turn on `provider` resumes, from the CLI sessions `record/lineage.json`
+    /// lists: the newest of that provider's, unless it was forgotten (#540).
     pub(super) async fn read_native_id(
         &self,
         id: &ConversationId,
         provider: ProviderKind,
-    ) -> Option<Option<String>> {
-        let mut before = None;
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream(
-                    streams::orchestrator(id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["orchestrator.logged".into()],
-                        limit: brigadier_store::MAX_PAGE,
-                    },
-                )
-                .await
-                .ok()?;
-            let Some(oldest) = page.last() else {
-                return Some(None);
-            };
-            before = Some(oldest.stream_seq);
-            for stored in &page {
-                let Ok(DomainEvent::OrchestratorLogged {
-                    entry:
-                        OrchestratorEntry::Provider {
-                            provider: kind,
-                            event,
-                        },
-                    ..
-                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
-                else {
-                    continue;
-                };
-                if let Some(answer) = native_answer(kind, &event, provider) {
-                    return Some(answer);
-                }
-            }
-        }
+    ) -> Option<String> {
+        let record = self.session_dir(id).record();
+        super::blocking(move || Ok(super::session_dir::resumed_session(&record, provider)))
+            .await
+            .ok()
+            .flatten()
     }
 
-    /// Marks the conversation's CLI session as gone for good: the next one starts over.
+    /// Marks the conversation's CLI sessions as gone for good: the next one starts over.
     pub(crate) async fn forget_native_session(&self, id: &ConversationId) {
-        self.log_provider(
-            id,
-            ProviderKind::Claude,
-            ProviderEvent::Notice {
-                level: brigadier_providers::NoticeLevel::Info,
-                message: prompts::SESSION_RESET.into(),
-            },
-        )
-        .await;
+        let record = self.session_dir(id).record();
+        if let Err(err) = super::session_dir::forget_lineage_at(record).await {
+            crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not forget the CLI session in lineage.json"; conversation = %id, error = %err);
+        }
+        if let Some(conv) = self.convs_lock().get(id).cloned() {
+            conv.native_ids().reset();
+        }
     }
 
     async fn has_history(&self, id: &ConversationId) -> bool {
@@ -5629,21 +5596,11 @@ impl SessionManager {
     }
 
     async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {
-        let start = match &entry {
-            OrchestratorEntry::Provider { provider, event } => match event {
-                ProviderEvent::SessionStarted { .. } => Some((*provider, event.clone())),
-                ProviderEvent::Notice { message, .. } if message == prompts::SESSION_RESET => {
-                    Some((*provider, event.clone()))
-                }
-                _ => None,
-            },
-            _ => None,
-        };
         let event = DomainEvent::OrchestratorLogged {
             conversation_id: id.clone(),
             entry,
         };
-        let seq = match self
+        match self
             .core
             .record(vec![(streams::orchestrator(id), event)])
             .await
@@ -5651,70 +5608,45 @@ impl SessionManager {
             Ok(seqs) => seqs.first().copied(),
             Err(err) => {
                 crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
-                return None;
+                None
             }
-        };
-        if let Some((provider, event)) = start
-            && let Some(conv) = self.convs_lock().get(id).cloned()
-        {
-            conv.native_ids().logged(provider, &event);
         }
-        seq
     }
 }
 
-/// What a logged event says about the session a turn on `provider` resumes, reading the log
-/// newest first: `Some(None)` after a reset (the CLI files are gone: archive, cleanup), the
-/// session for its own provider's start, and `None` (read on) for anything else.
-fn native_answer(
-    kind: ProviderKind,
-    event: &ProviderEvent,
-    provider: ProviderKind,
-) -> Option<Option<String>> {
-    match event {
-        ProviderEvent::Notice { message, .. } if message == prompts::SESSION_RESET => Some(None),
-        ProviderEvent::SessionStarted { native_id, .. } if kind == provider => {
-            Some(Some(native_id.clone()))
-        }
-        _ => None,
-    }
-}
-
-/// The session a turn on each provider resumes, as far as it is known without reading the
-/// log. Every start and reset logged since the conversation went live updates it; a lookup
-/// that read the log keeps its answer only if nothing was logged while it read.
+/// The session a turn on each provider resumes, as far as it is known without reading
+/// `record/lineage.json`. Every start and reset noted since the conversation went live updates
+/// it; a lookup that read the file keeps its answer only if nothing was noted while it read.
 #[derive(Default)]
 struct NativeIds {
     known: HashMap<ProviderKind, Option<String>>,
-    /// Starts and resets logged so far.
-    logged: u64,
+    /// Starts and resets noted so far.
+    noted: u64,
 }
 
 impl NativeIds {
     /// The known answer for `provider`, or the count a lookup must find unchanged to keep
     /// what it reads.
     fn known(&self, provider: ProviderKind) -> std::result::Result<Option<String>, u64> {
-        self.known.get(&provider).cloned().ok_or(self.logged)
+        self.known.get(&provider).cloned().ok_or(self.noted)
     }
 
     fn learned(&mut self, seen: u64, provider: ProviderKind, answer: Option<String>) {
-        if self.logged == seen {
+        if self.noted == seen {
             self.known.insert(provider, answer);
         }
     }
 
-    fn logged(&mut self, kind: ProviderKind, event: &ProviderEvent) {
-        self.logged += 1;
-        match event {
-            ProviderEvent::SessionStarted { native_id, .. } => {
-                self.known.insert(kind, Some(native_id.clone()));
-            }
-            // A reset is read the same for every provider.
-            _ => {
-                for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-                    self.known.insert(provider, None);
-                }
-            }
+    fn started(&mut self, provider: ProviderKind, native_id: String) {
+        self.noted += 1;
+        self.known.insert(provider, Some(native_id));
+    }
+
+    /// A reset is read the same for every provider.
+    fn reset(&mut self) {
+        self.noted += 1;
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            self.known.insert(provider, None);
         }
     }
 }

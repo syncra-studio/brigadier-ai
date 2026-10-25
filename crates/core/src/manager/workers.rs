@@ -1578,6 +1578,7 @@ impl SessionManager {
                         session_id: native_id.clone(),
                         file: file.clone(),
                         started_at: now_ms(),
+                        forgotten: false,
                     };
                     if let Err(err) = super::session_dir::note_lineage_at(record, entry).await {
                         tracing::warn!(task = %live.id, error = %err, "could not note the worker's CLI session");

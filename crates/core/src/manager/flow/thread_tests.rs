@@ -1349,23 +1349,6 @@ async fn a_feedback_offer_from_an_edited_message_blocks_nothing() {
     flow.stop().await;
 }
 
-/// Logs `count` provider notices to the thread's orchestrator log, as a busy turn's events
-/// would (a busy thread logs hundreds between two CLI starts).
-async fn log_busy(flow: &Flow, count: usize) {
-    for index in 0..count {
-        flow.manager
-            .log_provider(
-                &flow.conversation,
-                ProviderKind::Claude,
-                brigadier_providers::ProviderEvent::Notice {
-                    level: brigadier_providers::NoticeLevel::Info,
-                    message: format!("busy {index}"),
-                },
-            )
-            .await;
-    }
-}
-
 /// The session's permission level changes to `level` (between turns).
 async fn set_level(flow: &Flow, level: PermissionLevel) {
     let mut setup = flow.core.conversation(&flow.conversation).unwrap().setup;
@@ -1379,13 +1362,12 @@ async fn set_level(flow: &Flow, level: PermissionLevel) {
         .unwrap();
 }
 
-/// The native id the thread's first CLI session started with, from the log.
+/// The native id the thread's first CLI session started with, from `record/lineage.json`.
 async fn first_native_id(flow: &Flow) -> String {
     flow.manager
         .read_native_id(&flow.conversation, ProviderKind::Claude)
         .await
-        .flatten()
-        .expect("a logged session start")
+        .expect("a noted session start")
 }
 
 /// How many seams the session went through.
@@ -1395,10 +1377,10 @@ fn seams(flow: &Flow) -> usize {
         .len()
 }
 
-/// Bug 2: the turn after a closed CLI resumes its session however many events were logged
-/// since it started, even with nothing remembered (a restarted daemon reads the log).
+/// Bug 2: the turn after a closed CLI resumes its session with nothing remembered, as after
+/// a restart: `record/lineage.json` names it (#540).
 #[tokio::test]
-async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
+async fn a_closed_thread_resumes_its_session_from_its_lineage_after_a_restart() {
     let flow = Flow::start(
         "busy-resume",
         Options::default(),
@@ -1408,26 +1390,7 @@ async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
     flow.say("First.").await;
     flow.settled().await;
     let native = first_native_id(&flow).await;
-    // 1,000 events logged behind the manager's back, then the CLI closes and the live state
-    // is gone, as after a restart.
-    for index in 0..1_000 {
-        flow.core
-            .record(vec![(
-                crate::model::streams::orchestrator(&flow.conversation),
-                crate::model::DomainEvent::OrchestratorLogged {
-                    conversation_id: flow.conversation.clone(),
-                    entry: crate::work::OrchestratorEntry::Provider {
-                        provider: ProviderKind::Claude,
-                        event: brigadier_providers::ProviderEvent::Notice {
-                            level: brigadier_providers::NoticeLevel::Info,
-                            message: format!("busy {index}"),
-                        },
-                    },
-                },
-            )])
-            .await
-            .unwrap();
-    }
+    // The CLI closes and the live state is gone, as after a restart.
     flow.manager
         .conv(&flow.conversation)
         .unwrap()
@@ -1446,6 +1409,48 @@ async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
         "the same session resumes"
     );
     assert_eq!(seams(&flow), 0, "no seam");
+    flow.stop().await;
+}
+
+/// A forgotten CLI session (a Chat's rework, the upgrade pass) is never resumed, after a
+/// restart too: the next turn starts a fresh one (#540).
+#[tokio::test]
+async fn a_forgotten_session_starts_over_after_a_restart() {
+    let flow = Flow::start(
+        "forgotten-resume",
+        Options::default(),
+        script(|_| async { Reply::text("Done.") }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let native = first_native_id(&flow).await;
+    flow.manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .close_cli()
+        .await;
+    flow.manager.forget_native_session(&flow.conversation).await;
+    flow.manager.convs_lock().remove(&flow.conversation);
+    assert_eq!(
+        flow.manager
+            .read_native_id(&flow.conversation, ProviderKind::Claude)
+            .await,
+        None
+    );
+
+    flow.say("Second.").await;
+    flow.until("the second start", |_| flow.thread_specs().len() >= 2)
+        .await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert!(
+        !matches!(specs[1].1.origin, Origin::Resume { .. }),
+        "{:?}",
+        specs[1].1.origin
+    );
+    let resumed = first_native_id(&flow).await;
+    assert_ne!(resumed, native, "the next turn resumes the fresh session");
     flow.stop().await;
 }
 
@@ -1473,7 +1478,6 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     flow.say("First.").await;
     flow.settled().await;
     let native = first_native_id(&flow).await;
-    log_busy(&flow, 1_000).await;
     set_level(&flow, PermissionLevel::Full).await;
 
     flow.say("Second.").await;
