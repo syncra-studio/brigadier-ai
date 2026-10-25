@@ -70,7 +70,13 @@ impl Folder {
     /// Renames `from` to `to` in this folder, failing with `AlreadyExists` when `to` is there
     /// (it is never replaced, even by an empty folder).
     pub fn rename_new(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
-        platform_rename_new(self, from, to)
+        platform_rename_new(self, from, self, to)
+    }
+
+    /// Moves `from` in this folder to `to` in `into` (on the same file system), failing with
+    /// `AlreadyExists` when `to` is there (it is never replaced, even by an empty folder).
+    pub fn move_new(&self, from: &OsStr, into: &Folder, to: &OsStr) -> io::Result<()> {
+        platform_rename_new(self, from, into, to)
     }
 }
 
@@ -273,17 +279,24 @@ fn platform_clone(
 }
 
 #[cfg(target_os = "macos")]
-fn platform_rename_new(folder: &Folder, from: &OsStr, to: &OsStr) -> io::Result<()> {
+fn platform_rename_new(folder: &Folder, from: &OsStr, into: &Folder, to: &OsStr) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
     let source = CString::new(from.as_bytes())?;
     let target = CString::new(to.as_bytes())?;
-    let fd = folder.fd.as_raw_fd();
-    // SAFETY: the descriptor is open and both names are NUL-terminated for the whole call.
+    let (fd, into) = (folder.fd.as_raw_fd(), into.fd.as_raw_fd());
+    // SAFETY: both descriptors are open and both names are NUL-terminated for the whole call.
     #[allow(unsafe_code)]
-    let status =
-        unsafe { libc::renameatx_np(fd, source.as_ptr(), fd, target.as_ptr(), libc::RENAME_EXCL) };
+    let status = unsafe {
+        libc::renameatx_np(
+            fd,
+            source.as_ptr(),
+            into,
+            target.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
     if status == 0 {
         Ok(())
     } else {
@@ -293,7 +306,7 @@ fn platform_rename_new(folder: &Folder, from: &OsStr, to: &OsStr) -> io::Result<
 
 /// `renameat2(2)` called directly, on every C library (musl has no wrapper for it).
 #[cfg(target_os = "linux")]
-fn platform_rename_new(folder: &Folder, from: &OsStr, to: &OsStr) -> io::Result<()> {
+fn platform_rename_new(folder: &Folder, from: &OsStr, into: &Folder, to: &OsStr) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -301,15 +314,15 @@ fn platform_rename_new(folder: &Folder, from: &OsStr, to: &OsStr) -> io::Result<
     const RENAME_NOREPLACE: libc::c_uint = 1;
     let source = CString::new(from.as_bytes())?;
     let target = CString::new(to.as_bytes())?;
-    let fd = folder.fd.as_raw_fd();
-    // SAFETY: the descriptor is open and both names are NUL-terminated for the whole call.
+    let (fd, into) = (folder.fd.as_raw_fd(), into.fd.as_raw_fd());
+    // SAFETY: both descriptors are open and both names are NUL-terminated for the whole call.
     #[allow(unsafe_code)]
     let status = unsafe {
         libc::syscall(
             libc::SYS_renameat2,
             fd,
             source.as_ptr(),
-            fd,
+            into,
             target.as_ptr(),
             RENAME_NOREPLACE,
         )
@@ -323,7 +336,12 @@ fn platform_rename_new(folder: &Folder, from: &OsStr, to: &OsStr) -> io::Result<
 
 /// No rename here refuses to replace what is in its place, so nothing is published.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn platform_rename_new(_folder: &Folder, _from: &OsStr, _to: &OsStr) -> io::Result<()> {
+fn platform_rename_new(
+    _folder: &Folder,
+    _from: &OsStr,
+    _into: &Folder,
+    _to: &OsStr,
+) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "renaming without replacing isn't supported here",
@@ -417,6 +435,18 @@ mod tests {
             .rename_new(OsStr::new("from"), OsStr::new("fresh"))
             .unwrap();
         assert!(root.join("fresh/inner").is_dir());
+        // Into another folder, the same: never over what is there.
+        let other = Folder::open(&root, Path::new("other"), true).unwrap();
+        std::fs::create_dir_all(root.join("other/to")).unwrap();
+        let err = folder
+            .move_new(OsStr::new("fresh"), &other, OsStr::new("to"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        folder
+            .move_new(OsStr::new("fresh"), &other, OsStr::new("moved"))
+            .unwrap();
+        assert!(root.join("other/moved/inner").is_dir());
+        assert!(!root.join("fresh").exists());
     }
 
     #[test]

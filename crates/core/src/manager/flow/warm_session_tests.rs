@@ -1,6 +1,7 @@
-//! The session's own worktree starts warm (BUILD-PLAN C7): the thread works in it as a worker
+//! The session's own worktree gets warm (BUILD-PLAN C7): the thread works in it as a worker
 //! does in its own, so it gets the same copies of the checkout's dependency installs, and
-//! hears so, instead of failing its first check and reinstalling them.
+//! hears so, instead of failing its first check and reinstalling them. The copies come behind
+//! its first turn, which never waits for them.
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -50,19 +51,16 @@ fn copies_here(repo: &Path) -> bool {
 }
 
 #[tokio::test]
-async fn the_threads_worktree_has_the_checkouts_dependencies_and_the_thread_is_told() {
-    let seen: Arc<Mutex<Vec<(String, bool)>>> = Arc::default();
+async fn the_threads_worktree_gets_the_checkouts_dependencies_and_the_thread_is_told() {
+    let seen: Arc<Mutex<Vec<(String, std::path::PathBuf)>>> = Arc::default();
     let script: Script = {
         let seen = seen.clone();
         Arc::new(move |turn| {
             let seen = seen.clone();
             Box::pin(async move {
-                let installed = turn
-                    .add_dirs
-                    .iter()
-                    .chain([&turn.cwd])
-                    .any(|dir| dir.join("node_modules/left-pad/index.js").is_file());
-                seen.lock().unwrap().push((turn.input.clone(), installed));
+                seen.lock()
+                    .unwrap()
+                    .push((turn.input.clone(), turn.cwd.clone()));
                 Reply::text("Done.")
             })
         })
@@ -87,27 +85,44 @@ async fn the_threads_worktree_has_the_checkouts_dependencies_and_the_thread_is_t
     age(&flow.repo.join("node_modules"));
     flow.say("Run the tests").await;
     flow.settled().await;
-    {
-        let seen = seen.lock().unwrap();
-        let (input, installed) = seen.first().expect("the thread took a turn");
-        assert!(installed, "the session's worktree has node_modules");
-        assert!(
-            input.contains(
-                "[workspace] Dependencies are already installed: `node_modules` was copied in from the user's checkout. Don't reinstall them."
-            ),
-            "{input}"
-        );
-    }
-    // Only once: the next message's worktree is the same one.
+    let worktree = seen.lock().unwrap()[0].1.clone();
+    super::eventually("the worktree to get node_modules", || {
+        worktree.join("node_modules/left-pad/index.js").is_file()
+    })
+    .await;
+    // The thread hears it with the message after the copy came in (the first one, if it came
+    // that soon), and only once: the next message's worktree is the same one.
     flow.say("And again").await;
     flow.settled().await;
+    flow.say("Once more").await;
+    flow.settled().await;
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 2);
+    assert_eq!(seen.len(), 3);
+    let told: Vec<_> = seen
+        .iter()
+        .filter(|(input, _)| {
+            input.contains(
+                "[workspace] Dependencies are already installed: `node_modules` was copied in from the user's checkout. Don't reinstall them."
+            )
+        })
+        .collect();
+    assert_eq!(told.len(), 1, "{seen:#?}");
     assert!(
-        !seen[1].0.contains("Dependencies are already installed"),
+        !seen[2].0.contains("Dependencies are already installed"),
         "{}",
-        seen[1].0
+        seen[2].0
     );
+    // No copy in progress was ever left where git sees it.
+    let in_progress = std::fs::read_dir(&worktree)
+        .unwrap()
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".brigadier-warming-")
+        });
+    assert!(!in_progress);
     // The checkout's own copy is untouched.
     assert!(flow.repo.join("node_modules/left-pad/index.js").is_file());
     flow.stop().await;
