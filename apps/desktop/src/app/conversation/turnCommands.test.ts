@@ -8,8 +8,9 @@ import type { BackgroundTask, FileEntry, ThreadView } from "@/ipc/generated";
 const task = (id: string, itemId: string | null, startedAtMs: number, more: Partial<BackgroundTask> = {}): BackgroundTask => ({
   id, itemId, kind: "shell", label: id, status: "running", startedAtMs, endedAtMs: null, outputFile: null, summary: null, lastLine: null, ...more,
 });
+/** Claude's Bash call: a `command` item, as its thread holds it (D38). */
 const bash = (itemId: string, command: string, atMs: number): FileEntry => ({
-  event: { type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command, run_in_background: true }), status: "completed", output: null },
+  event: { type: "command", itemId, command, cwd: null, status: "completed", exitCode: null, output: null, durationMs: null },
   atMs,
 });
 const codex = (itemId: string, command: string, atMs: number): FileEntry => ({

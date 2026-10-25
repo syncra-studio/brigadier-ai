@@ -37,7 +37,7 @@ pub(crate) const GIT_EVERY_MS: i64 = 2_000;
 /// How stale a row's `last_event_at_ms` may grow before it is sent again for that alone: the
 /// app counts a worker quiet after 20 minutes of nothing.
 const EVENT_STALE_MS: i64 = 60_000;
-/// How many commands of background calls are kept for the tasks they start.
+/// How many commands of calls not (yet) a background task's are kept for the tasks they start.
 const COMMANDS_KEPT: usize = 32;
 
 /// What a worker's CLI did, as far as its rows tell.
@@ -54,8 +54,8 @@ pub(crate) struct WorkerCli {
     steps: Vec<(String, StepAtWork)>,
     /// Its background tasks, as its CLI says them, and those that ended lately.
     background: Vec<BackgroundTask>,
-    /// The commands of its latest background calls, by item id: a Claude task is labelled with
-    /// its description, and only its call says what it runs.
+    /// The commands of its latest calls that may start a background task, by item id: a Claude
+    /// task is labelled with its description, and only its call says what it runs.
     commands: Vec<(String, String)>,
     /// The context it last said it holds, and its window when it said one. Not part of its
     /// rows: `brigadier workers` reads it.
@@ -165,11 +165,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         }
         _ => {
             if let Some((item_id, command)) = background_call(event) {
-                cli.commands.retain(|(id, _)| id != item_id);
-                cli.commands.push((item_id.to_owned(), command));
-                if cli.commands.len() > COMMANDS_KEPT {
-                    cli.commands.remove(0);
-                }
+                note_command(cli, item_id, command);
             }
             if let Some((item_id, status, step)) = step_of(event) {
                 follow_step(&mut cli.steps, item_id, status, step);
@@ -194,27 +190,57 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
     changed
 }
 
-/// A call that runs a command in the background (Claude's `run_in_background` Bash): its item
-/// id and its command.
+/// A call that may run a command in the background: its item id and its command. Claude's
+/// `Bash` is a `Command` item that doesn't say whether it runs in the background (D38); a tool
+/// call says so with `run_in_background`.
 fn background_call(event: &ProviderEvent) -> Option<(&str, String)> {
-    let ProviderEvent::ToolCall {
-        item_id,
-        input: Some(input),
-        ..
-    } = event
-    else {
-        return None;
-    };
-    let args: serde_json::Value = serde_json::from_str(input).ok()?;
-    if args
-        .get("run_in_background")
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return None;
+    match event {
+        ProviderEvent::Command {
+            item_id, command, ..
+        } if !command.is_empty() => Some((item_id, command.clone())),
+        ProviderEvent::ToolCall {
+            item_id,
+            input: Some(input),
+            ..
+        } => {
+            let args: serde_json::Value = serde_json::from_str(input).ok()?;
+            if args
+                .get("run_in_background")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+            {
+                return None;
+            }
+            let command = args.get("command")?.as_str()?;
+            Some((item_id, command.to_owned()))
+        }
+        _ => None,
     }
-    let command = args.get("command")?.as_str()?;
-    Some((item_id, command.to_owned()))
+}
+
+/// Keeps `command` of call `item_id`; past [`COMMANDS_KEPT`] the oldest no background task is
+/// of leaves, so a long-running task keeps its command.
+fn note_command(cli: &mut WorkerCli, item_id: &str, command: String) {
+    cli.commands.retain(|(id, _)| id != item_id);
+    cli.commands.push((item_id.to_owned(), command));
+    let tasks: Vec<&str> = cli
+        .background
+        .iter()
+        .filter_map(|task| task.item_id.as_deref())
+        .collect();
+    if cli
+        .commands
+        .iter()
+        .filter(|(id, _)| !tasks.contains(&id.as_str()))
+        .count()
+        > COMMANDS_KEPT
+        && let Some(at) = cli
+            .commands
+            .iter()
+            .position(|(id, _)| !tasks.contains(&id.as_str()))
+    {
+        cli.commands.remove(at);
+    }
 }
 
 /// A call `event` says of, by its item id, with how it stands and, when it says, the step it is.
@@ -968,6 +994,48 @@ mod tests {
             5,
         );
         assert!(background_of(&cli).is_empty());
+    }
+
+    /// Claude's background `Bash` is a `Command` item, its task labelled with its description:
+    /// the row still knows what it runs, so its wait has no row (D38). A task's command outlives
+    /// the many calls after it.
+    #[test]
+    fn a_claude_workers_background_bash_keeps_its_command() {
+        use brigadier_providers::{BackgroundTaskKind, BackgroundTaskStatus};
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        let bash = |id: &str, command: &str| ProviderEvent::Command {
+            item_id: id.into(),
+            command: command.into(),
+            cwd: None,
+            status: ItemStatus::InProgress,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        follow(&mut cli, &bash("toolu_wait", "brigadier wait"), 2);
+        let task = BackgroundTask {
+            id: "b8ea764yr".into(),
+            item_id: Some("toolu_wait".into()),
+            kind: BackgroundTaskKind::Shell,
+            label: "Wait for the next worker event".into(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: 3,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+        };
+        follow(&mut cli, &ProviderEvent::BackgroundTask { task }, 3);
+        for at in 0..2 * COMMANDS_KEPT {
+            follow(&mut cli, &bash(&format!("c{at}"), "pnpm test"), 4);
+        }
+        assert_eq!(
+            background_of(&cli)[0].command.as_deref(),
+            Some("brigadier wait")
+        );
+        assert!(cli.commands.len() <= COMMANDS_KEPT + 1);
     }
 
     /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its

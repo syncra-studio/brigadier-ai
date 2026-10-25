@@ -9,23 +9,30 @@ const task = (kind: BackgroundTask["kind"], label: string, extra: Partial<Backgr
   outputFile: null, summary: null, lastLine: null, ...extra,
 });
 
+/** A Bash call as Claude's thread holds it: a `command` item (D38). */
+const claude = (command: string, extra: Partial<FileEntry> = {}, itemId = "bash-1"): FileEntry => ({
+  event: { type: "command", itemId, command, cwd: null, status: "completed", exitCode: null, output: null, durationMs: null },
+  ...extra,
+});
+
+/** A tool call with a `command` argument. */
 const bash = (input: unknown, extra: Partial<FileEntry> = {}, itemId = "bash-1"): FileEntry => ({
   event: { type: "toolCall", itemId, name: "Bash", input: JSON.stringify(input), status: "completed", output: null },
   ...extra,
 });
 
-test("Claude waits use the matching tool call's command, not the model-written task label", () => {
+test("Claude waits use the matching call's command, not the model-written task label", () => {
   const wait = task("shell", "Wait for the workers to finish");
   const entries = [
-    bash({ command: "pnpm test" }, {}, "unrelated"),
-    bash({ command: "brigadier wait w1", run_in_background: true }),
+    claude("pnpm test", {}, "unrelated"),
+    claude("brigadier wait w1"),
   ];
   assert.deepEqual(taskRows([wait], entries, 0), []);
   // A misleading label never hides an ordinary command.
   const ordinary = task("shell", "brigadier wait");
-  assert.equal(taskRows([ordinary], [bash({ command: "pnpm test", run_in_background: true })], 0).length, 1);
-  assert.equal(taskRows([ordinary], [bash({ command: "brigadier wait" }, {}, "unrelated"), bash({ command: "pnpm test" })], 0).length, 1);
-  assert.equal(taskRows([ordinary], [bash({ command: "echo 'brigadier wait'" })], 0).length, 1);
+  assert.equal(taskRows([ordinary], [claude("pnpm test")], 0).length, 1);
+  assert.equal(taskRows([ordinary], [claude("brigadier wait", {}, "unrelated"), claude("pnpm test")], 0).length, 1);
+  assert.equal(taskRows([ordinary], [claude("echo 'brigadier wait'")], 0).length, 1);
 });
 
 test("direct, chained and shell-wrapped waits have no row for either CLI", () => {
@@ -41,7 +48,7 @@ test("direct, chained and shell-wrapped waits have no row for either CLI", () =>
     "/bin/zsh -lc 'cd /repo && brigadier start fix && brigadier wait'",
   ]) {
     assert.deepEqual(taskRows([task("terminal", command)], [], 0), [], `Codex: ${command}`);
-    assert.deepEqual(taskRows([task("shell", "Workers")], [bash({ command, run_in_background: true })], 0), [], `Claude: ${command}`);
+    assert.deepEqual(taskRows([task("shell", "Workers")], [claude(command)], 0), [], `Claude: ${command}`);
   }
 });
 
@@ -52,8 +59,23 @@ test("other commands and quoted mentions of waits keep their rows", () => {
     'printf "%s" "brigadier wait"', "rg 'brigadier wait' src", "brigadier wait-for-worker",
   ]) {
     assert.equal(taskRows([task("terminal", command)], [], 0).length, 1, `Codex: ${command}`);
-    assert.equal(taskRows([task("shell", "Wait for workers")], [bash({ command })], 0).length, 1, `Claude: ${command}`);
+    assert.equal(taskRows([task("shell", "Wait for workers")], [claude(command)], 0).length, 1, `Claude: ${command}`);
   }
+});
+
+test("the recorded wait of session 698142a4 has no row (D38)", () => {
+  // Claude's task_started and its Bash call, as the thread got them.
+  const wait = task("shell", "Wait for the next worker event", { id: "b8ea764yr", itemId: "toolu_01Wrv7Adp1K2MrmL7UZnMh66" });
+  const pushChecks = task("shell", "Pre-push checks for composer", { id: "b2", itemId: "toolu_checks" });
+  const entries = [
+    claude("brigadier wait", {}, "toolu_01Wrv7Adp1K2MrmL7UZnMh66"),
+    claude("pnpm -C apps/desktop typecheck && cargo clippy", {}, "toolu_checks"),
+  ];
+  assert.deepEqual(taskRows([wait, pushChecks], entries, 0).map((row) => row.id), ["task:b2"]);
+});
+
+test("a tool call's command argument is read too", () => {
+  assert.deepEqual(taskRows([task("shell", "Workers")], [bash({ command: "brigadier wait", run_in_background: true })], 0), []);
 });
 
 test("a missing or unreadable Claude command keeps the task, without using its label", () => {

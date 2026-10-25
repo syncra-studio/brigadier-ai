@@ -79,11 +79,15 @@ export function runsBrigadier(command: string, sub: string): boolean {
   return false;
 }
 
-/** Claude labels a Bash task with its description; only its originating call has the command. */
+/**
+ * Claude labels a Bash task with its description; only its originating call has the command:
+ * a `command` item, as Claude's Bash always is (D38), or a tool call's `command` argument.
+ */
 export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
   if (task.kind === "terminal") return task.label;
   if (task.kind !== "shell" || task.itemId === null) return null;
-  const call = entries.find(({ event, parent }) => !parent && event.type === "toolCall" && event.itemId === task.itemId)?.event;
+  const call = entries.find(({ event, parent }) => !parent && (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.event;
+  if (call?.type === "command") return call.command || null;
   if (call?.type !== "toolCall") return null;
   try {
     const input = JSON.parse(call.input ?? "null") as { command?: unknown } | null;
