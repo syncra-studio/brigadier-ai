@@ -24,4 +24,14 @@ pub const BUILTIN: &[(&str, &str)] = &[
         "codex-thread-reads",
         include_str!("../fixtures/codex-thread-reads.jsonl"),
     ),
+    // The CLIs' own plan mode and question tool (harness D7), part of each CLI version's
+    // recording set (harness D9(c), D25).
+    (
+        "claude-plan-questions",
+        include_str!("../fixtures/claude-plan-questions.jsonl"),
+    ),
+    (
+        "codex-plan-questions",
+        include_str!("../fixtures/codex-plan-questions.jsonl"),
+    ),
 ];

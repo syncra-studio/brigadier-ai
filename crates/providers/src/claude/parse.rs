@@ -3652,4 +3652,138 @@ mod tests {
             }]
         );
     }
+
+    /// The recorded session's outputs, beside what Brigadier wrote back to it.
+    fn plan_questions_recording() -> (Vec<Output>, Vec<Value>) {
+        let recording = crate::record::Recording::parse(include_str!(
+            "../../fixtures/claude-plan-questions.jsonl"
+        ))
+        .unwrap();
+        let mut parser = Parser::replay();
+        let mut outputs = Vec::new();
+        let mut written = Vec::new();
+        for line in &recording.lines {
+            if line.dir == crate::record::Direction::Out {
+                outputs.extend(parser.feed(&line.line));
+            } else {
+                written.push(serde_json::from_str(&line.line).unwrap());
+            }
+        }
+        (outputs, written)
+    }
+
+    /// Claude's own plan mode and question tool, recorded on 2.1.310 (harness D7): the
+    /// questions reach the user's card with their recommendation and multi-select, and the plan
+    /// reaches the plan card with its file.
+    #[test]
+    fn claude_s_own_questions_and_plan_reach_the_user_s_cards() {
+        let (outputs, written) = plan_questions_recording();
+        let asked: Vec<(String, Vec<CliQuestion>)> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::QuestionsAsked { id, questions }) => {
+                    Some((id.clone(), questions.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked.len(), 2);
+        let option = |label: &str, description: &str| CliOption {
+            label: label.into(),
+            description: Some(description.into()),
+        };
+        let first = &asked[0].1;
+        assert_eq!(
+            first[0],
+            CliQuestion {
+                header: Some("Colours".into()),
+                question: "Which colours should the file list?".into(),
+                // "red (Recommended)": the mark leaves the label and names the recommendation.
+                options: vec![
+                    option("red", "List red"),
+                    option("green", "List green"),
+                    option("blue", "List blue"),
+                ],
+                recommended: Some(0),
+                multi_select: true,
+            }
+        );
+        // No option marked: nothing recommended, nothing invented.
+        assert_eq!(first[1].recommended, None);
+        assert!(!first[1].multi_select);
+        assert_eq!(first[1].options[0].label, "a.txt");
+
+        // The answer as recorded: picks of a multi-select joined with ", ", the recommended
+        // one with its mark again, a typed answer as typed.
+        let input = written
+            .iter()
+            .find_map(|line| {
+                (line["response"]["request_id"] == asked[0].0.as_str())
+                    .then(|| line["response"]["response"]["updatedInput"].clone())
+            })
+            .unwrap();
+        let mut asked_input = input.clone();
+        asked_input.as_object_mut().unwrap().remove("answers");
+        assert_eq!(
+            answered_input(
+                asked_input,
+                first,
+                &[vec!["red".into(), "blue".into()], vec!["c.txt".into()]]
+            ),
+            input
+        );
+        assert_eq!(
+            input["answers"],
+            json!({
+                "Which colours should the file list?": "red (Recommended), blue",
+                "What should the file be named?": "c.txt",
+            })
+        );
+
+        let plans: Vec<&ProviderEvent> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Event(event @ ProviderEvent::PlanProposed { .. }) => Some(event),
+                _ => None,
+            })
+            .collect();
+        let [ProviderEvent::PlanProposed { item_id, plan }] = plans[..] else {
+            panic!("one plan: {plans:?}")
+        };
+        assert_eq!(item_id, "toolu_01ShEDjduxsziJ9zNtbAJCFG");
+        assert!(plan.starts_with("# Plan\n"), "{plan}");
+        assert!(outputs.iter().any(|output| matches!(
+            output,
+            Output::Control(Control::PlanCaptured { file: Some(file), .. })
+                if file == "/Users/me/.claude/plans/use-your-askuserquestion-tool-composed-beacon.md"
+        )));
+        // Neither is a permission the user is asked for.
+        assert!(!outputs.iter().any(|output| matches!(
+            output,
+            Output::Event(ProviderEvent::ApprovalRequested { .. })
+        )));
+        // Into plan mode and out of it, as Claude said.
+        let modes: Vec<&str> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::PermissionMode(mode) => Some(mode.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(modes, ["plan", "acceptEdits"]);
+    }
+
+    #[test]
+    fn answers_to_questions_never_asked_are_left_out() {
+        let question = CliQuestion::new(
+            None,
+            "Which?".into(),
+            [("x (Recommended)".to_owned(), None), ("y".to_owned(), None)],
+            false,
+        );
+        assert_eq!(
+            answered_input(json!({"questions": []}), &[question], &[vec!["  ".into()]]),
+            json!({"questions": [], "answers": {}})
+        );
+    }
 }

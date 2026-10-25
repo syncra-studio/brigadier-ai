@@ -2380,4 +2380,142 @@ mod tests {
             ]
         );
     }
+
+    /// Codex's own plan mode and question tool, recorded on 0.164.0 (harness D7): the
+    /// questions reach the user's card, the plan the plan card; an interrupted turn's question
+    /// is never resolved by Codex.
+    #[test]
+    fn codex_s_own_questions_and_plan_reach_the_user_s_cards() {
+        let recording = crate::record::Recording::parse(include_str!(
+            "../../fixtures/codex-plan-questions.jsonl"
+        ))
+        .unwrap();
+        let mut parser = Parser::replay();
+        let mut outputs = Vec::new();
+        let mut written: Vec<Value> = Vec::new();
+        for line in &recording.lines {
+            if line.dir == crate::record::Direction::Out {
+                outputs.extend(parser.feed(&line.line));
+            } else {
+                written.push(serde_json::from_str(&line.line).unwrap());
+            }
+        }
+        let asked: Vec<(String, Vec<String>, Vec<CliQuestion>)> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Control(Control::Approval {
+                    approval_id,
+                    kind: PendingKind::Questions { ids, questions },
+                    ..
+                }) => Some((approval_id.clone(), ids.clone(), questions.clone())),
+                _ => None,
+            })
+            .collect();
+        let ids: Vec<&str> = asked.iter().map(|(id, ..)| id.as_str()).collect();
+        assert_eq!(ids, ["codex-0", "codex-1", "codex-2"]);
+        let events: Vec<&str> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::QuestionsAsked { id, .. }) => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(events, ids);
+        let (_, question_ids, questions) = &asked[0];
+        assert_eq!(question_ids, &["file_name"]);
+        assert_eq!(
+            questions[0],
+            CliQuestion {
+                header: Some("File name".into()),
+                question: "Which file name should the plan use?".into(),
+                options: vec![
+                    CliOption {
+                        label: "a.txt".into(),
+                        description: Some("Write hi to a.txt.".into()),
+                    },
+                    CliOption {
+                        label: "b.txt".into(),
+                        description: Some("Write hi to b.txt.".into()),
+                    },
+                ],
+                recommended: Some(0),
+                multi_select: false,
+            }
+        );
+        // No option marked: nothing recommended.
+        assert_eq!(asked[1].2[0].recommended, None);
+
+        // The answers as recorded: the chosen option as Codex offered it; declined, none.
+        let response = |id: u64| {
+            written
+                .iter()
+                .find(|line| line["id"] == id && line.get("result").is_some())
+                .map(|line| line["result"].clone())
+                .unwrap()
+        };
+        assert_eq!(
+            user_input_answer(question_ids, questions, &[vec!["a.txt".into()]]),
+            response(0)
+        );
+        assert_eq!(
+            user_input_answer(&asked[1].1, &asked[1].2, &[]),
+            response(1)
+        );
+
+        // Answered and declined, Codex resolves them; interrupted, it doesn't.
+        let resolved: Vec<&Value> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Control(Control::Resolved { rpc_id }) => Some(rpc_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolved, [&json!(0), &json!(1)]);
+
+        let plans: Vec<&ProviderEvent> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::Event(event @ ProviderEvent::PlanProposed { .. }) => Some(event),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            plans,
+            [&ProviderEvent::PlanProposed {
+                item_id: "01a1729b-9831-7fc3-9498-0c67248ca099-plan".into(),
+                plan: "Create `a.txt` containing exactly `hi`, then verify its contents.\n".into(),
+            }]
+        );
+        // Plan mode and back, each naming the thread's model and effort.
+        let modes: Vec<Value> = written
+            .iter()
+            .filter(|line| line["method"] == "turn/start")
+            .map(|line| line["params"]["collaborationMode"].clone())
+            .collect();
+        assert_eq!(modes[0]["mode"], "plan");
+        assert!(modes[1..].iter().all(|mode| mode["mode"] == "default"));
+        assert!(
+            modes
+                .iter()
+                .all(|mode| mode["settings"]["reasoning_effort"] == "low")
+        );
+    }
+
+    #[test]
+    fn an_answer_names_each_question_once_and_skips_blank_words() {
+        let question = CliQuestion::new(
+            None,
+            "Which?".into(),
+            [("x (Recommended)".to_owned(), None), ("y".to_owned(), None)],
+            true,
+        );
+        assert_eq!(
+            user_input_answer(
+                &["q".into()],
+                &[question],
+                &[vec!["x".into(), " ".into(), "y".into()]]
+            ),
+            json!({"answers": {"q": {"answers": ["x (Recommended)", "y"]}}})
+        );
+    }
 }

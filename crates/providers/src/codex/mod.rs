@@ -2655,6 +2655,32 @@ fn list_mcp_servers(rpc: &Arc<Rpc>, shared: &Arc<Shared>) {
     });
 }
 
+/// Drops the pending questions of request `rpc_id` (every one when `None`) and says they are
+/// withdrawn ([`ProviderEvent::QuestionsWithdrawn`]).
+async fn withdraw_questions(shared: &Shared, rpc_id: Option<&Value>) {
+    let withdrawn: Vec<String> = {
+        let mut approvals = lock(&shared.approvals);
+        let ids: Vec<String> = approvals
+            .iter()
+            .filter(|(_, (pending, kind))| {
+                rpc_id.is_none_or(|rpc_id| pending == rpc_id)
+                    && matches!(kind, PendingKind::Questions { .. })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ids {
+            approvals.remove(id);
+        }
+        ids
+    };
+    for id in withdrawn {
+        shared
+            .events
+            .send(ProviderEvent::QuestionsWithdrawn { id })
+            .await;
+    }
+}
+
 /// Serves a session's app-server output until it exits. `trusted` names the MCP servers whose
 /// tool calls run without asking.
 async fn read_loop(
@@ -2675,6 +2701,11 @@ async fn read_loop(
         for output in outputs {
             match output {
                 Output::Event(event) => {
+                    // An interrupted turn leaves its questions pending with no
+                    // `serverRequest/resolved` (checked on 0.164.0): withdrawn as it ends.
+                    if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+                        withdraw_questions(&shared, None).await;
+                    }
                     // A server that came up or gave up: its tools and state, as Codex lists
                     // them now.
                     let settled = matches!(
@@ -2730,26 +2761,7 @@ async fn read_loop(
                 // Questions Codex no longer waits on, unanswered: their card stays, and its
                 // answer reaches the thread as a message.
                 Output::Control(Control::Resolved { rpc_id }) => {
-                    let withdrawn: Vec<String> = {
-                        let mut approvals = lock(&shared.approvals);
-                        let ids: Vec<String> = approvals
-                            .iter()
-                            .filter(|(_, (pending, kind))| {
-                                *pending == rpc_id && matches!(kind, PendingKind::Questions { .. })
-                            })
-                            .map(|(id, _)| id.clone())
-                            .collect();
-                        for id in &ids {
-                            approvals.remove(id);
-                        }
-                        ids
-                    };
-                    for id in withdrawn {
-                        shared
-                            .events
-                            .send(ProviderEvent::QuestionsWithdrawn { id })
-                            .await;
-                    }
+                    withdraw_questions(&shared, Some(&rpc_id)).await;
                 }
             }
         }
@@ -3277,6 +3289,20 @@ mod tests {
     fn a_thread_gets_no_command_timeout_of_brigadiers() {
         let args = app_server_args(Some(&spec(ToolSet::Thread, None)));
         assert!(!args.iter().any(|arg| arg.contains("timeout")), "{args:?}");
+    }
+
+    /// A thread asks with Codex's own question tool in its default mode too (harness D7); a
+    /// worker never asks the user (G19.Q6).
+    #[test]
+    fn only_a_thread_turns_on_codex_s_question_tool() {
+        let on = |tools| {
+            app_server_args(Some(&spec(tools, None)))
+                .windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == THREAD_QUESTIONS)
+        };
+        assert!(on(ToolSet::Thread));
+        assert!(!on(ToolSet::Lean));
+        assert!(!on(ToolSet::SideChat));
     }
 
     #[test]
@@ -4101,6 +4127,148 @@ for line in sys.stdin:
         // The plain steer starts the next turn, as it always did.
         session.steer(TurnInput::text("Also CSV.")).await.unwrap();
         assert_eq!(methods(), "start-a-turn\nturn/steer\nturn/start\n");
+        rpc.process.shutdown(EXIT_GRACE).await;
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// Plan mode is Codex's plan collaboration mode, named on each turn with the thread's model
+    /// and the session's effort (which the mode takes over), and only once a session was put in
+    /// it; a question an interrupted turn leaves pending is withdrawn as the turn ends (harness
+    /// D7).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plan_mode_carries_the_effort_and_an_ended_turn_withdraws_its_questions() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-plan-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let log = scratch.join("lines");
+        let binary = scratch.join("app-server");
+        // `ask` asks a question, then the turn ends without resolving it (as an interrupt does).
+        std::fs::write(
+            &binary,
+            format!(
+                r#"#!/usr/bin/env python3
+import json, sys
+log = open({log:?}, "a")
+def say(m):
+    print(json.dumps(m), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    log.write(line); log.flush()
+    if m.get("method") == "ask":
+        say({{"id": 7, "method": "item/tool/requestUserInput", "params": {{"threadId": "t",
+            "turnId": "turn-1", "itemId": "c", "questions": [{{"id": "q", "header": "H",
+            "question": "Which?", "isOther": True, "options": [{{"label": "x", "description": None}}]}}]}}}})
+        say({{"method": "turn/completed", "params": {{"threadId": "t", "turn": {{"id": "turn-1",
+            "items": [], "itemsView": "notLoaded", "status": "interrupted", "error": None,
+            "startedAt": 1, "completedAt": 2, "durationMs": 1}}}}}})
+    elif "id" in m:
+        say({{"id": m["id"], "result": {{"turn": {{"id": "turn-1", "items": [],
+            "itemsView": "notLoaded", "status": "inProgress", "error": None}}}}}})
+"#,
+                log = log.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(scratch.join("data")),
+        })
+        .unwrap();
+        let mut spec = brigadier_sandbox::SpawnSpec::new(&binary);
+        spec.cwd = Some(scratch.clone());
+        let process::Spawned { process, stdout } =
+            process::spawn(platform, &spec, process::Options::default()).unwrap();
+        let rpc = Arc::new(Rpc::new(process));
+        let (events_tx, mut events) = mpsc::channel(EVENTS);
+        let shared = Arc::new(Shared {
+            approvals: Mutex::new(HashMap::new()),
+            turn_id: Mutex::new(None),
+            compact_asked: AtomicBool::new(false),
+            events: Events::new(events_tx, None),
+            thread: Mutex::new(Some("t".into())),
+            own_mcp: HashSet::new(),
+            mcp_listing: AtomicBool::new(false),
+            mcp_relist: Mutex::new(McpRelist::default()),
+        });
+        tokio::spawn(read_loop(
+            rpc.clone(),
+            stdout,
+            shared.clone(),
+            HashSet::new(),
+        ));
+        let mut session = CodexSession {
+            context_window: None,
+            thread_id: "t".into(),
+            rollout: None,
+            ephemeral: true,
+            compacts: false,
+            rpc: rpc.clone(),
+            shared: shared.clone(),
+            access: Access::Ask,
+            tools: ToolSet::Thread,
+            writable_roots: Vec::new(),
+            effort: Some("high".into()),
+            cwd: scratch.clone(),
+            model: "gpt-6.1-sol".into(),
+            thread_effort: Some(p::ReasoningEffort::try_from("low").unwrap()),
+            plan: Mutex::new(None),
+        };
+        let modes = || -> Vec<Value> {
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|line| line["method"] == "turn/start")
+                .map(|line| line["params"]["collaborationMode"].clone())
+                .collect()
+        };
+        let mode = |kind: &str, effort: &str| json!({"mode": kind, "settings": {"model": "gpt-6.1-sol", "reasoning_effort": effort}});
+        // Never in plan mode: its turns name no mode, as before; out of it changes nothing.
+        session.set_plan_mode(false).await.unwrap();
+        session.send(TurnInput::text("Hi.")).await.unwrap();
+        session.set_plan_mode(true).await.unwrap();
+        session.send(TurnInput::text("Plan it.")).await.unwrap();
+        session.set_plan_mode(false).await.unwrap();
+        session.send(TurnInput::text("Build it.")).await.unwrap();
+        assert_eq!(
+            modes(),
+            [Value::Null, mode("plan", "high"), mode("default", "high")]
+        );
+        // Without an effort of its own, the thread's.
+        session.effort = None;
+        session.set_plan_mode(true).await.unwrap();
+        session.send(TurnInput::text("Plan again.")).await.unwrap();
+        assert_eq!(modes()[3], mode("plan", "low"));
+
+        rpc.notify("ask").await.unwrap();
+        let mut seen = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    ProviderEvent::QuestionsAsked { id, .. } => seen.push(format!("asked {id}")),
+                    ProviderEvent::QuestionsWithdrawn { id } => {
+                        seen.push(format!("withdrawn {id}"))
+                    }
+                    ProviderEvent::TurnCompleted { .. } => {
+                        seen.push("ended".into());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen, ["asked codex-7", "withdrawn codex-7", "ended"]);
+        // Withdrawn, it takes no answer.
+        assert!(
+            session
+                .answer_questions("codex-7".into(), Some(vec![vec!["x".into()]]))
+                .await
+                .is_err()
+        );
         rpc.process.shutdown(EXIT_GRACE).await;
         std::fs::remove_dir_all(&scratch).unwrap();
     }
