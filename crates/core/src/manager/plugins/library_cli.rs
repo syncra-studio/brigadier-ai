@@ -11,8 +11,8 @@ use brigadier_cli::protocol::{
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::LibraryRow;
 use super::ops::{PluginJobView, PluginStep};
-use super::{PluginItemView, PluginsView};
 use crate::manager::SessionManager;
 use crate::manager::cli::CliCaller;
 use crate::manager::mcp_login::{AgentSignInState, McpSignInProgress};
@@ -48,38 +48,28 @@ fn tag(value: impl serde::Serialize) -> String {
     }
 }
 
-fn item(view: &PluginItemView) -> LibraryItem {
+fn item(row: &LibraryRow) -> LibraryItem {
     LibraryItem {
-        name: view.name.clone(),
-        kind: tag(view.kind),
-        detail: view.detail.clone(),
-        everywhere: view.everywhere,
-        on_in: view.on_in.clone(),
-        off_in: view.off_in.clone(),
-        agents: view
+        name: row.name.clone(),
+        kind: tag(row.kind),
+        detail: row.detail.clone(),
+        everywhere: row.everywhere,
+        on_in: row.on_in.clone(),
+        off_in: row.off_in.clone(),
+        agents: row
             .agents
             .iter()
-            .map(|agent| LibraryAgentState {
-                agent: tag(agent.agent),
-                state: tag(&agent.state),
+            .map(|(agent, state)| LibraryAgentState {
+                agent: tag(super::provider(*agent)),
+                state: tag(state),
             })
             .collect(),
-        attention: view.attention.as_ref().and_then(|attention| {
-            serde_json::to_value(attention)
-                .ok()?
-                .get("message")?
-                .as_str()
-                .map(str::to_owned)
-        }),
+        attention: row.attention.clone(),
     }
 }
 
-fn library_items(view: &PluginsView) -> Vec<LibraryItem> {
-    view.items
-        .iter()
-        .filter(|entry| entry.library)
-        .map(item)
-        .collect()
+fn library_items(rows: &[LibraryRow]) -> Vec<LibraryItem> {
+    rows.iter().map(item).collect()
 }
 
 fn job_agents(job: &PluginJobView) -> Vec<LibraryAgentResult> {
@@ -158,20 +148,19 @@ impl SessionManager {
             },
         };
         let answer = match action {
-            "list" => self.plugins_view(project).await.map(|view| LibraryOutput {
+            "list" => self.library_rows(project).await.map(|rows| LibraryOutput {
                 action: action.to_owned(),
-                items: library_items(&view),
+                items: library_items(&rows),
                 agents: Vec::new(),
                 warning: None,
             }),
             "add" => {
                 let text = args.text.unwrap_or_default();
-                let job = match self.add_plugin(
+                let job = match self.add_plugin_as(
                     text,
                     args.name,
-                    project.clone(),
+                    project.clone().map(|id| vec![id]),
                     args.shared,
-                    None,
                     None,
                 ) {
                     Ok(id) => self.finished_job(&id).await,
@@ -180,9 +169,9 @@ impl SessionManager {
                 if let Some(error) = &job.error {
                     return failed(error.clone());
                 }
-                self.plugins_view(project).await.map(|view| LibraryOutput {
+                self.library_rows(project).await.map(|rows| LibraryOutput {
                     action: action.to_owned(),
-                    items: library_items(&view)
+                    items: library_items(&rows)
                         .into_iter()
                         .filter(|item| job.keys.contains(&format!("lib:{}", item.name)))
                         .collect(),
@@ -244,20 +233,18 @@ impl SessionManager {
     /// `login <name>`: every agent that needs it signs in to the Library server `name`, one
     /// after another, in the user's browser.
     async fn cli_library_login(&self, project: Option<String>, name: String) -> CliReply {
-        let view = match self.plugins_view(project.clone()).await {
-            Ok(view) => view,
+        let rows = match self.library_rows(project.clone()).await {
+            Ok(rows) => rows,
             Err(err) => return failed(err.to_string()),
         };
-        let Some(entry) = view
-            .items
-            .iter()
-            .find(|entry| entry.library && entry.name == name)
-        else {
+        let Some(entry) = rows.iter().find(|entry| entry.name == name) else {
             return failed(format!("{name} isn't in your Library"));
         };
-        let Some(server) = entry.server_id.clone() else {
+        let Some((server, found_in)) = entry.server_id.clone() else {
             return failed(format!("{name} doesn't sign in"));
         };
+        // The catalog that has the server: the project's, when only it does.
+        let project = found_in.or(project);
         let Some(open) = self.sign_in_browser.get().cloned() else {
             return failed("Brigadier can't open a browser here");
         };

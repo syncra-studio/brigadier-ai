@@ -18,6 +18,14 @@ pub struct ServerSpec {
     /// The name its tools are called by.
     pub name: String,
     pub transport: TransportSpec,
+    /// The pre-registered OAuth client it signs in with, when its config names one.
+    pub oauth: Option<OAuthSpec>,
+}
+
+/// A pre-registered OAuth client: only its id goes into a file (a secret never does).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthSpec {
+    pub client_id: String,
 }
 
 /// How a server to add is reached.

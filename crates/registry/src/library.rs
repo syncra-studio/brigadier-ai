@@ -185,6 +185,36 @@ impl Library {
         self.entries().into_iter().find(|entry| entry.name == name)
     }
 
+    /// A name for a new plugin made from an item called `name`: `name` itself when it can be
+    /// one and is free, else it with other characters as `-`, then `-2`, `-3`… until free.
+    pub fn fresh_name(&self, name: &str) -> String {
+        let mut base: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .take(56)
+            .collect();
+        if base.is_empty() {
+            base = "item".to_owned();
+        }
+        let taken: Vec<String> = self.entries().into_iter().map(|entry| entry.name).collect();
+        let free = |candidate: &str| {
+            !taken.iter().any(|known| known == candidate) && !self.plugin_dir(candidate).exists()
+        };
+        if free(&base) {
+            return base;
+        }
+        (2..)
+            .map(|n| format!("{base}-{n}"))
+            .find(|candidate| free(candidate))
+            .unwrap_or(base)
+    }
+
     /// Packs `item` as plugin `name` (an update when `replace` and it is there already). A
     /// skill's files are read from `skill_dir` (fetched by the caller for a Git or skills.sh
     /// source); `taken` are the names of the MCP servers the agents have besides this item's.
@@ -427,6 +457,11 @@ impl Library {
                 (claude, codex)
             }
         };
+        let (mut claude, mut codex) = (claude, codex);
+        if let Some(oauth) = &spec.oauth {
+            claude["oauth"] = json!({ "clientId": oauth.client_id });
+            codex["oauth"] = json!({ "client_id": oauth.client_id });
+        }
         write_json(
             &staging.join(".mcp.json"),
             &json!({ "mcpServers": { &spec.name: claude } }),
@@ -628,6 +663,24 @@ fn skill_folders(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 fn plugin_root(text: &str, root: &str) -> String {
     text.replace("${CLAUDE_PLUGIN_ROOT}", root)
         .replace("${PLUGIN_ROOT}", root)
+}
+
+/// Whether `name` can be a Library plugin's or a server's.
+pub fn valid_name(name: &str) -> bool {
+    check_name(name).is_ok()
+}
+
+/// The SHA-256 of `text`, in hex: what remembers a value without keeping it.
+pub fn hash_text(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The hash of every file in `dir` (names and bytes): what tells a skill folder changed.
+pub fn hash_dir(dir: &Path) -> std::io::Result<String> {
+    hash_tree(dir)
 }
 
 /// A plugin's or server's name: letters, digits, `-` and `_`, not starting with `.`.

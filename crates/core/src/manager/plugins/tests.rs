@@ -1,8 +1,24 @@
 use std::path::{Path, PathBuf};
 
-use brigadier_registry::Roots;
+use brigadier_registry::{Catalog, Roots};
 
+use super::model::{ProjectCatalog, provider_app_command};
 use super::*;
+
+/// The page for `user` and `projects`, nothing shared yet.
+fn page(user: &Catalog, projects: &[ProjectCatalog], health: &dyn Health) -> PluginsView {
+    let model = model::model(user, projects, &[], &Sharing::default(), Path::new("/home"));
+    build(&model, projects, &Sharing::default(), health, &[], None).view
+}
+
+/// The CLI's Library rows' agent states for `user` and `projects`, where `focus` looks.
+#[allow(dead_code)]
+fn only_in(item: &PluginItemView) -> Option<(Vec<ProviderKind>, OnlyInReason)> {
+    match &item.problem {
+        Some(PluginProblem::OnlyIn { agents, reason, .. }) => Some((agents.clone(), *reason)),
+        _ => None,
+    }
+}
 
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -28,13 +44,6 @@ fn item<'a>(view: &'a PluginsView, key: &str) -> &'a PluginItemView {
         })
 }
 
-fn states(item: &PluginItemView) -> Vec<AgentItemState> {
-    item.agents
-        .iter()
-        .map(|agent| agent.state.clone())
-        .collect()
-}
-
 #[test]
 fn synced_only_skills_stay_hidden_whether_user_made_or_anthropic() {
     let home = home("synced-provenance");
@@ -54,7 +63,7 @@ fn synced_only_skills_stay_hidden_whether_user_made_or_anthropic() {
     let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
     let catalog = Catalog::read(&roots, None);
     assert_eq!(catalog.skills.len(), 2);
-    let view = build(&catalog, &[], &[], &Unknown, None);
+    let view = page(&catalog, &[], &Unknown);
     assert!(view.items.is_empty());
     assert!(view.elsewhere.is_empty());
     std::fs::remove_dir_all(home).unwrap();
@@ -129,26 +138,25 @@ fn codex_provider_plugins_hide_skills_servers_and_problems_even_when_off() {
         path: project.clone(),
         catalog: Catalog::read(&roots, Some(&project)),
     }];
-    for focus in [None, Some(project.as_path())] {
-        let view = build(&catalog, &projects, &[], &Unknown, focus);
-        let keys: Vec<_> = view.items.iter().map(|item| item.key.as_str()).collect();
-        assert_eq!(
-            keys,
-            [
-                "plugin:curated",
-                "server:curated-broken",
-                "plugin:curated-off",
-                "plugin:curated-off/curated-off-server",
-                "plugin:curated-remote",
-                "server:curated-remote-broken",
-                "plugin:curated-remote/curated-remote-server",
-                "plugin:curated/curated-server",
-                "plugin:official",
-            ]
-        );
-        assert_eq!(item(&view, "plugin:curated").skills, 1);
-        assert!(view.elsewhere.is_empty());
-    }
+    let view = page(&catalog, &projects, &Unknown);
+    let keys: Vec<_> = view.items.iter().map(|item| item.key.as_str()).collect();
+    // What won't start first, then A–Z.
+    assert_eq!(
+        keys,
+        [
+            "server:curated-broken",
+            "server:curated-remote-broken",
+            "plugin:curated",
+            "plugin:curated-off",
+            "plugin:curated-off/curated-off-server",
+            "plugin:curated-remote",
+            "plugin:curated-remote/curated-remote-server",
+            "plugin:curated/curated-server",
+            "plugin:official",
+        ]
+    );
+    assert_eq!(item(&view, "plugin:curated").skill_count, 1);
+    assert!(view.elsewhere.is_empty());
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -196,7 +204,7 @@ fn provider_app_servers_are_hidden_including_off_elsewhere_and_attention() {
             .iter()
             .any(|problem| problem.name == "provider_broken")
     );
-    let view = build(&catalog, &[], &[], &Unknown, None);
+    let view = page(&catalog, &[], &Unknown);
     assert_eq!(view.items.len(), 1);
     assert_eq!(view.items[0].key, "server:user_server");
     assert_eq!(view.elsewhere.len(), 1);
@@ -215,7 +223,7 @@ fn provider_app_servers_are_hidden_including_off_elsewhere_and_attention() {
 }
 
 #[test]
-fn the_page_shows_where_each_item_is_on_for_each_agent() {
+fn the_page_shows_scope_lock_problems_and_order() {
     let home = home("view");
     let a = home.join("a");
     let b = home.join("b");
@@ -231,13 +239,11 @@ fn the_page_shows_where_each_item_is_on_for_each_agent() {
     write(
         &home.join(".codex/config.toml"),
         &format!(
-            "[mcp_servers.pencil]\ncommand = \"pencil-mcp\"\n\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            "[mcp_servers.pencil]\ncommand = \"pencil-mcp\"\n\n\
+             [mcp_servers.docs]\nurl = \"https://mcp.docs.example/mcp\"\n\n\
+             [projects.\"{}\"]\ntrust_level = \"trusted\"\n",
             a.display()
         ),
-    );
-    write(
-        &a.join(".codex/config.toml"),
-        "[mcp_servers.pencil]\nenabled = false\n",
     );
     write(
         &home.join(".claude/skills/grill/SKILL.md"),
@@ -258,69 +264,61 @@ fn the_page_shows_where_each_item_is_on_for_each_agent() {
             catalog: Catalog::read(&roots, Some(path)),
         })
         .collect();
-    let every = build(&user, &projects, &[], &Unknown, None);
-    assert_eq!(
-        every.agents.iter().map(|a| a.agent).collect::<Vec<_>>(),
-        [ProviderKind::Claude, ProviderKind::Codex]
+    let view = page(&user, &projects, &Unknown);
+    // Both agents have pencil: on everywhere, nothing to share, locked by Claude's own entry.
+    let pencil = item(&view, "server:pencil");
+    assert!(pencil.on && pencil.problem.is_none());
+    assert_eq!(pencil.scope, PluginScope::AllProjects);
+    assert_eq!(pencil.removal, PluginRemoval::None);
+    assert!(
+        pencil
+            .locked
+            .as_deref()
+            .unwrap()
+            .starts_with("Claude Code keeps it on")
     );
-    let pencil = item(&every, "server:pencil");
-    assert!(pencil.everywhere && pencil.attention.is_none());
+    // Claude's own server in project a only: some projects, locked.
+    let postgres = item(&view, "server:postgres");
     assert_eq!(
-        states(pencil),
-        [AgentItemState::Ready, AgentItemState::Ready]
+        postgres.scope,
+        PluginScope::SomeProjects {
+            project_ids: vec!["a".to_owned()],
+            folders: Vec::new()
+        }
     );
-    // Claude Code has no per-project off of its own servers: the Library first.
-    assert!(!pencil.switchable);
-    let postgres = item(&every, "server:postgres");
-    assert!(!postgres.everywhere);
-    assert_eq!(postgres.on_in, [a.display().to_string()]);
-    assert_eq!(
-        postgres.attention,
-        Some(PluginAttention::NotEverywhere {
-            message: "Only Claude Code has it.".to_owned()
-        })
-    );
-    let grill = item(&every, "skill:grill");
+    assert!(postgres.locked.is_some());
+    // A skill in ~/.claude/skills: locked, its description the subtitle.
+    let grill = item(&view, "skill:grill");
     assert_eq!(grill.kind, PluginKind::Skill);
     assert_eq!(grill.description, "Asks hard questions.");
-    assert_eq!(
-        states(grill),
-        [AgentItemState::Ready, AgentItemState::Missing]
-    );
-    if cfg!(target_os = "macos") {
-        assert_eq!(every.elsewhere.len(), 1);
-        assert_eq!(every.elsewhere[0].name, "figma");
-        assert_eq!(
-            every.elsewhere[0].found_in.as_deref(),
-            Some("Claude Desktop")
-        );
-    }
-    // In project a: Codex switches pencil off there by its own file.
-    let in_a = build(&user, &projects, &[], &Unknown, Some(&a));
-    assert_eq!(
-        states(item(&in_a, "server:pencil")),
-        [AgentItemState::Ready, AgentItemState::Off]
-    );
-    assert_eq!(
-        states(item(&in_a, "server:postgres")),
-        [AgentItemState::Ready, AgentItemState::Missing]
-    );
-    // b isn't trusted in Codex: its line says so.
-    let b_view = &every.projects[1];
-    assert!(every.projects[0].notes.is_empty());
-    assert_eq!(b_view.notes.len(), 1);
-    assert_eq!(b_view.notes[0].agent, ProviderKind::Codex);
+    assert_eq!(grill.skill_count, 1);
     assert!(
-        b_view.notes[0]
-            .message
-            .contains("once you trust the project")
+        grill
+            .locked
+            .as_deref()
+            .unwrap()
+            .contains("loads every skill in")
     );
+    // Codex's own remote server: switchable, its address for the icon.
+    let docs = item(&view, "server:docs");
+    assert!(docs.locked.is_none());
+    assert_eq!(docs.url.as_deref(), Some("https://mcp.docs.example/mcp"));
+    assert_eq!(docs.icon, None);
+    if cfg!(target_os = "macos") {
+        assert_eq!(view.elsewhere.len(), 1);
+        assert_eq!(view.elsewhere[0].name, "figma");
+        assert_eq!(view.elsewhere[0].found_in, "Claude Desktop");
+    }
+    // b isn't trusted in Codex: its line says so.
+    assert!(view.projects[0].notes.is_empty());
+    assert_eq!(view.projects[1].notes.len(), 1);
+    assert_eq!(view.projects[1].notes[0].agent, ProviderKind::Codex);
     // Each agent's own list: Codex needs a sign-in to pencil; Claude can't start postgres.
     let lists = Lists(vec![
         (
             Agent::Codex,
             None,
-            vec![brigadier_registry::adapter::Listed {
+            vec![Listed {
                 name: "pencil".into(),
                 needs_sign_in: true,
                 failed: None,
@@ -329,39 +327,22 @@ fn the_page_shows_where_each_item_is_on_for_each_agent() {
         (
             Agent::Claude,
             Some(a.clone()),
-            vec![brigadier_registry::adapter::Listed {
+            vec![Listed {
                 name: "postgres".into(),
                 needs_sign_in: false,
                 failed: Some("Failed to connect — ENOENT".into()),
             }],
         ),
     ]);
-    let every = build(&user, &projects, &[], &lists, None);
-    let pencil = item(&every, "server:pencil");
+    let view = page(&user, &projects, &lists);
     assert_eq!(
-        states(pencil),
-        [AgentItemState::Ready, AgentItemState::NeedsSignIn]
-    );
-    assert_eq!(
-        pencil.attention,
-        Some(PluginAttention::SignIn {
-            message: "Codex needs you to sign in.".to_owned()
-        })
-    );
-    let in_a = build(&user, &projects, &[], &lists, Some(&a));
-    let postgres = item(&in_a, "server:postgres");
-    assert_eq!(
-        states(postgres)[0],
-        AgentItemState::WontStart {
-            reason: "Failed to connect — ENOENT".to_owned()
-        }
-    );
-    assert_eq!(
-        postgres.attention,
-        Some(PluginAttention::WontStart {
+        item(&view, "server:postgres").problem,
+        Some(PluginProblem::WontStart {
             message: "Won't start: Failed to connect — ENOENT".to_owned()
         })
     );
+    // Problems that need the user come first.
+    assert_eq!(view.items[0].key, "server:postgres");
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -391,11 +372,23 @@ fn a_plugins_skills_are_one_item_with_their_count() {
         r#"{"enabledPlugins": {"kit@acme": true}}"#,
     );
     let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
-    let view = build(&Catalog::read(&roots, None), &[], &[], &Unknown, None);
+    let view = page(&Catalog::read(&roots, None), &[], &Unknown);
     let kit = item(&view, "plugin:kit");
     assert_eq!(
-        (kit.kind, kit.name.as_str(), kit.skills),
+        (kit.kind, kit.name.as_str(), kit.skill_count),
         (PluginKind::Skill, "kit", 2)
+    );
+    // It can't be shared: it came in Claude Code's own plugin.
+    let Some(PluginProblem::OnlyIn {
+        message, reason, ..
+    }) = &kit.problem
+    else {
+        panic!("{:?}", kit.problem);
+    };
+    assert_eq!(*reason, OnlyInReason::OwnPlugin);
+    assert_eq!(
+        message,
+        "Only in Claude Code: came in Claude Code's own plugin"
     );
     assert_eq!(kit.description, "Images and video.");
     assert!(
@@ -457,23 +450,17 @@ fn an_agents_own_item_switched_off_everywhere_stays_as_an_off_row() {
         path: project.clone(),
         catalog: Catalog::read(&roots, Some(&project)),
     }];
-    for focus in [None, Some(project.as_path())] {
-        let view = build(&user, &projects, &[], &Unknown, focus);
-        let pencil = item(&view, "server:pencil");
-        assert_eq!(
-            states(pencil),
-            [AgentItemState::Missing, AgentItemState::Off]
-        );
-        assert!(pencil.switchable && !pencil.everywhere);
-        assert_eq!(pencil.detail, "pencil-mcp");
-        assert_eq!(
-            states(item(&view, "plugin:kit")),
-            [AgentItemState::Missing, AgentItemState::Off]
-        );
-        let deck = item(&view, "plugin:deck");
-        assert_eq!(states(deck), [AgentItemState::Off, AgentItemState::Missing]);
-        assert_eq!((deck.description.as_str(), deck.skills), ("Slides.", 1));
-    }
+    let view = page(&user, &projects, &Unknown);
+    let pencil = item(&view, "server:pencil");
+    assert!(!pencil.on && pencil.locked.is_none());
+    assert_eq!(pencil.detail, "pencil-mcp");
+    assert!(!item(&view, "plugin:kit").on);
+    let deck = item(&view, "plugin:deck");
+    assert!(!deck.on);
+    assert_eq!(
+        (deck.description.as_str(), deck.skill_count),
+        ("Slides.", 1)
+    );
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -499,28 +486,22 @@ fn a_claude_server_kept_to_a_folder_that_isnt_a_project_says_where_it_is_on() {
         path: project.clone(),
     }];
     let user = Catalog::read(&roots, None);
-    let view = build(&user, &projects, &[], &Unknown, None);
+    let view = page(&user, &projects, &Unknown);
     let codescene = item(&view, "server:codescene");
-    assert_eq!(codescene.on_in, [foreign.display().to_string()]);
-    assert!(!codescene.everywhere);
-    // Claude Code can't keep its own server to a project: the switch asks to add it to every
-    // agent first.
-    assert!(!codescene.switchable);
     assert_eq!(
-        states(codescene),
-        [AgentItemState::Off, AgentItemState::Missing]
+        codescene.scope,
+        PluginScope::SomeProjects {
+            project_ids: Vec::new(),
+            folders: vec![foreign.display().to_string()]
+        }
     );
-    // Looking at the project, it's off there.
-    let here = build(&user, &projects, &[], &Unknown, Some(&project));
-    assert_eq!(
-        states(item(&here, "server:codescene")),
-        [AgentItemState::Off, AgentItemState::Missing]
-    );
+    // Claude Code's own server: the switch and the scope can't change it.
+    assert!(codescene.locked.is_some());
     std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
-fn a_foreign_folder_claude_server_is_not_switchable_beside_a_codex_one() {
+fn a_foreign_folder_claude_server_locks_the_row_beside_a_codex_one() {
     let home = home("foreign-and-codex");
     let foreign = home.join("clients/elsewhere");
     std::fs::create_dir_all(&foreign).unwrap();
@@ -536,9 +517,9 @@ fn a_foreign_folder_claude_server_is_not_switchable_beside_a_codex_one() {
         "[mcp_servers.codescene]\ncommand = \"codescene-mcp\"\nenabled = false\n",
     );
     let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
-    let view = build(&Catalog::read(&roots, None), &[], &[], &Unknown, None);
-    // Claude Code's copy can't be kept to a project: its switch asks to add it to every agent.
-    assert!(!item(&view, "server:codescene").switchable);
+    let view = page(&Catalog::read(&roots, None), &[], &Unknown);
+    // A Claude Code entry of its own locks the row, whatever Codex's can do.
+    assert!(item(&view, "server:codescene").locked.is_some());
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -571,14 +552,18 @@ fn a_sign_in_where_it_is_on_shows_on_a_row_looking_elsewhere() {
         }],
     )]);
     // Looking at every project, where it's on only in the project.
-    let view = build(&Catalog::read(&roots, None), &projects, &[], &health, None);
+    let view = page(&Catalog::read(&roots, None), &projects, &health);
     let linear = item(&view, "server:linear");
-    assert_eq!(linear.on_in, [project.display().to_string()]);
-    assert_eq!(
-        linear.attention,
-        Some(PluginAttention::SignIn {
-            message: "Claude Code needs you to sign in.".to_owned()
-        })
-    );
+    let Some(PluginProblem::NeedsSignIn {
+        message,
+        server_id,
+        project_id,
+    }) = &linear.problem
+    else {
+        panic!("{:?}", linear.problem);
+    };
+    assert_eq!(message, "Claude Code needs you to sign in.");
+    assert!(server_id.starts_with("claude:local:"));
+    assert_eq!(project_id.as_deref(), Some("p"));
     std::fs::remove_dir_all(home).unwrap();
 }

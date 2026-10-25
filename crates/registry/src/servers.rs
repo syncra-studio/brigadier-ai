@@ -7,9 +7,14 @@ use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Vis
 use serde_json::{Map, Value};
 
 use crate::{
-    Agent, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport, plugins,
-    server_id,
+    Agent, AsWritten, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
+    plugins, server_id,
 };
+
+/// Whether `text` names a variable: `${…}`.
+fn names_variable(text: &str) -> bool {
+    text.contains("${")
+}
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -325,10 +330,31 @@ fn json_servers(
         let Some(config) = config.as_object() else {
             continue;
         };
-        // A server switched off where it is configured is off for every session.
-        if config.get("disabled").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
+        // A server switched off where it is configured is off for every session, but still
+        // the user's: kept as switched off.
+        let disabled = config.get("disabled").and_then(Value::as_bool) == Some(true);
+        let raw = |key: &str| config.get(key).and_then(Value::as_str).map(str::to_owned);
+        let written = AsWritten {
+            command: raw("command"),
+            args: config
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            url: raw("url"),
+            cwd: raw("cwd"),
+        };
+        let templated = !matches!(origin.variables, Variables::None)
+            && (written.command.as_deref().is_some_and(names_variable)
+                || written.args.iter().any(|arg| names_variable(arg))
+                || written.url.as_deref().is_some_and(names_variable)
+                || written.cwd.as_deref().is_some_and(names_variable)
+                || ["env", "headers"].iter().any(|key| {
+                    string_map(config.get(*key)).any(|(_, value)| names_variable(&value))
+                }));
         let kind = config.get("type").and_then(Value::as_str);
         let transport = if let Some(url) = config.get("url").and_then(Value::as_str) {
             // Legacy SSE servers aren't shared: Codex has no SSE transport.
@@ -391,6 +417,9 @@ fn json_servers(
             continue;
         };
         let mut server = server(name, origin.source, origin.project, origin.file, transport);
+        server.disabled = disabled;
+        server.written = written;
+        server.templated = templated;
         server.oauth = config
             .get("oauth")
             .and_then(|oauth| oauth.get("clientId"))
@@ -543,6 +572,28 @@ fn toml_servers(
             file,
             transport,
         );
+        let raw = |key: &str| {
+            config
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        };
+        server.written = AsWritten {
+            command: raw("command"),
+            args: config
+                .get("args")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            url: raw("url"),
+            cwd: raw("cwd"),
+        };
+        server.templated = ["env_vars", "env_http_headers", "bearer_token_env_var"]
+            .iter()
+            .any(|key| config.contains_key(*key));
         server.oauth = config
             .get("oauth")
             .and_then(toml::Value::as_table)
@@ -577,6 +628,9 @@ fn server(
         plugin: None,
         file: file.to_owned(),
         oauth: None,
+        disabled: false,
+        written: AsWritten::default(),
+        templated: false,
     }
 }
 
@@ -638,6 +692,7 @@ pub(crate) fn plugin(
         }
         (Some(_), _) => Vec::new(),
     };
+    servers.retain(|server| !server.disabled);
     for server in &mut servers {
         server.id = format!("{}:{}", plugin.prefix(), server.name);
         server.project.clone_from(&plugin.project);

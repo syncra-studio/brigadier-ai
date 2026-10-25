@@ -2453,25 +2453,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
         },
-        Request::GetPlugins { project_id } => Response::GetPlugins {
-            plugins: daemon.sessions.plugins_view(project_id).await?,
+        Request::GetPlugins => {
+            let mut plugins = daemon.sessions.plugins_view().await?;
+            plugin_icons(&daemon.site_icons, &mut plugins).await;
+            Response::GetPlugins { plugins }
+        }
+        Request::SwitchPlugin { key, on } => Response::SwitchPlugin {
+            job: daemon.sessions.switch_plugin(key, on),
         },
-        Request::SwitchPlugin {
-            key,
-            project_id,
-            on,
-            agent,
-        } => Response::SwitchPlugin {
-            job: daemon.sessions.switch_plugin(key, project_id, on, agent)?,
+        Request::SetPluginScope { key, project_ids } => Response::SetPluginScope {
+            job: daemon.sessions.set_plugin_scope(key, project_ids)?,
         },
-        Request::SetPluginPlaces { key, project_ids } => Response::SetPluginPlaces {
-            job: daemon.sessions.set_plugin_places(key, project_ids)?,
-        },
-        Request::UndoPluginPlaces { job } => Response::UndoPluginPlaces {
-            job: daemon.sessions.undo_plugin_places(job),
-        },
-        Request::AddMissingPlugin { key } => Response::AddMissingPlugin {
-            job: daemon.sessions.add_missing_plugin(key),
+        Request::SharePlugin { key } => Response::SharePlugin {
+            job: daemon.sessions.share_plugin(key),
         },
         Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
             check: daemon.sessions.check_plugin_add(text, name).await?,
@@ -2479,26 +2473,32 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::AddPlugin {
             text,
             name,
-            project_id,
-            shared,
-            agents,
+            project_ids,
             values,
         } => Response::AddPlugin {
             job: daemon
                 .sessions
-                .add_plugin(text, name, project_id, shared, agents, values)?,
-        },
-        Request::UseEverywhere { key } => Response::UseEverywhere {
-            job: daemon.sessions.use_everywhere(key),
-        },
-        Request::UndoUseEverywhere { key } => Response::UndoUseEverywhere {
-            job: daemon.sessions.undo_use_everywhere(key),
+                .add_plugin(text, name, project_ids, values)?,
         },
         Request::RemovePlugin { key } => Response::RemovePlugin {
             job: daemon.sessions.remove_plugin(key),
         },
         Request::UpdatePlugin { key } => Response::UpdatePlugin {
             job: daemon.sessions.update_plugin(key),
+        },
+        Request::GetPluginItem { key } => Response::GetPluginItem {
+            item: daemon.sessions.plugin_item(key).await?,
+        },
+        Request::SavePluginSkill {
+            key,
+            path,
+            contents,
+            expected,
+        } => Response::SavePluginSkill {
+            outcome: daemon
+                .sessions
+                .save_plugin_skill(key, path, contents, expected)
+                .await?,
         },
         Request::GetPluginJob { id } => Response::GetPluginJob {
             job: daemon.sessions.plugin_job_view(&id)?,
@@ -2841,6 +2841,33 @@ async fn on_pages<T: Send + 'static>(
 /// A computer-use request that didn't work, in the helper's own words.
 fn computer_error(message: String) -> IpcError {
     IpcError::from(brigadier_core::Error::Invalid(message))
+}
+
+/// Each remote server's site icon on the page, as far as it is known within a moment: a lookup
+/// still running goes on and is cached, so the next read has it.
+async fn plugin_icons(
+    icons: &Arc<SiteIcons>,
+    view: &mut brigadier_core::manager::plugins::PluginsView,
+) {
+    let lookups: Vec<(usize, tokio::task::JoinHandle<Option<String>>)> = view
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(at, item)| {
+            let url = item.url.as_deref()?;
+            let rest = url.strip_prefix("https://")?;
+            let host = rest.split(['/', '?', '#']).next()?;
+            let origin = format!("https://{host}");
+            let icons = icons.clone();
+            Some((at, tokio::spawn(async move { icons.icon(&origin).await })))
+        })
+        .collect();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    for (at, lookup) in lookups {
+        if let Ok(Ok(icon)) = tokio::time::timeout_at(deadline, lookup).await {
+            view.items[at].icon = icon;
+        }
+    }
 }
 
 #[cfg(test)]

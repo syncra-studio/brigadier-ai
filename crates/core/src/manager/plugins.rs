@@ -1,5 +1,6 @@
-//! Settings › Plugins: every skill and MCP server the agents have, as one list, with where
-//! each is on (every project, only some, off in some) and how each agent stands with it.
+//! Settings › Plugins: every skill and MCP server the agents have, as one list, each shared
+//! with every agent ([`share`]): an agent that lacks an item gets Brigadier's Library copy,
+//! while the agents that have it keep their own, untouched.
 //!
 //! Everything here is read from the agents' own setup ([`Catalog`]), read for the user and
 //! for each of the user's trusted projects, so the page shows what a plain `claude` or `codex`
@@ -8,36 +9,34 @@
 
 mod jobs;
 mod library_cli;
+mod model;
 pub mod ops;
+mod share;
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::{AgentAdapter, Listed, adapters, owner};
-use brigadier_registry::library::{Entry, Library, MARKETPLACE};
-use brigadier_registry::{Agent, Catalog, Server, Session, Skill, Source, Transport};
+use brigadier_registry::Agent;
+use brigadier_registry::adapter::{Listed, adapter, adapters};
+use brigadier_registry::library::{Entry, Library};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use model::{KeyKind, Model, ProjectCatalog, Row};
+use share::Sharing;
 
 /// The page.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginsView {
-    /// Every agent Brigadier drives, in the order its marks show.
-    pub agents: Vec<PluginAgentView>,
-    /// The projects the filter offers: the user's trusted ones.
+    /// The projects the scope picker offers: the user's trusted ones.
     pub projects: Vec<PluginProjectView>,
+    /// In the order shown: items with a problem that needs the user first (needs sign-in,
+    /// won't start, two setups of one name, update ready, couldn't share), then A–Z.
     pub items: Vec<PluginItemView>,
-    /// Servers only Claude Desktop or Cursor have: no agent uses them until brought in.
-    pub elsewhere: Vec<PluginItemView>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginAgentView {
-    pub agent: ProviderKind,
-    /// "Claude Code".
-    pub label: String,
+    /// Servers only other apps have (Claude Desktop, Cursor): no agent uses them until brought
+    /// in.
+    pub elsewhere: Vec<PluginElsewhereView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -66,103 +65,202 @@ pub enum PluginKind {
     Skill,
 }
 
-/// One skill or MCP server, across agents and projects.
+/// One skill or MCP server, for every agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginItemView {
-    /// Stable: `lib:<name>` for a Library item, `server:<name>`, `skill:<name>`,
-    /// `plugin:<plugin>/<name>` for another plugin's, `other:<id>` for another app's.
+    /// Stable: `server:<name>`, `skill:<name>` for an agent's own item (shared or not),
+    /// `lib:<name>` for one added through Brigadier, `plugin:<plugin>` (`plugin:<plugin>/<server>`)
+    /// for one of another marketplace's plugins.
     pub key: String,
     pub kind: PluginKind,
     pub name: String,
+    /// Empty when it has none: the subtitle is then [`Self::detail`].
     pub description: String,
-    /// How it runs: its command, or its address.
+    /// Its command line, address or folder, as its config writes it (no variable expanded).
     pub detail: String,
-    /// Reached over the network (an address), not started as a process.
-    pub remote: bool,
-    /// It is in the Library: every agent can have it, everywhere or per project.
-    pub library: bool,
-    /// On in every project (for at least one agent).
-    pub everywhere: bool,
-    /// When not [`Self::everywhere`]: the projects (folders) it is on in.
-    pub on_in: Vec<String>,
-    /// When [`Self::everywhere`]: the projects (folders) it is off in.
-    pub off_in: Vec<String>,
-    /// Each agent's state, in [`PluginsView::agents`]' order, where the page looks: the picked
-    /// project, or every project.
-    pub agents: Vec<PluginAgentState>,
-    /// What needs the user, if anything.
-    pub attention: Option<PluginAttention>,
-    /// Its switch works as it is; else it goes into the Library first (Add to every agent): one
-    /// of the agents that has it can't keep it to a project by itself.
-    pub switchable: bool,
-    /// A newer version is waiting (a Library item from Git or skills.sh).
-    pub update_available: bool,
-    /// It came into the Library by Add to every agent, which can be undone.
-    pub can_undo: bool,
-    /// The server to sign in to (`Request::SignInMcpServer`'s id), for one that signs in.
-    pub server_id: Option<String>,
-    /// The files it is set up in.
+    /// A remote server's address, as written.
+    pub url: Option<String>,
+    /// The remote server's site icon, as a `data:` URL, when the daemon could fetch it.
+    pub icon: Option<String>,
+    /// On for the agents (somewhere).
+    pub on: bool,
+    /// Where it is on now, or, switched off, where it goes back on.
+    pub scope: PluginScope,
+    pub problem: Option<PluginProblem>,
+    /// Present: the switch and the scope can't change it, and this is why (one line, the
+    /// subtitle). Absent: they can.
+    pub locked: Option<String>,
+    pub removal: PluginRemoval,
+    /// Share with every agent is offered: the user removed it from the others, or sharing it
+    /// failed.
+    pub can_share: bool,
+    /// How many skills it holds (another marketplace's plugin may hold several); 0 for a
+    /// server.
+    pub skill_count: u32,
+    /// "Saved in": the files it is set up in (an agent's own first, then the Library copy's).
     pub files: Vec<String>,
-    /// For another app's: the app ("Claude Desktop").
-    pub found_in: Option<String>,
-    /// How many skills it holds (a plugin's are one item); none for a server.
-    pub skills: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginAgentState {
-    pub agent: ProviderKind,
-    pub state: AgentItemState,
-}
-
-/// How one agent stands with an item.
+/// Where an item is on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum AgentItemState {
+pub enum PluginScope {
+    AllProjects,
+    /// The user's projects (`projectIds`), and folders that aren't projects (`folders`, as
+    /// paths: Claude's local scope).
+    SomeProjects {
+        project_ids: Vec<String>,
+        folders: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PluginProblem {
+    /// An agent needs the user to sign in: `serverId` and `projectId` go to
+    /// `Request::SignInMcpServer`.
+    NeedsSignIn {
+        message: String,
+        server_id: String,
+        project_id: Option<String>,
+    },
+    /// It won't start: "Won't start: unknown type "websocket"."
+    WontStart { message: String },
+    /// Two different setups go by its name: neither is shared.
+    Conflict { message: String },
+    /// A newer version is waiting (an item added from Git or skills.sh).
+    UpdateReady { message: String },
+    /// Only some agents have it: "Only in Claude Code: came in Claude Code's own plugin."
+    OnlyIn {
+        message: String,
+        agents: Vec<ProviderKind>,
+        reason: OnlyInReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum OnlyInReason {
+    /// It came in an agent's own plugin.
+    OwnPlugin,
+    /// The user removed it from the other agents.
+    Removed,
+    /// It can't be shared (a name or a value Brigadier won't copy).
+    CantShare,
+    /// Sharing it failed: Share with every agent tries again.
+    Failed,
+}
+
+/// What Remove does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PluginRemoval {
+    /// Added through Brigadier: Remove takes it from every agent.
+    Everything,
+    /// Remove takes only Brigadier's copies; the agents' own entry stays.
+    Copies,
+    /// Brigadier made nothing for it: no Remove.
+    None,
+}
+
+/// A server only another app has.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginElsewhereView {
+    /// `other:<id>`.
+    pub key: String,
+    pub name: String,
+    pub detail: String,
+    pub url: Option<String>,
+    /// The app: "Claude Desktop".
+    pub found_in: String,
+    pub file: String,
+}
+
+/// What an item is set up with: `Request::GetPluginItem`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginItemDetails {
+    pub key: String,
+    pub kind: PluginKind,
+    /// The skill files to open: one for a skill, each one for a plugin holding several.
+    pub skills: Vec<PluginSkillFile>,
+    /// A server's settings, read-only.
+    pub server: Option<PluginServerSettings>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSkillFile {
+    pub name: String,
+    /// Its `SKILL.md`, absolute.
+    pub path: String,
+    pub contents: String,
+    /// Why it can't be saved; absent when it can.
+    pub read_only: Option<String>,
+}
+
+/// A server's settings as its config writes them: the names of its values, never a value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PluginServerSettings {
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        env_names: Vec<String>,
+    },
+    Http {
+        url: String,
+        header_names: Vec<String>,
+    },
+}
+
+/// How saving a skill file went: `Response::SavePluginSkill`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PluginSkillSave {
+    /// Saved; the job (`Request::GetPluginJob`) brings its copies up to date.
+    Saved { job: String },
+    /// The file changed since it was opened (`expected` no longer matches): nothing was
+    /// written. `current` is its text now.
+    ChangedSinceOpened { current: String },
+}
+
+/// How one agent stands with an item: `brigadier library list`'s states.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum AgentItemState {
     Ready,
     NeedsSignIn,
     WontStart {
         reason: String,
     },
-    /// Switched off where the page looks.
+    /// Switched off where the call looks.
     Off,
     /// The agent doesn't have it.
     Missing,
-    /// The agent can't use it, with why.
-    NotSupported {
-        reason: String,
-    },
-    /// Being added, removed or switched.
-    Working,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum PluginAttention {
-    /// An agent needs the user to sign in: "Codex needs you to sign in."
-    SignIn { message: String },
-    /// It won't start: "Won't start: unknown type "websocket"."
-    WontStart { message: String },
-    /// Some agents don't have it: "Only Claude Code has it."
-    NotEverywhere { message: String },
-}
-
-/// One project's catalog, as its sessions get it.
-pub(crate) struct ProjectCatalog {
-    pub id: String,
-    pub name: String,
-    pub path: PathBuf,
-    pub catalog: Catalog,
 }
 
 /// What each agent's own list says of a server, where known.
@@ -195,7 +293,7 @@ impl Health for Unknown {
 }
 
 /// Each agent's own list (`claude mcp list`, `codex mcp list --json`), as last read: for every
-/// project (`None`) and the project the page looks at.
+/// project (`None`) and each project.
 pub(crate) struct Lists(pub Vec<(Agent, Option<PathBuf>, Vec<Listed>)>);
 
 impl Health for Lists {
@@ -206,7 +304,7 @@ impl Health for Lists {
         plugin: Option<&str>,
         project: Option<&Path>,
     ) -> Option<AgentItemState> {
-        let adapter = brigadier_registry::adapter::adapter(agent);
+        let adapter = adapter(agent);
         let (_, _, listed) = self
             .0
             .iter()
@@ -233,686 +331,411 @@ pub(crate) fn provider(agent: Agent) -> ProviderKind {
     }
 }
 
-/// A session of `agent` in `project` (or none: what every project gets).
-fn session(agent: Agent, project: Option<&Path>) -> Session<'_> {
-    Session {
-        agent,
-        cwd: project.unwrap_or(Path::new("")),
-        project,
-        in_checkout: true,
+/// "Claude Code", "Claude Code and Codex".
+fn labels(agents: &[Agent]) -> String {
+    let names: Vec<&str> = agents.iter().map(|agent| adapter(*agent).label()).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
-/// What one catalog entry is part of.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Key {
-    kind: KeyKind,
-    name: String,
+/// A Library item as `brigadier library list` shows it.
+#[derive(Debug, Clone)]
+pub(crate) struct LibraryRow {
+    pub name: String,
+    pub kind: PluginKind,
+    pub detail: String,
+    pub everywhere: bool,
+    pub on_in: Vec<String>,
+    pub off_in: Vec<String>,
+    pub agents: Vec<(Agent, AgentItemState)>,
+    pub attention: Option<String>,
+    /// The server to sign in to, and the project whose catalog has it.
+    pub server_id: Option<(String, Option<String>)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyKind {
-    Library,
-    Server,
-    Skill,
-    /// Another marketplace's plugin, by its name.
-    Plugin,
+/// The page and the CLI's Library rows.
+pub(crate) struct Built {
+    pub view: PluginsView,
+    pub library: Vec<LibraryRow>,
 }
 
-impl Key {
-    fn text(&self) -> String {
-        let prefix = match self.kind {
-            KeyKind::Library => "lib",
-            KeyKind::Server => "server",
-            KeyKind::Skill => "skill",
-            KeyKind::Plugin => "plugin",
-        };
-        format!("{prefix}:{}", self.name)
-    }
+/// The project id of folder `path`, when it is one of the user's projects.
+fn project_id(projects: &[ProjectCatalog], path: &Path) -> Option<String> {
+    projects
+        .iter()
+        .find(|project| project.path == path)
+        .map(|project| project.id.clone())
 }
 
-fn library_plugin(id: &str) -> Option<&str> {
-    id.strip_suffix(&format!("@{MARKETPLACE}"))
-}
-
-/// The item `server` belongs to; `None` for another app's.
-fn server_key(server: &Server) -> Option<Key> {
-    if let Some(plugin) = &server.plugin {
-        return Some(match library_plugin(&plugin.id) {
-            Some(name) => Key {
-                kind: KeyKind::Library,
-                name: name.to_owned(),
-            },
-            None => Key {
-                kind: KeyKind::Plugin,
-                name: format!("{}/{}", plugin.name, server.name),
-            },
-        });
-    }
-    match server.source {
-        Source::Desktop | Source::CursorUser | Source::CursorProject => None,
-        _ => Some(Key {
-            kind: KeyKind::Server,
-            name: server.name.clone(),
-        }),
-    }
-}
-
-/// The item `skill` belongs to, after its provider-supplied entries have been removed.
-fn skill_key(skill: &Skill) -> Key {
-    match skill.plugin() {
-        Some(plugin) => match library_plugin(&plugin.id) {
-            Some(name) => Key {
-                kind: KeyKind::Library,
-                name: name.to_owned(),
-            },
-            // A plugin's skills are one item: its agent switches the plugin.
-            None => Key {
-                kind: KeyKind::Plugin,
-                name: plugin.name.clone(),
-            },
-        },
-        None => Key {
-            kind: KeyKind::Skill,
-            name: skill.name.clone(),
-        },
-    }
-}
-
-/// Where an item is, for each agent.
-#[derive(Debug, Default)]
-struct Presence {
-    kind: Option<PluginKind>,
-    description: String,
-    detail: String,
-    remote: bool,
-    /// Agents that have it in every project.
-    everywhere: Vec<Agent>,
-    /// (project, agent) pairs that have it.
-    here: Vec<(PathBuf, Agent)>,
-    /// Agents that have it anywhere.
-    anywhere: Vec<Agent>,
-    files: Vec<String>,
-    /// Each agent's server: its name, and its plugin's name when it comes with one.
-    native: Vec<(Agent, String, Option<String>)>,
-    /// The server to sign in to, for one that signs in.
-    server_id: Option<String>,
-    /// Sources that hold it: whether every agent with it can switch it per project.
-    switchable: bool,
-    /// A source of it whose agent can switch it per project ([`switchable_source`]), and one
-    /// whose agent can't.
-    switch_source: bool,
-    switchless_source: bool,
-    /// The skills it holds, by name.
-    skills: Vec<String>,
-    problem: Option<String>,
-}
-
-impl Presence {
-    fn note(&mut self, agent: Agent, project: Option<&Path>) {
-        match project {
-            None => push(&mut self.everywhere, agent),
-            Some(path) => {
-                if !self.here.iter().any(|(p, a)| p == path && *a == agent) {
-                    self.here.push((path.to_owned(), agent));
-                }
-            }
-        }
-        push(&mut self.anywhere, agent);
-    }
-}
-
-fn push<T: PartialEq>(list: &mut Vec<T>, item: T) {
-    if !list.contains(&item) {
-        list.push(item);
-    }
-}
-
-fn detail(transport: &Transport) -> (String, bool) {
-    match transport {
-        Transport::Stdio { command, args, .. } => {
-            let mut text = command.clone();
-            for arg in args {
-                text.push(' ');
-                text.push_str(arg);
-            }
-            (text, false)
-        }
-        Transport::Http { url, .. } => (url.clone(), true),
-    }
-}
-
-/// Whether the agent of a server from `source` can switch it per project by itself.
-fn switchable_source(source: Source) -> bool {
-    // A plugin of any marketplace is switched by its agent's own commands; Codex's own
-    // servers by its project file (D8). Claude's own servers have no per-project off (D9).
-    matches!(
-        source,
-        Source::ClaudePlugin | Source::CodexPlugin | Source::CodexUser | Source::CodexProject
-    )
-}
-
-/// Commands inside known provider app bundles are supplied by those apps. Match path
-/// components, not server names, and don't mistake a path escaping the bundle for one in it.
-fn provider_app_command(command: &str) -> bool {
-    let path = Path::new(command);
-    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
-        return false;
-    }
-    let parts: Vec<_> = path.components().collect();
-    let apps = match parts.as_slice() {
-        [
-            Component::RootDir,
-            Component::Normal(applications),
-            rest @ ..,
-        ] if *applications == "Applications" => rest,
-        [
-            Component::RootDir,
-            Component::Normal(users),
-            Component::Normal(_),
-            Component::Normal(applications),
-            rest @ ..,
-        ] if *users == "Users" && *applications == "Applications" => rest,
-        _ => return false,
-    };
-    matches!(apps,
-        [Component::Normal(app), Component::Normal(contents), _, ..]
-            if (*app == "ChatGPT.app" || *app == "Claude.app") && *contents == "Contents")
-}
-
-fn provider_server(server: &Server) -> bool {
-    server
-        .plugin
-        .as_ref()
-        .is_some_and(|plugin| plugin.provider_supplied())
-        || matches!(&server.transport, Transport::Stdio { command, .. } if provider_app_command(command))
-}
-
-/// Reads `catalog` (for `project`, or the user's) into `items`.
-fn gather(
-    items: &mut Vec<(Key, Presence)>,
-    elsewhere: &mut Vec<PluginItemView>,
-    catalog: &Catalog,
-    project: Option<&Path>,
-    agents: &[&'static dyn AgentAdapter],
-) {
-    for server in &catalog.servers {
-        if provider_server(server) {
-            continue;
-        }
-        let Some(key) = server_key(server) else {
-            if project.is_none() {
-                let (text, remote) = detail(&server.transport);
-                if !catalog.servers.iter().any(|other| {
-                    !provider_server(other)
-                        && other.name == server.name
-                        && server_key(other).is_some()
-                }) && !elsewhere.iter().any(|known| known.name == server.name)
-                {
-                    elsewhere.push(PluginItemView {
-                        key: format!("other:{}", server.id),
-                        kind: PluginKind::Server,
-                        name: server.name.clone(),
-                        description: String::new(),
-                        detail: text,
-                        remote,
-                        library: false,
-                        everywhere: false,
-                        on_in: Vec::new(),
-                        off_in: Vec::new(),
-                        agents: agents
-                            .iter()
-                            .map(|adapter| PluginAgentState {
-                                agent: provider(adapter.agent()),
-                                state: AgentItemState::Missing,
-                            })
-                            .collect(),
-                        attention: None,
-                        switchable: false,
-                        update_available: false,
-                        can_undo: false,
-                        server_id: None,
-                        files: vec![server.file.display().to_string()],
-                        found_in: Some(server.source.label().to_owned()),
-                        skills: 0,
-                    });
-                }
-            }
-            continue;
-        };
-        let at = entry(key, items);
-        let presence = &mut items[at].1;
-        presence.kind = Some(PluginKind::Server);
-        let (text, remote) = detail(&server.transport);
-        presence.detail = text;
-        presence.remote = remote;
-        push(&mut presence.files, server.file.display().to_string());
-        let owned_by_switchless = !switchable_source(server.source);
-        if owned_by_switchless {
-            presence.switchless_source = true;
-        } else {
-            presence.switch_source = true;
-        }
-        for adapter in agents {
-            let agent = adapter.agent();
-            if catalog.server_native(server, &session(agent, project)) {
-                presence.note(agent, project);
-                push(
-                    &mut presence.native,
-                    (
-                        agent,
-                        server.name.clone(),
-                        server.plugin.as_ref().map(|plugin| plugin.name.clone()),
-                    ),
-                );
-                if server.signs_in && presence.server_id.is_none() {
-                    presence.server_id = Some(server.id.clone());
-                }
-                if owned_by_switchless {
-                    presence.switchable = false;
-                }
-            }
-        }
-    }
-    for problem in &catalog.problems {
-        if problem.read.as_deref().is_some_and(provider_app_command)
-            || catalog
-                .plugins
-                .iter()
-                .chain(&catalog.off.plugins)
-                .any(|plugin| {
-                    plugin.provider_supplied()
-                        && problem.source == Source::CodexPlugin
-                        && problem.file.starts_with(&plugin.root)
-                })
-        {
-            continue;
-        }
-        let key = Key {
-            kind: KeyKind::Server,
-            name: problem.name.clone(),
-        };
-        let at = entry(key, items);
-        let presence = &mut items[at].1;
-        presence.kind = Some(PluginKind::Server);
-        presence.problem = Some(problem.error.clone());
-        push(&mut presence.files, problem.file.display().to_string());
-        if let Some(read) = &problem.read {
-            presence.detail = read.clone();
-        }
-    }
-    for skill in &catalog.skills {
-        let Some(skill) = skill.user_installed() else {
-            continue;
-        };
-        let presence = skill_row(items, &skill);
-        let plugin_only = skill.plugin().is_some();
-        for adapter in agents {
-            let agent = adapter.agent();
-            if catalog.skill_native(&skill, &session(agent, project)) {
-                presence.note(agent, project);
-                if !plugin_only {
-                    presence.switchable = false;
-                }
-            }
-        }
-    }
-    if project.is_some() {
-        return;
-    }
-    // What an agent has but switches off for every project: an off row it can be switched on
-    // from again.
-    for server in &catalog.off.servers {
-        if provider_server(server) {
-            continue;
-        }
-        let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
-            continue;
-        };
-        let at = entry(key, items);
-        let presence = &mut items[at].1;
-        presence.kind = Some(PluginKind::Server);
-        if presence.detail.is_empty() {
-            (presence.detail, presence.remote) = detail(&server.transport);
-        }
-        push(&mut presence.files, server.file.display().to_string());
-        push(&mut presence.anywhere, agent);
-        presence.switch_source |= switchable_source(server.source);
-        presence.switchless_source |= !switchable_source(server.source);
-    }
-    for skill in &catalog.off.skills {
-        let Some(skill) = skill.user_installed() else {
-            continue;
-        };
-        if let Some(plugin) = skill.plugin() {
-            let presence = skill_row(items, &skill);
-            push(&mut presence.anywhere, plugin.agent);
-        }
-    }
-}
-
-/// The row `key` names in `items`, added when new.
-fn entry(key: Key, items: &mut Vec<(Key, Presence)>) -> usize {
-    match items.iter().position(|(known, _)| *known == key) {
-        Some(at) => at,
-        None => {
-            items.push((
-                key,
-                Presence {
-                    switchable: true,
-                    ..Presence::default()
-                },
-            ));
-            items.len() - 1
-        }
-    }
-}
-
-/// The row `skill` is part of, with what the skill tells of it.
-fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> &'a mut Presence {
-    let key = skill_key(skill);
-    let library = key.kind == KeyKind::Library;
-    let plugin = (key.kind == KeyKind::Plugin)
-        .then(|| skill.plugin())
-        .flatten();
-    let at = entry(key, items);
-    let presence = &mut items[at].1;
-    if presence.kind.is_none() || !library {
-        presence.kind = Some(PluginKind::Skill);
-    }
-    push(&mut presence.skills, skill.name.clone());
-    if presence.description.is_empty() {
-        presence.description = plugin
-            .and_then(|plugin| plugin.description())
-            .unwrap_or_else(|| skill.description.clone());
-    }
-    if presence.detail.is_empty() {
-        presence.detail = plugin
-            .map_or(&skill.dir, |plugin| &plugin.root)
-            .display()
-            .to_string();
-    }
-    push(&mut presence.files, skill.skill_md().display().to_string());
-    presence
-}
-
-/// The page, from the user's catalog and each trusted project's; `focus` is the project the
-/// filter picks (its folder), else every project.
+/// The page from the model; `updates`: the Library items with a newer version waiting;
+/// `focus`: where the CLI's agent states look (else every project).
 pub(crate) fn build(
-    user: &Catalog,
+    model: &Model,
     projects: &[ProjectCatalog],
-    library: &[Entry],
+    sharing: &Sharing,
     health: &dyn Health,
+    updates: &[String],
     focus: Option<&Path>,
-) -> PluginsView {
-    let agents = adapters();
-    let mut items: Vec<(Key, Presence)> = Vec::new();
-    let mut elsewhere = Vec::new();
-    gather(&mut items, &mut elsewhere, user, None, &agents);
-    for project in projects {
-        gather(
-            &mut items,
-            &mut elsewhere,
-            &project.catalog,
-            Some(&project.path),
-            &agents,
-        );
-    }
-    // An agent's own server kept to a folder that isn't one of the user's projects (Claude's
-    // local scope): on there, so the page says so, though no project's sessions get it.
-    for server in &user.servers {
-        let Some(folder) = &server.project else {
-            continue;
+) -> Built {
+    let every: Vec<Agent> = adapters().iter().map(|adapter| adapter.agent()).collect();
+    let mut items: Vec<(bool, PluginItemView)> = Vec::new();
+    let mut library = Vec::new();
+    for row in &model.rows {
+        let key = row.key.text();
+        let everywhere = row.everywhere();
+        let here = row.here();
+        let on = row.on();
+        let in_project = |path: &Path| {
+            here.iter()
+                .filter(|(at, _)| at == path)
+                .map(|(_, agent)| *agent)
+                .collect::<Vec<Agent>>()
         };
-        if server.plugin.is_some()
-            || provider_server(server)
-            || projects.iter().any(|project| project.path == *folder)
-        {
-            continue;
-        }
-        let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
-            continue;
-        };
-        let at = entry(key, &mut items);
-        let presence = &mut items[at].1;
-        presence.note(agent, Some(folder));
-        push(&mut presence.native, (agent, server.name.clone(), None));
-        // Its agent can't keep it to a project, whatever other agents' copies can.
-        if !switchable_source(server.source) {
-            presence.switchable = false;
-        }
-    }
-    // A Library item none of the agents has yet.
-    for entry in library {
-        let key = Key {
-            kind: KeyKind::Library,
-            name: entry.name.clone(),
-        };
-        if !items.iter().any(|(known, _)| *known == key) {
-            items.push((
-                key,
-                Presence {
-                    description: entry.description.clone(),
-                    switchable: true,
-                    kind: Some(if entry.dir.join("skills").is_dir() {
-                        PluginKind::Skill
-                    } else {
-                        PluginKind::Server
-                    }),
-                    ..Presence::default()
-                },
-            ));
-        }
-    }
-    items.sort_by(|(a, _), (b, _)| a.name.cmp(&b.name).then(a.kind.cmp(&b.kind)));
-    let label = |agents: &[Agent]| -> String {
-        let names: Vec<&str> = agents
+        let on_in: Vec<&ProjectCatalog> = projects
             .iter()
-            .map(|agent| brigadier_registry::adapter::adapter(*agent).label())
+            .filter(|project| !in_project(&project.path).is_empty())
             .collect();
-        match names.as_slice() {
-            [] => String::new(),
-            [one] => (*one).to_owned(),
-            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-        }
-    };
-    let items = items
-        .into_iter()
-        .filter_map(|(key, presence)| {
-            let kind = presence.kind?;
-            let library = key.kind == KeyKind::Library;
-            let everywhere = !presence.everywhere.is_empty();
-            let in_project = |path: &Path| {
-                presence
-                    .here
-                    .iter()
-                    .filter(|(p, _)| p == path)
-                    .map(|(_, a)| *a)
-                    .collect::<Vec<Agent>>()
-            };
-            let on_in: Vec<String> = if everywhere {
-                Vec::new()
-            } else {
-                let mut on_in: Vec<String> = projects
-                    .iter()
-                    .filter(|project| !in_project(&project.path).is_empty())
-                    .map(|project| project.path.display().to_string())
-                    .collect();
-                // Then the folders that aren't projects.
-                for (path, _) in &presence.here {
+        let scope = if !on {
+            match sharing.off_scopes.get(&key) {
+                Some(Some(paths)) => PluginScope::SomeProjects {
+                    project_ids: paths
+                        .iter()
+                        .filter_map(|path| project_id(projects, path))
+                        .collect(),
+                    folders: Vec::new(),
+                },
+                _ => PluginScope::AllProjects,
+            }
+        } else if !everywhere.is_empty() && on_in.len() == projects.len() {
+            PluginScope::AllProjects
+        } else {
+            let mut folders = Vec::new();
+            for (path, _) in &here {
+                if !projects.iter().any(|project| project.path == *path) {
                     let path = path.display().to_string();
-                    if !on_in.contains(&path) {
-                        on_in.push(path);
+                    if !folders.contains(&path) {
+                        folders.push(path);
                     }
                 }
-                on_in
-            };
-            let off_in: Vec<String> = if everywhere {
-                projects
-                    .iter()
-                    .filter(|project| {
-                        let here = in_project(&project.path);
-                        presence
-                            .everywhere
-                            .iter()
-                            .all(|agent| !here.contains(agent))
-                    })
-                    .map(|project| project.path.display().to_string())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let has = |agent: Agent| match focus {
-                None => presence.everywhere.contains(&agent),
-                Some(path) => in_project(path).contains(&agent),
-            };
-            let states: Vec<(Agent, AgentItemState)> = agents
-                .iter()
-                .map(|adapter| {
-                    let agent = adapter.agent();
-                    let state = if has(agent) {
-                        presence
-                            .native
-                            .iter()
-                            .find(|(a, _, _)| *a == agent)
-                            .and_then(|(_, name, plugin)| {
-                                health.state(agent, name, plugin.as_deref(), focus)
-                            })
-                            .unwrap_or(AgentItemState::Ready)
-                    } else if presence.anywhere.contains(&agent) {
-                        AgentItemState::Off
-                    } else {
-                        AgentItemState::Missing
-                    };
-                    (agent, state)
-                })
-                .collect();
-            // How it stands wherever else each agent has it on: a row shows a sign-in or a
-            // failed start in every section, not only where the page looks.
-            let elsewhere: Vec<(Agent, AgentItemState)> = presence
-                .native
-                .iter()
-                .flat_map(|(agent, name, plugin)| {
-                    let places = presence
-                        .everywhere
-                        .contains(agent)
-                        .then_some(None)
-                        .into_iter()
-                        .chain(
-                            presence
-                                .here
-                                .iter()
-                                .filter(|(_, a)| a == agent)
-                                .map(|(path, _)| Some(path.as_path())),
-                        )
-                        .filter(|place| *place != focus);
-                    places
-                        .filter_map(|place| health.state(*agent, name, plugin.as_deref(), place))
-                        .map(|state| (*agent, state))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            let mut needs: Vec<Agent> = Vec::new();
-            for (agent, state) in states.iter().chain(&elsewhere) {
-                if *state == AgentItemState::NeedsSignIn {
-                    push(&mut needs, *agent);
-                }
             }
-            let missing: Vec<Agent> = agents
-                .iter()
-                .map(|adapter| adapter.agent())
-                .filter(|agent| !presence.anywhere.contains(agent))
-                .collect();
-            let attention = if let Some(problem) = &presence.problem {
-                Some(PluginAttention::WontStart {
-                    message: format!("Won't start: {problem}"),
-                })
-            } else if let Some(reason) =
-                states
-                    .iter()
-                    .chain(&elsewhere)
-                    .find_map(|(_, state)| match state {
-                        AgentItemState::WontStart { reason } => Some(reason),
-                        _ => None,
-                    })
-            {
-                Some(PluginAttention::WontStart {
-                    message: format!("Won't start: {reason}"),
-                })
-            } else if !needs.is_empty() {
-                let verb = if needs.len() == 1 { "needs" } else { "need" };
-                Some(PluginAttention::SignIn {
-                    message: format!("{} {verb} you to sign in.", label(&needs)),
-                })
-            } else if !missing.is_empty() && !presence.anywhere.is_empty() {
-                Some(PluginAttention::NotEverywhere {
-                    message: format!("Only {} has it.", label(&presence.anywhere)),
-                })
-            } else {
-                None
-            };
-            Some(PluginItemView {
-                key: key.text(),
-                kind,
-                name: key.name.rsplit('/').next().unwrap_or(&key.name).to_owned(),
-                description: presence.description,
-                detail: presence.detail,
-                remote: presence.remote,
-                library,
-                everywhere,
-                on_in,
-                off_in,
-                agents: states
+            PluginScope::SomeProjects {
+                project_ids: on_in.iter().map(|project| project.id.clone()).collect(),
+                folders,
+            }
+        };
+        // Each agent's server, and where it is on: what its own list says there.
+        let mut native = row.own.native.clone();
+        for entry in &row.copy.native {
+            if !native.contains(entry) {
+                native.push(entry.clone());
+            }
+        }
+        let places = |agent: Agent| -> Vec<Option<PathBuf>> {
+            everywhere
+                .contains(&agent)
+                .then_some(None)
+                .into_iter()
+                .chain(
+                    here.iter()
+                        .filter(|(_, a)| *a == agent)
+                        .map(|(path, _)| Some(path.clone())),
+                )
+                .collect()
+        };
+        let states: Vec<AgentItemState> = native
+            .iter()
+            .flat_map(|(agent, name, plugin)| {
+                places(*agent)
                     .into_iter()
-                    .map(|(agent, state)| PluginAgentState {
-                        agent: provider(agent),
-                        state,
+                    .filter_map(|place| {
+                        health.state(*agent, name, plugin.as_deref(), place.as_deref())
                     })
-                    .collect(),
-                attention,
-                // A server only Claude Code's own setup holds can't be kept to a project, even
-                // where it is on nowhere yet.
-                switchable: library
-                    || (presence.switchable
-                        && !(presence.switchless_source && !presence.switch_source)),
-                update_available: false,
-                can_undo: false,
-                server_id: presence.server_id,
-                files: presence.files,
-                found_in: None,
-                skills: u32::try_from(presence.skills.len()).unwrap_or(u32::MAX),
+                    .collect::<Vec<_>>()
             })
+            .collect();
+        let mut needs: Vec<Agent> = Vec::new();
+        for (agent, name, plugin) in &native {
+            if places(*agent).into_iter().any(|place| {
+                health.state(*agent, name, plugin.as_deref(), place.as_deref())
+                    == Some(AgentItemState::NeedsSignIn)
+            }) && !needs.contains(agent)
+            {
+                needs.push(*agent);
+            }
+        }
+        let server_id = row
+            .own
+            .server_id
+            .clone()
+            .or_else(|| row.copy.server_id.clone());
+        let mut holders = row.holders();
+        for agent in row.copy_agents() {
+            if !holders.contains(agent) {
+                holders.push(*agent);
+            }
+        }
+        holders.sort_by_key(|agent| every.iter().position(|known| known == agent));
+        let missing: Vec<Agent> = every
+            .iter()
+            .copied()
+            .filter(|agent| !holders.contains(agent))
+            .collect();
+        let declined = sharing.is_declined(row.kind, &row.key.name, row.endpoint().as_deref());
+        let failure = sharing.failed.get(&key);
+        let only_in = |reason: OnlyInReason, why: String| PluginProblem::OnlyIn {
+            message: format!("Only in {}: {why}", labels(&holders)),
+            agents: holders.iter().map(|agent| provider(*agent)).collect(),
+            reason,
+        };
+        let problem = if let Some(problem) = row.own.problem.as_ref().or(row.copy.problem.as_ref())
+        {
+            Some(PluginProblem::WontStart {
+                message: format!("Won't start: {problem}"),
+            })
+        } else if row.conflict {
+            Some(PluginProblem::Conflict {
+                message: format!(
+                    "Two different setups are called {}: Brigadier shares neither until one goes.",
+                    row.key.name
+                ),
+            })
+        } else if let Some(reason) = states.iter().find_map(|state| match state {
+            AgentItemState::WontStart { reason } => Some(reason),
+            _ => None,
+        }) {
+            Some(PluginProblem::WontStart {
+                message: format!("Won't start: {reason}"),
+            })
+        } else if let (false, Some((id, project))) = (needs.is_empty(), &server_id) {
+            let verb = if needs.len() == 1 { "needs" } else { "need" };
+            Some(PluginProblem::NeedsSignIn {
+                message: format!("{} {verb} you to sign in.", labels(&needs)),
+                server_id: id.clone(),
+                project_id: project
+                    .as_deref()
+                    .and_then(|path| project_id(projects, path)),
+            })
+        } else if row.lib.as_ref().is_some_and(|lib| updates.contains(lib)) {
+            Some(PluginProblem::UpdateReady {
+                message: "A newer version is ready.".to_owned(),
+            })
+        } else if holders.is_empty() || missing.is_empty() {
+            None
+        } else if row.key.kind == KeyKind::Plugin {
+            let label = labels(&holders);
+            Some(only_in(
+                OnlyInReason::OwnPlugin,
+                format!("came in {label}'s own plugin"),
+            ))
+        } else if declined {
+            Some(only_in(
+                OnlyInReason::Removed,
+                "you removed it from the other agents".to_owned(),
+            ))
+        } else if let Some(why) = share::cant_share(row) {
+            Some(only_in(OnlyInReason::CantShare, why))
+        } else {
+            failure.map(|failure| {
+                only_in(
+                    OnlyInReason::Failed,
+                    format!(
+                        "couldn't share it with {}: {}",
+                        labels(&missing),
+                        failure.reason
+                    ),
+                )
+            })
+        };
+        let urgent = matches!(
+            problem,
+            Some(
+                PluginProblem::NeedsSignIn { .. }
+                    | PluginProblem::WontStart { .. }
+                    | PluginProblem::Conflict { .. }
+                    | PluginProblem::UpdateReady { .. }
+                    | PluginProblem::OnlyIn {
+                        reason: OnlyInReason::Failed,
+                        ..
+                    }
+            )
+        );
+        let own = !row.own.sources.is_empty();
+        let removal = match (&row.lib, own) {
+            (Some(_), true) => PluginRemoval::Copies,
+            (Some(_), false) => PluginRemoval::Everything,
+            (None, _) => PluginRemoval::None,
+        };
+        let name = row
+            .key
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&row.key.name)
+            .to_owned();
+        let mut files = row.own.files.clone();
+        for file in &row.copy.files {
+            if !files.contains(file) {
+                files.push(file.clone());
+            }
+        }
+        let detail = if row.own.detail.is_empty() {
+            row.copy.detail.clone()
+        } else {
+            row.own.detail.clone()
+        };
+        let skills = if row.own.skills.is_empty() {
+            row.copy.skills.len()
+        } else {
+            row.own.skills.len()
+        };
+        let view = PluginItemView {
+            key: key.clone(),
+            kind: row.kind,
+            name: name.clone(),
+            description: if row.own.description.is_empty() {
+                row.copy.description.clone()
+            } else {
+                row.own.description.clone()
+            },
+            detail: detail.clone(),
+            url: row.own.url.clone().or_else(|| row.copy.url.clone()),
+            icon: None,
+            on,
+            scope: scope.clone(),
+            locked: row.own.lock.clone(),
+            removal,
+            can_share: row.key.kind != KeyKind::Plugin && own && (declined || failure.is_some()),
+            skill_count: if row.kind == PluginKind::Skill {
+                u32::try_from(skills.max(1)).unwrap_or(u32::MAX)
+            } else {
+                0
+            },
+            files,
+            problem,
+        };
+        if let Some(lib) = &row.lib {
+            library.push(library_row(
+                row, lib, &view, projects, health, focus, server_id,
+            ));
+        }
+        items.push((urgent, view));
+    }
+    items.sort_by(|(a, x), (b, y)| {
+        b.cmp(a)
+            .then_with(|| x.name.to_lowercase().cmp(&y.name.to_lowercase()))
+            .then_with(|| x.key.cmp(&y.key))
+    });
+    Built {
+        view: PluginsView {
+            projects: projects
+                .iter()
+                .map(|project| PluginProjectView {
+                    id: project.id.clone(),
+                    name: project.name.clone(),
+                    path: project.path.display().to_string(),
+                    notes: adapters()
+                        .iter()
+                        .filter(|adapter| !adapter.trusts(&project.catalog, &project.path))
+                        .map(|adapter| PluginAgentNote {
+                            agent: provider(adapter.agent()),
+                            message: format!(
+                                "{} only reads this project's settings once you trust the project.",
+                                adapter.label()
+                            ),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            items: items.into_iter().map(|(_, view)| view).collect(),
+            elsewhere: model.elsewhere.clone(),
+        },
+        library,
+    }
+}
+
+/// `row`'s Library item as `brigadier library list` shows it, each agent's state where
+/// `focus` looks.
+fn library_row(
+    row: &Row,
+    lib: &str,
+    view: &PluginItemView,
+    projects: &[ProjectCatalog],
+    health: &dyn Health,
+    focus: Option<&Path>,
+    server_id: Option<(String, Option<PathBuf>)>,
+) -> LibraryRow {
+    let everywhere = row.everywhere();
+    let here = row.here();
+    let in_project = |path: &Path| here.iter().any(|(at, _)| at == path);
+    let global = view.on && matches!(view.scope, PluginScope::AllProjects);
+    let agents = adapters()
+        .iter()
+        .map(|adapter| {
+            let agent = adapter.agent();
+            let has = match focus {
+                None => everywhere.contains(&agent),
+                Some(path) => here.iter().any(|(at, a)| at == path && *a == agent),
+            };
+            let state = if has {
+                row.own
+                    .native
+                    .iter()
+                    .chain(&row.copy.native)
+                    .find(|(a, _, _)| *a == agent)
+                    .and_then(|(_, name, plugin)| {
+                        health.state(agent, name, plugin.as_deref(), focus)
+                    })
+                    .unwrap_or(AgentItemState::Ready)
+            } else if row.own.anywhere.contains(&agent) || row.copy.anywhere.contains(&agent) {
+                AgentItemState::Off
+            } else {
+                AgentItemState::Missing
+            };
+            (agent, state)
         })
         .collect();
-    PluginsView {
-        agents: agents
-            .iter()
-            .map(|adapter| PluginAgentView {
-                agent: provider(adapter.agent()),
-                label: adapter.label().to_owned(),
-            })
-            .collect(),
-        projects: projects
-            .iter()
-            .map(|project| PluginProjectView {
-                id: project.id.clone(),
-                name: project.name.clone(),
-                path: project.path.display().to_string(),
-                notes: agents
-                    .iter()
-                    .filter(|adapter| !adapter.trusts(&project.catalog, &project.path))
-                    .map(|adapter| PluginAgentNote {
-                        agent: provider(adapter.agent()),
-                        message: format!(
-                            "{} only reads this project's settings once you trust the project.",
-                            adapter.label()
-                        ),
-                    })
-                    .collect(),
-            })
-            .collect(),
-        items,
-        elsewhere,
+    LibraryRow {
+        name: lib.to_owned(),
+        kind: row.kind,
+        detail: view.detail.clone(),
+        everywhere: global,
+        on_in: if global {
+            Vec::new()
+        } else {
+            projects
+                .iter()
+                .filter(|project| in_project(&project.path))
+                .map(|project| project.path.display().to_string())
+                .collect()
+        },
+        off_in: if global {
+            projects
+                .iter()
+                .filter(|project| !in_project(&project.path))
+                .map(|project| project.path.display().to_string())
+                .collect()
+        } else {
+            Vec::new()
+        },
+        agents,
+        attention: view.problem.as_ref().map(|problem| match problem {
+            PluginProblem::NeedsSignIn { message, .. }
+            | PluginProblem::WontStart { message }
+            | PluginProblem::Conflict { message }
+            | PluginProblem::UpdateReady { message }
+            | PluginProblem::OnlyIn { message, .. } => message.clone(),
+        }),
+        server_id: server_id.map(|(id, project)| {
+            (
+                id,
+                project
+                    .as_deref()
+                    .and_then(|path| project_id(projects, path)),
+            )
+        }),
     }
 }
 
@@ -954,8 +777,34 @@ impl super::SessionManager {
             .collect()
     }
 
-    /// Settings › Plugins, looking at project `focus` (its id), else at every project.
-    pub async fn plugins_view(&self, focus: Option<String>) -> crate::Result<PluginsView> {
+    /// Every repository folder of the user's trusted projects: what the watcher looks at.
+    fn plugin_repos(&self) -> Vec<PathBuf> {
+        let mut repos: Vec<PathBuf> = self
+            .core
+            .catalog()
+            .projects
+            .into_iter()
+            .filter(|project| {
+                project
+                    .repos
+                    .first()
+                    .is_some_and(|repo| project.counts_trusted(&repo.path))
+            })
+            .flat_map(|project| {
+                project
+                    .repos
+                    .into_iter()
+                    .map(|repo| PathBuf::from(repo.path))
+            })
+            .collect();
+        repos.sort();
+        repos.dedup();
+        repos
+    }
+
+    /// The page and the CLI's Library rows, with each agent's state where `focus` (a project
+    /// id) looks.
+    async fn plugins_built(&self, focus: Option<String>) -> crate::Result<Built> {
         let registry = self.registry();
         let projects = self.plugin_projects();
         let library = self.library();
@@ -966,6 +815,7 @@ impl super::SessionManager {
                 .map(|(_, _, path)| path.clone())
         });
         let health = self.plugin_health(focus_path.as_deref());
+        let home = registry.roots().home.clone();
         super::blocking(move || {
             let user = registry.catalog(None);
             let projects: Vec<ProjectCatalog> = projects
@@ -977,104 +827,96 @@ impl super::SessionManager {
                     path,
                 })
                 .collect();
-            let focus = focus.and_then(|id| {
-                projects
-                    .iter()
-                    .find(|project| project.id == id)
-                    .map(|project| project.path.clone())
-            });
+            let entries: Vec<Entry> = library.entries();
+            let sharing = Sharing::load(&library).unwrap_or_default();
+            let model = model::model(&user, &projects, &entries, &sharing, &home);
+            let updates = jobs::updates_waiting(library, &entries);
             Ok(build(
-                &user,
+                &model,
                 &projects,
-                &library.entries(),
+                &sharing,
                 health.as_ref(),
-                focus.as_deref(),
+                &updates,
+                focus_path.as_deref(),
             ))
         })
         .await
-        .map(|mut view| {
-            jobs::mark_library(&mut view, self.library());
-            view
-        })
     }
 
-    /// The folder of the user's trusted project `id`.
-    fn plugin_project(&self, id: Option<String>) -> crate::Result<Option<PathBuf>> {
-        let Some(id) = id else {
+    /// Settings › Plugins.
+    pub async fn plugins_view(&self) -> crate::Result<PluginsView> {
+        self.plugins_built(None).await.map(|built| built.view)
+    }
+
+    /// The Library's items as `brigadier library` shows them, each agent's state in project
+    /// `focus` (an id) or every project.
+    pub(crate) async fn library_rows(
+        &self,
+        focus: Option<String>,
+    ) -> crate::Result<Vec<LibraryRow>> {
+        self.plugins_built(focus).await.map(|built| built.library)
+    }
+
+    /// The folders of the user's projects `ids`: `None` stays every project.
+    fn plugin_scope(&self, ids: Option<Vec<String>>) -> crate::Result<Option<Vec<PathBuf>>> {
+        let Some(ids) = ids else {
             return Ok(None);
         };
-        self.plugin_projects()
-            .into_iter()
-            .find(|(known, _, _)| *known == id)
-            .map(|(_, _, path)| Some(path))
-            .ok_or_else(|| crate::Error::Invalid(format!("no project {id}")))
+        if ids.is_empty() {
+            return Err(crate::Error::Invalid("no projects picked".to_owned()));
+        }
+        let projects = self.plugin_projects();
+        ids.into_iter()
+            .map(|id| {
+                projects
+                    .iter()
+                    .find(|(known, _, _)| *known == id)
+                    .map(|(_, _, path)| path.clone())
+                    .ok_or_else(|| crate::Error::Invalid(format!("no project {id}")))
+            })
+            .collect::<crate::Result<Vec<PathBuf>>>()
+            .map(Some)
+    }
+
+    fn plugin_setup(&self) -> jobs::Setup {
+        jobs::Setup {
+            registry: self.registry(),
+            library: self.library(),
+            cli: self.brigadier_cli(),
+            binary: self.clis().binary,
+            projects: self
+                .plugin_projects()
+                .into_iter()
+                .map(|(_, _, path)| path)
+                .collect(),
+        }
     }
 
     fn plugin_job(&self, action: jobs::Action) -> String {
-        jobs::start(
-            jobs::Setup {
-                registry: self.registry(),
-                library: self.library(),
-                cli: self.brigadier_cli(),
-                binary: self.clis().binary,
-                projects: self
-                    .plugin_projects()
-                    .into_iter()
-                    .map(|(_, _, path)| path)
-                    .collect(),
-            },
-            action,
-        )
+        jobs::start(self.plugin_setup(), action)
     }
 
-    /// Turns item `key` on or off: in project `project_id`, else in every project; for one
-    /// agent only when `agent`. Its job's id.
-    pub fn switch_plugin(
-        &self,
-        key: String,
-        project_id: Option<String>,
-        on: bool,
-        agent: Option<ProviderKind>,
-    ) -> crate::Result<String> {
-        let project = self.plugin_project(project_id)?;
-        Ok(self.plugin_job(jobs::Action::Switch {
-            key,
-            project,
-            on,
-            agent: agent.and_then(ops::agent_of),
-        }))
+    /// Turns item `key` on or off for every agent, keeping its projects for when it is on
+    /// again. Its job's id.
+    pub fn switch_plugin(&self, key: String, on: bool) -> String {
+        self.plugin_job(jobs::Action::Switch { key, on })
     }
 
-    /// Puts Library item `key` on in every project (`project_ids` `None`, Global), or in
-    /// exactly the user's projects `project_ids`, for every agent. Its job's id.
-    pub fn set_plugin_places(
+    /// Puts item `key` on in every project (`project_ids` `None`) or in exactly the user's
+    /// projects `project_ids`, for every agent. Its job's id.
+    pub fn set_plugin_scope(
         &self,
         key: String,
         project_ids: Option<Vec<String>>,
     ) -> crate::Result<String> {
-        let places = match project_ids {
-            None => None,
-            Some(ids) if ids.is_empty() => {
-                return Err(crate::Error::Invalid("no projects picked".to_owned()));
-            }
-            Some(ids) => Some(
-                ids.into_iter()
-                    .map(|id| self.plugin_project(Some(id)).map(Option::unwrap_or_default))
-                    .collect::<crate::Result<Vec<PathBuf>>>()?,
-            ),
-        };
-        Ok(self.plugin_job(jobs::Action::SetPlaces { key, places }))
+        let scope = self.plugin_scope(project_ids)?;
+        Ok(self.plugin_job(jobs::Action::SetScope { key, scope }))
     }
 
-    /// Undoes place picker job `job`: each agent back exactly where it had the item. Its job's id.
-    pub fn undo_plugin_places(&self, job: String) -> String {
-        self.plugin_job(jobs::Action::UndoPlaces { job })
-    }
-
-    /// Gives Library item `key` to the agents that lack it, where the others have it (installed
-    /// and off when no agent has it on anywhere). Its job's id.
-    pub fn add_missing_plugin(&self, key: String) -> String {
-        self.plugin_job(jobs::Action::AddMissing { key })
+    /// Share with every agent: item `key`, removed earlier or failed, is shared now. Its job's
+    /// id.
+    pub fn share_plugin(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::Share { key })
     }
 
     /// What pasted `text` would add, before anything is added.
@@ -1087,42 +929,43 @@ impl super::SessionManager {
         super::blocking(move || Ok(jobs::check_add(&home, &text, name.as_deref()))).await
     }
 
-    /// Adds what `text` holds for every agent (only `agents`, when given): in project
-    /// `project_id` only ("just me" unless `shared`), else in every project. `values` sets or
-    /// adds the one pasted server's env or headers. Its job's id.
+    /// Adds what `text` holds for every agent: in every project (`project_ids` `None`) or in
+    /// exactly those. `values` sets or adds the one pasted server's env or headers. Its job's
+    /// id.
     pub fn add_plugin(
         &self,
         text: String,
         name: Option<String>,
-        project_id: Option<String>,
-        shared: bool,
-        agents: Option<Vec<ProviderKind>>,
+        project_ids: Option<Vec<String>>,
         values: Option<std::collections::BTreeMap<String, String>>,
     ) -> crate::Result<String> {
-        let project = self.plugin_project(project_id)?;
+        self.add_plugin_as(text, name, project_ids, false, values)
+    }
+
+    /// [`Self::add_plugin`]; `shared` (the CLI's `--shared`, one project) in the form the
+    /// project commits.
+    pub(crate) fn add_plugin_as(
+        &self,
+        text: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+        shared: bool,
+        values: Option<std::collections::BTreeMap<String, String>>,
+    ) -> crate::Result<String> {
+        let scope = self.plugin_scope(project_ids)?;
         Ok(self.plugin_job(jobs::Action::Add {
             text,
             name,
-            project,
+            scope,
             shared,
             options: ops::AddOptions {
-                agents: agents.map(|kinds| kinds.into_iter().filter_map(ops::agent_of).collect()),
                 values: values.unwrap_or_default(),
             },
         }))
     }
 
-    /// Moves an agent's own item `key` into the Library for every agent. Its job's id.
-    pub fn use_everywhere(&self, key: String) -> String {
-        self.plugin_job(jobs::Action::UseEverywhere { key })
-    }
-
-    /// Undoes Use everywhere of Library item `key`. Its job's id.
-    pub fn undo_use_everywhere(&self, key: String) -> String {
-        self.plugin_job(jobs::Action::Undo { key })
-    }
-
-    /// Removes item `key` from every agent and project. Its job's id.
+    /// Removes what Brigadier made for item `key`: its copies (the agents' own entry stays,
+    /// and it isn't shared again), or an item added through Brigadier whole. Its job's id.
     pub fn remove_plugin(&self, key: String) -> String {
         self.plugin_job(jobs::Action::Remove { key })
     }
@@ -1132,9 +975,74 @@ impl super::SessionManager {
         self.plugin_job(jobs::Action::Update { key })
     }
 
+    /// What item `key` is set up with: its skill files, or its server's settings.
+    pub async fn plugin_item(&self, key: String) -> crate::Result<PluginItemDetails> {
+        let setup = self.plugin_setup();
+        super::blocking(move || {
+            jobs::with_ctx(&setup, &|_, _| {}, |ctx| share::details(ctx, &key))
+                .map_err(crate::Error::Invalid)
+        })
+        .await
+    }
+
+    /// Saves `contents` as item `key`'s skill file `path`, which must still hold `expected`
+    /// (the text as opened); then its copies follow, in a job.
+    pub async fn save_plugin_skill(
+        &self,
+        key: String,
+        path: String,
+        contents: String,
+        expected: String,
+    ) -> crate::Result<PluginSkillSave> {
+        let setup = self.plugin_setup();
+        let written = {
+            let (key, path) = (key.clone(), path.clone());
+            super::blocking(move || {
+                jobs::with_ctx(&setup, &|_, _| {}, |ctx| {
+                    share::write_skill(ctx, &key, &path, &contents, &expected)
+                })
+                .map_err(crate::Error::Invalid)
+            })
+            .await?
+        };
+        Ok(match written {
+            share::Saved::ChangedSinceOpened { current } => {
+                PluginSkillSave::ChangedSinceOpened { current }
+            }
+            share::Saved::Saved => PluginSkillSave::Saved {
+                job: self.plugin_job(jobs::Action::FollowSkill { key, path }),
+            },
+        })
+    }
+
     /// How plugin job `id` goes.
     pub fn plugin_job_view(&self, id: &str) -> crate::Result<ops::PluginJobView> {
         jobs::job(id).ok_or_else(|| crate::Error::Invalid(format!("no job {id}")))
+    }
+
+    /// Starts sharing: a pass now in the background, then one after each change the watcher
+    /// sees (the user's projects watched too). Shows nothing.
+    pub(crate) fn start_plugin_sharing(&self) {
+        // Tests share nothing behind their back.
+        if cfg!(test) {
+            return;
+        }
+        let registry = self.registry();
+        registry.watch_projects(&self.plugin_repos());
+        let me = self.me.clone();
+        registry.on_change(move || {
+            if let Some(manager) = me.upgrade() {
+                manager.request_plugin_sync(false);
+            }
+        });
+        self.request_plugin_sync(true);
+    }
+
+    /// Asks for a sharing pass (one more after the running one, if one runs); `retry`: try
+    /// again what failed with the same inputs.
+    fn request_plugin_sync(&self, retry: bool) {
+        self.registry().watch_projects(&self.plugin_repos());
+        jobs::request_sync(self.plugin_setup(), retry);
     }
 
     /// What each agent's own list said of its servers, last time it was read, for every

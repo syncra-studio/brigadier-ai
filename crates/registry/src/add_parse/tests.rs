@@ -35,6 +35,7 @@ fn stdio(name: &str, command: &str, args: &[&str], env: &[(&str, &str)]) -> Item
             env: pairs(env),
             cwd: None,
         },
+        oauth: None,
     })
 }
 
@@ -45,6 +46,7 @@ fn http(name: &str, url: &str, headers: &[(&str, &str)]) -> Item {
             url: url.into(),
             headers: pairs(headers),
         },
+        oauth: None,
     })
 }
 
@@ -293,6 +295,7 @@ fn server_json_in_every_shape() {
                 env: Vec::new(),
                 cwd: Some(PathBuf::from("/work")),
             },
+            oauth: None,
         })
     );
 

@@ -258,14 +258,33 @@ fn project_file(
             ))
         })?;
     }
+    // The user may have changed it meanwhile (an editor, a terminal): the edit is made again on
+    // what it holds now, never over it.
+    let (text, new) = match read_and_edit(file, edit)? {
+        (now, again) if now != text => (now, again),
+        _ => (text, new),
+    };
     if new != text {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)
                 .map_err(|err| failed(file, "create the folder of", &err))?;
         }
-        std::fs::write(file, new).map_err(|err| failed(file, "write", &err))?;
+        write_whole(file, &new).map_err(|err| failed(file, "write", &err))?;
     }
     Ok(())
+}
+
+/// Writes `text` to `file` whole: into a file beside it, then moved over it.
+fn write_whole(file: &Path, text: &str) -> std::io::Result<()> {
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = file.with_file_name(format!(".{name}.brigadier-{}", std::process::id()));
+    std::fs::write(&temp, text)?;
+    std::fs::rename(&temp, file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 fn failed(file: &Path, what: &str, err: &dyn fmt::Display) -> ApplyError {
