@@ -71,9 +71,9 @@ async fn codex_chat(flow: &Flow) -> ConversationId {
         .id
 }
 
-/// The Chat's image row, image and kept copy: the "Created an image" row in the turn, the
-/// logged event pointing at the Chat's own `thread-images/<id>`, read back once Codex's own
-/// file is gone. Returns the kept copy.
+/// The Chat's image row, image and kept copy: the "Created an image" row in the turn, its copy
+/// kept in the Chat's own `thread-images/<id>`, read back once Codex's own file is gone.
+/// Returns the kept copy.
 async fn image_is_shown(flow: &Flow, chat: &ConversationId, source: &Path) -> PathBuf {
     let board = answered(flow, chat).await;
     let request = board.latest_request().unwrap();
@@ -88,26 +88,13 @@ async fn image_is_shown(flow: &Flow, chat: &ConversationId, source: &Path) -> Pa
         "{:#?}",
         board.orchestrator_steps
     );
-    let items = flow
-        .manager
-        .thread_items(chat, &request.id, None, None, 100)
-        .await
-        .unwrap();
-    let kept = items
-        .entries
-        .iter()
-        .find_map(|entry| match &entry.event {
-            ProviderEvent::Image {
-                status: ItemStatus::Completed,
-                path,
-                ..
-            } => path.clone(),
-            _ => None,
-        })
-        .map(PathBuf::from)
-        .expect("the image's event is logged");
     let own = flow.dir.join("data/thread-images").join(&chat.0);
-    assert!(kept.starts_with(&own), "{}", kept.display());
+    let kept = std::fs::read_dir(&own)
+        .expect("the Chat keeps its images")
+        .flatten()
+        .map(|entry| entry.path())
+        .next()
+        .expect("the image is kept");
     std::fs::remove_file(source).unwrap();
     let (data, mime) = flow.manager.read_thread_image(chat, "ig_1").await.unwrap();
     assert_eq!(data, brigadier_providers::image_base64(PNG));

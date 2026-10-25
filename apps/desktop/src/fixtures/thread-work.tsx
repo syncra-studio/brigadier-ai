@@ -147,7 +147,7 @@ const tool = (position: number, kind: Partial<Tool> & Pick<Tool, "itemId" | "nam
   position,
   atMs,
   requestId: "r1",
-  kind: { type: "tool", detail: null, status: "completed", throughPosition: 0, logSeq: position, turn: 1, ...kind },
+  kind: { type: "tool", detail: null, status: "completed", throughPosition: 0, turn: 1, ...kind },
 });
 
 const readStep = tool(1, { itemId: "read", name: "Read", detail: `${ROOT}/src/math.js`, item: "tool", endedAtMs: now });

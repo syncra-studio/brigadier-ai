@@ -263,7 +263,7 @@ test("messages to other sessions and the waits for their replies, next to each o
 /** A lead's tool step, as the board keeps it. */
 const toolStep = (position: number, itemId: string, name: string, item: "image" | "command" | "files"): BlockOrchestratorStep => ({
   position,
-  kind: { type: "tool", itemId, name, detail: null, status: "completed", throughPosition: 0, item, logSeq: position, turn: 1 },
+  kind: { type: "tool", itemId, name, detail: null, status: "completed", throughPosition: 0, item, turn: 1 },
 });
 
 test("an image the thread looked at or made is a row of its own that ends the group; looks in a row are one row", () => {

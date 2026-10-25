@@ -120,7 +120,6 @@ impl SessionManager {
         &self,
         id: &ConversationId,
         event: &ProviderEvent,
-        log_seq: Option<i64>,
         turn: Option<i64>,
     ) {
         let ProviderEvent::Image {
@@ -147,7 +146,6 @@ impl SessionManager {
                 files: None,
                 output_bytes: None,
                 full_output: None,
-                log_seq,
                 turn,
             },
         )

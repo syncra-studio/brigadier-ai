@@ -1,7 +1,7 @@
-//! The thread's own tool calls as transcript items (BUILD-PLAN B1b,
-//! [`super::super::thread_items`]): a turn that edits two files and runs a command printing
-//! more than its event keeps, in each CLI's event shapes, read back through
-//! `listThreadItems`, and its rows on the board while the command runs.
+//! The thread's own tool calls' rows (BUILD-PLAN B1b, [`super::super::thread_items`]): a turn
+//! that edits two files and runs a command printing more than its event keeps, in each CLI's
+//! event shapes, and its rows on the board while the command runs. The calls themselves are
+//! read from the CLI's own session file (`version_fixture_tests`, #540).
 
 use std::sync::{Arc, Mutex};
 
@@ -9,9 +9,7 @@ use brigadier_providers::{FileChange, FileChangeKind, ItemStatus, ProviderEvent,
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::work::{
-    FileStat, OrchestratorEntry, OrchestratorStepKind, OutputSource, ThreadItemKind,
-};
+use crate::work::{FileStat, OrchestratorStepKind, OutputSource, ThreadItemKind};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -50,13 +48,11 @@ fn command_row(board: &Board) -> Option<&OrchestratorStepKind> {
 
 /// A Claude turn edits two files (two `Edit` calls) and runs a `Bash` whose long output its
 /// hook stored (the model got the digest); a Codex turn makes one patch of two files and runs
-/// a command whose output streams, longer than its event keeps. Both come back through
-/// `listThreadItems` keyed to the turn and the request: the command with its whole output
-/// and exit code, each file with its lines in and out and its diff. While the command runs
-/// its row shows (Codex's with how much it printed) and the page returns it running, a Codex
-/// command with its output so far. What streamed is not stored as it streams.
+/// a command whose output streams, longer than its event keeps. Their rows are keyed to the
+/// turn and the request, each file with its lines in and out. While the command runs its row
+/// shows (Codex's with how much it printed).
 #[tokio::test]
-async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items() {
+async fn a_turns_own_edits_and_long_command_are_rows_of_its_turn() {
     for provider in [ProviderKind::Claude, ProviderKind::Codex] {
         let full = long_output();
         let digest: Arc<Mutex<String>> = Arc::default();
@@ -207,26 +203,6 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
             .iter()
             .find_map(|step| step.request_id.clone())
             .expect("the rows are the request's");
-        let live = flow
-            .manager
-            .thread_items(&flow.conversation, &request, None, None, 50)
-            .await
-            .unwrap();
-        let so_far: Option<&str> = live.entries.iter().find_map(|entry| match &entry.event {
-            ProviderEvent::CommandOutputDelta { item_id, text } if item_id == "cmd-1" => {
-                Some(text.as_str())
-            }
-            _ => None,
-        });
-        assert!(
-            live.entries.iter().any(|entry| matches!(&entry.event,
-                ProviderEvent::Command { item_id, status: ItemStatus::InProgress, .. } if item_id == "cmd-1")),
-            "{provider:?}: {live:?}"
-        );
-        match provider {
-            ProviderKind::Claude => assert_eq!(so_far, None),
-            _ => assert_eq!(so_far, Some(full.as_str())),
-        }
         release.notify_one();
         let board = flow.settled().await;
 
@@ -240,12 +216,10 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
                     item,
                     files,
                     turn: of,
-                    log_seq,
                     ..
                 } => {
                     assert_eq!(step.request_id.as_deref(), Some(request.as_str()));
                     assert_eq!(*of, Some(turn), "{provider:?}: {item_id}");
-                    assert!(log_seq.is_some());
                     Some((item_id.clone(), *item, files.clone()))
                 }
                 _ => None,
@@ -288,97 +262,8 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
         };
         assert_eq!(rows, expected, "{provider:?}");
 
-        // The items, as a worker's transcript holds them, keyed to the request and the turn.
-        let page = flow
-            .manager
-            .thread_items(&flow.conversation, &request, Some(turn), None, 50)
-            .await
-            .unwrap();
-        assert_eq!(page.next, None);
-        assert_eq!(page.entries.len(), expected.len(), "{provider:?}: {page:?}");
-        let mut diffs = Vec::new();
-        for entry in &page.entries {
-            match &entry.event {
-                ProviderEvent::FileChanges {
-                    changes, status, ..
-                } => {
-                    assert_eq!(*status, ItemStatus::Completed);
-                    for change in changes {
-                        diffs.push((
-                            change.path.clone(),
-                            change.added,
-                            change.removed,
-                            change.diff.is_some(),
-                        ));
-                    }
-                }
-                ProviderEvent::Command {
-                    status,
-                    exit_code,
-                    output,
-                    duration_ms,
-                    cwd,
-                    ..
-                } => {
-                    assert_eq!(*status, ItemStatus::Completed);
-                    assert_eq!(*exit_code, Some(0));
-                    // Whole, from the output store, past the event's clip or digest.
-                    assert_eq!(output.as_deref(), Some(full.as_str()), "{provider:?}");
-                    assert!(duration_ms.is_some_and(|ms| ms >= 0));
-                    assert_eq!(cwd.is_some(), provider == ProviderKind::Codex);
-                }
-                other => panic!("{provider:?}: unexpected {other:?}"),
-            }
-        }
-        assert_eq!(
-            diffs,
-            [
-                ("/w/src/a.rs".to_owned(), Some(1), Some(1), true),
-                ("/w/src/lib.rs".to_owned(), Some(2), Some(0), true),
-            ],
-            "{provider:?}"
-        );
-        // Another turn's are none of these; the pages follow on from each other.
-        let other = flow
-            .manager
-            .thread_items(
-                &flow.conversation,
-                &request,
-                Some(turn + 1_000_000),
-                None,
-                50,
-            )
-            .await
-            .unwrap();
-        assert!(other.entries.is_empty());
-        let first = flow
-            .manager
-            .thread_items(&flow.conversation, &request, None, None, 1)
-            .await
-            .unwrap();
-        assert_eq!(first.entries.len(), 1);
-        let rest = flow
-            .manager
-            .thread_items(&flow.conversation, &request, None, first.next, 50)
-            .await
-            .unwrap();
-        assert_eq!(rest.entries.len() + 1, expected.len());
-        assert_eq!(rest.next, None);
-
-        // Stored once: the streamed output never as it streamed; a Codex command's whole
-        // output in the output store as it streamed, the event keeping the CLI's clip.
-        let log = flow
-            .core
-            .list_orchestrator_log(&flow.conversation, None, 500)
-            .await
-            .unwrap();
-        assert!(!log.entries.iter().any(|entry| matches!(
-            &entry.entry,
-            OrchestratorEntry::Provider {
-                event: ProviderEvent::CommandOutputDelta { .. },
-                ..
-            }
-        )));
+        // A long output is stored once: a Codex command's whole output in the output store as
+        // it streamed, past the CLI's clip; Claude's through the hook.
         let sources: Vec<OutputSource> =
             board.outputs.values().map(|output| output.source).collect();
         match provider {

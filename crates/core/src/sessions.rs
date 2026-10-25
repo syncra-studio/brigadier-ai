@@ -1237,24 +1237,6 @@ impl Core {
         Ok(OrchestratorPage { entries, has_more })
     }
 
-    /// The whole text of the conversation's stored output `alias`, while its blob is there.
-    pub(crate) async fn stored_output_text(
-        &self,
-        id: &ConversationId,
-        alias: &str,
-    ) -> Option<String> {
-        let blob = {
-            let mut boards = self.boards.lock().await;
-            if !boards.contains_key(id) {
-                let board = self.load_board(id).await.ok()?;
-                boards.insert(id.clone(), board);
-            }
-            boards.get(id)?.outputs.get(alias)?.blob.clone()
-        };
-        let bytes = self.store.blobs().get(blob.parse().ok()?).await.ok()??;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
-    }
-
     /// Up to `limit` events of `kind` before `before`, oldest first, and whether older ones
     /// exist.
     async fn read_page(

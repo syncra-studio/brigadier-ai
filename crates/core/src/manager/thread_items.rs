@@ -1,45 +1,33 @@
 //! The thread's own tool calls as the transcript items a worker's fold into (BUILD-PLAN B1b).
 //!
-//! Each call keeps its row on the board ([`OrchestratorStepKind::Tool`]) and its events in the
-//! orchestrator log, as before. The row also says what item the call is
-//! ([`ThreadItemKind`]), a file change's files with their lines in and out, how much a command
-//! has printed while it streams, where the call's newest event is in the log and which turn it
-//! ran in. [`SessionManager::thread_items`] reads one request's rows and returns each call's
-//! newest event from where its row points: one read per call, never a scan of the log.
+//! Each call keeps its row on the board ([`OrchestratorStepKind::Tool`]): what item the call
+//! is ([`ThreadItemKind`]), a file change's files with their lines in and out, how much a
+//! command has printed while it streams and which turn it ran in. The call itself is read
+//! from the CLI's own session file ([`crate::thread_view`]), never from a copy (#540).
 //!
 //! Native CLI output arrives at completion for Claude and streams for Codex. Brigadier's
 //! own command tools feed the same live buffers from their child pipes, for both providers.
-//! The row hears how much came at most once a [`OUTPUT_STEP_EVERY`]; live reads hide secrets
-//! before returning the output's tail.
+//! The row hears how much came at most once a [`OUTPUT_STEP_EVERY`].
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use brigadier_providers::{FileChange, ItemStatus, ProviderEvent, diff_counts};
-use brigadier_store::StreamPage;
+use brigadier_providers::{FileChange, ItemStatus, diff_counts};
 
 use super::conversation::ConvLive;
 use super::{OUTPUT_MAX_BYTES, SessionManager};
-use crate::model::{ConversationId, DomainEvent, RawEntry, ThreadItemsPage, streams};
-use crate::work::{
-    FileStat, OrchestratorEntry, OrchestratorStepKind, OutputSource, ThreadItemKind,
-};
-use crate::{Result, now_ms};
+use crate::work::{FileStat, OrchestratorStepKind, OutputSource, ThreadItemKind};
 
 /// How often a streaming command's row hears how much it printed.
 pub(super) const OUTPUT_STEP_EVERY: Duration = Duration::from_secs(1);
 /// What a Codex command's event keeps of its output (the parser's clip): a command that
 /// printed more has its whole output stored.
 const EVENT_OUTPUT: usize = 8 * 1024;
-/// The most of a running command's output a page returns: its end.
-const LIVE_TAIL: usize = 256 * 1024;
-/// The most calls a page returns.
-const PAGE_MAX: u32 = 100;
 
 /// What a conversation holds of its thread's running calls.
 #[derive(Default)]
 pub(crate) struct ThreadItems {
-    /// The orchestrator log entry of the running turn's start.
+    /// When the running turn started: it keys its calls' rows.
     turn: Option<i64>,
     /// Running commands' streamed output, by item.
     live: HashMap<String, LiveOutput>,
@@ -67,27 +55,14 @@ impl ThreadItems {
         self.turn
     }
 
-    pub(super) fn turn_started(&mut self, log_seq: Option<i64>) {
-        self.turn = log_seq;
+    pub(super) fn turn_started(&mut self, at_ms: i64) {
+        self.turn = Some(at_ms);
     }
 
     /// The CLI ended: its commands' output streams no more.
     pub(super) fn cli_ended(&mut self) {
         self.live.clear();
     }
-}
-
-/// Whether `event` is logged before it is handled: a tool call's row points at its log entry,
-/// and a turn's start keys the calls that follow.
-pub(super) fn logged_first(event: &ProviderEvent) -> bool {
-    matches!(
-        event,
-        ProviderEvent::ToolCall { .. }
-            | ProviderEvent::Command { .. }
-            | ProviderEvent::FileChanges { .. }
-            | ProviderEvent::TurnStarted { .. }
-            | ProviderEvent::Image { .. }
-    )
 }
 
 /// What a tool call `name` (with or without its MCP server's prefix) given `input` is as a
@@ -321,155 +296,6 @@ impl SessionManager {
         if let Some(row) = row {
             self.orchestrator_step(&conv.id, row).await;
         }
-    }
-
-    pub(super) async fn command_tail(
-        &self,
-        id: &ConversationId,
-        output: Vec<u8>,
-        bytes: u64,
-        running: bool,
-    ) -> (String, u64) {
-        let output = self.hide_secrets(id, output).await;
-        let mut text = String::from_utf8_lossy(&output).into_owned();
-        if running {
-            let mut hidden = self.grants.secrets();
-            hidden.extend(self.session_secret_values(id).await);
-            if let Some(redactor) = super::secrets::redactor(hidden) {
-                text = redactor.push(&mut String::new(), &text).into_owned();
-            }
-        }
-        let mut from = text.len().saturating_sub(LIVE_TAIL);
-        while !text.is_char_boundary(from) {
-            from += 1;
-        }
-        (text[from..].to_owned(), bytes)
-    }
-
-    /// A page of the thread's own calls in `request` (only those of `turn`, the log entry of
-    /// its start, when given), oldest first, after the row at board position `after`: each
-    /// call's newest event from where its row points, its whole output when it is stored, a
-    /// running command's output so far. Calls from before their rows pointed at the log are
-    /// left out.
-    pub async fn thread_items(
-        &self,
-        id: &ConversationId,
-        request: &str,
-        turn: Option<i64>,
-        after: Option<i64>,
-        limit: u32,
-    ) -> Result<ThreadItemsPage> {
-        let board = self.core.board(id).await?;
-        let limit = limit.clamp(1, PAGE_MAX) as usize;
-        let mut rows = board.orchestrator_steps.iter().filter(|step| {
-            step.request_id.as_deref() == Some(request)
-                && after.is_none_or(|after| step.position > after)
-                && matches!(&step.kind, OrchestratorStepKind::Tool { log_seq: Some(_), turn: of, .. }
-                    if turn.is_none() || *of == turn)
-        });
-        let page: Vec<_> = rows.by_ref().take(limit).collect();
-        let next = rows.next().and(page.last().map(|step| step.position));
-        let stream = streams::orchestrator(id);
-        let live = self.convs_lock().get(id).cloned();
-        let mut entries = Vec::new();
-        for step in page {
-            let OrchestratorStepKind::Tool {
-                item_id,
-                status,
-                ended_at_ms,
-                log_seq: Some(log_seq),
-                full_output,
-                ..
-            } = &step.kind
-            else {
-                continue;
-            };
-            let stored = self
-                .core
-                .store()
-                .read_stream(
-                    stream.clone(),
-                    StreamPage {
-                        before: Some(log_seq + 1),
-                        kinds: vec!["orchestrator.logged".into()],
-                        limit: 1,
-                    },
-                )
-                .await?;
-            let Some(stored) = stored
-                .into_iter()
-                .find(|event| event.stream_seq == *log_seq)
-            else {
-                continue;
-            };
-            let Ok(DomainEvent::OrchestratorLogged {
-                entry: OrchestratorEntry::Provider { mut event, .. },
-                ..
-            }) = crate::sessions::decode(&stored)
-            else {
-                continue;
-            };
-            let whole = match full_output {
-                Some(alias) => self.core.stored_output_text(id, alias).await,
-                None => None,
-            };
-            match &mut event {
-                ProviderEvent::Command {
-                    output,
-                    duration_ms,
-                    ..
-                } => {
-                    if whole.is_some() {
-                        *output = whole;
-                    }
-                    // Claude doesn't say how long a command took: its row does.
-                    if duration_ms.is_none() {
-                        *duration_ms = ended_at_ms.map(|ended| ended.saturating_sub(step.at_ms));
-                    }
-                }
-                ProviderEvent::ToolCall { name, output, .. } if whole.is_some() => {
-                    *output = match (output.as_deref(), whole) {
-                        (Some(reply), Some(whole)) if crate::digest::own_run(name) => {
-                            Some(crate::digest::whole_reply(reply, &whole))
-                        }
-                        (_, whole) => whole,
-                    };
-                }
-                // The file before an edit is evidence for the request's record, not for the
-                // page: whole files would make a page of edits too big to send.
-                ProviderEvent::FileChanges { changes, .. } => {
-                    for change in changes {
-                        change.original = None;
-                    }
-                }
-                _ => {}
-            }
-            let running = *status == ItemStatus::InProgress;
-            entries.push(RawEntry {
-                stream_seq: stored.stream_seq,
-                at_ms: stored.at_ms,
-                event,
-            });
-            if running && let Some(conv) = &live {
-                let tail = conv
-                    .items()
-                    .live
-                    .get(item_id)
-                    .map(|live| live.output.clone());
-                if let Some(tail) = tail.filter(|tail| !tail.is_empty()) {
-                    let (text, _) = self.command_tail(id, tail, 0, true).await;
-                    entries.push(RawEntry {
-                        stream_seq: stored.stream_seq,
-                        at_ms: now_ms(),
-                        event: ProviderEvent::CommandOutputDelta {
-                            item_id: item_id.clone(),
-                            text,
-                        },
-                    });
-                }
-            }
-        }
-        Ok(ThreadItemsPage { entries, next })
     }
 }
 

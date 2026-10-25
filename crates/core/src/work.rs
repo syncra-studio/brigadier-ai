@@ -1733,7 +1733,7 @@ pub enum OrchestratorStepKind {
         files: Option<Vec<FileStat>>,
         /// How much output a command has printed so far, while it streams (Codex; Claude's
         /// command output arrives at completion), updated at most once a second. The output
-        /// itself is read with `listThreadItems`, not kept here.
+        /// itself is the CLI's own (its session file), not kept here.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         output_bytes: Option<u64>,
@@ -1742,12 +1742,8 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         full_output: Option<String>,
-        /// The orchestrator log entry (its stream sequence in `orch:<id>`) with the call's
-        /// newest event, which `listThreadItems` reads.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        log_seq: Option<i64>,
-        /// The turn it ran in: the orchestrator log entry of the turn's start.
+        /// The turn it ran in: when that turn started (ms since the epoch). Older rows hold
+        /// where its start was in the retired `orch:<id>` log (#540).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         turn: Option<i64>,

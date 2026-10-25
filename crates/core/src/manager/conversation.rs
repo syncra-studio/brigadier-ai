@@ -4004,22 +4004,12 @@ impl SessionManager {
         event: ProviderEvent,
     ) {
         let event = self.retain_thread_image(&conv.id, event).await;
-        // A tool call's row points at its log entry, and a turn's start keys the calls that
-        // follow: both are logged before they are handled.
-        let logged = if super::thread_items::logged_first(&event) {
-            Some(
-                self.log_provider_at(&conv.id, cli.provider, event.clone())
-                    .await,
-            )
-        } else {
-            None
-        };
-        let log_seq = logged.flatten();
+        // A turn's start keys the calls that follow.
         if matches!(event, ProviderEvent::TurnStarted { .. }) {
-            conv.items().turn_started(log_seq);
+            conv.items().turn_started(now_ms());
         }
         let turn = conv.items().turn();
-        self.image_row(&conv.id, &event, log_seq, turn).await;
+        self.image_row(&conv.id, &event, turn).await;
         if let ProviderEvent::Message {
             role: ProviderRole::User,
             text,
@@ -4251,7 +4241,6 @@ impl SessionManager {
                         full_output: output
                             .as_deref()
                             .and_then(super::thread_items::digest_alias),
-                        log_seq,
                         turn,
                     },
                 )
@@ -4320,7 +4309,6 @@ impl SessionManager {
                         full_output: output
                             .as_deref()
                             .and_then(super::thread_items::digest_alias),
-                        log_seq,
                         turn,
                     },
                 )
@@ -4350,7 +4338,6 @@ impl SessionManager {
                         files: Some(super::thread_items::file_stats(changes)),
                         output_bytes: None,
                         full_output: None,
-                        log_seq,
                         turn,
                     },
                 )
@@ -4583,9 +4570,7 @@ impl SessionManager {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,
         };
-        if logged.is_none() {
-            self.log_provider(&conv.id, cli.provider, event).await;
-        }
+        self.log_provider(&conv.id, cli.provider, event).await;
         if let Some(status) = completed {
             crate::heap(|| self.turn_completed(conv, cli, status)).await;
         }
@@ -5581,18 +5566,6 @@ impl SessionManager {
     ) {
         self.log_orchestrator(id, OrchestratorEntry::Provider { provider, event })
             .await;
-    }
-
-    /// [`Self::log_provider`], returning where the entry is in the log (`None` if it could
-    /// not be stored).
-    pub(super) async fn log_provider_at(
-        &self,
-        id: &ConversationId,
-        provider: ProviderKind,
-        event: ProviderEvent,
-    ) -> Option<i64> {
-        self.log_orchestrator(id, OrchestratorEntry::Provider { provider, event })
-            .await
     }
 
     async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {

@@ -45,7 +45,7 @@ files?: Array<FileStat>,
 /**
  * How much output a command has printed so far, while it streams (Codex; Claude's
  * command output arrives at completion), updated at most once a second. The output
- * itself is read with `listThreadItems`, not kept here.
+ * itself is the CLI's own (its session file), not kept here.
  */
 outputBytes?: number, 
 /**
@@ -54,12 +54,8 @@ outputBytes?: number,
  */
 fullOutput?: string, 
 /**
- * The orchestrator log entry (its stream sequence in `orch:<id>`) with the call's
- * newest event, which `listThreadItems` reads.
- */
-logSeq?: number, 
-/**
- * The turn it ran in: the orchestrator log entry of the turn's start.
+ * The turn it ran in: when that turn started (ms since the epoch). Older rows hold
+ * where its start was in the retired `orch:<id>` log (#540).
  */
 turn?: number, } | { "type": "messaged", taskId: TaskId, 
 /**
