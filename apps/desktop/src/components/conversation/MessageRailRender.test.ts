@@ -30,7 +30,7 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     scrub: { offset: number | null; flashed: boolean };
     narrow: { narrow: { rail: boolean; gutter: number }; wide: boolean };
     intoUnmounted: { target: string; mountedBefore: boolean; clicked: Landing; up: Landing; markers: number };
-    kept: { landed: boolean; before: string | null; opened: string | null; unmounted: boolean; after: string | null; sameHeight: boolean };
+    kept: { landed: boolean; before: string | null; opened: string | null; unmounted: boolean | string; after: string | null; sameHeight: boolean };
     farApproval: { turnMounted: boolean; shown: boolean; gone: boolean };
     longAnswer: { messagesShown: number; current: string[]; inView: string[] };
     feed: { feed: string | null; label: string | null; articles: boolean; setsize: (string | null)[]; placed: boolean; total: number; first: number; mountedBefore: boolean; up: boolean; down: boolean };

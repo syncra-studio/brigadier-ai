@@ -243,6 +243,20 @@ async function stepTo(key: "ArrowUp" | "ArrowDown", id: string) {
   return { landed, offset: offsetOf(id) };
 }
 
+/**
+ * Scrolls to the thread's bottom, a frame at a time while it grows or the scroller still moves
+ * the view, until `check` holds (up to 10s); then settles. Whether it held, else where the view was.
+ */
+async function toBottomUntil(check: () => boolean): Promise<boolean | string> {
+  const held = await until(() => {
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+    viewport().scrollTop = viewport().scrollHeight;
+    return check();
+  });
+  await settle(300);
+  return held || `${viewport().scrollTop} of ${viewport().scrollHeight - viewport().clientHeight}`;
+}
+
 /** Clicks the rail's marker for `id` and waits for its row to land. */
 async function clickTo(id: string) {
   const before = landings(id);
@@ -393,10 +407,10 @@ const steps = {
     await settle(100);
     const opened = toggle()?.getAttribute("aria-expanded") ?? null;
     const height = row(id)?.getBoundingClientRect().height ?? null;
-    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
-    viewport().scrollTop = viewport().scrollHeight;
-    await settle(300);
-    const unmounted = row(id) === null;
+    // A jump keeps the row it mounted until the next one (in a short window, this one's): a jump
+    // far below takes its place, and the view goes on to the bottom.
+    await clickTo(markerIds()[30]!);
+    const unmounted = await toBottomUntil(() => row(id) === null);
     const back = await clickTo(id);
     return {
       landed: reached.landed && back.landed, before, opened, unmounted,
@@ -406,9 +420,7 @@ const steps = {
   },
   /** An approval for a turn far from those mounted: it still waits in the composer's place. */
   async farApproval() {
-    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
-    viewport().scrollTop = viewport().scrollHeight;
-    await settle(300);
+    await toBottomUntil(() => row("long-u41") === null);
     const approval: ShownApproval = {
       id: "far-ap", conversationId: "long", taskId: null, requestId: "long-r41", position: 0, state: { type: "pending" }, createdAtMs: Date.now(), resolvedAtMs: null,
       subject: { type: "cli", request: { id: "far-ap", kind: "command", tool: "Bash", command: "git push origin main", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: "git push" } },
