@@ -16,7 +16,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use brigadier_providers::claude::Claude;
@@ -95,9 +95,13 @@ struct State {
     generation: u32,
     /// The generation each provider's last finished check began in.
     checked_generation: HashMap<ProviderKind, u32>,
+    /// Each account's model list as its CLI last gave it: the lead's is its provider's.
+    account_models: HashMap<AccountRef, ModelCatalog>,
 }
 
 pub struct Runtime {
+    /// Itself, for work it starts in the background.
+    this: Weak<Runtime>,
     core: Arc<Core>,
     platform: Arc<dyn Platform>,
     claude: Arc<Claude>,
@@ -214,7 +218,8 @@ impl Runtime {
                 .await
                 .map_err(|err| Error::Invalid(format!("loading the model registry: {err}")))?
         };
-        let runtime = Arc::new(Self {
+        let runtime = Arc::new_cyclic(|this| Self {
+            this: this.clone(),
             monitor,
             routing,
             registry,
@@ -947,17 +952,20 @@ impl Runtime {
             self.record_overview(overview.clone()).await;
         }
         // The model list (or its failure) is published as soon as it is known: the startup
-        // screen waits for it, and must not wait for a slow quota request too.
+        // screen waits for it, and must not wait for a slow quota request too. It is the lead
+        // account's, the one Settings → Accounts marks in use.
+        let lead = self.monitor.lead(kind);
+        let (lead, listing) = match self.provider_for(&lead) {
+            Ok(listing) => (lead, listing),
+            Err(_) => (AccountRef::own(kind), provider.clone()),
+        };
         let models = async {
-            let models = provider.models().await;
+            let models = listing.models().await;
             let mut with_models = overview.clone();
             match &models {
                 Ok(catalog) => {
-                    let dir = self.cache_dir.clone();
-                    let cached = catalog.clone();
-                    let _ =
-                        tokio::task::spawn_blocking(move || write_model_cache(&dir, &cached)).await;
-                    with_models.models = Some(catalog.clone());
+                    self.adopt_models(&lead, catalog.clone()).await;
+                    with_models.models = self.overview(kind).and_then(|now| now.models);
                 }
                 Err(err) => with_models.error = Some(format!("models: {err}")),
             }
@@ -967,7 +975,8 @@ impl Runtime {
         let (models, quota) = tokio::join!(models, provider.quota());
         let mut errors = Vec::new();
         match models {
-            Ok(catalog) => overview.models = Some(catalog),
+            // The lead may have moved meanwhile: its list is the one shown now.
+            Ok(_) => overview.models = self.overview(kind).and_then(|now| now.models),
             Err(err) => errors.push(format!("models: {err}")),
         }
         match quota {
@@ -979,6 +988,58 @@ impl Runtime {
         }
         overview.error = (!errors.is_empty()).then(|| errors.join("; "));
         overview
+    }
+
+    /// Keeps `catalog` as `account`'s model list; while `account` leads its provider, the
+    /// provider's overview (not yet recorded) and the list cached on disk are it. Answers
+    /// whether it leads.
+    async fn adopt_models(&self, account: &AccountRef, catalog: ModelCatalog) -> bool {
+        let kind = account.provider;
+        let leads = {
+            let mut state = self.state();
+            state
+                .account_models
+                .insert(account.clone(), catalog.clone());
+            let leads = self.monitor.lead(kind) == *account;
+            if leads && let Some(overview) = state.overviews.get_mut(&kind) {
+                overview.models = Some(catalog.clone());
+            }
+            leads
+        };
+        if leads {
+            let dir = self.cache_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || write_model_cache(&dir, &catalog)).await;
+        }
+        leads
+    }
+
+    /// Reads the model list of `kind`'s lead account in the background, and records its
+    /// overview with it while that account still leads.
+    fn refresh_lead_models(&self, kind: ProviderKind) {
+        let Some(runtime) = self.this.upgrade() else {
+            return;
+        };
+        self.spawn(async move {
+            let lead = runtime.monitor.lead(kind);
+            if !runtime.signed_in(&lead) {
+                return;
+            }
+            let Ok(provider) = runtime.provider_for(&lead) else {
+                return;
+            };
+            match provider.models().await {
+                Ok(catalog) => {
+                    if runtime.adopt_models(&lead, catalog).await
+                        && let Some(overview) = runtime.overview(kind)
+                    {
+                        runtime.record_overview(overview).await;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(provider = %kind, error = %err, "could not read the models of the account in use")
+                }
+            }
+        });
     }
 
     async fn record_overview(&self, mut overview: ProviderOverview) {

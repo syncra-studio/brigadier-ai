@@ -444,16 +444,22 @@ impl Runtime {
     }
 
     /// Chooses each provider's lead account again; a provider whose lead changed has its
-    /// overview recorded again (its quota is the new lead's). Answers whether any lead changed
+    /// overview recorded again (its quota and models are the new lead's: models it listed
+    /// before at once, else once its CLI lists them). Answers whether any lead changed
     /// (Settings → Accounts then marks another account in use).
     pub(super) async fn update_leads(&self) -> bool {
         let mut moved = false;
         for kind in ProviderKind::ALL {
             let lead = self.launch_account(kind, None);
-            if !self.monitor.set_lead(lead) {
+            if !self.monitor.set_lead(lead.clone()) {
                 continue;
             }
             moved = true;
+            let known = self.state().account_models.get(&lead).cloned();
+            let listed = match known {
+                Some(catalog) => self.adopt_models(&lead, catalog).await,
+                None => false,
+            };
             let overview = {
                 let mut state = self.state();
                 let Some(overview) = state.overviews.get_mut(&kind) else {
@@ -463,6 +469,9 @@ impl Runtime {
                 overview.clone()
             };
             self.record_overview(overview).await;
+            if !listed {
+                self.refresh_lead_models(kind);
+            }
         }
         moved
     }

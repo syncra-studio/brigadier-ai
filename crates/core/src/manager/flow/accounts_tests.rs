@@ -2512,3 +2512,117 @@ async fn a_waiting_message_moved_to_another_agent_is_shown_already() {
     assert_eq!(shown, messages);
     flow.stop().await;
 }
+
+/// The Claude models Settings → Providers lists: the runtime's, and the last published.
+async fn models_listed(flow: &Flow) -> (Vec<String>, Vec<String>) {
+    let ids = |overview: Option<crate::model::ProviderOverview>| -> Vec<String> {
+        overview
+            .and_then(|overview| overview.models)
+            .map(|catalog| catalog.models.into_iter().map(|model| model.id).collect())
+            .unwrap_or_default()
+    };
+    let page = flow
+        .core
+        .store()
+        .read_stream(
+            crate::model::streams::PROVIDERS.into(),
+            brigadier_store::StreamPage {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    // Newest first.
+    let published = page
+        .iter()
+        .filter_map(|event| match crate::sessions::decode(event).ok()? {
+            DomainEvent::ProviderChecked { overview }
+                if overview.provider == ProviderKind::Claude =>
+            {
+                Some(overview)
+            }
+            _ => None,
+        })
+        .next();
+    (
+        ids(flow.manager.runtime.overview(ProviderKind::Claude)),
+        ids(published),
+    )
+}
+
+/// Waits until the Claude models listed, kept and published, are `expected`.
+async fn until_models(flow: &Flow, expected: &[&str]) {
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
+    loop {
+        let (kept, published) = models_listed(flow).await;
+        if kept == expected && published == expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "models listed {kept:?}, published {published:?}, not {expected:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// Settings → Providers lists the models of the account in use: automatic switching and Use
+/// both move the list, without a restart, and a check of the provider keeps it.
+#[tokio::test]
+async fn the_models_listed_are_the_account_in_uses() {
+    let log = Log::default();
+    let behavior = Arc::new(super::FakeBehavior {
+        account_models: true,
+        ..Default::default()
+    });
+    let flow = Flow::start(
+        "accounts-models",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.add_accounts(
+        &[
+            (ProviderKind::Claude, "acct-b"),
+            (ProviderKind::Claude, "acct-c"),
+        ],
+        true,
+    )
+    .await;
+    // Automatic switching picks the account whose week ends first.
+    report_weekly(&flow, None, 7.0, 37).await;
+    report_weekly(&flow, Some("acct-c"), 20.0, 70).await;
+    report_weekly(&flow, Some("acct-b"), 50.0, 4).await;
+    assert_eq!(in_use(&flow).await.0, vec![Some("acct-b".into())]);
+    until_models(&flow, &["claude-opus-5-5", "acct-b-model"]).await;
+    // Checking the provider again (its own login) keeps the account in use's list.
+    flow.manager
+        .runtime
+        .check_provider(ProviderKind::Claude, *super::PATIENCE)
+        .await;
+    until_models(&flow, &["claude-opus-5-5", "acct-b-model"]).await;
+
+    // It runs out: work moves to this computer's login (its quota as the check read it
+    // reported again), and so does the list.
+    report_weekly(&flow, None, 7.0, 37).await;
+    report_weekly(&flow, Some("acct-b"), 100.0, 4).await;
+    assert_eq!(in_use(&flow).await.0, vec![None]);
+    until_models(&flow, &["claude-opus-5-5"]).await;
+
+    // Use picks another account: its list.
+    let before = flow.core.settings();
+    let mut settings = before.clone();
+    for entry in &mut settings.accounts {
+        entry.default = entry.id == "acct-c";
+    }
+    let settings = crate::accounts::edited(&before, settings);
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    assert_eq!(in_use(&flow).await.0, vec![Some("acct-c".into())]);
+    until_models(&flow, &["claude-opus-5-5", "acct-c-model"]).await;
+    flow.stop().await;
+}

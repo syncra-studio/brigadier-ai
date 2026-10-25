@@ -577,6 +577,9 @@ pub(crate) struct FakeBehavior {
     pub signed_out: Mutex<Vec<ProviderKind>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
+    /// An extra account's CLI also lists a model of its own (`<account>-model`), so a list
+    /// tells whose it is.
+    pub account_models: bool,
     pub refuse_steers: bool,
     /// A message steered into a turn that its script never read is taken in once the script
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
@@ -689,24 +692,32 @@ impl FakeCli {
             // check or merge code run on a vendor's best.
             ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
         };
-        ids.iter()
-            .map(|(id, name)| ModelInfo {
-                id: (*id).into(),
-                display_name: (*name).into(),
-                description: String::new(),
-                resolved: None,
-                efforts: vec!["medium".into(), "high".into()],
-                default_effort: Some("high".into()),
-                is_default: true,
-                // Claude's takes images, so operate work has a model.
-                input_modalities: match self.kind {
-                    ProviderKind::Claude => vec!["text".into(), "image".into()],
-                    ProviderKind::Codex => vec!["text".into()],
-                },
-                fast: None,
-                legacy: false,
-            })
-            .collect()
+        let own = self
+            .account
+            .as_ref()
+            .filter(|_| self.behavior.account_models)
+            .map(|account| (format!("{account}-model"), account.clone()));
+        let ids = ids
+            .iter()
+            .map(|(id, name)| ((*id).to_owned(), (*name).to_owned()))
+            .chain(own);
+        ids.map(|(id, name)| ModelInfo {
+            id,
+            display_name: name,
+            description: String::new(),
+            resolved: None,
+            efforts: vec!["medium".into(), "high".into()],
+            default_effort: Some("high".into()),
+            is_default: true,
+            // Claude's takes images, so operate work has a model.
+            input_modalities: match self.kind {
+                ProviderKind::Claude => vec!["text".into(), "image".into()],
+                ProviderKind::Codex => vec!["text".into()],
+            },
+            fast: None,
+            legacy: false,
+        })
+        .collect()
     }
 }
 
