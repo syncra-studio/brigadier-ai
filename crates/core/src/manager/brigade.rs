@@ -170,6 +170,8 @@ mod tests {
         // A Chat runs workers too (S28).
         assert!(!SKILL.contains("needs a project"));
         assert!(SKILL.contains("--repo"));
+        // An app the user asked to see is started by the session itself, as a preview.
+        assert!(SKILL.contains("brigadier preview start"));
         // S22b's four lines: decisions travel to workers, derived documents and the user.
         for line in [
             "The brief carries the rules that bear on its job, verbatim, with their ledger ids",
