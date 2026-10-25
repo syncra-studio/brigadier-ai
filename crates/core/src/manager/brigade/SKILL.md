@@ -107,6 +107,10 @@ A big job (several parts, risky, or the user asked) gets two reviews; a small ch
 - You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left; never loop.
 - Before handing a derived document on (plan, brief, report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".
 
+## Things that end later
+
+Started something that ends after your turn (CI, a PR's checks, the nightly)? Keep a watcher on it in the background (`gh run watch <id> --exit-status`, or Monitor) so its end wakes you; never end on "in progress" with nothing running.
+
 ## Gotchas
 
 - Tests needing gitignored files (fixtures, credentials) skip silently in a fresh worktree; the worker links them and says which.

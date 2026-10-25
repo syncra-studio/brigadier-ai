@@ -136,8 +136,9 @@ mod tests {
         );
         // A session that reads it keeps it in context for every later call (the w152 bench:
         // about 3.1k tokens written once, then read again on each call). The short-job path
-        // added 0.7 KB to save a whole call (w155).
-        assert!(SKILL.len() <= 9_600, "{} bytes", SKILL.len());
+        // added 0.7 KB to save a whole call (w155); keeping a watcher on what ends after the
+        // turn, 0.27 KB (D21).
+        assert!(SKILL.len() <= 9_870, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
@@ -170,6 +171,8 @@ mod tests {
         // A Chat runs workers too (S28).
         assert!(!SKILL.contains("needs a project"));
         assert!(SKILL.contains("--repo"));
+        // Something that ends after the turn keeps a watcher running, as advice (D21).
+        assert!(SKILL.contains("`gh run watch <id> --exit-status`, or Monitor"));
         // An app the user asked to see is started by the session itself, as a preview.
         assert!(SKILL.contains("brigadier preview start"));
         // S22b's four lines: decisions travel to workers, derived documents and the user.
