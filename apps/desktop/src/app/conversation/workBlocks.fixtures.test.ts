@@ -326,6 +326,36 @@ test("the thread's own brigadier wait and start are no rows, and a wait's end no
   assert.equal(asBrigadier("interrupt", 'cd /repo && brigadier start "Fix the parser" --title Parser').step, undefined);
 });
 
+test("the thread's read of its own wait's output file is part of the wait: no row; other reads keep theirs (D38, D58)", () => {
+  const view = load("claude-2.1.310", "background").persisted;
+  const call = view.entries.find((entry) => entry.event.type === "command" && entry.event.command === "sleep 2");
+  assert.ok(call?.event.type === "command" && call.atMs !== undefined && call.event.output);
+  const file = /Output is being written to: (\S+)\. /.exec(call.event.output)?.[1] ?? "";
+  assert.ok(file.startsWith("/private/tmp/"));
+  const read = (itemId: string, path: string): FileEntry => ({
+    event: { type: "toolCall", itemId, name: "Read", input: JSON.stringify({ file_path: path }), status: "completed", output: "1\tdone" },
+    atMs: call.atMs! + 1,
+  });
+  const tail: FileEntry = {
+    event: { type: "command", itemId: "tail-it", command: `tail -n 5 ${file.replace(/^\/private/, "")}`, cwd: null, status: "completed", exitCode: 0, output: "done", durationMs: 5 },
+    atMs: call.atMs + 2,
+  };
+  const rows = (command: string) => {
+    const entries = view.entries.flatMap((entry) =>
+      entry === call && entry.event.type === "command"
+        ? [{ ...entry, event: { ...entry.event, command } }, read("read-wait", file), read("read-wait-tmp", file.replace(/^\/private/, "")), tail, read("read-other", "/repo/README.md")]
+        : [entry],
+    );
+    return cliBlocks({ ...view, entries }, "recorded-thread").flatMap(toolSteps).map((kind) => kind.itemId);
+  };
+  const waited = rows("brigadier wait --any --timeout 600");
+  assert.ok(waited.includes("read-other"));
+  assert.deepEqual(waited.filter((id) => id.startsWith("read-wait") || id === "tail-it"), []);
+  // Any other background command's output file is read with a row.
+  const other = rows("sleep 2");
+  assert.ok(["read-wait", "read-wait-tmp", "tail-it", "read-other"].every((id) => other.includes(id)));
+});
+
 test("the thread's other brigadier calls read in plain words, by the first brigadier call of a command (D47)", () => {
   assert.equal(doneWords('brigadier ledger add --kind decision --source user "Ship it"'), "Updated the ledger");
   assert.equal(doneWords("brigadier ledger"), "Read the ledger");

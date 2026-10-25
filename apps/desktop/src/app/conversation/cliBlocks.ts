@@ -351,6 +351,42 @@ function waitEnded(text: string, view: ThreadView): boolean {
   return command != null && brigadierCalls(command)[0] === "wait";
 }
 
+/** Where Claude writes a background command's output, as its call's result says. */
+const OUTPUT_FILE = /Output is being written to: (\S+?\.output)\b/;
+
+/** A path as one file whichever name macOS gives `/tmp` (`/private/tmp`). */
+const samePath = (path: string) => path.replace(/^\/private\//, "/");
+
+/**
+ * The output files of the thread's own `brigadier wait`s, from the wait's own result (a reload
+ * keeps it) or its background task: reading one is part of the wait, under the hood too (D38, D58).
+ */
+function waitOutputs(view: ThreadView): Set<string> {
+  const files = new Set<string>();
+  for (const { event } of view.entries) {
+    if (event.type !== "command" && event.type !== "toolCall") continue;
+    const command = event.type === "command" ? event.command : SHELL_TOOLS.has(bare(event.name)) ? stepDetail(event.input) : null;
+    if (command == null || brigadierCalls(command)[0] !== "wait") continue;
+    const said = event.output && OUTPUT_FILE.exec(event.output)?.[1];
+    if (said) files.add(samePath(said));
+    const task = view.background?.find((each) => each.itemId === event.itemId);
+    if (task?.outputFile) files.add(samePath(task.outputFile));
+  }
+  return files;
+}
+
+/** Whether a call only reads one of `files`: a Read of it, or a plain `cat`, `head` or `tail` of it. */
+function readsOnly(event: FileEntry["event"], files: ReadonlySet<string>): boolean {
+  if (files.size === 0) return false;
+  if (event.type === "toolCall" && bare(event.name) === "Read") {
+    const path = parsed(event.input)?.["file_path"];
+    return typeof path === "string" && files.has(samePath(path));
+  }
+  const command = event.type === "command" ? event.command : event.type === "toolCall" && SHELL_TOOLS.has(bare(event.name)) ? stepDetail(event.input) : null;
+  const path = command && /^(?:cat|head|tail)(?:\s+-[\w-]+(?:\s+\d+)?)*\s+(?:'([^']+)'|"([^"]+)"|(\S+))$/.exec(unwrapCommand(command));
+  return !!path && files.has(samePath(path[1] ?? path[2] ?? path[3] ?? ""));
+}
+
 /** Each entry's row as last made: an item the stream left alone keeps its entry (`mergeEntries`). */
 const madeSteps = new WeakMap<FileEntry, { made: string; step: ToolStep | null }>();
 
@@ -599,6 +635,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && row.startedAtMs >= from));
   };
   const internal = new Set<Block>();
+  const waited = waitOutputs(view);
   // The turns, by place, the CLI told a background job's end in: Claude tells it in the next turn
   // it runs, which may be Brigadier's own `/compact`.
   const noticed = new Set<number>();
@@ -810,6 +847,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         return;
       }
       default: {
+        if (readsOnly(event, waited)) return;
         const kind = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
