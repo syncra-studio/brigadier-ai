@@ -613,8 +613,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         });
         return;
       }
+      // The CLI's line for a background job's end ("Background command … completed") is never
+      // drawn: the turn it starts goes on in the same work, its reply the turn's.
       case "taskNotice":
-        current.taskNotices.push({ position, text: event.text });
         return;
       case "compactionEnded": {
         const atMs = entry.atMs ?? current.startedAtMs;

@@ -50,6 +50,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { useTurnWorkers } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -83,7 +84,7 @@ export type BlockMeta = {
   seams: BlockSeam[];
   /** Brigadier's seam message in its turn, by position. */
   nudges: number[];
-  /** The CLI's lines for background jobs that ended, by position. */
+  /** Quiet lines of what its workers did, by position. */
   taskNotices: BlockTaskNotice[];
   state: BlockState;
   startedAtMs: number;
@@ -139,8 +140,9 @@ export const RequestBlock: FC = () => {
     }, 50);
     return () => window.clearTimeout(timer);
   }, [revealDenied]);
+  const conversationId = useViewConversation()?.id ?? null;
   // A jump to a message this turn sent opens its work.
-  const revealing = useRevealing(useViewConversation()?.id ?? null);
+  const revealing = useRevealing(conversationId);
   const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing));
   const { show } = fold;
   useEffect(() => {
@@ -159,6 +161,9 @@ export const RequestBlock: FC = () => {
     const board = s.board;
     return !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
   });
+  // The workers its turn started that still work: over, it stays open and live until they finish
+  // (its own wake-ups when they do are in the same turn), with no end cards yet; then it folds.
+  const holding = useTurnWorkers(conversationId, meta?.state === "done" ? meta.startedAtMs : null);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -166,14 +171,15 @@ export const RequestBlock: FC = () => {
   }, [hasCards]);
   if (!meta) return null;
 
-  const live = isLive(meta.state);
+  const held = holding > 0;
+  const live = isLive(meta.state) || held;
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  const finished = blockFinished(meta.state);
+  const finished = blockFinished(meta.state) && !held;
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
   // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
   // Until then a reply streams in place.
-  const answering = !finished && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
+  const answering = !finished && !held && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
   const done = finished || answering !== null;
   const answer = answering ?? answerIndex(meta.texts, finished);
   const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
@@ -208,6 +214,7 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
+    ...(held && { workers: holding }),
   };
 
   return (
@@ -238,6 +245,7 @@ export const RequestBlock: FC = () => {
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
             answering={answering !== null}
             answerAtMs={answerAtMs}
+            workers={holding}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {

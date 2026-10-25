@@ -253,37 +253,36 @@ test("what the user sent shows as ever, /compact and Brigadier's marks too; so d
   assert.deepEqual(chat.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"]]);
 });
 
-test("a background job's end Claude took up shows the CLI's notice line before its reply, in view once the work folds", () => {
-  const line = 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)';
-  const [block] = cliBlocks(
-    {
-      entries: [
-        user("u1", "Start it in the background", 1000),
-        at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
-        at({ type: "taskNotice", itemId: "n1", text: line }, 21000),
-        at({ type: "message", itemId: "a2", role: "assistant", text: "It finished: bg-finished." }, 21100),
-      ],
-      turns: [turn("u1", 1000, 21200, "done")],
-    },
-    "conv",
-  );
+test("a background job's end Claude took up draws no notice line: its turn goes on in the same work, live and after a restart", () => {
+  const thread = {
+    entries: [
+      user("u1", "Start it in the background", 1000),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)' }, 21000),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "It finished: bg-finished." }, 21100),
+    ],
+    turns: [turn("u1", 1000, 21200, "done")],
+  };
+  const blocks = cliBlocks(thread, "conv");
+  assert.equal(blocks.length, 1);
+  const [block] = blocks;
   assert.ok(block);
   assert.equal(block.user?.kind, "message");
+  // No bubble, no line, nothing between the two replies.
   assert.deepEqual(block.steers, []);
-  assert.deepEqual(block.taskNotices, [{ position: 2, text: line }]);
+  assert.deepEqual(block.taskNotices, []);
   const sequence = blockSequence({ ...block, steers: [] });
-  const notice = sequence.findIndex((entry) => entry.kind === "taskNotice");
-  const reply = sequence.findIndex((entry) => entry.kind === "text" && entry.index === 1);
-  assert.ok(notice >= 0 && notice < reply, JSON.stringify(sequence));
-  // The work folds; the notice is in view between the two answers, the first one kept (#577).
-  const parts = turnParts(turnActivity(sequence, false), 1, true, false, () => true);
-  assert.deepEqual(
-    parts.map((part) => (part.type === "between" ? part.entry.kind : part.answer?.kind === "text" ? `answer ${part.answer.index}` : "work")),
-    ["answer 0", "taskNotice"],
-  );
+  assert.deepEqual(sequence.map((entry) => entry.kind), ["text", "text"]);
+  // Done, the last reply is the answer and the one before it folds into the work, with no part cut out.
+  const answer = answerIndex(block.texts, true);
+  assert.equal(answer, 1);
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
+  assert.deepEqual(parts.map((part) => part.type), ["work"]);
+  assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
+  assert.equal(foldsAway(sequence[0]!, answer), true);
 });
 
-test("an answer already shown stays in view as its own reply when a background job's end brings another, live and once done", () => {
+test("a background job's end Claude took up mid-work keeps the work one run, its command and first reply folded", () => {
   const [block] = cliBlocks(
     {
       entries: [
@@ -299,15 +298,12 @@ test("an answer already shown stays in view as its own reply when a background j
   );
   assert.ok(block);
   const sequence = blockSequence({ ...block, steers: [] });
-  const activity = turnActivity(sequence, false);
+  assert.equal(sequence.some((entry) => entry.kind === "taskNotice"), false);
   const answer = answerIndex(block.texts, true);
   assert.equal(answer, 1);
-  const [work, notice] = turnParts(activity, answer, true, false, () => true);
-  // The first answer is its own reply out of the fold; only the command folds.
-  assert.equal(work?.type === "work" && work.answer?.kind === "text" && work.answer.index, 0);
-  assert.deepEqual(work?.type === "work" && work.items.map((item) => item.type), ["group"]);
-  assert.equal(notice?.type === "between" && notice.entry.kind, "taskNotice");
-  assert.equal(foldsAway(sequence.find((entry) => entry.kind === "text" && entry.index === 0)!, answer), true);
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
 });
 
 test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {

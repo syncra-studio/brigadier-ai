@@ -204,7 +204,7 @@ export function anchorMessage(block: Pick<Block, "user">): Message | null {
 
 export type BlockState = RequestState["type"];
 
-/** The CLI's own line for a background job's end it took up, before its reply. */
+/** A quiet line of what a worker did (Brigadier's message of the workers' news), where it came. */
 export type BlockTaskNotice = { position: number; text: string };
 
 export type Block = {
@@ -231,7 +231,7 @@ export type Block = {
   seams: BlockSeam[];
   /** Brigadier's one message of a seam in its turn ("write your hand-off note"), where it came. */
   nudges: number[];
-  /** The CLI's own lines for background jobs that ended ("Background command … completed"), where they came. */
+  /** Brigadier's quiet lines of what its workers did ("Worker "…" finished · …"), where they came. */
   taskNotices: BlockTaskNotice[];
   /** The requests it shows: its own (the key), then the steered ones. */
   requestIds: string[];
@@ -531,7 +531,7 @@ export type SequenceEntry =
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
   | { kind: "nudge"; position: number }
-  /** The CLI's line for a background job's end ("Background command … completed"), as the CLI shows it. */
+  /** A quiet line of what a worker did ("Worker "…" finished · …"). */
   | { kind: "taskNotice"; text: string; position: number }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */

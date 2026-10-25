@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 
+import { workingWorkers } from "@/app/conversation/turnWorkers";
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
 import { workersOf } from "@/state/nativeWorkers";
@@ -286,6 +287,14 @@ const NO_SERVERS: readonly McpServerState[] = [];
 /** A session's own workers, as their CLIs and git show them (S14), newest first. */
 export function useWorkerRows(conversationId: string | null): readonly WorkerRow[] {
   return useCliThread((s) => (conversationId ? (s.views[conversationId] ? workersOf(conversationId, s.views[conversationId]) : NO_ROWS) : NO_ROWS));
+}
+
+/** How many of the workers a session's turn started at `startedAtMs` still work (`workingWorkers`); 0 for `null`. */
+export function useTurnWorkers(conversationId: string | null, startedAtMs: number | null): number {
+  return useCliThread((s) => {
+    const view = conversationId && startedAtMs !== null ? s.views[conversationId] : undefined;
+    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, startedAtMs!) : 0;
+  });
 }
 
 /** The MCP servers a session's own CLI has, as it last said. */
