@@ -13,9 +13,9 @@ const row = (id: string, title: string, patch: Partial<WorkerRow> = {}): WorkerR
   branch: null, base: null, diff: null, ahead: 0, merged: false, ...patch,
 });
 
-// Q87: a line per worker while a few work (its name and its state in a soft word), else the
-// avatars row; what a worker runs shows in the Workers panel, never in the card (S14: its row).
-test("the context card's Workers row names each worker at work by its row, with its state and +/−, never what it runs", async () => {
+// Q87: a line per worker while a few work (its name and, in a soft word, what it does while it
+// works, else its state), else the avatars row (S14: its row).
+test("the context card's Workers row names each worker at work by its row, with what it does or its state, and +/−", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { WorkersSummary } = await server.ssrLoadModule("/src/app/side-panel/WorkerSummary.tsx");
@@ -30,6 +30,14 @@ test("the context card's Workers row names each worker at work by its row, with 
     // One worker at work: its own line, its +/− against the session's branch.
     const one = text([row("t1", "Demo of the fixes", { diff: { files: [], insertions: 12, deletions: 3 } })]);
     assert.match(one, /Demo of the fixes working \+12 −3/);
+
+    // At work on a call: the call, in the thread's words, shimmering.
+    const html = (rows: WorkerRow[]) => {
+      Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: rows } });
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(WorkersSummary, { conversationId: "c" }));
+    };
+    const busy = html([row("t1", "Demo of the fixes", { steps: [{ name: "shell", detail: "pnpm build" }] })]);
+    assert.match(busy, /<span class="[^"]*shimmer[^"]*"> running pnpm build<\/span>/);
 
     // A few: a line each with its state; the finished ones in the outcome line, not lines of their own.
     const few = text([

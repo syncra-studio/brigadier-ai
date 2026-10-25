@@ -1,7 +1,7 @@
 import { memo, useContext } from "react";
 
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
-import { workerStateOf } from "@/app/conversation/activity/workerState";
+import { workerNow } from "@/app/conversation/activity/workerNow";
 import { Counts } from "@/components/shared";
 import { RowTime } from "@/app/conversation/RowTime";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
 import { useWorkerRows } from "@/state/cliThread";
 
 /**
- * One worker: `[g] Name · its state · 1m 2s · +12 −3`, from its row (its CLI's events and git),
- * and its Stop while its CLI runs. Opens its thread.
+ * One worker: `[g] Name · what it does · 1m 2s · +12 −3`, from its row (its CLI's events and git):
+ * while it works its call at work, shimmering, else its state. Its Stop while its CLI runs.
+ * Opens its thread.
  */
 export const StripRow = memo(function StripRow({ conversationId, taskId }: { conversationId: string; taskId: string }) {
   const name = useWorkerName(taskId);
@@ -20,7 +21,7 @@ export const StripRow = memo(function StripRow({ conversationId, taskId }: { con
   const row = useWorkerRows(conversationId).find((each) => each.id === taskId);
   const now = useNow(30_000);
   if (!row) return null;
-  const state = workerStateOf(row, now);
+  const state = workerNow(row, now);
   const stat = row.diff;
   return (
     <li>

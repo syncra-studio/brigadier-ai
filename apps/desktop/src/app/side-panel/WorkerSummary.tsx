@@ -2,7 +2,8 @@ import { type FC, useContext } from "react";
 
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { Counts } from "@/components/shared";
-import { finishedWords, lowerFirst, rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
+import { nowInLine, workerNow } from "@/app/conversation/activity/workerNow";
+import { finishedWords, rowFinished } from "@/app/conversation/activity/workerState";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import { useNow } from "@/hooks/use-now";
@@ -20,13 +21,13 @@ const WORKER_LINES = 3;
 const TICK_MS = 30_000;
 
 /**
- * A worker at work: its glyph, its name, its state in a soft word ("working", "needs you"), and
- * its +N −N against the session's branch.
+ * A worker at work: its glyph, its name, in a soft word what it does while it works ("running
+ * pnpm build", shimmering) or its state ("needs you"), and its +N −N against the session's branch.
  */
 const WorkerLineRow: FC<{ row: WorkerRow; now: number }> = ({ row, now }) => {
   const name = useWorkerName(row.id);
   const { setPanel } = useContext(AgentsPanelContext);
-  const state = workerStateOf(row, now);
+  const state = workerNow(row, now);
   const stat = row.diff;
   return (
     <SummaryRowButton
@@ -39,7 +40,7 @@ const WorkerLineRow: FC<{ row: WorkerRow; now: number }> = ({ row, now }) => {
     >
       <span className="block truncate">
         {name}
-        <span className={state.kind === "working" ? "text-muted-foreground shimmer" : "text-muted-foreground"}> {lowerFirst(state.word)}</span>
+        <span className={state.kind === "working" ? "text-muted-foreground shimmer" : "text-muted-foreground"}> {nowInLine(state)}</span>
       </span>
     </SummaryRowButton>
   );

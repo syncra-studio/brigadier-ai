@@ -117,6 +117,20 @@ pub struct WorkerRow {
     pub ahead: u32,
     /// It has commits, and that branch has them all.
     pub merged: bool,
+    /// What its CLI has at work in its open turn, oldest first; none between its steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<StepAtWork>>", optional)]
+    pub steps: Vec<StepAtWork>,
+}
+
+/// A call a worker's CLI has at work, as the lead's step would record it: its tool's name and
+/// its one-line detail (the path, command, pattern or query). The app says it in the thread's
+/// words ("Running pnpm build").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StepAtWork {
+    pub name: String,
+    pub detail: Option<String>,
 }
 
 /// Something a worker's CLI waits on the user for: the session relays the answer (G19.Q6).

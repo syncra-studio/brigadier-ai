@@ -3,7 +3,7 @@
 //! ([`ThreadView::workers`], [`ThreadNews::workers`]) as Background is.
 //!
 //! - What a worker's CLI does (its turn open or how it ended, a usage limit, a compaction, when
-//!   it last said anything) is followed from its events, live only.
+//!   it last said anything, the calls it has at work) is followed from its events, live only.
 //! - What it waits on the user for is its CLI's open permission prompts and questions and its
 //!   MCP servers that want a sign-in.
 //! - Its +/−, commits ahead and whether it merged are git's, against its session's branch
@@ -14,12 +14,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use brigadier_providers::{LimitHit, McpStatus, ProviderEvent, Role, TurnStatus};
+use brigadier_providers::{ItemStatus, LimitHit, McpStatus, ProviderEvent, Role, TurnStatus};
 
+use super::thread_items::step_detail;
 use super::{SessionManager, blocking};
 use crate::model::ConversationId;
 use crate::thread_view::{
-    self, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerWait, WorkerWaitKind,
+    self, StepAtWork, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerWait, WorkerWaitKind,
 };
 use crate::work::{ApprovalSubject, CardState, DiffStat, Task, TaskId, TaskState};
 use crate::{Result, now_ms};
@@ -42,6 +43,8 @@ pub(crate) struct WorkerCli {
     sent_event_ms: Option<i64>,
     pub limit: Option<LimitHit>,
     pub fresh_context: bool,
+    /// The calls it has at work in the open turn, by item id, oldest first.
+    steps: Vec<(String, StepAtWork)>,
     /// The context it last said it holds, and its window when it said one. Not part of its
     /// rows: `brigadier workers` reads it.
     pub context: Option<(i64, Option<i64>)>,
@@ -92,6 +95,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.limit = None;
                 cli.errored = false;
                 cli.user_message = None;
+                cli.steps.clear();
             }
         }
         // A turn's own message (Codex says it once its turn started); a steer's adds nothing.
@@ -105,6 +109,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.steps.clear();
             }
             cli.user_message = Some(item_id.clone());
             cli.line = Some(turn_line(cli, None, None));
@@ -122,6 +127,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         } => cli.context = Some((*used_tokens, *window_tokens)),
         ProviderEvent::TurnCompleted { status, .. } if cli.open => {
             cli.open = false;
+            cli.steps.clear();
             cli.last_end = Some(match status {
                 TurnStatus::Completed if cli.errored => TurnEnd::Failed,
                 TurnStatus::Completed => TurnEnd::Done,
@@ -132,10 +138,15 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         }
         ProviderEvent::Exited { .. } if cli.open => {
             cli.open = false;
+            cli.steps.clear();
             cli.last_end = Some(TurnEnd::Interrupted);
             cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
         }
-        _ => {}
+        _ => {
+            if let Some((item_id, status, step)) = step_of(event) {
+                follow_step(&mut cli.steps, item_id, status, step);
+            }
+        }
     }
     let mut now = WorkerCli {
         user_message: None,
@@ -152,6 +163,89 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         cli.sent_event_ms = Some(at);
     }
     changed
+}
+
+/// A call `event` says of, by its item id, with how it stands and, when it says, the step it is.
+fn step_of(event: &ProviderEvent) -> Option<(&str, ItemStatus, Option<StepAtWork>)> {
+    let step = |name: &str, detail: Option<String>| {
+        Some(StepAtWork {
+            name: name.to_owned(),
+            detail,
+        })
+    };
+    Some(match event {
+        ProviderEvent::Command {
+            item_id,
+            command,
+            status,
+            ..
+        } => (
+            item_id,
+            *status,
+            (!command.is_empty())
+                .then(|| step("shell", Some(command.chars().take(240).collect())))
+                .flatten(),
+        ),
+        ProviderEvent::ToolCall {
+            item_id,
+            name,
+            input,
+            status,
+            ..
+        } => {
+            let args = input
+                .as_deref()
+                .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok());
+            (
+                item_id,
+                *status,
+                step(name, args.as_ref().and_then(step_detail)),
+            )
+        }
+        // As the app's `changesDetail` says a worker's file changes.
+        ProviderEvent::FileChanges {
+            item_id,
+            changes,
+            status,
+        } => {
+            let detail = changes.first().map(|first| match changes.len() {
+                1 => first.path.clone(),
+                n => format!("{} and {} more", first.path, n - 1),
+            });
+            (item_id, *status, step("apply_patch", detail))
+        }
+        ProviderEvent::Image {
+            item_id,
+            status,
+            prompt,
+            ..
+        } => (item_id, *status, step("imagegen", prompt.clone())),
+        _ => return None,
+    })
+}
+
+/// Keeps `steps` to the calls at work: one in progress joins them, or takes its own place with
+/// what more it says (a detail said once is kept); one that ended leaves.
+fn follow_step(
+    steps: &mut Vec<(String, StepAtWork)>,
+    item_id: &str,
+    status: ItemStatus,
+    step: Option<StepAtWork>,
+) {
+    let at = steps.iter().position(|(id, _)| id == item_id);
+    match (status, at, step) {
+        (ItemStatus::InProgress, Some(at), Some(step)) => {
+            let held = &mut steps[at].1;
+            held.detail = step.detail.or_else(|| held.detail.take());
+            held.name = step.name;
+        }
+        (ItemStatus::InProgress, None, Some(step)) => steps.push((item_id.to_owned(), step)),
+        (ItemStatus::InProgress, _, None) => {}
+        (_, Some(at), _) => {
+            steps.remove(at);
+        }
+        (_, None, _) => {}
+    }
 }
 
 /// The `record/turns.jsonl` line of `cli`'s turn: its start, or its `end` at `ended_at_ms`.
@@ -207,6 +301,11 @@ pub(crate) fn row(
         diff: git.diff,
         ahead: git.ahead,
         merged: git.merged,
+        steps: if cli.open && !gone {
+            cli.steps.into_iter().map(|(_, step)| step).collect()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -255,7 +354,7 @@ impl SessionManager {
         let git_soon = matches!(
             event,
             ProviderEvent::Command { status, .. } | ProviderEvent::ToolCall { status, .. }
-                if *status != brigadier_providers::ItemStatus::InProgress
+                if *status != ItemStatus::InProgress
         ) || matches!(event, ProviderEvent::FileChanges { .. });
         if changed || git_now || git_soon {
             self.workers_changed(conversation, git_now);
@@ -635,6 +734,75 @@ mod tests {
         follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);
         follow(&mut cli, &turn_end(TurnStatus::Completed), 7);
         assert_eq!(cli.last_end, Some(TurnEnd::Failed));
+    }
+
+    fn command(id: &str, command: &str, status: ItemStatus) -> ProviderEvent {
+        ProviderEvent::Command {
+            item_id: id.into(),
+            command: command.into(),
+            cwd: None,
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        }
+    }
+
+    fn tool(id: &str, input: Option<&str>, status: ItemStatus) -> ProviderEvent {
+        ProviderEvent::ToolCall {
+            item_id: id.into(),
+            name: "Edit".into(),
+            input: input.map(str::to_owned),
+            status,
+            output: None,
+            kept: None,
+        }
+    }
+
+    fn steps(cli: &WorkerCli) -> Vec<(&str, Option<&str>)> {
+        cli.steps
+            .iter()
+            .map(|(_, step)| (step.name.as_str(), step.detail.as_deref()))
+            .collect()
+    }
+
+    /// The calls a worker has at work, as its row names them: each joins as it starts, keeps
+    /// the detail its start said, and leaves as it ends; a turn's end leaves none.
+    #[test]
+    fn a_workers_steps_at_work_follow_its_calls() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        assert!(follow(
+            &mut cli,
+            &command("c1", "pnpm build", ItemStatus::InProgress),
+            2
+        ));
+        assert!(follow(
+            &mut cli,
+            &tool(
+                "t1",
+                Some(r#"{"file_path":"/w/foo.ts","old_string":"a"}"#),
+                ItemStatus::InProgress
+            ),
+            3
+        ));
+        assert_eq!(
+            steps(&cli),
+            [("shell", Some("pnpm build")), ("Edit", Some("/w/foo.ts"))]
+        );
+        assert!(
+            !follow(&mut cli, &tool("t1", None, ItemStatus::InProgress), 4),
+            "nothing new"
+        );
+        assert!(follow(
+            &mut cli,
+            &tool("t1", None, ItemStatus::Completed),
+            5
+        ));
+        assert_eq!(steps(&cli), [("shell", Some("pnpm build"))]);
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 6);
+        assert!(cli.steps.is_empty());
     }
 
     /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its
