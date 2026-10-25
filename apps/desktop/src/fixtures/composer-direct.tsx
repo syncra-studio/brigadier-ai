@@ -5,8 +5,7 @@
  * a message then goes to the worker alone, past the session's paused queue, with an ordinary
  * `@task-N` as context. A refused send puts the whole message and its To: back; one at a time
  * goes; a taken one takes the To: away and opens the worker's thread. While the To: shows, no
- * queued message is pulled into the composer; the worker's panel sets the To: again, and leaving
- * the session takes it away. What it
+ * queued message is pulled into the composer, and leaving the session takes it away. What it
  * saw goes as JSON into `<pre id="composer-direct-result">`.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -295,12 +294,9 @@ async function drive() {
     seen.pausedQuestion = document.querySelector("[role=dialog]") !== null;
     seen.sent = sent.slice(sentBefore);
 
-    // The worker's Message sets the To: again; leaving the session takes it away.
+    // A To: picked again goes when the user leaves the session.
     for (let i = 0; i < 20 && typed() !== ""; i++) await key("Backspace");
-    // This page has no window shell to make room for the panel: it opens past the window's edge.
-    document.querySelector<HTMLButtonElement>("[data-slot=worker-message]")!.click();
-    await until("the To: from the worker's panel", () => chip() !== null);
-    seen.focusedAfterMessage = document.activeElement === field();
+    await pickDirect("Build the importer");
     show(other);
     await until("the other session", () => field() !== null && chip() === null);
     show(id);

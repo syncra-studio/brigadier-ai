@@ -4,13 +4,13 @@ import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { WorkerGlyph } from "@/components/conversation";
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { TooltipIconButton } from "@/components/controls";
-import { ArrowLeft, Chat } from "@/components/icons";
+import { ArrowLeft } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { WorkerRow } from "@/ipc/generated";
 
 /**
  * A worker's header, from its row: back, its glyph and name, its model and state (a click shows
- * its details, when it has them), Message (the composer's To:), Stop and the panel's own actions.
+ * its details, when it has them), Stop and the panel's own actions.
  */
 export function WorkerHeader({
   row,
@@ -20,7 +20,6 @@ export function WorkerHeader({
   details,
   onBack,
   onToggleDetails,
-  onMessage,
   headerActions,
 }: {
   row: WorkerRow;
@@ -31,8 +30,6 @@ export function WorkerHeader({
   details: boolean;
   onBack: () => void;
   onToggleDetails?: (() => void) | undefined;
-  /** Sets the session composer's To: to it, while it can take a message from the user. */
-  onMessage?: (() => void) | undefined;
   headerActions?: ReactNode;
 }) {
   return (
@@ -64,11 +61,6 @@ export function WorkerHeader({
         </TooltipTrigger>
         <TooltipContent>Worker details · {model} · {state}</TooltipContent>
       </Tooltip>
-      {onMessage && (
-        <TooltipIconButton tooltip="Message this worker" size="icon-sm" data-slot="worker-message" onClick={onMessage}>
-          <Chat />
-        </TooltipIconButton>
-      )}
       <StopWorker row={row} name={name ?? row.title} />
       {headerActions}
     </header>

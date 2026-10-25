@@ -33,7 +33,6 @@ test("the composer's To: sends one message straight to a live worker: picked fro
   // Each went to the worker with the ordinary mention as context; none to the session.
   const mention = JSON.stringify([{ type: "task", id: "task-live" }]);
   assert.deepEqual(seen.sent, [`worker task-live Use blue @task-1 ${mention}`, `worker task-live Use blue @task-1 ${mention}`]);
-  // The worker's panel's Message sets the To: and puts the caret in the composer.
-  assert.equal(seen.focusedAfterMessage, true);
+  // Leaving the session takes the To: away.
   assert.equal(seen.chipAfterSwitch, false);
 });
