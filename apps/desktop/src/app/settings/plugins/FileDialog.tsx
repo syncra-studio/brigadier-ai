@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { Badge, Button, TooltipIconButton } from "@/components/controls";
@@ -64,18 +64,22 @@ export function FileDialog({ item, details, save, onClose }: {
   /** The files Save found changed since they were opened, by path, with what each holds now: nothing was written to them. */
   const [stale, setStale] = useState<Record<string, string>>({});
   const action = useAction();
+  // Read once, as it opens: the text as opened is what a save expects to find on disk, until an
+  // explicit Reload. The page reads the item again every few seconds and draws this dialog anew
+  // each time; reading again then would take an outside edit as the text opened, and a save would
+  // write over it.
+  const opening = useRef({ details, item });
   useEffect(() => {
     let live = true;
-    details().then(
-      (read) => live && setFiles(shownFiles(item, read)),
+    const { details: read, item: opened } = opening.current;
+    read().then(
+      (found) => live && setFiles(shownFiles(opened, found)),
       (cause: unknown) => live && setFailed(cause instanceof Error ? cause.message : String(cause)),
     );
     return () => {
       live = false;
     };
-    // Read once, as it opens: the page's later reads of the item don't reload what's being edited.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [details]);
+  }, []);
   /** Shows the stale files as they are now; the edits made here to them are dropped. */
   const reload = () => {
     setFiles((now) => now && now.map((entry) => (entry.path in stale ? { ...entry, text: stale[entry.path]! } : entry)));

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage } from "@/app/settings/parts";
@@ -153,6 +153,12 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
   }
 
   const target = open && open.type !== "add" ? find(open.key) : undefined;
+  // The same calls for as long as one item's file stays open, however often the page is read again.
+  const fileKey = open?.type === "file" ? open.key : null;
+  const fileCalls = useMemo(() => adapter && fileKey !== null ? {
+    details: () => adapter.details(fileKey),
+    save: (path: string, contents: string, expected: string) => adapter.saveSkill(fileKey, path, contents, expected),
+  } : null, [adapter, fileKey]);
   const close = () => setDialog(null);
   return (
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
@@ -175,8 +181,8 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
           }}
         />
       )}
-      {adapter && open?.type === "file" && target && (
-        <FileDialog key={target.key} item={target} details={() => adapter.details(target.key)} save={(path, contents, expected) => adapter.saveSkill(target.key, path, contents, expected)} onClose={close} />
+      {fileCalls && open?.type === "file" && target && (
+        <FileDialog key={target.key} item={target} details={fileCalls.details} save={fileCalls.save} onClose={close} />
       )}
       {(action.error || error) && <p role="alert" className="text-destructive bg-background absolute right-5 bottom-4 left-5 text-xs whitespace-pre-wrap">{action.error ?? error}</p>}
     </div>

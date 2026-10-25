@@ -145,7 +145,10 @@ test("plugins: the grid, details and Open, and the requests they make", { timeou
   assert.equal(seen.escaped!.dialog?.slot, "plugin-file", "Escape doesn't drop unsaved edits");
   assert.equal(seen.savedClosed!.dialog, null);
   assert.equal(seen.reopened!.dialog!.lines, 12);
-  // A save over a file changed since it opened is refused, plainly; Reload shows it as it is now.
+  // A save over a file changed since it opened is refused, plainly, even after the page read
+  // everything again in between; Reload shows it as it is now.
+  assert.match(seen.refreshedWhileEditing!.dialog!.body, /4\. Mine\./, "the edit survives the page's reads");
+  assert.equal(seen.refreshedWhileEditing!.dialog!.banner, "");
   assert.equal(seen.refused!.dialog?.slot, "plugin-file");
   assert.match(seen.refused!.dialog!.banner, /^SKILL\.md changed on disk after you opened it, so Save didn't write over it\. .*Reload$/);
   assert.equal(seen.reloaded!.dialog!.banner, "");

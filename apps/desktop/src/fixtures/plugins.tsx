@@ -472,6 +472,10 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   type("release-notes's SKILL.md", `${skillText("release-notes")}4. Mine.\n`);
   saved.set(`${LIB}/release-notes/skills/release-notes/SKILL.md`, `${skillText("release-notes")}4. Theirs.\n`);
+  // The page reads everything again (as it does every few seconds) while the edit waits.
+  changed();
+  await pause(150);
+  seen.refreshedWhileEditing = read();
   click("Save");
   await pause(150);
   seen.refused = read();
