@@ -807,6 +807,8 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
             format!("Send a message to {title} in {project}?")
         }
         ApprovalSubject::Browser { question, .. } => question,
+        // The CLI's own plan from its plan mode, on the plan card (harness D7).
+        ApprovalSubject::Plan { .. } => "Build this plan?".to_string(),
     };
     Some((approval.id.0, what))
 }
@@ -914,6 +916,13 @@ mod tests {
         assert_eq!(
             pending_approval(&envelope(&approval(outline.clone(), CardState::Pending))),
             Some(("a1".to_owned(), "Implement this plan? Dark mode".to_owned()))
+        );
+        let plan = ApprovalSubject::Plan {
+            plan: "# Dark mode\n1. Add the switch".into(),
+        };
+        assert_eq!(
+            pending_approval(&envelope(&approval(plan, CardState::Pending))),
+            Some(("a1".to_owned(), "Build this plan?".to_owned()))
         );
         // A recorded merge card notifies no more: merging is asked for in words.
         let merge = ApprovalSubject::FinishSession {
