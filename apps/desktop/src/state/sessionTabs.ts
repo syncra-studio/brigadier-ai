@@ -137,8 +137,8 @@ export type ConflictView = "conflict" | "compare" | "merge";
 export type PanelView =
   /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
   | { type: "sources" }
-  /** What something in the context card's Background prints: a preview's log or a CLI's background command's output. */
-  | { type: "output"; source: "preview" | "task"; id: string };
+  /** What something in the context card's Background prints: a preview's log or a CLI's background command's output (`worker`: a worker's CLI's). */
+  | { type: "output"; source: "preview" | "task"; id: string; worker?: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 /**
  * Text pasted as a chip, `[Pasted text #n]`, read in a tab (#427): the composer's own, which
@@ -635,7 +635,7 @@ export function closeMockupTab(conversationId: string, moment: string): void {
 
 /** Shows `view` in its own tab: the tab already showing it, else a new one after the tab in front. */
 export function openPanelTab(conversationId: string, view: PanelView, title: string): string {
-  const id = view.type === "output" ? `panel:output:${view.source}:${view.id}` : `panel:${view.type}`;
+  const id = view.type === "output" ? `panel:output:${view.source}:${view.worker ? `${view.worker}:` : ""}${view.id}` : `panel:${view.type}`;
   update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
     ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "panel" ? { ...tab, title } : tab) }
     : { tabs: insertAfterActive(current, { kind: "panel", id, opener: current.active, view, title }), active: id });

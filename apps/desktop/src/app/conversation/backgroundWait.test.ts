@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { taskRows } from "@/app/conversation/backgroundRows";
-import type { BackgroundTask, FileEntry } from "@/ipc/generated";
+import { taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
+import type { BackgroundTask, FileEntry, WorkerRow } from "@/ipc/generated";
 
 const task = (kind: BackgroundTask["kind"], label: string, extra: Partial<BackgroundTask> = {}): BackgroundTask => ({
   id: "t", itemId: "bash-1", kind, label, status: "running", startedAtMs: 10, endedAtMs: null,
@@ -79,4 +79,18 @@ test("task rows drop finished tasks immediately and leave the task history intac
   const before = structuredClone(tasks);
   assert.deepEqual(taskRows(tasks, []).map((row) => [row.id, row.state]), [["task:t", "running"]]);
   assert.deepEqual(tasks, before);
+});
+
+const worker = (background: WorkerRow["background"]) => ({ id: "w1", background }) as WorkerRow;
+
+test("a worker's running background commands are rows under its name, by the session's rules", () => {
+  const rows = workerTaskRows([worker([
+    { task: task("shell", "Run the dev app", { id: "dev" }), command: "pnpm tauri:dev" },
+    { task: task("shell", "Wait for my helper", { id: "wait" }), command: "brigadier wait w3" },
+    { task: task("terminal", "brigadier wait", { id: "codex-wait" }), command: null },
+    { task: task("agent", "Look around", { id: "agent" }), command: null },
+    { task: task("shell", "Old build", { id: "done", status: "completed", endedAtMs: 20 }), command: "pnpm build" },
+  ])], () => "Rail fix");
+  assert.deepEqual(rows.map((row) => [row.id, row.type === "task" && row.worker]), [["task:w1:dev", { id: "w1", name: "Rail fix" }]]);
+  assert.deepEqual(workerTaskRows([{ id: "w2" } as WorkerRow], () => null), []);
 });

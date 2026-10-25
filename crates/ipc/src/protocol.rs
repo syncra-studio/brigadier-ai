@@ -676,16 +676,22 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
-    /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), as the
-    /// CLI's own Stop does.
+    /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), or one
+    /// of its worker `worker_id`'s CLI, as the CLI's own Stop does.
     StopBackgroundTask {
         conversation_id: ConversationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        worker_id: Option<TaskId>,
         task_id: String,
     },
-    /// What a background command of the thread's CLI printed so far: the end of its output
-    /// file, up to 256 KiB.
+    /// What a background command of the thread's CLI, or of its worker `worker_id`'s CLI,
+    /// printed so far: the end of its output file, up to 256 KiB.
     ReadBackgroundTaskOutput {
         conversation_id: ConversationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        worker_id: Option<TaskId>,
         task_id: String,
     },
     /// The thread as its CLI keeps it (S9, S10): its CLI session files' items, the live

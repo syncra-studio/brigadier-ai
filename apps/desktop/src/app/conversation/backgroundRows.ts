@@ -1,12 +1,12 @@
 import { taskShown } from "@/app/conversation/backgroundTasks";
 import { unwrapCommand } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
-import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
+import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/generated";
 
 /**
  * The context card's Background rows (Q91, S12): one row per thing the session has going in the
- * background, with its state in a word: a preview it keeps running (`brigadier preview`), and its
- * CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`). A worker's second copy of an app
+ * background, with its state in a word: a preview it keeps running (`brigadier preview`), its
+ * CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`) and its workers' CLIs'. A worker's second copy of an app
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
@@ -18,8 +18,11 @@ export type BackgroundState = "building" | "starting" | "running" | "paused" | "
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
-  /** One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`). */
-  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState };
+  /**
+   * One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`), or of a worker's
+   * CLI (`worker`: its id and name).
+   */
+  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState; worker: { id: string; name: string | null } | null };
 
 /** Leading `NAME=value` assignments, as a shell reads them before the command. */
 const ASSIGNMENTS = /^(?:\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/;
@@ -78,8 +81,22 @@ function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): strin
 /** Running CLI tasks, excluding the session's worker wait already covered by the workers card. */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
   return tasks.filter((task) => taskShown(task) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
-    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running",
+    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running", worker: null,
   }));
+}
+
+/**
+ * The workers' CLIs' running background tasks, by the same rules as the session's own: no row
+ * for a subagent or a `brigadier wait`, each named by its worker.
+ */
+export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null): BackgroundRow[] {
+  return workers.flatMap((worker) => (worker.background ?? [])
+    .filter(({ task, command }) => taskShown(task) && task.kind !== "agent"
+      && !runsBrigadierWait(command ?? (task.kind === "terminal" ? task.label : "")))
+    .map(({ task }): BackgroundRow => ({
+      type: "task", id: `task:${worker.id}:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running",
+      worker: { id: worker.id, name: workerName(worker.id) },
+    })));
 }
 
 /**

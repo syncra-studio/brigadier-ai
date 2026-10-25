@@ -121,6 +121,20 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<StepAtWork>>", optional)]
     pub steps: Vec<StepAtWork>,
+    /// Its CLI's background tasks, as the CLI says them, and those that ended lately; none once
+    /// it ended or was closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WorkerTask>>", optional)]
+    pub background: Vec<WorkerTask>,
+}
+
+/// One of a worker's CLI's background tasks, with the command that started it when its CLI
+/// labels it otherwise (Claude's background Bash, by its description).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerTask {
+    pub task: BackgroundTask,
+    pub command: Option<String>,
 }
 
 /// A call a worker's CLI has at work, as the lead's step would record it: its tool's name and

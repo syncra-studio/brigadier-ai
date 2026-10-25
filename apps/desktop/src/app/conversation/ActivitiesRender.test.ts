@@ -85,6 +85,19 @@ test("Background shows CLI commands with Stop and output; native agents appear i
   assert.equal(seen.section, false);
 });
 
+test("Background lists a worker's running background commands under its name, with Stop and output reaching its CLI; a worker's brigadier wait has no row", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?workerTasks=1", "activities-result", 60000)) as {
+    running: string[]; row: Row; worker: string | null; opened: string; output: boolean; calls: string[]; ended: string[];
+  };
+  assert.deepEqual(seen.running, ["task:task-2:b7dev"], "the wait has no row");
+  assert.deepEqual(seen.row, { label: "Run the dev app", state: null, moving: false, elapsed: "30s", tip: "VITE ready\nFrom Demo of the fixes" });
+  assert.equal(seen.worker, "Demo of the fixes");
+  assert.equal(seen.opened, "panel:output:task:task-2:b7dev");
+  assert.equal(seen.output, true, "its output tab reads the worker's CLI's output file");
+  assert.deepEqual(seen.calls, ["stopBackgroundTask b7dev of task-2"]);
+  assert.deepEqual(seen.ended, [], "it leaves as soon as it ends");
+});
+
 test("only Background names truncate: building stays whole and shimmering, running needs only its dot, and short names keep the word beside them", { timeout: 90000 }, async (t) => {
   type Name = { truncated: boolean; ellipsis: string; state: string | null; stateFits: boolean; gap: number | null; shimmer: boolean; sweeping: boolean; green: boolean; height: number; beforeTime: boolean };
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?names=1", "activities-result", 60000)) as {
