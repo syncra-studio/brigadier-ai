@@ -7,7 +7,6 @@ import {
   loadCatalog,
   loadConversation,
   openConversation,
-  openOrchestratorLog,
   openSettings,
   toggleSettings,
 } from "@/state/actions";
@@ -15,7 +14,7 @@ import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/ac
 import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
-import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds, useBoard } from "@/state/board";
+import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
@@ -62,8 +61,8 @@ function flush() {
 
 /** Reloads everything the UI holds: used after (re)connecting and after missing events.
  * Threads and kept boards other than the shown ones may be stale, so they are dropped and reload
- * when opened. The shown conversations' boards, the Inspector's orchestrator log and the Brain
- * tab's session workers are read again. */
+ * when opened. The shown conversations' boards and the Brain tab's session workers are read
+ * again. */
 async function resync() {
   const { selection, threads } = useApp.getState();
   const openId = selection.type === "conversation" ? selection.id : null;
@@ -79,8 +78,6 @@ async function resync() {
   // Ready and merged count commits in each tab's worktree: they come when they come.
   void loadSettledTabs().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
-  const log = useBoard.getState().orchestrator;
-  if (log) void openOrchestratorLog(log.conversationId);
   await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks(), resyncThreadViews(shown)]);
 }
 

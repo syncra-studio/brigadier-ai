@@ -24,9 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use brigadier_git::Oid;
-use brigadier_providers::{
-    Access, ApprovalDecision, ApprovalRequest, Decider, ProviderEvent, ProviderKind,
-};
+use brigadier_providers::{Access, ApprovalDecision, ApprovalRequest, Decider, ProviderKind};
 
 use super::conversation::{Cli, ConvLive};
 use super::workers::thread_temp_owner;
@@ -244,7 +242,7 @@ impl SessionManager {
         mut request: ApprovalRequest,
     ) {
         if self.raised_to_full(&conv.id, cli) {
-            self.answer_thread(conv, cli, request, ApprovalDecision::Allow, Decider::Policy)
+            self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
                 .await;
             return;
         }
@@ -254,7 +252,7 @@ impl SessionManager {
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
         if self.allowed_before(&conv.id, &mut request, workspace) {
-            self.answer_thread(conv, cli, request, ApprovalDecision::Allow, Decider::User)
+            self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
                 .await;
         } else {
             self.ask_user_for_thread(conv, cli, request).await;
@@ -305,13 +303,7 @@ impl SessionManager {
                 return;
             }
             if !self
-                .answer_thread(
-                    &conv,
-                    &cli,
-                    request.clone(),
-                    ApprovalDecision::Allow,
-                    Decider::Policy,
-                )
+                .answer_thread(&conv, &cli, request.clone(), ApprovalDecision::Allow)
                 .await
             {
                 continue;
@@ -341,7 +333,6 @@ impl SessionManager {
         cli: &Arc<Cli>,
         request: ApprovalRequest,
         decision: ApprovalDecision,
-        decider: Decider,
     ) -> bool {
         if let Err(err) = cli
             .session
@@ -351,8 +342,6 @@ impl SessionManager {
             tracing::warn!(conversation = %conv.id, error = %err, "could not answer an approval");
             return false;
         }
-        self.log_resolution(&conv.id, cli.provider, request.id, decision, decider)
-            .await;
         true
     }
 
@@ -384,35 +373,7 @@ impl SessionManager {
         if decision == ApprovalDecision::AllowSimilar {
             self.waiters.allow_similar(conversation_id, request);
         }
-        self.log_resolution(
-            conversation_id,
-            cli.provider,
-            request.id.clone(),
-            decision,
-            brigadier_providers::Decider::User,
-        )
-        .await;
         Ok(())
-    }
-
-    async fn log_resolution(
-        &self,
-        id: &ConversationId,
-        provider: ProviderKind,
-        approval_id: String,
-        decision: ApprovalDecision,
-        decided_by: brigadier_providers::Decider,
-    ) {
-        self.log_provider(
-            id,
-            provider,
-            ProviderEvent::ApprovalResolved {
-                id: approval_id,
-                decision,
-                decided_by,
-            },
-        )
-        .await;
     }
 }
 

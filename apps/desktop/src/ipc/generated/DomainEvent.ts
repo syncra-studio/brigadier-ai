@@ -16,7 +16,6 @@ import type { McpServerState } from "./McpServerState";
 import type { Message } from "./Message";
 import type { MessageQueue } from "./MessageQueue";
 import type { Notice } from "./Notice";
-import type { OrchestratorEntry } from "./OrchestratorEntry";
 import type { OrchestratorStep } from "./OrchestratorStep";
 import type { PeerState } from "./PeerState";
 import type { Preview } from "./Preview";
@@ -111,7 +110,7 @@ artifact: string | null,
  * configuration, lockfiles, toolchains and declared inputs); none when an input
  * couldn't be identified.
  */
-fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "backgroundCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "outputKept", taskId: TaskId, itemId: string, file: KeptFile, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "decidedForYou", decision: Decision, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
+fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "backgroundCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "outputKept", taskId: TaskId, itemId: string, file: KeptFile, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "decidedForYou", decision: Decision, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
 /**
  * The sender's request whose turn sent it.
  */

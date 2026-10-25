@@ -6,9 +6,7 @@
 //! objects as they change. `position` fields are the stream sequence of the event that created
 //! the object, so messages and cards interleave in one timeline.
 
-use brigadier_providers::{
-    ApprovalRequest, Decider, ErrorKind, LimitHit, ProviderEvent, ProviderKind,
-};
+use brigadier_providers::{ApprovalRequest, Decider, ErrorKind, LimitHit, ProviderKind};
 use brigadier_router::{Area, Capability, Explanation, Pin, QualityTier};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -3004,45 +3002,6 @@ impl<'de> Deserialize<'de> for InjectionKind {
     }
 }
 
-/// One thing Brigadier put into the orchestrator's context, for the Inspector.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextInjection {
-    pub kind: InjectionKind,
-    pub bytes: u64,
-    /// About four bytes per token.
-    pub tokens_estimate: u64,
-    /// A short description (`report task-3`, the first words of a message).
-    pub label: String,
-    pub task_id: Option<TaskId>,
-}
-
-/// One entry of the orchestrator log shown in the Inspector.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum OrchestratorEntry {
-    Injection {
-        injection: ContextInjection,
-    },
-    /// What the orchestrator's CLI reported.
-    Provider {
-        provider: ProviderKind,
-        event: ProviderEvent,
-    },
-    /// Something broke the orchestrator's contract, such as its CLI compacting the context
-    /// (PLAN.md §2: the orchestrator never compacts).
-    ContractBreach {
-        message: String,
-    },
-    /// An entry of a kind an earlier version wrote that nothing reads any more.
-    #[serde(other)]
-    Retired,
-}
-
 /// A settings change the thread suggests on a card (Q90): this session's permission level,
 /// the built-in browser, or merging on its own. Nothing else is the agent's to suggest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -3095,31 +3054,19 @@ mod tests {
         assert!(queue.ready_to_send().is_none(), "Deciding holds the queue");
     }
 
-    /// Log entries and injection kinds an earlier version wrote still read: as retired, or as
-    /// a hand-off.
+    /// The retired `orch:<id>` log's events read back as retired (#540), and an injection
+    /// kind an earlier version wrote reads as a hand-off.
     #[test]
     fn old_log_entries_still_read() {
-        let entry: OrchestratorEntry = serde_json::from_value(serde_json::json!({
-            "type": "checkpoint",
-            "anything": 1,
+        let event: crate::model::DomainEvent = serde_json::from_value(serde_json::json!({
+            "type": "orchestratorLogged",
+            "conversationId": "c1",
+            "entry": { "type": "contractBreach", "message": "compacted" },
         }))
         .unwrap();
-        assert_eq!(entry, OrchestratorEntry::Retired);
-        let entry: OrchestratorEntry = serde_json::from_value(serde_json::json!({
-            "type": "injection",
-            "injection": {
-                "kind": "anOlderKind",
-                "bytes": 10,
-                "tokensEstimate": 3,
-                "label": "first message",
-                "taskId": null,
-            },
-        }))
-        .unwrap();
-        let OrchestratorEntry::Injection { injection } = entry else {
-            panic!("an injection: {entry:?}");
-        };
-        assert_eq!(injection.kind, InjectionKind::Seam);
+        assert_eq!(event, crate::model::DomainEvent::Retired);
+        let kind: InjectionKind = serde_json::from_value(serde_json::json!("anOlderKind")).unwrap();
+        assert_eq!(kind, InjectionKind::Seam);
     }
 
     #[test]

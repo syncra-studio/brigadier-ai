@@ -15,10 +15,6 @@
 //!   every envelope of one request (a worker's question first); else the next queued
 //!   message (unless the queue is paused). So results reach the orchestrator before the
 //!   user's next queued message, and never mixed into another request's turn unlabelled.
-//!
-//! Every byte sent to the orchestrator is logged as a [`ContextInjection`] on `orch:<id>`,
-//! next to the CLI's own usage and context-size events, so the Inspector can show that its
-//! context grows only by messages and reports.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,9 +23,9 @@ use std::time::Duration;
 
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus,
-    Decider, ErrorKind, InputFile, InputPart, ItemStatus, LimitHit, Origin, OutputHook,
-    ProviderEvent, ProviderKind, ProviderSession, Role as ProviderRole, SessionSpec, Started,
-    TextPhase, ToolSet, TurnInput, TurnStatus,
+    ErrorKind, InputFile, InputPart, ItemStatus, LimitHit, Origin, OutputHook, ProviderEvent,
+    ProviderKind, ProviderSession, Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet,
+    TurnInput, TurnStatus,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +36,7 @@ use super::usage::TokenOwner;
 use super::{EventSource, SessionManager};
 use crate::model::{
     CardId, ConversationId, ConversationKind, ConversationStatus, DomainEvent, Lifecycle, Mention,
-    Message, MessageRole, ModelChoice, Notice, Setup, streams,
+    Message, MessageRole, ModelChoice, Notice, Setup,
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
@@ -49,9 +45,8 @@ use crate::sessions::{
 };
 use crate::tools::Role;
 use crate::work::{
-    AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
-    OrchestratorEntry, OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState,
-    TaskId,
+    AttachmentRef, Compaction, CompactionState, HeldBy, InjectionKind, OrchestratorStepKind,
+    QueuedMessage, QuotaWait, RequestState, RunState, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -1211,7 +1206,6 @@ impl SessionManager {
                 };
                 let mut into = None;
                 if steered {
-                    self.log_user_injection(&conv, &message).await;
                     // The rest of the turn answers the new message: its own request.
                     into = std::mem::replace(&mut state.request, message.request_id.clone());
                     state.in_turn.push(message.clone());
@@ -1399,7 +1393,6 @@ impl SessionManager {
             state.held_requests.push(request.clone());
         }
         let into = if steered {
-            self.log_user_injection(conv, &message).await;
             state.in_turn.push(message.clone());
             // The rest of the turn answers the new message: its own request.
             std::mem::replace(&mut state.request, message.request_id.clone())
@@ -1583,14 +1576,6 @@ impl SessionManager {
                 .is_ok()
         {
             drop(state);
-            self.log_injection(
-                &conv.id,
-                InjectionKind::Decision,
-                "the user's stop".into(),
-                None,
-                text.len(),
-            )
-            .await;
             return;
         }
         state.notes.push(text);
@@ -1624,9 +1609,6 @@ impl SessionManager {
                     .is_ok()
             {
                 drop(state);
-                let bytes = envelope.text.len();
-                self.log_injection(id, envelope.kind, envelope.label, None, bytes)
-                    .await;
                 return Some(true);
             }
         }
@@ -2470,23 +2452,12 @@ impl SessionManager {
             });
         }
         let handoff = match &successor {
-            Some(successor) => Some((
-                successor.n(),
-                self.seam_handoff(&conv, &cli, successor).await,
-            )),
+            Some(successor) => Some(self.seam_handoff(&conv, &cli, successor).await),
             None => None,
         };
-        if let Some((n, handoff)) = handoff {
+        if let Some(handoff) = handoff {
             match handoff {
                 Ok(text) => {
-                    self.log_injection(
-                        &conv.id,
-                        InjectionKind::Seam,
-                        format!("hand-off {n}"),
-                        None,
-                        text.len(),
-                    )
-                    .await;
                     input.prepend_text(&text);
                 }
                 Err(err) => {
@@ -2501,29 +2472,8 @@ impl SessionManager {
         } else if reseed {
             let transcript = self.reseed_text(&conv.id, &users).await;
             if !transcript.is_empty() {
-                self.log_injection(
-                    &conv.id,
-                    InjectionKind::Reseed,
-                    "transcript so far".into(),
-                    None,
-                    transcript.len(),
-                )
-                .await;
                 input.prepend_text(&transcript);
             }
-        }
-        for message in &unsent {
-            self.log_user_injection(&conv, message).await;
-        }
-        for ((envelope, _), note) in unread.iter().zip(&notes) {
-            self.log_injection(
-                &conv.id,
-                envelope.kind,
-                envelope.label.clone(),
-                envelope.task_id.clone(),
-                note.len(),
-            )
-            .await;
         }
         // Plan mode is the CLI's own (harness D7): set before the turn, never told in words.
         if conv.kind == ConversationKind::Session
@@ -2974,7 +2924,7 @@ impl SessionManager {
         };
         // A cleanup that stopped waiting for this start has already passed this conversation,
         // and it may have been restored since, with a CLI of its own: this one ends unused,
-        // before anything of it is logged, and only what it made goes.
+        // before anything of it is kept, and only what it made goes.
         if fence.cut_off() {
             let native_id = started.session.native_id();
             started.session.close().await;
@@ -2987,18 +2937,6 @@ impl SessionManager {
         }
         if reseed_needed {
             conv.state.lock().await.reseed = true;
-        }
-        // A resumed CLI keeps the instructions it started with; a new one has them as they are
-        // now.
-        if !resumed {
-            self.log_injection(
-                &conv.id,
-                InjectionKind::Instructions,
-                prompts::ROLE_INSTRUCTIONS.into(),
-                None,
-                prompt.len(),
-            )
-            .await;
         }
         let Started { session, events } = started;
         // The conversation keeps the account it started on until a hard stop moves it
@@ -3592,10 +3530,10 @@ impl SessionManager {
         });
     }
 
-    /// Stores the conversation CLI's text, reasoning and tool calls in the thread,
-    /// and keeps the complete provider events in `orch:<id>` for the Inspector. Each event's
-    /// handling is polled from the heap: made in this frame, in each of the places it is
-    /// awaited, it took a fifth of a runtime thread's stack in an unoptimized build.
+    /// Stores the conversation CLI's text, reasoning and tool calls in the thread; the complete
+    /// events stay in the CLI's own session file (D30). Each event's handling is polled from
+    /// the heap: made in this frame, in each of the places it is awaited, it took a fifth of a
+    /// runtime thread's stack in an unoptimized build.
     async fn pump_conversation(
         self: Arc<Self>,
         conv: Arc<ConvLive>,
@@ -4155,16 +4093,6 @@ impl SessionManager {
                 {
                     crate::logging::private_trace!(conv.private_logs, warn, "could not answer an approval"; conversation = %conv.id, error = %err);
                 }
-                self.log_provider(
-                    &conv.id,
-                    cli.provider,
-                    ProviderEvent::ApprovalResolved {
-                        id: request.id.clone(),
-                        decision,
-                        decided_by: Decider::Policy,
-                    },
-                )
-                .await;
             }
             // A long session's compaction failing, or its context too long: compaction first,
             // the seam as the fallback (run2-D10).
@@ -4529,22 +4457,6 @@ impl SessionManager {
                     .await;
             }
             ProviderEvent::CompactionStarted { automatic }
-                if conv.kind == ConversationKind::Session =>
-            {
-                // A session's thread goes on at seams, never compacted (G12).
-                self.log_orchestrator(
-                    &conv.id,
-                    OrchestratorEntry::ContractBreach {
-                        message: format!(
-                            "The thread's {} CLI compacted its context{}.",
-                            cli.provider,
-                            if *automatic { " on its own" } else { "" }
-                        ),
-                    },
-                )
-                .await;
-            }
-            ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Chat =>
             {
                 let after = self
@@ -4611,7 +4523,6 @@ impl SessionManager {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,
         };
-        self.log_provider(&conv.id, cli.provider, event).await;
         if let Some(status) = completed {
             crate::heap(|| self.turn_completed(conv, cli, status)).await;
         }
@@ -5558,72 +5469,6 @@ impl SessionManager {
         };
         if let Err(err) = self.core.record_conversation(id, vec![event]).await {
             crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store a notice"; conversation = %id, error = %err);
-        }
-    }
-
-    async fn log_user_injection(&self, conv: &Arc<ConvLive>, message: &Message) {
-        if conv.kind != ConversationKind::Session {
-            return;
-        }
-        // Count all of what was sent: a long message keeps only its first part inline, and
-        // pasted text is an attachment.
-        let bytes = self.full_words(message).await.len();
-        self.log_injection(
-            &conv.id,
-            InjectionKind::UserMessage,
-            "user message".into(),
-            None,
-            bytes,
-        )
-        .await;
-    }
-
-    /// Logs what entered the orchestrator's context.
-    pub(crate) async fn log_injection(
-        &self,
-        id: &ConversationId,
-        kind: InjectionKind,
-        label: String,
-        task_id: Option<TaskId>,
-        bytes: usize,
-    ) {
-        let entry = OrchestratorEntry::Injection {
-            injection: ContextInjection {
-                kind,
-                bytes: bytes as u64,
-                tokens_estimate: (bytes as u64).div_ceil(4),
-                label,
-                task_id,
-            },
-        };
-        self.log_orchestrator(id, entry).await;
-    }
-
-    pub(super) async fn log_provider(
-        &self,
-        id: &ConversationId,
-        provider: ProviderKind,
-        event: ProviderEvent,
-    ) {
-        self.log_orchestrator(id, OrchestratorEntry::Provider { provider, event })
-            .await;
-    }
-
-    async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {
-        let event = DomainEvent::OrchestratorLogged {
-            conversation_id: id.clone(),
-            entry,
-        };
-        match self
-            .core
-            .record(vec![(streams::orchestrator(id), event)])
-            .await
-        {
-            Ok(seqs) => seqs.first().copied(),
-            Err(err) => {
-                crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not log the orchestrator"; conversation = %id, error = %err);
-                None
-            }
         }
     }
 }

@@ -150,18 +150,6 @@ function summary(event: DomainEvent): string {
       return event.event.type;
     case "outputKept":
       return `${event.file.path} ${event.file.error ?? `${event.file.bytes} B`}`;
-    case "orchestratorLogged":
-      switch (event.entry.type) {
-        case "injection":
-          return `${event.entry.injection.kind} ${event.entry.injection.label}`;
-        case "provider":
-          return event.entry.event.type;
-        case "contractBreach":
-          return event.entry.message;
-        default:
-          // Retired entries (old stores) have nothing to say.
-          return "";
-      }
     case "decidedForYou":
       return event.decision.what;
     case "peerMessageSent":

@@ -19,7 +19,6 @@ import type {
   MachineStep,
   MessageQueue,
   Notice,
-  OrchestratorLogEntry,
   OrchestratorStep,
   PeerMessage,
   PeerState,
@@ -51,9 +50,6 @@ export function shownApproval(approval: Approval): approval is ShownApproval {
 
 /** Newest entries kept per open worker transcript; older ones load on demand. */
 export const WORKER_ENTRIES = 3_000;
-
-/** Newest orchestrator log entries kept for the Inspector. */
-export const ORCHESTRATOR_ENTRIES = 5_000;
 
 /** Notices kept per conversation, newest last. */
 const NOTICES = 20;
@@ -128,25 +124,15 @@ export type Board = {
 /** A worker's latest reply, as its status line in the Workers panel. */
 export type WorkerSummary = { text: string; atMs: number };
 
-/** The Inspector's Orchestrator tab: one conversation's orchestrator log. */
-export type OrchestratorLog = {
-  conversationId: string;
-  entries: OrchestratorLogEntry[];
-  hasMore: boolean;
-  loading: boolean;
-};
-
 type BoardState = {
   board: Board | null;
-  orchestrator: OrchestratorLog | null;
 };
 
 export type BoardStore = StoreApi<BoardState>;
 
-/** The open conversation's board (and the Inspector's orchestrator log). */
+/** The open conversation's board. */
 const mainBoard: BoardStore = createStore<BoardState>()(() => ({
   board: null,
-  orchestrator: null,
 }));
 
 /** Side chats' boards, each shown beside the open conversation in its side panel. */
@@ -273,7 +259,6 @@ export function useCheckoutChanges(conversationId: string): string {
 export function createSideBoard(conversationId: string): BoardStore {
   const store = createStore<BoardState>()(() => ({
     board: takeKeptBoard(conversationId) ?? emptyBoard(conversationId),
-    orchestrator: null,
   }));
   sideBoards.add(store);
   return store;
@@ -773,24 +758,9 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
   }
 }
 
-function applyToLog(log: OrchestratorLog, envelope: EventEnvelope): OrchestratorLog {
-  const { event, streamSeq, atMs } = envelope;
-  if (event.type !== "orchestratorLogged") return log;
-  const last = log.entries.at(-1);
-  if (last && last.streamSeq >= streamSeq) return log;
-  const entries = [...log.entries, { streamSeq, atMs, entry: event.entry }];
-  const trimmed = entries.length > ORCHESTRATOR_ENTRIES;
-  return {
-    ...log,
-    entries: trimmed ? entries.slice(-ORCHESTRATOR_ENTRIES) : entries,
-    hasMore: log.hasMore || trimmed,
-  };
-}
-
 /**
- * Routes a batch of events to the open conversation's board, the side chats' boards and the
- * Inspector's orchestrator log, one update each. Everything else is ignored here: other
- * conversations have no board.
+ * Routes a batch of events to the open conversation's board and the side chats' boards, one
+ * update each. Everything else is ignored here: other conversations have no board.
  */
 export function applyBoardEvents(envelopes: readonly EventEnvelope[]): void {
   for (const load of viewLoads) {
@@ -823,22 +793,10 @@ function applyToShown(board: Board, envelopes: readonly EventEnvelope[]): Board 
 }
 
 function applyToStore(store: BoardStore, envelopes: readonly EventEnvelope[]): void {
-  const { board, orchestrator } = store.getState();
-  if (!board && !orchestrator) return;
-  const orchestratorStream = orchestrator ? `orch:${orchestrator.conversationId}` : null;
-  let nextBoard = board;
-  let nextLog = orchestrator;
-  for (const envelope of envelopes) {
-    const { stream } = envelope;
-    if (nextBoard && boardStream(nextBoard, stream)) {
-      nextBoard = applyToBoard(nextBoard, envelope);
-      continue;
-    }
-    if (nextLog && stream === orchestratorStream) nextLog = applyToLog(nextLog, envelope);
-  }
-  if (nextBoard !== board || nextLog !== orchestrator) {
-    store.setState({ board: nextBoard, orchestrator: nextLog });
-  }
+  const { board } = store.getState();
+  if (!board) return;
+  const nextBoard = applyToShown(board, envelopes);
+  if (nextBoard !== board) store.setState({ board: nextBoard });
 }
 
 /**

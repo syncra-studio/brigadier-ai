@@ -653,8 +653,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     // conversationDeleting.
     case "engineSwitching":
     case "engineSwitched":
-    // Conversation views (tasks, cards, queue, streaming) and the Inspector's orchestrator
-    // log read these themselves.
+    // Conversation views (tasks, cards, queue, streaming) read these themselves.
     case "thinkingDelta":
     case "messageDelta":
     case "runStateChanged":
@@ -683,7 +682,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "backgroundCleared":
     case "workerEvent":
     case "outputKept":
-    case "orchestratorLogged":
     // "Decided for you" lives on the board.
     case "decidedForYou":
     // The rail's update button reads these (state/updates).

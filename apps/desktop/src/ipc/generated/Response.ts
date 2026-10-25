@@ -43,7 +43,6 @@ import type { MessageMatches } from "./MessageMatches";
 import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
 import type { ModelRules } from "./ModelRules";
-import type { OrchestratorPage } from "./OrchestratorPage";
 import type { Page } from "./Page";
 import type { PageSummary } from "./PageSummary";
 import type { PageWriteOutcome } from "./PageWriteOutcome";
@@ -153,7 +152,7 @@ login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn,
 /**
  * The tasks stopped, oldest first.
  */
-taskIds: Array<TaskId>, } | { "method": "sendMockupNotes" } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+taskIds: Array<TaskId>, } | { "method": "sendMockupNotes" } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

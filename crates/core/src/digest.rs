@@ -220,52 +220,6 @@ pub(crate) fn own_run(name: &str) -> bool {
     matches!(bare_tool_name(name), "run" | "run_unsandboxed")
 }
 
-/// What a `run` reply says after its output, on lines of their own: the commit
-/// it made or didn't, a review it started. Empty when it says nothing more.
-fn reply_notes(reply: &str) -> &str {
-    let is_note = |line: &str| {
-        line.is_empty()
-            || line.starts_with("Not committed: ")
-            || line.starts_with("Nothing to commit: ")
-            || line.starts_with("[review running] ")
-            || (line.starts_with("Committed ") && line.contains(" with your trailer: "))
-    };
-    let kept = reply.trim_end();
-    let mut cut = kept.len();
-    let mut rest = kept;
-    while let Some(at) = rest.rfind('\n') {
-        let line = &rest[at + 1..];
-        if !is_note(line) {
-            break;
-        }
-        cut = at;
-        rest = &rest[..at];
-    }
-    let notes = &kept[cut..];
-    if notes.trim().is_empty() { "" } else { notes }
-}
-
-/// An own command's reply that came as a digest, with its whole output in the digest's place:
-/// its first line (how the command ended), the whole output, then what the reply said after
-/// the output, so the thread's Shell box reads all three. A reply that came as a JSON content
-/// array is read from its text.
-pub(crate) fn whole_reply(reply: &str, whole: &str) -> String {
-    let reply = content_text(reply);
-    let reply = reply.as_ref();
-    let header = reply.lines().next().unwrap_or_default();
-    let mut text = format!("{header}\n{whole}");
-    let notes = reply_notes(reply);
-    if !notes.is_empty() {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        // One line end of the notes' own is the one just ensured; a blank line before a review
-        // note stays.
-        text.push_str(notes.strip_prefix('\n').unwrap_or(notes));
-    }
-    text
-}
-
 /// The alias of the full output a digest points to (`[full output: out-…`), if it names one.
 pub(crate) fn digest_alias(output: &str) -> Option<&str> {
     const MARK: &str = "[full output: ";
@@ -429,42 +383,21 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// A long run reply shows its whole output with its header and what it said after
-    /// the output: the commit it made, a review it started.
     #[test]
-    fn a_digested_check_reply_keeps_its_header_and_notes_around_the_whole_output() {
-        let reply = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background.";
-        assert_eq!(
-            whole_reply(reply, "one\ntwo\npassed\n"),
-            "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background."
-        );
-        let plain = "exit 1 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\nFAIL a.test.js\n";
-        assert_eq!(
-            whole_reply(plain, "one\nFAIL a.test.js"),
-            "exit 1 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\nFAIL a.test.js"
-        );
-        // A review note alone keeps the blank line before it.
-        let review = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\n\n[review running] Claude Code reviews your change for this request in the background.";
-        assert_eq!(
-            whole_reply(review, "one\ntwo\npassed\n"),
-            "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
-        );
+    fn own_runs_are_brigadiers_command_tools() {
         assert!(own_run("mcp__brigadier__run") && own_run("run") && !own_run("Bash"));
     }
 
     /// A Codex MCP reply that comes as a JSON content array (or the tool result holding one)
-    /// reads as its text: the whole reply keeps its header and notes around the whole output,
-    /// and its exit code is read. JSON that holds no text blocks stays as it is.
+    /// reads as its text, and its exit code is read. JSON that holds no text blocks stays as
+    /// it is.
     #[test]
     fn a_json_content_array_reply_reads_as_its_text() {
-        let reply = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
-        let whole = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
-        let array = serde_json::json!([{ "type": "text", "text": reply }]).to_string();
-        assert_eq!(whole_reply(&array, "one\ntwo\npassed\n"), whole);
+        let reply = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\npassed";
         let result =
             serde_json::json!({ "content": [{ "type": "text", "text": reply }], "isError": false })
                 .to_string();
-        assert_eq!(whole_reply(&result, "one\ntwo\npassed\n"), whole);
+        assert_eq!(content_text(&result), reply);
         assert_eq!(exit_of(&result), Some(0));
         let blocks = serde_json::json!([
             { "type": "text", "text": "[exit 1]\nFAIL" },

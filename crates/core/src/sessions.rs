@@ -14,8 +14,8 @@ use crate::board::{self, Board};
 use crate::model::{
     Catalog, Conversation, ConversationId, ConversationKind, ConversationView, DomainEvent,
     EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches, MessagePage,
-    MessageRole, ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId,
-    ProjectPatch, ProjectRepo, RawEntry, Settings, Setup, WorkerPage, streams,
+    MessageRole, ModelChoice, Project, ProjectId, ProjectPatch, ProjectRepo, RawEntry, Settings,
+    Setup, WorkerPage, streams,
 };
 use crate::projection::Projection;
 
@@ -1202,39 +1202,6 @@ impl Core {
             })
             .collect::<Result<_>>()?;
         Ok(WorkerPage { entries, has_more })
-    }
-
-    /// A page of the orchestrator log, oldest first.
-    pub async fn list_orchestrator_log(
-        &self,
-        id: &ConversationId,
-        before: Option<i64>,
-        limit: u32,
-    ) -> Result<OrchestratorPage> {
-        self.conversation(id)?;
-        let (events, has_more) = self
-            .read_page(
-                streams::orchestrator(id),
-                "orchestrator.logged",
-                before,
-                limit,
-            )
-            .await?;
-        let entries = events
-            .iter()
-            .filter_map(|event| match decode(event) {
-                Ok(DomainEvent::OrchestratorLogged { entry, .. }) => {
-                    Some(Ok(OrchestratorLogEntry {
-                        stream_seq: event.stream_seq,
-                        at_ms: event.at_ms,
-                        entry,
-                    }))
-                }
-                Ok(_) => None,
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<_>>()?;
-        Ok(OrchestratorPage { entries, has_more })
     }
 
     /// Up to `limit` events of `kind` before `before`, oldest first, and whether older ones

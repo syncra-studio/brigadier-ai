@@ -10,8 +10,7 @@ use super::SessionManager;
 use crate::model::{ConversationId, DomainEvent, MessageRole};
 use crate::tools::{OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, InjectionKind, OrchestratorStep, OrchestratorStepKind, QuestionItem,
-    QuestionOption, TaskId,
+    ApprovalSubject, OrchestratorStep, OrchestratorStepKind, QuestionItem, QuestionOption, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -24,20 +23,10 @@ impl SessionManager {
         conversation_id: ConversationId,
         call: OrchestratorCall,
     ) -> ToolReply {
-        let name = call.name();
-        let reply = match self.run_orchestrator_call(&conversation_id, call).await {
+        match self.run_orchestrator_call(&conversation_id, call).await {
             Ok(text) => ToolReply::ok(text),
             Err(err) => ToolReply::error(err.to_string()),
-        };
-        self.log_injection(
-            &conversation_id,
-            InjectionKind::ToolResult,
-            name.into(),
-            None,
-            reply.text.len(),
-        )
-        .await;
-        reply
+        }
     }
 
     async fn run_orchestrator_call(

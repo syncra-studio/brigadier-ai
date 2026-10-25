@@ -786,7 +786,7 @@ Several steps edit `M/tools.rs`, `crates/mcp-server/src/catalog.rs`, `M/prompts.
 | `M/decisions.rs` | `board.rs`, `requests.rs`, `watchdog.rs`, `overnight/report.rs`, `rebirth.rs` `briefing()` | S23 |
 | `M/constraints.rs` (+ the `remember` writer) | `phases.rs`, `workers.rs`, `rebirth.rs` | `remember` in S18; the module in S23 |
 | `M/export.rs` | `rebirth.rs` briefing exchanges, Brain transcript sync (`brains.rs:1218`) | S23 (done) |
-| `orch:<id>` log (`OrchestratorLogged`) | the resume id (`read_native_id`, `forget_native_session`), the context size (`Core::context_usage`), the thread rows (`thread_items.rs`), the Inspector's log, injections and context chart | a later step, from the CLI's own session files or `record/` (G11), never a Brigadier copy (#540) |
+| `orch:<id>` log (`OrchestratorLogged`) | the resume id (`read_native_id`, `forget_native_session`), the context size (`Core::context_usage`), the thread rows (`thread_items.rs`), the Inspector's log, injections and context chart | #540 (harness run, D30): the resume id from `record/lineage.json`, the context size from the CLI's own session file (Claude's window in `record/turns.jsonl`), the thread rows off the log, the Inspector's log, injections and context chart removed (injections are gone, D13) |
 | `keep_note_decisions`, the rebirth Brain section | `rebirth.rs` | S23 |
 | `M/context_pack.rs`, `M/worker_handoff.rs` | `M/workers.rs` | S16b |
 | `M/background_runs.rs` | Brigadier's `run` and `run_check` (gone in S4, S6) | S12 |
@@ -1509,6 +1509,9 @@ worse than today's rebirth.
     consumers were not only rebirth: the resume id, the context size, the thread rows and the Inspector still
     read it (§4 table). A later step takes all four from the CLI's own session files or `record/` (G11), never
     a Brigadier copy, and deletes the log (#540). The variant was not renamed to pass the grep.
+  - #540 (harness run, D30) deleted the log: `OrchestratorLogged`, `log_orchestrator` and the injection log are
+    gone, and the Inspector's Orchestrator tab shows the session picker and thread metrics only. Old stored
+    `orchestratorLogged` events read as retired; nothing is migrated.
   - The stand-in is deleted whole (`Conversation.fallback`, `ModelFallback`, its event, pill and usage row): a
     usage limit with no other account waits for the reset (MA5). Old stand-in events read as retired.
   - MA5: the wait after a reset is spread at random over a minute; at most 4 resumes in a row go by

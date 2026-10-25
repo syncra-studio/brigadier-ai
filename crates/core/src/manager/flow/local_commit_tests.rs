@@ -18,9 +18,9 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// A session told the instructions before this change, on the user's own checkout: it hears
-/// the note once, its edit stays uncommitted, and the commit the user then asks for has no
-/// trailer and is recorded as the thread's: the thread commits with git.
+/// A session on the user's own checkout, across a restart: its edit stays uncommitted, and the
+/// commit the user then asks for has no trailer and is recorded as the thread's: the thread
+/// commits with git.
 #[tokio::test]
 async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_trailer() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -87,25 +87,6 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
         .id;
     flow.say("Look around.").await;
     flow.settled().await;
-    // It was told the instructions of the revision before.
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
     flow.restart().await;
     let start = git(&flow.repo, &["rev-parse", "HEAD"]);
     flow.say("Fix the typo.").await;

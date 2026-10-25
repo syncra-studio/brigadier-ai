@@ -1515,7 +1515,6 @@ impl SessionManager {
         }
         let mut purge = vec![
             streams::conversation(&id),
-            streams::orchestrator(&id),
             streams::inbox(&id),
             streams::draft(&id.to_string()),
         ];

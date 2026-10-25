@@ -5,5 +5,4 @@ styles/globals.css 0.5px 1.2px  # hairline columns and the page corner's anti-al
 styles/onboarding.css #fff  # the welcome's mark and title are pure white; the only white token is the terminal's active tab
 app/side-panel/NewTabTools.css 1.160714rem 28rem  # the New tab page's line height has no text token; 28rem is a container query, where var() can't go
 app/side-panel/pages/PageTab.css 2.1rem .5px 1.7875rem .9375rem 1.875rem 1rem 3px .21875rem .34375rem .15em .3125rem  # the page editor's own type (title line, heading sizes and lines), menu row and radii, quote rule, checkbox tick and hairline rings: off the text, radius and spacing scales
-app/inspector/ContextChart.tsx <svg  # the context chart is drawn from the injection log, not an icon
 components/conversation/context-ring.tsx <svg  # the context ring is drawn from the share used, not an icon

@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { OrchestratorLogView } from "@/app/inspector/OrchestratorLogView";
 import { SessionBar } from "@/app/inspector/SessionBar";
-import { openOrchestratorLog, shownBeforeSettings } from "@/state/actions";
+import { ThreadMetricsPanel } from "@/app/inspector/ThreadMetricsPanel";
+import { shownBeforeSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
- * A session's orchestrator: every context injection against the CLI's reported context size,
- * so it is visible that its context grows only by messages and reports. It starts on the
- * session open before Settings (else the newest one); the picker shows another.
+ * A session's thread: its own commits and how its context grew over each request. It starts on
+ * the session open before Settings (else the newest one); the picker shows another. Brigadier
+ * puts nothing into a thread's context of its own any more (D13), so there is no injection
+ * log to show (#540).
  */
 export function OrchestratorTab() {
   const conversations = useApp((s) => s.conversations);
@@ -36,19 +33,6 @@ export function OrchestratorTab() {
   });
   const sessionId =
     options.find((option) => option.value === picked)?.value ?? options[0]?.value ?? null;
-  const [failure, setFailure] = useState<{ sessionId: string; message: string } | null>(null);
-
-  // Follow the open session's log while this tab shows; stop following when it closes.
-  useEffect(() => {
-    if (sessionId === null) return undefined;
-    openOrchestratorLog(sessionId).catch((cause: unknown) =>
-      setFailure({ sessionId, message: errorText(cause) }),
-    );
-    return () => {
-      void openOrchestratorLog(null);
-    };
-  }, [sessionId]);
-
   if (sessionId === null) {
     return (
       <p className="text-muted-foreground p-4 text-xs">
@@ -56,11 +40,12 @@ export function OrchestratorTab() {
       </p>
     );
   }
-  const error = failure?.sessionId === sessionId ? failure.message : null;
   return (
     <>
       <SessionBar sessionId={sessionId} options={options} onChange={setPicked} />
-      <OrchestratorLogView sessionId={sessionId} error={error} />
+      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-3 py-2.5 text-xs">
+        <ThreadMetricsPanel sessionId={sessionId} />
+      </div>
     </>
   );
 }

@@ -51,7 +51,6 @@ import {
   keepBoard,
   placeView,
   takeKeptBoard,
-  ORCHESTRATOR_ENTRIES,
   updateBoard,
   useBoard,
 } from "@/state/board";
@@ -1543,82 +1542,6 @@ export async function removeProject(
     return { projects, conversations, threads };
   });
   return report;
-}
-
-// ----- orchestrator log (Inspector) ------------------------------------------------------
-
-/** Orchestrator log entries fetched per page. */
-const ORCHESTRATOR_PAGE = 1_000;
-
-/** Follows a conversation's orchestrator log in the Inspector, or stops with `null`. */
-export async function openOrchestratorLog(conversationId: string | null): Promise<void> {
-  if (conversationId === null) {
-    useBoard.setState({ orchestrator: null });
-    return;
-  }
-  useBoard.setState({
-    orchestrator: { conversationId, entries: [], hasMore: false, loading: true },
-  });
-  try {
-    const { page } = await request({
-      method: "listOrchestratorLog",
-      conversationId,
-      before: null,
-      limit: ORCHESTRATOR_PAGE,
-    });
-    const log = useBoard.getState().orchestrator;
-    if (log?.conversationId !== conversationId) return;
-    const newest = page.entries.at(-1)?.streamSeq ?? 0;
-    useBoard.setState({
-      orchestrator: {
-        conversationId,
-        entries: [
-          ...page.entries,
-          ...log.entries.filter((entry) => entry.streamSeq > newest),
-        ].slice(-ORCHESTRATOR_ENTRIES),
-        hasMore: page.hasMore,
-        loading: false,
-      },
-    });
-  } catch (error) {
-    const log = useBoard.getState().orchestrator;
-    if (log?.conversationId === conversationId) {
-      useBoard.setState({ orchestrator: { ...log, loading: false } });
-    }
-    throw error;
-  }
-}
-
-export async function loadEarlierOrchestratorLog(): Promise<void> {
-  const log = useBoard.getState().orchestrator;
-  const oldest = log?.entries[0];
-  if (!log || !oldest || log.loading) return;
-  useBoard.setState({ orchestrator: { ...log, loading: true } });
-  const { conversationId } = log;
-  try {
-    const { page } = await request({
-      method: "listOrchestratorLog",
-      conversationId,
-      before: oldest.streamSeq,
-      limit: ORCHESTRATOR_PAGE,
-    });
-    const current = useBoard.getState().orchestrator;
-    if (current?.conversationId !== conversationId) return;
-    useBoard.setState({
-      orchestrator: {
-        ...current,
-        entries: [...page.entries, ...current.entries],
-        hasMore: page.hasMore,
-        loading: false,
-      },
-    });
-  } catch (error) {
-    const current = useBoard.getState().orchestrator;
-    if (current?.conversationId === conversationId) {
-      useBoard.setState({ orchestrator: { ...current, loading: false } });
-    }
-    throw error;
-  }
 }
 
 // ----- settings --------------------------------------------------------------------------

@@ -14,7 +14,6 @@ use crate::manager::long_sessions::LongSessions;
 use crate::manager::seam::{Phase, SeamConfig, read_seam, without_handoff};
 use crate::model::DomainEvent;
 use crate::thread_view::NUDGE_MARK;
-use crate::work::OrchestratorEntry;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -97,17 +96,6 @@ fn thread(inputs: Inputs) -> Script {
     })
 }
 
-async fn breaches(flow: &Flow) -> usize {
-    flow.core
-        .list_orchestrator_log(&flow.conversation, None, 500)
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .filter(|logged| matches!(logged.entry, OrchestratorEntry::ContractBreach { .. }))
-        .count()
-}
-
 #[tokio::test]
 async fn a_codex_session_compacts_in_place_by_default_with_nothing_put_back() {
     let inputs: Inputs = Arc::default();
@@ -137,7 +125,6 @@ async fn a_codex_session_compacts_in_place_by_default_with_nothing_put_back() {
     let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
     assert_eq!((file.generation, file.phase), (1, Phase::Live));
     assert!(file.seams.is_empty());
-    assert_eq!(breaches(&flow).await, 0);
     // Codex compacts where it would by itself, or at the point a comparison set (run2-D6).
     let specs = flow.specs();
     let (_, spec) = specs
@@ -177,8 +164,6 @@ async fn with_the_seams_opt_out_a_codex_session_still_goes_on_at_its_seam() {
     .await
     .expect("a successor at the seam");
     flow.settled().await;
-    // Its CLI compacting on its own is still a breach of the seam's contract.
-    assert!(breaches(&flow).await >= 1);
     flow.stop().await;
 }
 
@@ -231,7 +216,7 @@ async fn claude_compactions(arm: &str) -> Vec<Option<String>> {
     flow.idle().await;
     flow.say("After.").await;
     flow.idle().await;
-    // The same CLI session goes on: no hand-off, no successor, no breach.
+    // The same CLI session goes on: no hand-off, no successor.
     let seen = inputs.lock().unwrap().clone();
     assert!(
         seen.iter().all(|(_, input)| !input.starts_with(NUDGE_MARK)),
@@ -243,7 +228,6 @@ async fn claude_compactions(arm: &str) -> Vec<Option<String>> {
     );
     let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
     assert_eq!((file.generation, file.phase), (1, Phase::Live));
-    assert_eq!(breaches(&flow).await, 0);
     // Claude may compact by itself as a backstop just above the point (run2-D5).
     let specs = flow.specs();
     let (_, spec) = specs

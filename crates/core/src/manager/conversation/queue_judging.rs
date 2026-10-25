@@ -29,7 +29,7 @@ use super::{ConvLive, SendOutcome};
 use crate::manager::SessionManager;
 use crate::manager::cli::{CliCaller, MIN_ID, short};
 use crate::model::{Conversation, Mention, Message, MessageRole};
-use crate::work::{AttachmentRef, InjectionKind, QueuedMessage, SentToWorker};
+use crate::work::{AttachmentRef, QueuedMessage, SentToWorker};
 use crate::{Result, now_ms};
 
 /// How long a queued message waits for the session's judgment before it joins the working
@@ -179,7 +179,6 @@ impl SessionManager {
                 && !state.interrupted
                 && !state.seam.held
         });
-        let mut bytes = 0;
         let steered = match cli {
             Some(cli) => {
                 // The message the session reads, kept nowhere until it is judged.
@@ -189,14 +188,6 @@ impl SessionManager {
                     .turn_input(conv, std::slice::from_ref(&message), &[])
                     .await;
                 conv.take_frame(&item.id);
-                bytes = input
-                    .parts
-                    .iter()
-                    .map(|part| match part {
-                        brigadier_providers::InputPart::Text(text) => text.len(),
-                        _ => 0,
-                    })
-                    .sum();
                 // Never a new turn (run2-D46): with none running it waits plainly.
                 matches!(cli.session.steer_running(input).await, Ok(true))
             }
@@ -240,14 +231,6 @@ impl SessionManager {
             self.mark_items_held(conv, std::slice::from_ref(&item.id), None)
                 .await;
         }
-        self.log_injection(
-            &conv.id,
-            InjectionKind::FollowUp,
-            format!("queued message {shown}"),
-            None,
-            bytes,
-        )
-        .await;
         self.judge_within(conv, &item.id);
         item.delivered = true;
         item.held_by = held;
@@ -464,14 +447,6 @@ impl SessionManager {
             state.notes.push(text.clone());
         }
         drop(state);
-        self.log_injection(
-            &conv.id,
-            InjectionKind::FollowUp,
-            format!("queued message {} withdrawn", short(item_id)),
-            None,
-            text.len(),
-        )
-        .await;
     }
 
     /// The user's "Run here" on a message the session offered as a new session.

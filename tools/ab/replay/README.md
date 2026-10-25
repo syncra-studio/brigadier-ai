@@ -109,11 +109,10 @@ run stops at the last event plus 1 s, with `finished: false`.
   `rework` is fixed to `false`; it only decides "Try again"/Edit.
 - **Not read at all, because the request block doesn't use them:**
   - listWorkerEvents: worker transcripts are only for an opened worker panel
-  - listOrchestratorLog: the Inspector
   - getWorkerDiff: `board.diffs`. Its only effect in the block is the `+N −M` suffix on a
     worker's activity line, so that suffix never shows here.
-  - Worker activity, summaries and `doing` come from `workerEvent` and `orchestratorLogged`
-    envelopes, exactly as live.
+  - Worker activity, summaries and `doing` come from `workerEvent` envelopes, exactly as
+    live.
 - **Clock and environment.**
   - `Date.now()` returns the replay time. It's set to `t0` before modules load, so
     module-level clocks (use-activity-clock) start there. Timers and effects never run.

@@ -1538,13 +1538,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::ListWorkerEvents {
             page: heap(|| core.list_worker_events(&task_id, before, limit)).await?,
         },
-        Request::ListOrchestratorLog {
-            conversation_id,
-            before,
-            limit,
-        } => Response::ListOrchestratorLog {
-            page: heap(|| core.list_orchestrator_log(&conversation_id, before, limit)).await?,
-        },
         Request::GetThreadMetrics { conversation_id } => Response::GetThreadMetrics {
             metrics: heap(|| daemon.sessions.thread_metrics(&conversation_id)).await?,
         },

@@ -166,7 +166,6 @@ impl Projection {
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }
             | DomainEvent::OutputKept { .. }
-            | DomainEvent::OrchestratorLogged { .. }
             | DomainEvent::RawSessionUpdated { .. }
             | DomainEvent::RawEvent { .. }
             | DomainEvent::CleanupRecorded { .. }

@@ -24,7 +24,7 @@ function isTab(value: string): value is InspectorTab {
 
 /**
  * The Inspector, a page of Settings for developers: the live event stream, the open session's
- * orchestrator context, the Project Brains, processes, metrics against the §4 budgets and raw
+ * thread metrics, the Project Brains, processes, metrics against the §4 budgets and raw
  * provider sessions, a tab each. The tabs fill the page's column down to the window's bottom,
  * each scrolling on its own.
  */

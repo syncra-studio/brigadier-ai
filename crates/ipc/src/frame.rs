@@ -267,6 +267,7 @@ mod client_tests {
             mcp: vec![],
             workers: vec![],
             seams: vec![],
+            jobs: Default::default(),
         };
         let (send, recv) = tokio::io::duplex(8192);
         let mut writer = FrameWriter::new(send);

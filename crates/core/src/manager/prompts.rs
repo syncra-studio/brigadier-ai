@@ -243,9 +243,6 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 /// still carries it counts as the thread's.
 pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 
-/// How the log names role instructions.
-pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
-
 /// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then all
 /// it can ask at once with the CLI's own question tool, the shared understanding said back
 /// before it acts. Every new job opens with it (harness D7, D28).

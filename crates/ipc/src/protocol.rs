@@ -20,9 +20,9 @@ use brigadier_core::{
     ConversationKind, ConversationStatus, ConversationView, DiffStat, FeedbackFiled,
     FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport, ForkPlace,
     GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches, MessagePage,
-    MessageQueue, ModelChoice, ModelRule, ModelRules, OrchestratorPage, PendingChanges, ProbeBurst,
-    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
-    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst, Project,
+    ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating,
+    RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
@@ -944,12 +944,6 @@ pub enum Request {
         before: Option<i64>,
         limit: u32,
     },
-    /// A page of the orchestrator log (Inspector): CLI events and context injections.
-    ListOrchestratorLog {
-        conversation_id: ConversationId,
-        before: Option<i64>,
-        limit: u32,
-    },
     /// A session thread's metrics (Inspector): its own commits and its context per request.
     GetThreadMetrics {
         conversation_id: ConversationId,
@@ -1798,9 +1792,6 @@ pub enum Response {
     },
     ListWorkerEvents {
         page: WorkerPage,
-    },
-    ListOrchestratorLog {
-        page: OrchestratorPage,
     },
     GetThreadMetrics {
         metrics: ThreadMetrics,

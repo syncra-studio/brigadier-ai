@@ -9,8 +9,8 @@ use brigadier_providers::{
 use brigadier_router::{MergedModel, OverrideRule, ProviderQuota, QuotaSample, RegistryInfo};
 
 use crate::work::{
-    Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep,
-    Question, RunState, Task, UserRequest, WorkerStep,
+    Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorStep, Question, RunState, Task,
+    UserRequest, WorkerStep,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -1543,22 +1543,6 @@ pub struct WorkerPage {
     pub has_more: bool,
 }
 
-/// A page of the orchestrator log, oldest first.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct OrchestratorPage {
-    pub entries: Vec<OrchestratorLogEntry>,
-    pub has_more: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct OrchestratorLogEntry {
-    pub stream_seq: i64,
-    pub at_ms: i64,
-    pub entry: OrchestratorEntry,
-}
-
 /// Where a raw session's events come from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -2482,10 +2466,6 @@ pub enum DomainEvent {
         item_id: String,
         file: brigadier_providers::KeptFile,
     },
-    OrchestratorLogged {
-        conversation_id: ConversationId,
-        entry: OrchestratorEntry,
-    },
     /// The attachments a composer draft holds. Blob collection keeps what an event mentions and
     /// the draft's stream keeps only its latest event, so they stay stored until the draft is
     /// sent or discarded (an empty list).
@@ -2666,7 +2646,6 @@ impl DomainEvent {
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OutputKept { .. } => "output.kept",
-            Self::OrchestratorLogged { .. } => "orchestrator.logged",
             Self::DraftPinned { .. } => "draft.pinned",
             Self::DecidedForYou { .. } => "decision.made",
             Self::PeerMessageSent { .. } => "peer.sent",
@@ -2726,11 +2705,6 @@ pub mod streams {
     /// A worker's CLI events.
     pub fn task(id: &super::TaskId) -> String {
         format!("task:{id}")
-    }
-
-    /// The orchestrator's CLI events and context injections (Inspector).
-    pub fn orchestrator(id: &ConversationId) -> String {
-        format!("orch:{id}")
     }
 
     /// What was queued for a thread's next turn: its inbox lives in memory (#210).

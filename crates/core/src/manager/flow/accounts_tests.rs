@@ -1330,21 +1330,6 @@ async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_mes
         assert!(turns[1].input.contains("Never landed steer."), "{turns:?}");
         assert!(turns[1].input.contains(CONTINUE_ON_ACCOUNT), "{turns:?}");
         assert!(!turns[1].input.contains("Landed first."), "{turns:?}");
-        let injections = flow
-            .core
-            .list_orchestrator_log(&flow.conversation, None, 200)
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .filter(|logged| {
-                matches!(&logged.entry,
-                    crate::work::OrchestratorEntry::Injection { injection }
-                        if injection.kind == crate::work::InjectionKind::UserMessage
-                )
-            })
-            .count();
-        assert_eq!(injections, 2, "each delivered message logged once");
         flow.stop().await;
     }
 }

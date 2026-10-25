@@ -71,12 +71,6 @@ pub(super) struct Successor {
     messages: Vec<String>,
 }
 
-impl Successor {
-    pub(super) fn n(&self) -> u32 {
-        self.n
-    }
-}
-
 /// Why a generation ended without its note when the CLI said nothing better.
 const NO_NOTE: &str = "it ended its turn without writing one";
 const HELD_TOO_LONG: &str = "it was still working a minute after a message came";
@@ -245,14 +239,6 @@ impl SessionManager {
         {
             drop(state);
             crate::logging::private_trace!(conv.private_logs, info, "asked for the hand-off note"; conversation = %conv.id, used);
-            self.log_injection(
-                &conv.id,
-                InjectionKind::Seam,
-                "hand-off note".into(),
-                None,
-                text.len(),
-            )
-            .await;
             return Some(true);
         }
         state.seam.nudge_due = Some(text);

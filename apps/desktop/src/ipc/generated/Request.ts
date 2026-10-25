@@ -109,7 +109,7 @@ input?: AnswerInput, } | { "method": "writeUpFeedback", text: string, } | { "met
 /**
  * Only entries with a smaller `streamSeq` (for paging backwards).
  */
-before: number | null, limit: number, } | { "method": "listOrchestratorLog", conversationId: ConversationId, before: number | null, limit: number, } | { "method": "getThreadMetrics", conversationId: ConversationId, } | { "method": "readArtifact", id: string, offset: number, limit: number, } | { "method": "saveArtifact", id: string, 
+before: number | null, limit: number, } | { "method": "getThreadMetrics", conversationId: ConversationId, } | { "method": "readArtifact", id: string, offset: number, limit: number, } | { "method": "saveArtifact", id: string, 
 /**
  * Absolute path.
  */
