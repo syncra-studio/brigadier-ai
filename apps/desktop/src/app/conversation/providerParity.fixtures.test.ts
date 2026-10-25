@@ -13,6 +13,11 @@ import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc
 // live and read again (D50, D44). The recordings are the CLIs' own (D29); two facts the
 // recordings can't hold are derived and labelled (D57), and what differs only because a CLI
 // does differently is listed in EXEMPT, each with the decision that allows it.
+//
+// Not covered, so never passed here: the frames in the middle of a turn (only the end views,
+// live and read again, are compared); timing (when rows appear, the header's calm, the fold's
+// animation); a usage limit (no current-version recording, D25/D29); a Codex subagent that
+// failed, which only its live row says (its parent's rollout says completed).
 const root = new URL("../../../../../crates/providers/fixtures/versions/", import.meta.url);
 const CLAUDE = "claude-2.1.310";
 const CODEX = "codex-0.164.0";

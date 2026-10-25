@@ -178,7 +178,7 @@ mod tests {
         assert!(is_text_round(SESSION_ROUND));
     }
 
-    /// The grilling skill's own format (~/.claude/skills/grilling/SKILL.md).
+    /// The grilling skill's own format (~/.claude/skills/grill-me/SKILL.md, which took grilling's, D48).
     #[test]
     fn the_grilling_format_is_one() {
         let round = "Round 1:\n\n\
