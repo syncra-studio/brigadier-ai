@@ -572,15 +572,35 @@ async function flipsCase(seen: Record<string, unknown>) {
   seen.after = sendButton()?.dataset.state;
 }
 
+/** Button and glyph identity across actual look changes and unrelated board updates. */
+async function buttonIdentityCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  const initial = sendButton()!;
+  const glyph = initial.querySelector("svg")!.parentElement;
+  setState({ type: "working" });
+  setRun("starting");
+  await until("a cancellable start", () => ["stop", "starting"].includes(sendButton()?.dataset.state ?? ""));
+  seen.atStart = { sameButton: sendButton() === initial, sameGlyph: sendButton()?.querySelector("svg")?.parentElement === glyph, state: sendButton()?.dataset.state };
+  setRun("running");
+  await until("Stop", () => sendButton()?.dataset.state === "stop");
+  const stop = sendButton()!;
+  for (const run of ["starting", "running", "idle", "running"] as const) { setRun(run); await sleep(40); }
+  seen.updates = { sameButton: sendButton() === stop, state: sendButton()?.dataset.state };
+  setRun("idle");
+  setState({ type: "done" });
+  await until("Send", () => sendButton()?.dataset.state === "send");
+  seen.after = { sameButton: sendButton() === initial, sameGlyph: sendButton()?.querySelector("svg")?.parentElement === glyph, state: sendButton()?.dataset.state };
+}
+
 /**
  * #422: a session's model starts again for each worker report and landing while the work goes
- * on. Its first start shows the starting spinner; every later one keeps Stop, never dimming.
+ * on. Every start keeps the same Stop look, never dimming.
  */
 async function restartsCase(seen: Record<string, unknown>) {
   await until("the editor", () => field() !== null);
   setState({ type: "working" });
   setRun("starting");
-  await until("the first start", () => sendButton()?.dataset.state === "starting", 3000);
+  await until("the first start", () => sendButton()?.dataset.state === "stop", 3000);
   seen.first = sendButton()?.dataset.state;
   setRun("running");
   await until("Stop", () => sendButton()?.dataset.state === "stop", 3000);
@@ -595,11 +615,44 @@ async function restartsCase(seen: Record<string, unknown>) {
   setState({ type: "done" });
   await until("Send back", () => sendButton()?.dataset.state === "send", 3000).catch(() => {});
   seen.after = sendButton()?.dataset.state;
-  // The next request's first start shows the spinner again.
+  // The next request starts with Stop too.
   setState({ type: "working" });
   setRun("starting");
-  await until("the next start", () => sendButton()?.dataset.state === "starting", 3000).catch(() => {});
+  await until("the next start", () => sendButton()?.dataset.state === "stop", 3000).catch(() => {});
   seen.next = sendButton()?.dataset.state;
+}
+
+/** Queue and steer share the arrow and the same glyph, changing only the tooltip. */
+async function queueLookCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  setState({ type: "working" });
+  setRun("running");
+  await until("Stop", () => sendButton()?.dataset.state === "stop");
+  const button = sendButton()!;
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "a follow-up" });
+  await until("Queue arrow", () => sendButton()?.dataset.state === "send" && sendButton()?.textContent === "Queue");
+  const glyph = sendButton()?.querySelector("svg");
+  seen.queue = { state: sendButton()?.dataset.state, tip: sendButton()?.textContent, sameButton: sendButton() === button };
+  useApp.setState((s) => ({ settings: { ...s.settings, followUp: "steer" } }));
+  await until("Steer arrow", () => sendButton()?.textContent === "Steer");
+  seen.steer = { state: sendButton()?.dataset.state, tip: sendButton()?.textContent, sameButton: sendButton() === button, sameGlyph: sendButton()?.querySelector("svg") === glyph };
+}
+
+/** Starting is cancellable with the same Stop button; the first Esc only updates its tip. */
+async function startingCancelCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  const initial = sendButton()!;
+  setRun("starting");
+  await until("Stop for the start", () => sendButton()?.dataset.state === "stop");
+  seen.starting = { state: sendButton()?.dataset.state, disabled: sendButton()?.disabled, sameButton: sendButton() === initial };
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until("Esc reminder", () => sendButton()?.textContent === "Press Esc again to stop");
+  seen.armed = { state: sendButton()?.dataset.state, sameButton: sendButton() === initial, glyph: !!sendButton()?.querySelector("svg"), text: sendButton()?.textContent };
+  await fixtureClick(sendButton()!);
+  await until("the start cancelled", () => sent.some((req) => req.method === "interrupt"));
+  seen.cancelled = sent.filter((req) => req.method === "interrupt").length;
+  seen.sends = sent.filter((req) => req.method === "sendMessage").length;
 }
 
 /**
@@ -665,7 +718,10 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   shift: shiftCase,
   dropSend: dropSendCase,
   flips: flipsCase,
+  identity: buttonIdentityCase,
   restarts: restartsCase,
+  startingCancel: startingCancelCase,
+  queueLook: queueLookCase,
   stop: stopCase,
 };
 

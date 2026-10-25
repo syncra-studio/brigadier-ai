@@ -10,13 +10,12 @@ import { DictateButton } from "@/app/conversation/DictateButton";
 import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { askPausedSend } from "@/app/conversation/PausedSend";
+import { sendButtonState } from "@/app/conversation/sendButtonState";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { shortcutKeys } from "@/app/shortcutCatalog";
-import { SendButton, type SendState } from "@/components/controls";
-import { ComposerPrimitive, useAui, useAuiState } from "@/components/conversation";
-import type { RunState } from "@/ipc/generated";
+import { SendButton } from "@/components/controls";
+import { useComposerSend, useAui, useAuiState } from "@/components/conversation";
 import { clearBackgroundSend, markBackgroundSend, useBackgroundArmed } from "@/state/backgroundSend";
-import { useBoard } from "@/state/board";
 import { cancelDictation, useDictation } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { turnStopping, useStopping } from "@/state/stopping";
@@ -30,9 +29,9 @@ const ESC_WINDOW_MS = 2000;
 const TEXT_FIELD = "input, textarea, select, [contenteditable=true], [contenteditable='']";
 
 /**
- * A two-press stop: the first Esc outside menus and cards arms the send button (it reads
- * "Esc"), a second within two seconds stops the model; Esc in the composer then also leaves the
- * field, keeping the text. With nothing running, Esc puts the cursor in the composer instead.
+ * A two-press stop: the first Esc outside menus and cards arms Stop, with a reminder in its
+ * tooltip. A second within two seconds stops the model; Esc also leaves the composer field,
+ * keeping its text. With nothing running, Esc puts the cursor in the composer instead.
  * Esc while dictation (`dictationOwner`'s) downloads, starts or records cancels it, and only that.
  */
 function useEscToStop(canCancel: boolean, dictationOwner: string): boolean {
@@ -87,8 +86,7 @@ function useEscToStop(canCancel: boolean, dictationOwner: string): boolean {
 /**
  * How long Stop stays after the model stops being cancellable. A merge lands its workers one by
  * one and the conversation stops and starts working between them; without this the button
- * flipped Stop ↔ Send several times a second, each flip easing its glyph in again from nothing,
- * so it showed as a blank disc.
+ * flipped Stop ↔ Send several times a second. Explicit Stop bypasses this hold.
  */
 const STOP_HOLD_MS = 700;
 
@@ -105,30 +103,8 @@ function useHeldOn(on: boolean, ms: number): boolean {
   return on || held;
 }
 
-/**
- * Whether the model is starting for the first time in this stretch of work (`working`). A
- * session's model starts again for each worker report and landing; those starts keep Stop, so
- * the button doesn't dim to the spinner and back mid-work (#422).
- */
-function useFirstStart(run: RunState | null, working: boolean): boolean {
-  const [ran, setRan] = useState(false);
-  // Set while rendering (React's way to adjust state to a prop), not in an effect.
-  if (working && run === "running" && !ran) setRan(true);
-  if (!working && ran) setRan(false);
-  return run === "starting" && !ran;
-}
-
 /** What ⌘⏎ and ⌘-click on Send do in a project's session. */
 const START_TIP = "Start as a new session";
-
-const SEND_TIPS: Record<SendState, string> = {
-  starting: "Starting your task…",
-  armed: "Press Esc again to stop",
-  stop: "Stop",
-  queue: "Queue",
-  resume: "Resume",
-  send: "Send message",
-};
 
 /** Whether ⌘ (Ctrl off macOS) is held down, while `on`. */
 function useModHeld(mac: boolean, on: boolean): boolean {
@@ -151,12 +127,9 @@ function useModHeld(mac: boolean, on: boolean): boolean {
 }
 
 /**
- * One send button, which changes with the state: ↑ to send (its tip "Queue" while the model
- * works: a Chat queues the message, a session's orchestrator sorts it; "Steer" when steering is
- * the default follow-up, Settings › General), ■ to stop, "Esc" once
- * armed, ▶ to resume a stopped request, and a grey spinner while the conversation's model
- * starts. In a project's session ⌘-click starts the message as a new session in the
- * background, as ⌘⏎ does; its arrow turns while ⌘ is held (or the New session chip is on).
+ * One stable button: an arrow to send/queue/steer, Stop while starting or cancellable,
+ * and Resume for a stopped request. Esc only changes Stop's tooltip. ⌘-click and the
+ * New session chip keep the background-session send behaviour.
  */
 export function SendControls({
   running,
@@ -166,18 +139,15 @@ export function SendControls({
   onResume: (() => void) | null;
 }) {
   const aui = useAui();
+  const { send, disabled: sendDisabled } = useComposerSend();
   const target = useContext(ComposerTargetContext);
   const conversationId = target?.conversation?.id ?? null;
-  const run = useBoard((s) =>
-    !!conversationId && s.board?.conversationId === conversationId ? s.board.run : null,
-  );
   const empty = useAuiState((s) => s.composer.isEmpty);
   const cancellable = useAuiState((s) => s.composer.canCancel);
   // The user's own Stop shows at once (#498): no hold after it.
   const stopping = useStopping((s) => turnStopping(s.stops, conversationId));
   const held = useHeldOn(cancellable, STOP_HOLD_MS);
-  const canCancel = cancellable || (held && !stopping);
-  const starting = useFirstStart(run, canCancel);
+  const canCancel = !stopping && (cancellable || held);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const armed = useEscToStop(canCancel, dictationOwner);
   const steers = useApp((s) => s.settings.followUp === "steer");
@@ -192,24 +162,12 @@ export function SendControls({
   useImagesUnsupportedToast();
   const stored = useAuiState((s) => anyUploading(s.composer.attachments));
   const uploading = useReadingFiles(dictationOwner) || stored;
-  const state: SendState =
-    armed
-      ? "armed"
-      : canCancel && empty
-        ? starting
-          ? "starting"
-          : "stop"
-        : running && !empty
-          ? "queue"
-          : !running && empty && onResume
-            ? "resume"
-            : "send";
-  const sending = state === "send" || state === "queue";
-  // Stop is a plain button, not the Cancel primitive: held Stop (nothing to cancel) and live Stop
-  // are then the same element, so a flip between them never remounts it.
-  const cancelling = state === "starting" || state === "armed" || state === "stop";
+  const state = sendButtonState({ armed, canCancel, empty, running, resumable: onResume !== null });
+  const sending = state === "send";
+  const queue = sending && running && !empty;
   const background = sending && projectSession !== null && !empty && (modHeld || chip);
-  const tip = state === "queue" && steers ? "Steer" : SEND_TIPS[state];
+  const tip = state === "stop" ? armed ? "Press Esc again to stop" : "Stop"
+    : state === "resume" ? "Resume" : queue ? steers ? "Steer" : "Queue" : "Send message";
   const tooltip =
     sending && imagesBlocked
       ? IMAGES_BLOCKED
@@ -218,33 +176,34 @@ export function SendControls({
         : background
         ? START_TIP
         : sending && projectSession
-          ? `${state === "send" ? "Send" : tip} ${shortcutKeys("send", mac)} · ${START_TIP} ${shortcutKeys("start-in-tab", mac)}`
+          ? `${queue ? tip : "Send"} ${shortcutKeys("send", mac)} · ${START_TIP} ${shortcutKeys("start-in-tab", mac)}`
           : tip;
   const button = (
     <SendButton
       tooltip={tooltip}
-      disabled={sending && (imagesBlocked || uploading)}
+      disabled={sending && (sendDisabled || imagesBlocked || uploading)}
       state={state}
       background={background}
       onClick={
         state === "resume"
           ? (onResume ?? undefined)
-          : cancelling
+          : state === "stop"
             ? () => {
                 if (cancellable) aui.composer().cancel();
               }
           : (event: MouseEvent<HTMLButtonElement>) => {
               const toNewSession = sending && !empty && (mac ? event.metaKey : event.ctrlKey);
-              // Into a paused queue it asks first; the Send primitive's own click doesn't send.
-              if (sending && !empty && !(projectSession && toNewSession) && askPausedSend(conversationId, () => aui.composer().send())) {
+              // A paused queue asks before this click sends.
+              if (sending && !empty && !(projectSession && toNewSession) && askPausedSend(conversationId, () => send())) {
                 event.preventDefault();
                 return;
               }
-              if (!projectSession) return;
-              // A ⌘-click whose send never came is not this send's.
-              clearBackgroundSend(projectSession);
-              // Before the Send primitive's own click sends: this send goes to a new session.
-              if (toNewSession) markBackgroundSend(projectSession);
+              if (projectSession) {
+                // A ⌘-click whose send never came is not this send's.
+                clearBackgroundSend(projectSession);
+                if (toNewSession) markBackgroundSend(projectSession);
+              }
+              send();
             }
       }
     />
@@ -252,7 +211,7 @@ export function SendControls({
   return (
     <div className="flex shrink-0 items-center gap-1">
       <DictateButton owner={dictationOwner} />
-      {state === "resume" || cancelling ? button : <ComposerPrimitive.Send asChild>{button}</ComposerPrimitive.Send>}
+      {button}
     </div>
   );
 }

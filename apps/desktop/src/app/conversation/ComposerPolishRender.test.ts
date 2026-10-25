@@ -99,12 +99,12 @@ test("Stop stays Stop, its glyph showing, while a merge stops and starts the wor
   assert.equal(seen.after, "send");
 });
 
-test("Stop stays Stop while a session's model starts again mid-work; only the work's first start shows the spinner (issue 422)", { timeout: 90000 }, async (t) => {
+test("the first start and later starts all keep the Stop look (issue 422)", { timeout: 90000 }, async (t) => {
   const seen = await polish(t, "restarts");
-  assert.equal(seen.first, "starting");
+  assert.equal(seen.first, "stop");
   assert.deepEqual(seen.during, ["stop"]);
   assert.equal(seen.after, "send");
-  assert.equal(seen.next, "starting");
+  assert.equal(seen.next, "stop");
 });
 
 test("Stop shows the turn stopped the moment it is pressed; a stop that fails shows it working again and says why (issue 498)", { timeout: 90000 }, async (t) => {
@@ -118,4 +118,28 @@ test("a message sent while the answer works, a file attached, waits in the queue
   const seen = await polish(t, "busySend");
   assert.deepEqual(seen.sending, { rail: 1, chat: 0 });
   assert.deepEqual(seen.queued, { rail: 1, chat: 0 });
+});
+
+
+test("the composer submit button and glyph wrapper never remount across send, starting/stop and send", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "identity");
+  assert.deepEqual(seen.atStart, { sameButton: true, sameGlyph: true, state: "stop" });
+  assert.deepEqual(seen.updates, { sameButton: true, state: "stop" });
+  assert.deepEqual(seen.after, { sameButton: true, sameGlyph: true, state: "send" });
+});
+
+
+test("starting can be cancelled; armed Esc keeps the Stop glyph and changes only its tooltip", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "startingCancel");
+  assert.deepEqual(seen.starting, { state: "stop", disabled: false, sameButton: true });
+  assert.deepEqual(seen.armed, { state: "stop", sameButton: true, glyph: true, text: "Press Esc again to stop" });
+  assert.equal(seen.cancelled, 1);
+  assert.equal(seen.sends, 0);
+});
+
+
+test("queue and steer keep the send arrow mounted and change only its tooltip", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "queueLook");
+  assert.deepEqual(seen.queue, { state: "send", tip: "Queue", sameButton: true });
+  assert.deepEqual(seen.steer, { state: "send", tip: "Steer", sameButton: true, sameGlyph: true });
 });

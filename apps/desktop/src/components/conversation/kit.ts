@@ -30,3 +30,6 @@ export type {
   ThreadMessageLike,
   Unstable_TriggerItem,
 } from "@assistant-ui/react";
+
+// The Send primitive's behaviour without changing the submit button's React parent.
+export { useComposerSend } from "@assistant-ui/core/react";
