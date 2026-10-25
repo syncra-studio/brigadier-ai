@@ -216,14 +216,16 @@ class Battery:
             raise RuntimeError(f"daemon IPC unavailable (exit code {code}): {error}") from error
 
     def entries(self):
-        entries, before = [], None
-        while True:
-            page = self.ipc.call({"method": "listOrchestratorLog", "conversationId": self.conversation,
-                                  "before": before, "limit": 500})["page"]
-            entries.extend(page["entries"])
-            if not page["hasMore"] or not page["entries"]:
-                return sorted(entries, key=lambda e: e["streamSeq"])
-            before = min(e["streamSeq"] for e in page["entries"])
+        """The thread's CLI session starts, oldest first, from its own `record/lineage.json`
+        (#540: the orch log is gone)."""
+        try:
+            lineage = json.loads((self.record() / "lineage.json").read_text())
+        except (OSError, ValueError):
+            lineage = []
+        return [{"atMs": entry.get("startedAt", 0), "entry": {
+            "provider": entry["provider"], "event": {"type": "sessionStarted", "file": entry["file"],
+            "nativeId": entry.get("sessionId")}}}
+            for entry in lineage if entry.get("provider") and entry.get("file")]
 
     def record(self):
         """The session's `record/` folder (data in /tmp: its sessions folder is `<data>-s`)."""
@@ -408,18 +410,7 @@ class Battery:
     def capture(self):
         if not self.conversation:
             return
-        if not self.proc or self.proc.poll() is not None:
-            try:
-                lineage = json.loads((self.record() / "lineage.json").read_text())
-            except (OSError, ValueError):
-                lineage = []
-            entries = [{"atMs": entry.get("startedAt", entry.get("started_at", 0)), "entry": {
-                "provider": entry["provider"], "event": {"type": "sessionStarted", "file": entry["file"],
-                "nativeId": entry.get("sessionId", entry.get("session_id"))}}}
-                for entry in lineage if entry.get("provider") and entry.get("file")]
-            self.errors.append("capture: daemon unavailable; recovered native paths from owned lineage record")
-        else:
-            entries = self.entries()
+        entries = self.entries()
         self.result["provider_events"] = entries
         self.native_sources = list(dict.fromkeys((e["entry"].get("provider", self.args.provider), event["file"])
             for e in entries if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted" and event.get("file")))

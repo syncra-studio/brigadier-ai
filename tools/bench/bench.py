@@ -276,14 +276,13 @@ class Daemon:
             if len(events) < 500:
                 break
 
-    def logs(self):
-        entries, before = [], None
-        while True:
-            page = self.call("listOrchestratorLog", conversationId=self.conv, before=before, limit=500)["page"]
-            entries.extend(page["entries"])
-            if not page["hasMore"] or not page["entries"]:
-                return sorted(entries, key=lambda e: e["streamSeq"])
-            before = min(e["streamSeq"] for e in page["entries"])
+    def lineage(self):
+        """The thread's CLI sessions, oldest first, from its `record/lineage.json` (the data
+        directory is in a temporary folder, so its sessions folder is `<data>-s`)."""
+        try:
+            return json.loads((self.root / "data-s" / self.conv[-8:] / "record" / "lineage.json").read_text())
+        except (OSError, ValueError):
+            return []
 
     def run(self, repo, arm, provider, model, prompt):
         self.provider = provider
@@ -317,14 +316,11 @@ class Daemon:
         view = wait(ended, self.args.timeout)
         wall = time.monotonic() - start
         self.events()
-        for entry in self.logs():
-            e = entry["entry"]
-            event = e.get("event") or {}
-            if event.get("type") == "sessionStarted" and event.get("file"):
-                self.save_native(e.get("provider", provider), event["file"])
+        lineage = [entry for entry in self.lineage() if entry.get("file")]
+        for entry in lineage:
+            self.save_native(entry.get("provider", provider), entry["file"])
         # The first native session belongs to the parent, not its worker.
-        parent_files = [e["entry"]["event"]["file"] for e in self.logs()
-                        if (e["entry"].get("event") or {}).get("type") == "sessionStarted" and e["entry"]["event"].get("file")]
+        parent_files = [entry["file"] for entry in lineage]
         if not parent_files:
             raise RuntimeError("No parent native session recorded")
         parent_files = list(dict.fromkeys(parent_files))
