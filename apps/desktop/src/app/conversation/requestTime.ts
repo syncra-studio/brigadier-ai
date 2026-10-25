@@ -20,9 +20,18 @@ export function useElapsed(from: number, to: number | null, live: boolean): numb
   return Math.max(0, (live || to === null ? now : to) - from);
 }
 
-/** A turn's header: how long it worked, and how it ended. */
-export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false): string {
+/** What a turn over says while the workers it started still work. */
+export function workersWaitWords(workers: number): string {
+  return workers === 1 ? "Waiting for a worker" : `Waiting for ${workers} workers`;
+}
+
+/**
+ * A turn's header: how long it worked, and how it ended. `workers`: a turn over whose workers
+ * still work says it waits for them, and for how long.
+ */
+export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, workers = 0): string {
   const time = formatDuration(elapsed);
+  if (workers > 0) return `${workersWaitWords(workers)} · ${time}`;
   switch (state) {
     case "working": {
       if (quota) return `Waiting for quota · ${time}`;
