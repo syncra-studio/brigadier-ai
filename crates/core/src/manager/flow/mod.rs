@@ -594,6 +594,8 @@ pub(crate) struct FakeBehavior {
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub cleanup_error: Mutex<Option<String>>,
     pub removals: Mutex<Vec<Removal>>,
+    /// The worktrees (with their branches) the CLI made for a session's subagents, by its id.
+    pub subagent_worktrees: Mutex<std::collections::HashMap<String, Vec<(PathBuf, String)>>>,
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
@@ -915,6 +917,20 @@ impl Provider for FakeCli {
             })
         });
         Box::pin(async move { took })
+    }
+
+    fn made_worktrees(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
+        let made = self.behavior.subagent_worktrees.lock().unwrap();
+        let found = artifacts
+            .iter()
+            .filter_map(|artifact| match artifact {
+                Artifact::ClaudeSession { session_id, .. } => made.get(session_id),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        Box::pin(async move { found })
     }
 
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, brigadier_providers::Result<()>> {

@@ -1567,6 +1567,12 @@ impl SessionManager {
                     .and_then(|branch| super::branch_names::branch_namespace(id, branch)),
             );
         }
+        if with_branches {
+            for (_, path, branch) in self.subagent_worktrees(conversation, &tasks).await {
+                needles.insert(path.display().to_string());
+                needles.insert(branch);
+            }
+        }
         let named = |owner: &str| ids.iter().any(|id| owner.contains(id.as_str()));
         let mut natives = Vec::new();
         for (holder, artifacts, _) in ledger.owners() {
@@ -1727,6 +1733,29 @@ impl SessionManager {
                 .record(&doomed, Artifact::GitBranches { repo, namespace })
                 .await?;
         }
+        // Worktrees its CLIs made for their subagents, wherever they are, then their branches.
+        for (repo, path, branch) in self.subagent_worktrees(conversation, tasks).await {
+            if path.exists() {
+                ledger
+                    .record(
+                        &doomed,
+                        Artifact::Worktree {
+                            repo: repo.clone(),
+                            path: path.to_string_lossy().into_owned(),
+                        },
+                    )
+                    .await?;
+            }
+            ledger
+                .record(
+                    &doomed,
+                    Artifact::GitBranches {
+                        repo,
+                        namespace: branch,
+                    },
+                )
+                .await?;
+        }
         if let Some(Setup::Session {
             repo,
             environment: Environment::LocalCheckout { .. },
@@ -1778,6 +1807,61 @@ impl SessionManager {
 }
 
 impl SessionManager {
+    /// The worktrees its and its workers' CLIs made for their subagents that are still in one
+    /// of its repositories (the worktree, else its branch), each with that repository and its
+    /// branch.
+    pub(super) async fn subagent_worktrees(
+        &self,
+        conversation: &Conversation,
+        tasks: &[Task],
+    ) -> Vec<(String, PathBuf, String)> {
+        let id = &conversation.id;
+        let mut ids = vec![format!(":{id}")];
+        ids.extend(tasks.iter().map(|task| format!(":{}", task.id.0)));
+        let made = self
+            .runtime
+            .ledger()
+            .subagent_worktrees(|owner| ids.iter().any(|id| owner.ends_with(id.as_str())))
+            .await;
+        if made.is_empty() {
+            return Vec::new();
+        }
+        let mut repos: Vec<String> = Vec::new();
+        if let Some(Setup::Session { repo, .. }) = &conversation.setup {
+            repos.push(repo.clone());
+        }
+        repos.extend(
+            tasks
+                .iter()
+                .filter_map(|task| task.plain.as_ref()?.repo.clone()),
+        );
+        repos.sort();
+        repos.dedup();
+        let git = self.git.clone();
+        blocking(move || {
+            let mut found = Vec::new();
+            for repo in repos {
+                let Ok(open) = git.open(Path::new(&repo)) else {
+                    continue;
+                };
+                let trees = open.worktrees().unwrap_or_default();
+                for (path, branch) in &made {
+                    let canonical = path.canonicalize().ok();
+                    let checked_out = trees.iter().any(|tree| {
+                        tree.path == *path
+                            || canonical.is_some() && tree.path.canonicalize().ok() == canonical
+                    });
+                    if checked_out || open.branch_tip(branch).ok().flatten().is_some() {
+                        found.push((repo.clone(), path.clone(), branch.clone()));
+                    }
+                }
+            }
+            Ok(found)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     /// The routing store lets go of a deleted conversation: its turns and its tasks' outcomes.
     pub(super) async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
         let Some(store) = self.runtime.routing_store().cloned() else {

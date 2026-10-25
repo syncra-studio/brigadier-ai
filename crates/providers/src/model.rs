@@ -1572,8 +1572,9 @@ pub enum Artifact {
     GitRefs { repo: String, namespace: String },
     /// A session's branch namespace in `repo` (`<prefix><short id>/`): every branch in it, the
     /// session's and its workers' and those their CLIs made there, with their
-    /// `branch.<name>.*` config. Only Delete disposes of it; a branch some worktree has out
-    /// stays.
+    /// `branch.<name>.*` config. Without its `/`, one branch by its exact name (one a CLI
+    /// made outside the namespace for a worktree of its own). Only Delete disposes of it; a
+    /// branch some worktree has out stays.
     GitBranches { repo: String, namespace: String },
     /// An untracked file a Local checkout session's turns made (`path` in the checkout `repo`)
     /// with the blob its last turn snapshot holds: removed only while still untracked and

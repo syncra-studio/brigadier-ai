@@ -214,6 +214,49 @@ impl CliHomes {
             .unwrap();
     }
 
+    /// A subagent of its Claude session that ran in a worktree of its own, as Claude Code
+    /// makes one (`.claude/worktrees/agent-<id>` in `cwd`'s checkout, on `worktree-agent-<id>`,
+    /// with a commit there) and records it beside the subagent's transcript. Returns the
+    /// worktree's path and branch.
+    fn subagent_worktree(&self, cwd: &Path) -> (PathBuf, String) {
+        let agent = format!("a{}", &uuid::Uuid::new_v4().simple().to_string()[..16]);
+        let path = cwd.join(".claude/worktrees").join(format!("agent-{agent}"));
+        let branch = format!("worktree-agent-{agent}");
+        git(
+            cwd,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &branch,
+                &path.display().to_string(),
+            ],
+        );
+        std::fs::write(path.join("agent.txt"), "subagent\n").unwrap();
+        git(&path, &["add", "agent.txt"]);
+        git(&path, &["commit", "-q", "-m", "Subagent"]);
+        let meta = self
+            .claude
+            .join("projects")
+            .join(encoded(cwd))
+            .join(&self.claude_session)
+            .join(format!("subagents/agent-{agent}.meta.json"));
+        std::fs::create_dir_all(meta.parent().unwrap()).unwrap();
+        std::fs::write(
+            &meta,
+            serde_json::json!({
+                "agentType": "general-purpose",
+                "worktreePath": path,
+                "spawnedWithWorktree": true,
+                "worktreeBranch": branch,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        (path, branch)
+    }
+
     /// The rollout of its Codex thread.
     fn rollout(&self) -> PathBuf {
         self.codex.join(format!(
@@ -441,13 +484,22 @@ async fn a_deleted_worktree_session_leaves_no_trace() {
         )
         .await;
     homes.install(&flow);
+    let (agent_tree, agent_branch) = homes.subagent_worktree(&work);
     let extra = vec![
         homes.claude_session.clone(),
         homes.codex_thread.clone(),
         homes.temp.display().to_string(),
         format!("{space}cli-made"),
         format!("{space}cli-tree"),
+        agent_tree.display().to_string(),
+        agent_branch.clone(),
     ];
+    // The ask lists its subagent's branch, whose commit landed nowhere.
+    let unlanded = flow.manager.preview_delete(std::slice::from_ref(&id)).await;
+    assert!(
+        unlanded.iter().any(|branch| branch.name == agent_branch),
+        "{unlanded:?}"
+    );
     let needles = needles(&flow, &id, &tasks, &extra);
     let before = leak_scan(&flow, &flow.repo, &[flow.scratch()], &needles);
     assert!(!before.is_empty(), "the scan sees the session before");
@@ -502,6 +554,7 @@ async fn a_deleted_local_checkout_session_takes_its_litter_and_leaves_its_work()
         )
         .await;
     homes.install(&flow);
+    let (agent_tree, agent_branch) = homes.subagent_worktree(&flow.repo);
     let files = flow
         .manager
         .preview_delete_files(std::slice::from_ref(&id))
@@ -519,7 +572,12 @@ async fn a_deleted_local_checkout_session_takes_its_litter_and_leaves_its_work()
         &flow,
         &id,
         &[],
-        &[homes.claude_session.clone(), homes.codex_thread.clone()],
+        &[
+            homes.claude_session.clone(),
+            homes.codex_thread.clone(),
+            agent_tree.display().to_string(),
+            agent_branch,
+        ],
     );
     flow.manager.delete(id.clone()).await.unwrap();
     flow.manager.cleanup_finished(&id).await;
@@ -720,10 +778,48 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
         ],
     );
     git(&flow.repo, &["branch", "harness/w01", "main"]);
+    // A worktree its thread's CLI made for a subagent, whose work landed on main.
+    let agent_branch = "worktree-agent-a0b1c2d3e4f5a6b7c".to_owned();
+    let agent_tree = flow.repo.join(".claude/worktrees/agent-a0b1c2d3e4f5a6b7c");
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &agent_branch,
+            &agent_tree.display().to_string(),
+        ],
+    );
+    git(
+        &agent_tree,
+        &["commit", "-q", "--allow-empty", "-m", "Subagent"],
+    );
+    // Landed by its commit (main's reflog naming the branch would be the user's history).
+    let agent_tip = git(&agent_tree, &["rev-parse", "HEAD"]);
+    git(&flow.repo, &["merge", "-q", "--ff-only", &agent_tip]);
+    let thread_session = flow
+        .manager
+        .runtime
+        .ledger()
+        .artifacts(&crate::ledger::lineage_owner(&old.0))
+        .into_iter()
+        .find_map(|artifact| match artifact {
+            Artifact::ClaudeSession { session_id, .. } => Some(session_id),
+            _ => None,
+        })
+        .unwrap();
+    flow.behavior.subagent_worktrees.lock().unwrap().insert(
+        thread_session,
+        vec![(agent_tree.clone(), agent_branch.clone())],
+    );
     let mut needles = vec![
         old.0.clone(),
         session_branch.clone(),
         format!("{space}landed"),
+        agent_branch.clone(),
+        agent_tree.display().to_string(),
     ];
     needles.extend(tasks.iter().map(|t| t.id.0.clone()));
     needles.extend(natives_of(&flow, &old, &tasks));
@@ -742,6 +838,8 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
     .await;
     assert!(!git(&flow.repo, &["for-each-ref", "refs/brigadier/s/"]).contains(&old.0));
     assert!(!git(&flow.repo, &["config", "--local", "-l"]).contains(&session_branch));
+    assert!(!agent_tree.exists(), "its subagent's worktree goes");
+    assert!(git(&flow.repo, &["branch", "--list", &agent_branch]).is_empty());
     // Its unmerged work waits for Storage's "not merged" ask.
     let kept = flow.manager.kept_branches().await.unwrap();
     assert!(

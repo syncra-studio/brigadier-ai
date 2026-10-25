@@ -11,7 +11,7 @@
 //!   reach.
 //! - Only recorded artifacts are ever touched.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -820,6 +820,43 @@ impl CleanupLedger {
         .await
     }
 
+    /// The worktrees, each with its branch, that the CLIs made for the subagents of the
+    /// sessions `owners` hold (as each CLI recorded them).
+    pub async fn subagent_worktrees(
+        &self,
+        owners: impl Fn(&str) -> bool,
+    ) -> Vec<(std::path::PathBuf, String)> {
+        let held = self
+            .owners()
+            .into_iter()
+            .filter(|(owner, _, _)| owners(owner))
+            .flat_map(|(_, artifacts, _)| artifacts)
+            .collect();
+        self.worktrees_made_for(held).await
+    }
+
+    /// The worktrees, each with its branch, that the CLIs made for the subagents of these
+    /// sessions ([`Artifact::ClaudeSession`]s; the rest is passed over).
+    pub async fn worktrees_made_for(
+        &self,
+        sessions: Vec<Artifact>,
+    ) -> Vec<(std::path::PathBuf, String)> {
+        let mut by_home: BTreeMap<Option<String>, Vec<Artifact>> = BTreeMap::new();
+        for artifact in sessions {
+            if let Artifact::ClaudeSession { home, .. } = &artifact {
+                by_home.entry(home.clone()).or_default().push(artifact);
+            }
+        }
+        let mut made = Vec::new();
+        for (home, sessions) in by_home {
+            let remover = self.remover(ProviderKind::Claude, home.as_deref());
+            made.extend(remover.made_worktrees(sessions).await);
+        }
+        made.sort();
+        made.dedup();
+        made
+    }
+
     /// The branches Brigadier made, by name (in any repository).
     pub(crate) fn made_branches(&self) -> Vec<String> {
         self.state()
@@ -1185,10 +1222,11 @@ impl CleanupLedger {
             ids.iter()
                 .any(|id| !id.is_empty() && name.contains(id.as_str()))
         };
+        // A namespace, or one branch by its exact name.
         let in_space = |branch: &str| {
-            needles
-                .iter()
-                .any(|space| space.ends_with('/') && branch.starts_with(space.as_str()))
+            needles.iter().any(|space| {
+                branch == space || space.ends_with('/') && branch.starts_with(space.as_str())
+            })
         };
         {
             let state = self.state();

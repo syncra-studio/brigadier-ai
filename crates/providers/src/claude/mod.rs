@@ -1530,6 +1530,17 @@ impl Provider for Claude {
         })
     }
 
+    fn made_worktrees(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
+        Box::pin(async move {
+            let Some(config) = self.history_dir() else {
+                return Vec::new();
+            };
+            tokio::task::spawn_blocking(move || files::subagent_worktrees(&config, &artifacts))
+                .await
+                .unwrap_or_default()
+        })
+    }
+
     fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
         Box::pin(async move {
             let Origin::Resume { native_id } = &spec.origin else {

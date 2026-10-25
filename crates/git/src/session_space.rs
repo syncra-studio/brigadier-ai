@@ -10,6 +10,14 @@ use crate::command::{failure, valid_oid};
 use crate::repo::Repo;
 use crate::{Error, Oid, Result, parse};
 
+/// Whether branch `name` is in `namespace` (a prefix ending with `/`, or one exact name).
+fn in_namespace(namespace: &str, name: &str) -> bool {
+    match namespace.ends_with('/') {
+        true => name.starts_with(namespace),
+        false => name == namespace,
+    }
+}
+
 /// What [`Repo::remove_namespace`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NamespaceRemoval {
@@ -20,17 +28,22 @@ pub struct NamespaceRemoval {
 }
 
 impl Repo {
+    /// A namespace ends with `/`; without it, it is one branch's exact name (a branch a
+    /// session's CLI made outside its namespace, for a worktree of its own).
     fn validate_namespace(&self, namespace: &str) -> Result<()> {
         let invalid = || Error::Invalid(format!("invalid branch namespace: {namespace:?}"));
-        if namespace.len() < 2 || !namespace.ends_with('/') || namespace.starts_with('/') {
+        if namespace.len() < 2 || namespace.starts_with('/') {
             return Err(invalid());
         }
-        self.validate_branch(&format!("{namespace}x"))
-            .map_err(|_| invalid())
+        let name = match namespace.ends_with('/') {
+            true => format!("{namespace}x"),
+            false => namespace.to_owned(),
+        };
+        self.validate_branch(&name).map_err(|_| invalid())
     }
 
-    /// The local branches whose names start with `namespace` (which ends with `/`), with
-    /// their tips, by name.
+    /// The local branches whose names start with `namespace` (or that one branch: see
+    /// [`Self::validate_namespace`]), with their tips, by name.
     pub fn branches_in(&self, namespace: &str) -> Result<Vec<(String, Oid)>> {
         self.validate_namespace(namespace)?;
         let pattern = format!("refs/heads/{namespace}");
@@ -45,7 +58,7 @@ impl Repo {
         let mut branches = Vec::new();
         for line in parse::text(&out)?.lines() {
             if let Some((name, tip)) = line.split_once('\0')
-                && name.starts_with(namespace)
+                && in_namespace(namespace, name)
             {
                 branches.push((name.to_owned(), Oid(tip.to_owned())));
             }
@@ -79,7 +92,7 @@ impl Repo {
             .lines()
             .filter_map(|key| key.strip_prefix("branch.")?.rsplit_once('.'))
             .map(|(name, _)| name.to_owned())
-            .filter(|name| name.starts_with(namespace))
+            .filter(|name| in_namespace(namespace, name))
             .collect();
         names.sort();
         names.dedup();
@@ -355,16 +368,19 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        for kept in [
-            "brigadier/abcd12345/other",
-            "brigadier/ffff0000/session",
-            "harness/w1",
-        ] {
+        for kept in ["brigadier/abcd12345/other", "brigadier/ffff0000/session"] {
             assert!(repo.branch_tip(kept).unwrap().is_some(), "{kept}");
             assert_eq!(repo.merge_base_of(kept).unwrap().as_deref(), Some("main"));
         }
-        assert!(repo.branches_in("brigadier").is_err());
+        // Without its `/`, one branch by its exact name: not those it starts.
+        assert!(repo.branches_in("harness/w").unwrap().is_empty());
+        assert_eq!(
+            repo.remove_namespace("harness/w1").unwrap().deleted,
+            ["harness/w1"]
+        );
+        assert!(repo.branch_config_in("harness/w1").unwrap().is_empty());
         assert!(repo.branches_in("/x/").is_err());
+        assert!(repo.branches_in("-x").is_err());
         // Twice is fine.
         assert_eq!(
             repo.remove_namespace("brigadier/abcd1234/").unwrap(),

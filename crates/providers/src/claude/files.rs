@@ -595,6 +595,61 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
     }
 }
 
+/// The worktrees Claude Code made for these sessions' subagents (an Agent call with worktree
+/// isolation), with their branches, as each subagent's `subagents/agent-<id>.meta.json` beside
+/// its transcript records them.
+pub(super) fn subagent_worktrees(config: &Path, artifacts: &[Artifact]) -> Vec<(PathBuf, String)> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Meta {
+        #[serde(default)]
+        spawned_with_worktree: bool,
+        worktree_path: Option<PathBuf>,
+        worktree_branch: Option<String>,
+    }
+    let Ok(projects) = std::fs::read_dir(config.join("projects")) else {
+        return Vec::new();
+    };
+    let projects: Vec<PathBuf> = projects.flatten().map(|entry| entry.path()).collect();
+    let mut made = Vec::new();
+    for artifact in artifacts {
+        let Artifact::ClaudeSession { session_id, .. } = artifact else {
+            continue;
+        };
+        if check_session_id(session_id).is_err() {
+            continue;
+        }
+        for project in &projects {
+            let Ok(entries) = std::fs::read_dir(project.join(session_id).join("subagents")) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.to_string_lossy().ends_with(".meta.json") {
+                    continue;
+                }
+                let Some(meta) = std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Meta>(&bytes).ok())
+                else {
+                    continue;
+                };
+                if let (true, Some(path), Some(branch)) = (
+                    meta.spawned_with_worktree,
+                    meta.worktree_path,
+                    meta.worktree_branch,
+                ) && path.is_absolute()
+                {
+                    made.push((path, branch));
+                }
+            }
+        }
+    }
+    made.sort();
+    made.dedup();
+    made
+}
+
 /// Whether the session's saved transcript (`projects/<project>/<id>.jsonl`) is known to be gone:
 /// the config's projects folder exists and no project holds it. Unknown (no projects folder,
 /// an unreadable one) is not missing.

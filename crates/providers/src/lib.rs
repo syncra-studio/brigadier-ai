@@ -117,6 +117,12 @@ pub trait Provider: Send + Sync {
     /// Processes are the caller's: see [`cleanup::end_process`]. Only what is listed is touched.
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Result<()>>;
 
+    /// The worktrees the CLI made for these sessions' subagents, each with its branch (both
+    /// as the CLI recorded them): a session's Delete takes them with it.
+    fn made_worktrees(&self, _artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
+        Box::pin(async { Vec::new() })
+    }
+
     /// A tab's cleanup must also suppress identifying diagnostics from control processes.
     fn remove_with_privacy(
         &self,

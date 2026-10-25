@@ -312,8 +312,29 @@ impl SessionManager {
             let board = self.core.board(id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
             records.extend(branch_records(&owned, &conversation, &tasks));
-            // And those its CLIs made in its namespaces, which Delete takes too (D7).
+            // And those its CLIs made in its namespaces, which Delete takes too (D7), and
+            // for their subagents' worktrees.
             spaces.extend(self.branch_spaces(&conversation, &tasks));
+            let target = match &conversation.setup {
+                Some(Setup::Session {
+                    environment: Environment::NewWorktree { base, .. },
+                    ..
+                }) => base.clone(),
+                Some(Setup::Session {
+                    environment: Environment::LocalCheckout { branch },
+                    ..
+                }) => branch.clone(),
+                _ => String::new(),
+            };
+            for (repo, path, name) in self.subagent_worktrees(&conversation, &tasks).await {
+                worktrees.push(path);
+                records.push(BranchRecord {
+                    repo: PathBuf::from(repo),
+                    name,
+                    target: target.clone(),
+                    tip: None,
+                });
+            }
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {

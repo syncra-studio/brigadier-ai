@@ -122,15 +122,59 @@ impl SessionManager {
             .flat_map(|project| project.repos.iter().map(|repo| PathBuf::from(&repo.path)))
             .collect();
         repos.extend(deleted.values().flat_map(|d| d.repos.iter().cloned()));
-        // Each repository is read once, for all of them.
-        let wanted: Vec<Wanted> = deleted
-            .values()
-            .map(|found| Wanted {
-                probe: ConversationId(format!("00000000-0000-0000-0000-0000{}", found.short)),
-                folder: sessions_dir.join(&found.short),
-                target: found.target.clone(),
+        let ledger = self.runtime.ledger().clone();
+        let natives = ledger.native_sessions();
+        let owners = ledger.owners();
+        let held: HashSet<String> = owners
+            .iter()
+            .flat_map(|(_, artifacts, _)| artifacts)
+            .filter_map(|artifact| match artifact {
+                Artifact::ClaudeSession { session_id, .. } => Some(session_id.clone()),
+                Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
+                _ => None,
             })
             .collect();
+        // Each repository is read once, for all of them.
+        let mut wanted: Vec<Wanted> = Vec::new();
+        for found in deleted.values() {
+            let folder = sessions_dir.join(&found.short);
+            // The branches its CLIs made for their subagents' worktrees, as their files tell:
+            // those of the CLI sessions that ran in its folder or its records still hold.
+            let suffix = found.id.as_ref().map(|id| format!(":{id}"));
+            let mut sessions: Vec<Artifact> = owners
+                .iter()
+                .filter(|(owner, _, _)| suffix.as_ref().is_some_and(|s| owner.ends_with(s)))
+                .flat_map(|(_, artifacts, _)| artifacts.iter().cloned())
+                .collect();
+            sessions.extend(
+                natives
+                    .iter()
+                    .filter(|(_, session)| {
+                        session.kind == brigadier_providers::ProviderKind::Claude
+                            && session
+                                .cwd
+                                .as_ref()
+                                .is_some_and(|cwd| Path::new(cwd).starts_with(&folder))
+                    })
+                    .map(|(native, session)| Artifact::ClaudeSession {
+                        session_id: native.clone(),
+                        home: None,
+                        cwd: session.cwd.clone(),
+                    }),
+            );
+            let subagents = ledger
+                .worktrees_made_for(sessions)
+                .await
+                .into_iter()
+                .map(|(_, branch)| branch)
+                .collect();
+            wanted.push(Wanted {
+                probe: ConversationId(format!("00000000-0000-0000-0000-0000{}", found.short)),
+                folder,
+                target: found.target.clone(),
+                subagents,
+            });
+        }
         let git = self.git.clone();
         let swept = blocking(move || {
             Ok(repos
@@ -141,7 +185,6 @@ impl SessionManager {
         })
         .await
         .unwrap_or_default();
-        let ledger = self.runtime.ledger().clone();
         let recorded = self.kept_branches().await.unwrap_or_default();
         // Not yet gone (work kept, a failure): its records stay, and the next sweep looks again.
         let mut unclean: HashSet<String> = HashSet::new();
@@ -172,17 +215,6 @@ impl SessionManager {
                 sweep.failures.push(err.to_string());
             }
         }
-        let natives = ledger.native_sessions();
-        let held: HashSet<String> = ledger
-            .owners()
-            .into_iter()
-            .flat_map(|(_, artifacts, _)| artifacts)
-            .filter_map(|artifact| match artifact {
-                Artifact::ClaudeSession { session_id, .. } => Some(session_id),
-                Artifact::CodexThread { thread_id, .. } => Some(thread_id),
-                _ => None,
-            })
-            .collect();
         let marker = self.runtime.platform().paths().owner_marker();
         let temps: Vec<PathBuf> = std::fs::read_dir("/tmp")
             .into_iter()
@@ -391,6 +423,8 @@ struct Wanted {
     probe: ConversationId,
     folder: PathBuf,
     target: Option<String>,
+    /// The branches its CLIs made for their subagents' worktrees.
+    subagents: Vec<String>,
 }
 
 /// What the sweep did in one repository, by short id.
@@ -446,11 +480,18 @@ fn sweep_repo(git: &brigadier_git::Git, repo_path: &Path, wanted: &[Wanted]) -> 
     for one in wanted {
         let short = one.probe.short().to_owned();
         let result = (|| -> brigadier_git::Result<()> {
-            let spaces: BTreeSet<String> = branches
+            let mut spaces: BTreeSet<String> = branches
                 .lines()
                 .chain(configured.iter().map(String::as_str))
                 .filter_map(|branch| branch_namespace(&one.probe, branch))
                 .collect();
+            // Its subagents' branches, each a namespace of one (see `Repo::branches_in`).
+            spaces.extend(
+                one.subagents
+                    .iter()
+                    .filter(|branch| branches.lines().any(|there| there == branch.as_str()))
+                    .cloned(),
+            );
             // Worktrees: the clean ones go; one with uncommitted work stays.
             for worktree in &worktrees {
                 let ours = worktree.path != main
