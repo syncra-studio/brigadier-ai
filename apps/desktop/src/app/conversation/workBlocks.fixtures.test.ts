@@ -178,6 +178,18 @@ test("a turn that ended with no reply keeps its work in view, live and reread, o
   }
 });
 
+test("Claude's background end told in Brigadier's own /compact is one more turn of the block that started it, as Codex's is (D44, D52)", () => {
+  const fixture = load("claude-2.1.310", "background");
+  for (const source of ["live", "persisted"] as const) {
+    // As a session draws it: Brigadier's `/compact` is no bubble.
+    const blocks = cliBlocks(fixture[source], "recorded-thread", undefined, true);
+    assert.ok(blocks.every((block) => block.user !== null), `${source}: a block with no message of its own`);
+    const [first] = blocks;
+    assert.equal(first?.taskNotices.length, 1, source);
+    assert.deepEqual(first?.texts.map((text) => text.text), ["OK", "OK"], source);
+  }
+});
+
 /** The recorded `sleep 30` call, as the CLI's file keeps it when the turn ends before its result. */
 function cutOff(end: "interrupted" | "failed"): { view: ThreadView; itemId: string } {
   const fixture = load("claude-2.1.310", "interrupt");

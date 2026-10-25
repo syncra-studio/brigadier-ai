@@ -572,6 +572,14 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && row.startedAtMs >= from));
   };
   const internal = new Set<Block>();
+  // The turns, by place, the CLI told a background job's end in: Claude tells it in the next turn
+  // it runs, which may be Brigadier's own `/compact`.
+  const noticed = new Set<number>();
+  view.entries.reduce((at, entry) => {
+    const next = !entry.parent && startsTurn(entry) ? at + 1 : at;
+    if (!entry.parent && entry.event.type === "taskNotice") noticed.add(next);
+    return next;
+  }, -1);
   let maintenance: "turn" | "steered" | "upkeep" | null = null;
   const seams = view.seams ?? [];
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
@@ -653,7 +661,11 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         startsTurn(entry) &&
         !!before &&
         !internal.has(before) &&
-        ((!!news && startedIn(before, asked.text)) || (woke && carries.some((request) => before.requestIds.includes(request))));
+        ((!!news && startedIn(before, asked.text)) ||
+          (woke && carries.some((request) => before.requestIds.includes(request))) ||
+          // Brigadier's `/compact` that Claude told a background command's end in: one more turn
+          // of the block before, as Codex's word of its command's end is (D44, D52).
+          (compacting && noticed.has(turn)));
       if (joins && block) {
         const last = turnOf.get(block);
         joined.set(block, [...(joined.get(block) ?? []), ...(last ? [last] : [])]);
