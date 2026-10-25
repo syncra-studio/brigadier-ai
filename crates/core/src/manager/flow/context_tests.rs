@@ -271,10 +271,11 @@ async fn a_thread_and_its_worker_pull_their_context() {
     let flow = Flow::start("context", Options::default(), script).await;
     flow.say(REQUEST).await;
     flow.settled().await;
-    assert!(
-        *worker_done.lock().unwrap(),
-        "the worker's turn ran to its end"
-    );
+    // The session's request settles at its own turn's end; its worker's turn may still run.
+    flow.until("the worker's turn ran to its end", |_| {
+        *worker_done.lock().unwrap()
+    })
+    .await;
     // The worker's `ledger add` went to its own ledger; its session's is as it was.
     let ledger = session_ledger.lock().unwrap().clone().unwrap();
     assert_eq!(std::fs::read_to_string(ledger).unwrap(), LEDGER);
