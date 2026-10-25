@@ -6,7 +6,7 @@
  * - `long`: a chat of 80 turns. Opening it brings the newest 40, only those near the view mounted.
  * - `short`: a chat of 3 turns.
  * - `long-u47` is long enough to be cut until "Show more".
- * - `gaps`: 6 user messages, each followed by 12 turns its CLI began, so the one next to any is never mounted.
+ * - `gaps`: 6 user messages, each followed by 12 turns Brigadier's word began, so the one next to any is never mounted.
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
  * `window.messageRail` holds the steps for a browser probe.
@@ -77,7 +77,8 @@ function spaced(id: string, turns: number, notices: number): Message[] {
     add({ id: `${id}-a${turn}`, role: "assistant", text: `Answer ${turn + 1}, with a command left running.`, createdAtMs: at + 1000, requestId });
     for (let notice = 0; notice < notices; notice++) {
       const atMs = at + (notice + 2) * 1000;
-      add({ id: `${id}-n${turn}-${notice}`, role: "user", text: `[your background command \`job ${notice + 1}\` finished]`, createdAtMs: atMs, requestId });
+      // Brigadier's word starts each (a job's end would join the block that started it, D21).
+      add({ id: `${id}-n${turn}-${notice}`, role: "user", text: `[decision] Job ${notice + 1} goes on.`, createdAtMs: atMs, requestId });
       add({ id: `${id}-m${turn}-${notice}`, role: "assistant", text: `Job ${notice + 1} of question ${turn + 1} is done.`, createdAtMs: atMs + 500, requestId });
     }
   }
