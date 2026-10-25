@@ -386,6 +386,7 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
         ended_at_ms,
         requests: Vec::new(),
         limit: None,
+        context_window: None,
     }
 }
 

@@ -197,6 +197,7 @@ fn turn_records(
                         ended_at_ms: Some(recording.header.recorded_at_ms + row.t as i64),
                         requests: vec![],
                         limit: None,
+                        context_window: None,
                     });
                 }
             }
@@ -423,6 +424,63 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                 &folder.join(case["view"].as_str().unwrap()),
                 &json!({"events":events,"live":before_reload,"persisted":reloaded}),
             );
+        }
+    }
+}
+
+/// #540: the context size read back from each recorded CLI version's own session file is what
+/// its live stream last reported, its window too where the file names one (Codex's).
+#[test]
+fn every_cli_versions_session_file_says_the_context_its_stream_reported() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../providers/fixtures/versions");
+    let platform = native_for_identifier(
+        "ai.brigadier.version-replay-tests",
+        PlatformOptions {
+            data_dir: Some(root.join("unused-data")),
+        },
+    )
+    .unwrap();
+    let env = Arc::new(CliEnv::from_vars([]));
+    let mut folders: Vec<PathBuf> = std::fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    folders.sort();
+    assert!(!folders.is_empty());
+    for folder in folders {
+        let index: Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join("index.json")).unwrap())
+                .unwrap();
+        let kind: ProviderKind = serde_json::from_value(index["provider"].clone()).unwrap();
+        let provider: Box<dyn Provider> = match kind {
+            ProviderKind::Claude => Box::new(claude::Claude::new(platform.clone(), env.clone())),
+            ProviderKind::Codex => Box::new(codex::Codex::new(platform.clone(), env.clone())),
+        };
+        // The compaction run: one native session across its compaction, interrupt and resume.
+        let case = &index["scenarios"]["compaction"];
+        let mut reported = None;
+        for path in case["historyRecordings"].as_array().unwrap() {
+            let (_, events) = replay(provider.as_ref(), &folder.join(path.as_str().unwrap()));
+            for (_, event) in events {
+                if let ProviderEvent::ContextSize {
+                    used_tokens,
+                    window_tokens,
+                } = event
+                {
+                    reported = Some((used_tokens, window_tokens));
+                }
+            }
+        }
+        let (used, window) = reported.expect("the stream reported a context size");
+        let native = folder.join(case["native"].as_str().unwrap());
+        let said = session_file::context(kind, &native)
+            .unwrap()
+            .expect("the file says a context size");
+        assert_eq!(said.used_tokens, used, "{}", folder.display());
+        if kind == ProviderKind::Codex {
+            assert_eq!(said.window_tokens, window, "{}", folder.display());
         }
     }
 }

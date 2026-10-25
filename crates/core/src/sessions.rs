@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
-use brigadier_providers::{ProviderEvent, ProviderKind};
+use brigadier_providers::ProviderKind;
 use brigadier_store::{NewEvent, Retention, Store, StreamPage};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -12,16 +12,16 @@ use ts_rs::TS;
 
 use crate::board::{self, Board};
 use crate::model::{
-    Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
-    DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches,
-    MessagePage, MessageRole, ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project,
-    ProjectId, ProjectPatch, ProjectRepo, RawEntry, Settings, Setup, WorkerPage, streams,
+    Catalog, Conversation, ConversationId, ConversationKind, ConversationView, DomainEvent,
+    EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches, MessagePage,
+    MessageRole, ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId,
+    ProjectPatch, ProjectRepo, RawEntry, Settings, Setup, WorkerPage, streams,
 };
 use crate::projection::Projection;
 
 use crate::work::{
-    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, OrchestratorEntry,
-    QueuedMessage, RequestState, RequestUndo, SentToWorker, Task, TaskId, UserRequest,
+    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, QueuedMessage,
+    RequestState, RequestUndo, SentToWorker, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -57,8 +57,6 @@ pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 20;
 const MAX_QUEUED: usize = 50;
 const BOARD_PAGE: u32 = 1_000;
-/// Newest orchestrator log entries searched for the model's context size.
-const CONTEXT_SCAN: u32 = 200;
 
 /// What an agent's CLI told of its MCP servers ([`Core::record_mcp_servers`]).
 #[derive(Debug, Clone)]
@@ -1325,10 +1323,10 @@ impl Core {
         let conversation = self.conversation(&id)?;
         let messages = self.list_messages(id.clone(), None, limit).await?;
         let board = self.board(&id).await?;
-        let context = self.context_usage(&id).await?;
         Ok(ConversationView {
             conversation,
-            context,
+            // From its CLI's own file: `SessionManager::conversation_view` (#540).
+            context: None,
             messages,
             tasks: board.sorted_tasks(),
             approvals: board.sorted_approvals(),
@@ -1352,56 +1350,6 @@ impl Core {
             mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),
         })
-    }
-
-    /// The context size the conversation's CLI last reported, from the newest orchestrator
-    /// log entries (a window it stopped repeating comes from an earlier report).
-    async fn context_usage(&self, id: &ConversationId) -> Result<Option<ContextUsage>> {
-        let entries = self
-            .store
-            .read_stream(
-                streams::orchestrator(id),
-                StreamPage {
-                    before: None,
-                    kinds: vec!["orchestrator.logged".into()],
-                    limit: CONTEXT_SCAN,
-                },
-            )
-            .await?;
-        let mut usage: Option<ContextUsage> = None;
-        for stored in &entries {
-            let DomainEvent::OrchestratorLogged {
-                entry:
-                    OrchestratorEntry::Provider {
-                        event:
-                            ProviderEvent::ContextSize {
-                                used_tokens,
-                                window_tokens,
-                            },
-                        ..
-                    },
-                ..
-            } = decode(stored)?
-            else {
-                continue;
-            };
-            match &mut usage {
-                None => {
-                    usage = Some(ContextUsage {
-                        used_tokens,
-                        window_tokens,
-                    });
-                }
-                Some(latest) if latest.window_tokens.is_none() => {
-                    latest.window_tokens = window_tokens;
-                }
-                Some(_) => break,
-            }
-            if usage.is_some_and(|latest| latest.window_tokens.is_some()) {
-                break;
-            }
-        }
-        Ok(usage)
     }
 
     /// Appends events to a conversation's stream and applies them to its board. Returns each

@@ -77,6 +77,69 @@ pub fn read(kind: ProviderKind, path: &Path) -> std::io::Result<Vec<FileEntry>> 
     Ok(merge(Vec::new(), entries))
 }
 
+/// How full a session's context is, as its CLI's own file last said (#540).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileContext {
+    pub used_tokens: i64,
+    /// The model's window, when the file says it (Codex's); Claude's file never does.
+    pub window_tokens: Option<i64>,
+}
+
+/// The context size `kind`'s session file at `path` last recorded, counted as the live stream
+/// counts it ([`ProviderEvent::ContextSize`]): Claude's newest model call in the session's own
+/// thread, or what a compaction after it left; Codex's newest `token_count`. Read from the
+/// end, so a long session's file isn't read whole. None when the file says none.
+pub fn context(kind: ProviderKind, path: &Path) -> std::io::Result<Option<FileContext>> {
+    match kind {
+        ProviderKind::Claude => newest(path, crate::claude::session_file::context_of),
+        ProviderKind::Codex => newest(path, crate::codex::rollout::context_of),
+    }
+}
+
+/// How much more of a file [`newest`] reads back at a time.
+const TAIL_STEP: u64 = 256 * 1024;
+
+/// The answer of the newest line of the JSONL file at `path` that `find` answers for
+/// (`Some`); `find` says `None` for a line that tells nothing. Reads back from the end.
+pub(crate) fn newest<T>(
+    path: &Path,
+    find: impl Fn(&serde_json::Value) -> Option<Option<T>>,
+) -> std::io::Result<Option<T>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    // Where the lines not read yet end.
+    let mut end = file.metadata()?.len();
+    let mut span = TAIL_STEP;
+    while end > 0 {
+        let start = end.saturating_sub(span);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = vec![0; usize::try_from(end - start).unwrap_or(usize::MAX)];
+        file.read_exact(&mut bytes)?;
+        // The first line may start before what was read: it is read with the next part. A
+        // part with no whole line in it is read again, longer.
+        let whole = match start {
+            0 => 0,
+            _ => match bytes.iter().position(|byte| *byte == b'\n') {
+                Some(at) if at + 1 < bytes.len() => at + 1,
+                _ => {
+                    span = span.saturating_mul(2);
+                    continue;
+                }
+            },
+        };
+        for line in bytes[whole..].split(|byte| *byte == b'\n').rev() {
+            if let Ok(value) = serde_json::from_slice(line)
+                && let Some(answer) = find(&value)
+            {
+                return Ok(answer);
+            }
+        }
+        end = start + whole as u64;
+        span = TAIL_STEP;
+    }
+    Ok(None)
+}
+
 /// `kind`'s session file at `path` kept read, to read again for only what was added since:
 /// Claude's file and its subagents' are read on from where the last read stopped. Codex's
 /// rollout is read whole each time.
@@ -295,6 +358,101 @@ mod tests {
     use super::*;
     use crate::model::{Role, TextPhase};
     use serde_json::{Value, json};
+
+    /// A scratch session file, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn context_file(lines: &[Value]) -> (Scratch, std::path::PathBuf) {
+        let path =
+            std::env::temp_dir().join(format!("brigadier-context-{}.jsonl", uuid::Uuid::new_v4()));
+        let text: Vec<String> = lines.iter().map(Value::to_string).collect();
+        std::fs::write(&path, text.join("\n") + "\n").unwrap();
+        (Scratch(path.clone()), path)
+    }
+
+    fn claude_call(read: i64, sidechain: bool) -> Value {
+        json!({"type": "assistant", "isSidechain": sidechain, "message": {"usage": {
+            "input_tokens": 2, "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": 10, "output_tokens": 5}}})
+    }
+
+    /// Claude's newest call of its own thread counts all it read and wrote; a subagent's and a
+    /// stand-in reply's don't count, and a compaction after it leaves what it says (#540).
+    #[test]
+    fn claudes_context_is_its_newest_own_call_or_what_a_compaction_left() {
+        let stand_in = json!({"type": "assistant", "message": {"usage": {
+            "input_tokens": 0, "output_tokens": 0}}});
+        let (_dir, path) = context_file(&[
+            claude_call(100, false),
+            claude_call(900, true),
+            stand_in,
+            json!({"type": "user", "message": {"content": "next"}}),
+        ]);
+        assert_eq!(
+            context(ProviderKind::Claude, &path).unwrap(),
+            Some(FileContext {
+                used_tokens: 117,
+                window_tokens: None
+            })
+        );
+        let (_dir, path) = context_file(&[
+            claude_call(100, false),
+            json!({"type": "system", "subtype": "compact_boundary",
+                "compactMetadata": {"preTokens": 117, "postTokens": 40}}),
+        ]);
+        assert_eq!(
+            context(ProviderKind::Claude, &path)
+                .unwrap()
+                .map(|c| c.used_tokens),
+            Some(40)
+        );
+        let (_dir, path) = context_file(&[json!({"type": "user"})]);
+        assert_eq!(context(ProviderKind::Claude, &path).unwrap(), None);
+    }
+
+    /// Codex's newest `token_count` gives its last request and the window.
+    #[test]
+    fn codexs_context_is_its_newest_token_count() {
+        let count = |total: i64| {
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "last_token_usage": {"total_tokens": total}, "model_context_window": 1000}}})
+        };
+        let (_dir, path) = context_file(&[
+            count(10),
+            count(20),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": null}}),
+        ]);
+        assert_eq!(
+            context(ProviderKind::Codex, &path).unwrap(),
+            Some(FileContext {
+                used_tokens: 20,
+                window_tokens: Some(1000)
+            })
+        );
+    }
+
+    /// The file is read back from its end in parts; a line longer than a part is read whole.
+    #[test]
+    fn the_newest_line_is_found_past_lines_longer_than_a_part() {
+        let long = "x".repeat(usize::try_from(TAIL_STEP * 3).unwrap());
+        let (_dir, path) = context_file(&[
+            claude_call(100, false),
+            json!({"type": "user", "message": {"content": long}}),
+            json!({"type": "user", "message": {"content": long}}),
+        ]);
+        assert_eq!(
+            context(ProviderKind::Claude, &path)
+                .unwrap()
+                .map(|c| c.used_tokens),
+            Some(117)
+        );
+    }
 
     /// A session file's items, one line each (`BRIGADIER_SESSION_FILE=claude:<path>` or
     /// `codex:<path>`): for comparing a real session with its CLI's own resume view.

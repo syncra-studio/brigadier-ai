@@ -269,6 +269,10 @@ pub(crate) struct TurnRecord {
     pub requests: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<LimitHit>,
+    /// The model's context window its CLI last said, at the turn's end: Claude's session file
+    /// never records it (#540).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
 }
 
 /// What the live stream added for a conversation, sent as it comes.
@@ -359,6 +363,8 @@ pub(crate) struct LiveTurn {
     pub waking_until: Option<i64>,
     /// What of its background work was last said to hold its turn.
     pub jobs_said: CliJobs,
+    /// The model's context window its CLI last said: it outlasts the turn.
+    pub context_window: Option<i64>,
 }
 
 /// How many commands of calls not (yet) a background task's are kept.
@@ -872,6 +878,7 @@ mod tests {
             ended_at_ms: Some(at),
             requests: Vec::new(),
             limit: None,
+            context_window: None,
         };
         let live = LiveTurn {
             entries: vec![notice.clone(), message("a2", Role::Assistant)],

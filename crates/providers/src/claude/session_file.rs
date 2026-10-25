@@ -20,6 +20,38 @@ const INTERRUPTED: &str = "[Request interrupted by user";
 /// Claude's own stand-in reply after a Stop.
 const NO_RESPONSE: &str = "No response requested.";
 
+/// What a line of the session file says of its context ([`crate::session_file::context`]): a
+/// model call of the session's own thread counts all it read and wrote, as the stream's usage
+/// does; a compaction leaves its post-compaction tokens, or nothing known.
+pub(crate) fn context_of(value: &Value) -> Option<Option<crate::session_file::FileContext>> {
+    match str_of(value, "type")? {
+        "assistant" if value.get("isSidechain").and_then(Value::as_bool) != Some(true) => {
+            let usage = value.get("message")?.get("usage")?;
+            let count = |key: &str| usage.get(key).and_then(Value::as_i64).unwrap_or(0);
+            let used = count("input_tokens")
+                + count("cache_read_input_tokens")
+                + count("cache_creation_input_tokens")
+                + count("output_tokens");
+            // Claude's own stand-in replies count nothing.
+            (used > 0).then_some(Some(crate::session_file::FileContext {
+                used_tokens: used,
+                window_tokens: None,
+            }))
+        }
+        "system" if str_of(value, "subtype") == Some("compact_boundary") => Some(
+            value
+                .get("compactMetadata")
+                .and_then(|metadata| metadata.get("postTokens"))
+                .and_then(Value::as_i64)
+                .map(|used| crate::session_file::FileContext {
+                    used_tokens: used,
+                    window_tokens: None,
+                }),
+        ),
+        _ => None,
+    }
+}
+
 /// The thread the session file at `path` holds, its subagents' beside their calls.
 pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
     let entries = read_lines(path, None)?;

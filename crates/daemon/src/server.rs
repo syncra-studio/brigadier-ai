@@ -1433,7 +1433,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .0,
         },
         Request::GetConversation { id, limit } => Response::GetConversation {
-            view: Box::new(heap(|| core.conversation_view(id, limit)).await?),
+            view: Box::new(heap(|| sessions.conversation_view(id, limit)).await?),
         },
         Request::SendMessage {
             conversation_id,

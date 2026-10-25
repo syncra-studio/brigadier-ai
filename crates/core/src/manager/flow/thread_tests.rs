@@ -1412,6 +1412,62 @@ async fn a_closed_thread_resumes_its_session_from_its_lineage_after_a_restart() 
     flow.stop().await;
 }
 
+/// The view's context size after a restart is what the CLI's own session file last said,
+/// with the window its stream named, noted in `record/turns.jsonl` (#540).
+#[tokio::test]
+async fn the_context_size_after_a_restart_is_the_cli_files_own() {
+    use brigadier_providers::ProviderEvent;
+    let flow = Flow::start(
+        "context-file",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            turn.emit(ProviderEvent::ContextSize {
+                used_tokens: 117,
+                window_tokens: Some(200_000),
+            })
+            .await;
+            super::session_line(
+                turn.session_file.as_ref().expect("a session file"),
+                json!({"type": "assistant", "isSidechain": false, "message": {
+                    "id": "msg_context", "role": "assistant", "content": [],
+                    "usage": {"input_tokens": 2, "cache_read_input_tokens": 100,
+                        "cache_creation_input_tokens": 10, "output_tokens": 5}}}),
+            );
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    flow.manager
+        .conv(&flow.conversation)
+        .unwrap()
+        .close_cli()
+        .await;
+    flow.manager.convs_lock().remove(&flow.conversation);
+    flow.manager.cli_threads.lock().unwrap().clear();
+
+    let view = flow
+        .manager
+        .conversation_view(flow.conversation.clone(), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.context,
+        Some(crate::model::ContextUsage {
+            used_tokens: 117,
+            window_tokens: Some(200_000),
+        })
+    );
+    flow.stop().await;
+}
+
 /// A forgotten CLI session (a Chat's rework, the upgrade pass) is never resumed, after a
 /// restart too: the next turn starts a fresh one (#540).
 #[tokio::test]

@@ -13,6 +13,28 @@ use crate::model::{
 };
 use crate::session_file::{FileEntry, shown};
 
+/// What a line of the rollout says of its context ([`crate::session_file::context`]): a
+/// `token_count`'s last request, which the live stream reports as the context in use, and the
+/// model's window.
+pub(crate) fn context_of(value: &Value) -> Option<Option<crate::session_file::FileContext>> {
+    if str_of(value, "type") != Some("event_msg") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    if str_of(payload, "type") != Some("token_count") {
+        return None;
+    }
+    let info = payload.get("info").filter(|info| !info.is_null())?;
+    let used = info
+        .get("last_token_usage")?
+        .get("total_tokens")?
+        .as_i64()?;
+    Some(Some(crate::session_file::FileContext {
+        used_tokens: used,
+        window_tokens: info.get("model_context_window").and_then(Value::as_i64),
+    }))
+}
+
 /// The thread the rollout at `path` holds.
 pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
     let text = std::fs::read_to_string(path)?;

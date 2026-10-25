@@ -9,7 +9,7 @@ use brigadier_providers::{
 use super::SessionManager;
 use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive};
 use super::session_dir::read_lineage;
-use crate::model::{ContextUsage, ConversationId};
+use crate::model::{ContextUsage, ConversationId, ConversationView};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
 use crate::work::{ConversationActivity, TaskId};
 use crate::{Error, Result, now_ms};
@@ -134,6 +134,7 @@ impl SessionManager {
                             commands: std::mem::take(&mut live.commands),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
+                            context_window: live.context_window,
                             ..LiveTurn::default()
                         };
                     }
@@ -169,6 +170,7 @@ impl SessionManager {
                             ended_at_ms: None,
                             requests: live.requests.clone(),
                             limit: None,
+                            context_window: None,
                         });
                     }
                     let entry = FileEntry {
@@ -200,6 +202,9 @@ impl SessionManager {
                     used_tokens,
                     window_tokens,
                 }) => {
+                    if window_tokens.is_some() {
+                        live.context_window = *window_tokens;
+                    }
                     context = Some(ContextUsage {
                         used_tokens: *used_tokens,
                         window_tokens: *window_tokens,
@@ -223,6 +228,7 @@ impl SessionManager {
                     ended_at_ms: Some(at),
                     requests: live.requests.clone(),
                     limit: live.limit.take(),
+                    context_window: live.context_window,
                 });
             }
             if let Some(record) = &noted
@@ -421,6 +427,29 @@ impl SessionManager {
         Ok(view)
     }
 
+    /// Everything conversation `id`'s view shows, with how full its context is as its CLI's
+    /// own file says (#540).
+    pub async fn conversation_view(
+        &self,
+        id: ConversationId,
+        limit: u32,
+    ) -> Result<ConversationView> {
+        let mut view = self.core.conversation_view(id.clone(), limit).await?;
+        view.context = self.context_usage(&id).await;
+        Ok(view)
+    }
+
+    /// How full conversation `id`'s context is: what its newest CLI session's file last said is
+    /// in use, with the window that file names (Codex's) or else the one the newest turn in
+    /// `record/turns.jsonl` noted (Claude's) (#540).
+    pub(crate) async fn context_usage(&self, id: &ConversationId) -> Option<ContextUsage> {
+        let record = self.session_dir(id).record();
+        super::blocking(move || Ok(context_in(&record)))
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// Conversation `id`'s thread as its CLI keeps it.
     pub fn thread_view(&self, id: &ConversationId) -> Result<ThreadView> {
         self.core.conversation(id)?;
@@ -543,6 +572,36 @@ const LINE_MAX: usize = 200;
 /// `task` as it stands now among `tasks`, those ended long ago dropped; the tasks after.
 /// What of `live`'s background work holds its turn at `at`, when that changed since it was
 /// last said.
+/// How full the context of the thread whose `record/` is `record` is ([`SessionManager::context_usage`]):
+/// from the CLI session file written to last, of those its lineage lists and hasn't forgotten.
+fn context_in(record: &std::path::Path) -> Option<ContextUsage> {
+    let (_, provider, file) = read_lineage(record)
+        .into_iter()
+        .filter(|session| !session.forgotten)
+        .filter_map(|session| {
+            let file = session_file::locate(
+                session.provider,
+                std::path::Path::new(session.file.as_deref()?),
+            );
+            let written = std::fs::metadata(&file)
+                .and_then(|meta| meta.modified())
+                .ok()?;
+            Some((written, session.provider, file))
+        })
+        .max_by_key(|(written, ..)| *written)?;
+    let said = session_file::context(provider, &file).ok().flatten()?;
+    let window_tokens = said.window_tokens.or_else(|| {
+        thread_view::read_turns(record)
+            .into_iter()
+            .rev()
+            .find_map(|turn| turn.context_window)
+    });
+    Some(ContextUsage {
+        used_tokens: said.used_tokens,
+        window_tokens,
+    })
+}
+
 fn said_jobs(live: &mut LiveTurn, at: i64) -> Option<thread_view::CliJobs> {
     let jobs = live.jobs(at);
     (jobs != live.jobs_said).then(|| {
