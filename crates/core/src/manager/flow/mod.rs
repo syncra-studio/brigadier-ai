@@ -2376,6 +2376,8 @@ mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(unix)]
+mod auto_resume_routing_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod fault_tests;

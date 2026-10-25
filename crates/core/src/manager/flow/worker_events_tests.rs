@@ -895,12 +895,24 @@ async fn a_worker_cut_off_as_it_starts_starts_again_in_its_worktree() {
     let again = Flow::task(&board, 1);
     assert_eq!(again.workspace.clone().unwrap().worktree, worktree);
     let worktree = worktree.expect("a worktree");
-    let started_in: Vec<_> = flow.specs().into_iter().map(|(_, spec)| spec.cwd).collect();
+    // The worker's own start: its CLI runs in the session's worker folder, its worktree added.
+    let started: Vec<_> = flow
+        .specs()
+        .into_iter()
+        .map(|(_, spec)| spec)
+        .filter(|spec| {
+            spec.env
+                .iter()
+                .any(|(key, value)| key == SESSION_ENV && *value == task.id.0)
+        })
+        .collect();
+    assert_eq!(started.len(), 1, "{started:#?}");
+    let worktree = std::path::Path::new(&worktree);
     assert!(
-        started_in
-            .iter()
-            .any(|cwd| cwd.to_string_lossy() == worktree.as_str()),
-        "{started_in:?} vs {worktree:?}"
+        started[0].cwd == worktree || started[0].add_dirs.iter().any(|dir| dir == worktree),
+        "{:?} {:?} vs {worktree:?}",
+        started[0].cwd,
+        started[0].add_dirs
     );
     flow.stop().await;
 }
