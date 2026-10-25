@@ -153,7 +153,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
   switch (kind.type) {
     case "messaged":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
-      line = <>Messaged <WorkerName taskId={kind.taskId} /></>;
+      line = kind.byUser ? <>You messaged <WorkerName taskId={kind.taskId} /></> : <>Messaged <WorkerName taskId={kind.taskId} /></>;
       detail = kind.text ? <QuietBrief>{kind.text}</QuietBrief> : undefined;
       break;
     case "answered":

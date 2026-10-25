@@ -931,6 +931,18 @@ pub enum Request {
         text: String,
         attachments: Vec<AttachmentRef>,
     },
+    /// The user's one message to one of the session's own workers (the composer's To:): it
+    /// goes to the worker, with its attachments and mentions, as `brigadier send` sends; the
+    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. An error
+    /// means the worker did not take it.
+    SendToWorker {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        #[serde(default)]
+        mentions: Vec<Mention>,
+    },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
         task_id: TaskId,
@@ -1118,35 +1130,26 @@ pub enum Request {
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
-    /// Settings › Plugins: every skill and MCP server the agents have, where each is on and how
-    /// each agent stands with it, looking at project `projectId` when given (else at every
-    /// project).
-    GetPlugins {
-        project_id: Option<String>,
-    },
-    /// Turns Settings › Plugins item `key` on or off in project `projectId`, else in every
-    /// project; for agent `agent` only when given. Answers with a job ([`Request::GetPluginJob`]).
+    /// Settings › Plugins: every skill and MCP server the agents have, each shared with every
+    /// agent, where each is on and what needs the user.
+    GetPlugins,
+    /// Turns Settings › Plugins item `key` on or off for every agent, keeping its projects for
+    /// when it is on again. Refused (in the job's error) for a locked item. Answers with a job
+    /// ([`Request::GetPluginJob`]).
     SwitchPlugin {
         key: String,
-        project_id: Option<String>,
         on: bool,
-        agent: Option<ProviderKind>,
     },
-    /// Puts Settings › Plugins Library item `key` on in every project (`projectIds` null:
-    /// Global), or in exactly projects `projectIds`, for every agent: the place picker. Answers
-    /// with a job.
-    SetPluginPlaces {
+    /// Puts item `key` on in every project (`projectIds` null: All projects), or in exactly
+    /// projects `projectIds`, for every agent; an item switched off keeps it for when it is on.
+    /// Refused for a locked item. Answers with a job.
+    SetPluginScope {
         key: String,
         project_ids: Option<Vec<String>>,
     },
-    /// Undoes place picker job `job` (a [`Request::SetPluginPlaces`]'s): each agent back exactly
-    /// where it had the item. Answers with a job.
-    UndoPluginPlaces {
-        job: String,
-    },
-    /// Gives Settings › Plugins Library item `key` to the agents that lack it, where the others
-    /// have it (installed and off when no agent has it on anywhere). Answers with a job.
-    AddMissingPlugin {
+    /// Share with every agent: item `key`, which the user removed from the other agents or
+    /// whose sharing failed, is shared now. Answers with a job.
+    SharePlugin {
         key: String,
     },
     /// What pasted `text` would add (a skill, an MCP server), before anything is added;
@@ -1155,37 +1158,49 @@ pub enum Request {
         text: String,
         name: Option<String>,
     },
-    /// Adds what `text` holds for every agent (only `agents`, when given): in project
-    /// `projectId` only ("just me" unless `shared`), else in every project. `values` sets or
-    /// adds the env (or headers) of the one server pasted; they go to the Keychain. Answers
-    /// with a job.
+    /// Adds what `text` holds for every agent: in every project (`projectIds` null), or in
+    /// exactly projects `projectIds`. `values` sets or adds the env (or headers) of the one
+    /// server pasted; they go to the Keychain. Answers with a job.
     AddPlugin {
         text: String,
         name: Option<String>,
-        project_id: Option<String>,
-        shared: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        agents: Option<Vec<ProviderKind>>,
+        project_ids: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         values: Option<std::collections::BTreeMap<String, String>>,
     },
-    /// Moves an agent's own item `key` into the Library, for every agent. Answers with a job.
-    UseEverywhere {
+    /// Brings another app's server (`key`: an `elsewhere` entry's, `other:<id>`) to every agent,
+    /// as [`Request::AddPlugin`] does a pasted one: its values to the Keychain, that app's file
+    /// only read. In every project (`projectIds` null) or exactly `projectIds`; `name` replaces
+    /// its own name on a clash (a clash without one fails the job, saying why). Afterwards it
+    /// is an item, no longer in `elsewhere`. Answers with a job.
+    ImportPlugin {
         key: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
     },
-    /// Undoes Use everywhere of Library item `key`. Answers with a job.
-    UndoUseEverywhere {
-        key: String,
-    },
-    /// Removes item `key` from every agent and project. Answers with a job.
+    /// Removes what Brigadier made for item `key`: its copies (the agents' own entry stays as
+    /// it is, and it isn't shared again until [`Request::SharePlugin`]), or an item added
+    /// through Brigadier from every agent. Answers with a job.
     RemovePlugin {
         key: String,
     },
     /// Brings Library item `key` to its source's newest version. Answers with a job.
     UpdatePlugin {
         key: String,
+    },
+    /// What item `key` is set up with: its skill files (path and text) to open, or its
+    /// server's settings (no value, only their names).
+    GetPluginItem {
+        key: String,
+    },
+    /// Saves `contents` as item `key`'s skill file `path` if it still holds `expected` (its
+    /// text when opened); its copies then follow, in a job.
+    SavePluginSkill {
+        key: String,
+        path: String,
+        contents: String,
+        expected: String,
     },
     /// How a Settings › Plugins job goes, each agent's part.
     GetPluginJob {
@@ -1791,6 +1806,10 @@ pub enum Response {
         task_ids: Vec<TaskId>,
     },
     SendMockupNotes,
+    /// `queued`: it went into the worker's running turn.
+    SendToWorker {
+        queued: bool,
+    },
     PauseTask,
     ResumeTask,
     RestoreKeptWork {
@@ -1839,6 +1858,10 @@ pub enum Response {
     },
     PreviewDelete {
         branches: Vec<UnlandedBranch>,
+        /// Files a Local checkout session left uncommitted in the user's checkout, which go
+        /// too (D5).
+        #[serde(default)]
+        files: Vec<String>,
     },
     RenameConversation {
         conversation: Box<Conversation>,
@@ -1902,13 +1925,10 @@ pub enum Response {
     SwitchPlugin {
         job: String,
     },
-    SetPluginPlaces {
+    SetPluginScope {
         job: String,
     },
-    UndoPluginPlaces {
-        job: String,
-    },
-    AddMissingPlugin {
+    SharePlugin {
         job: String,
     },
     CheckPluginAdd {
@@ -1917,10 +1937,7 @@ pub enum Response {
     AddPlugin {
         job: String,
     },
-    UseEverywhere {
-        job: String,
-    },
-    UndoUseEverywhere {
+    ImportPlugin {
         job: String,
     },
     RemovePlugin {
@@ -1928,6 +1945,12 @@ pub enum Response {
     },
     UpdatePlugin {
         job: String,
+    },
+    GetPluginItem {
+        item: brigadier_core::manager::plugins::PluginItemDetails,
+    },
+    SavePluginSkill {
+        outcome: brigadier_core::manager::plugins::PluginSkillSave,
     },
     GetPluginJob {
         job: brigadier_core::manager::plugins::ops::PluginJobView,
@@ -2543,5 +2566,36 @@ mod send_defaults_tests {
                 matches!(request, Request::SendMessage { mentions, steer: false, queue_index: None, .. } if mentions.is_empty())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_import_tests {
+    use super::*;
+
+    #[test]
+    fn import_plugin_round_trips_nullable_name_and_project_scope() {
+        for (name, projects) in [
+            (serde_json::Value::Null, serde_json::Value::Null),
+            (
+                serde_json::json!("renamed"),
+                serde_json::json!(["project with spaces"]),
+            ),
+        ] {
+            let wire = serde_json::json!({"method":"importPlugin", "key":"other:desktop:with spaces", "name":name, "projectIds":projects});
+            let request: Request = serde_json::from_value(wire.clone()).unwrap();
+            assert!(
+                matches!(&request, Request::ImportPlugin {key,..} if key == "other:desktop:with spaces")
+            );
+            assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        }
+        let response = serde_json::to_value(Response::ImportPlugin {
+            job: "plugin-job-test".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"method":"importPlugin", "job":"plugin-job-test"})
+        );
     }
 }

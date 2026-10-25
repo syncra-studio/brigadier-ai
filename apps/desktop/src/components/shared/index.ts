@@ -2,6 +2,7 @@
 // App code imports these from here only.
 
 export * from "./banner";
+export * from "./code-editor";
 export * from "./conversation-row";
 export * from "./copy-button";
 export * from "./counts";

@@ -434,6 +434,8 @@ impl SessionManager {
                     },
                     format!("{prefix}{}/fork", id.short()),
                 );
+                self.note_branch_namespace(id, Path::new(&repo), &name)
+                    .await?;
                 let at = repo.clone();
                 let (environment, made) = blocking(move || {
                     let repo = git.open(Path::new(&repo)).map_err(git_error)?;

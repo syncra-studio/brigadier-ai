@@ -45,7 +45,7 @@ export function BrowserSiteSettings({ onBack }: { onBack: () => void }) {
             />
           </SettingsCard>
         ) : (
-          <SettingsCard>
+          <SettingsCard inset>
             <ul className="divide-divider divide-y">
               {(sites ?? []).map((site) => (
                 <SiteRow key={site.origin} site={site} onChoose={(device, choice) => choose(site.origin, device, choice)} />

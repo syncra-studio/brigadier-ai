@@ -606,6 +606,11 @@ pub(crate) struct FakeBehavior {
     pub signed_out: Mutex<Vec<ProviderKind>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
+    /// An extra account's CLI also lists a model of its own (`<account>-model`), so a list
+    /// tells whose it is.
+    pub account_models: bool,
+    /// The next this many model lists fail, whichever CLI reads them.
+    pub models_failing: Mutex<u32>,
     pub refuse_steers: bool,
     /// A message steered into a turn that its script never read is taken in once the script
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
@@ -618,6 +623,8 @@ pub(crate) struct FakeBehavior {
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub cleanup_error: Mutex<Option<String>>,
     pub removals: Mutex<Vec<Removal>>,
+    /// The worktrees (with their branches) the CLI made for a session's subagents, by its id.
+    pub subagent_worktrees: Mutex<std::collections::HashMap<String, Vec<(PathBuf, String)>>>,
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
@@ -714,24 +721,32 @@ impl FakeCli {
             // check or merge code run on a vendor's best.
             ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
         };
-        ids.iter()
-            .map(|(id, name)| ModelInfo {
-                id: (*id).into(),
-                display_name: (*name).into(),
-                description: String::new(),
-                resolved: None,
-                efforts: vec!["medium".into(), "high".into()],
-                default_effort: Some("high".into()),
-                is_default: true,
-                // Claude's takes images, so operate work has a model.
-                input_modalities: match self.kind {
-                    ProviderKind::Claude => vec!["text".into(), "image".into()],
-                    ProviderKind::Codex => vec!["text".into()],
-                },
-                fast: None,
-                legacy: false,
-            })
-            .collect()
+        let own = self
+            .account
+            .as_ref()
+            .filter(|_| self.behavior.account_models)
+            .map(|account| (format!("{account}-model"), account.clone()));
+        let ids = ids
+            .iter()
+            .map(|(id, name)| ((*id).to_owned(), (*name).to_owned()))
+            .chain(own);
+        ids.map(|(id, name)| ModelInfo {
+            id,
+            display_name: name,
+            description: String::new(),
+            resolved: None,
+            efforts: vec!["medium".into(), "high".into()],
+            default_effort: Some("high".into()),
+            is_default: true,
+            // Claude's takes images, so operate work has a model.
+            input_modalities: match self.kind {
+                ProviderKind::Claude => vec!["text".into(), "image".into()],
+                ProviderKind::Codex => vec!["text".into()],
+            },
+            fast: None,
+            legacy: false,
+        })
+        .collect()
     }
 }
 
@@ -773,6 +788,13 @@ impl Provider for FakeCli {
 
     fn models(&self) -> BoxFuture<'_, brigadier_providers::Result<ModelCatalog>> {
         Box::pin(async move {
+            {
+                let mut failing = self.behavior.models_failing.lock().unwrap();
+                if *failing > 0 {
+                    *failing -= 1;
+                    return Err(brigadier_providers::Error::Spawn("no models".into()));
+                }
+            }
             Ok(ModelCatalog {
                 provider: self.kind,
                 models: FakeCli::models(self),
@@ -927,6 +949,20 @@ impl Provider for FakeCli {
             })
         });
         Box::pin(async move { took })
+    }
+
+    fn made_worktrees(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
+        let made = self.behavior.subagent_worktrees.lock().unwrap();
+        let found = artifacts
+            .iter()
+            .filter_map(|artifact| match artifact {
+                Artifact::ClaudeSession { session_id, .. } => made.get(session_id),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        Box::pin(async move { found })
     }
 
     fn remove(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, brigadier_providers::Result<()>> {
@@ -2053,6 +2089,11 @@ impl Flow {
             .id
     }
 
+    /// The flow's own folder: its repository, data folder and sessions' folders.
+    pub fn scratch(&self) -> &Path {
+        &self.dir
+    }
+
     /// Sends the user's message.
     pub async fn say(&self, text: &str) {
         self.say_to(&self.conversation, text).await;
@@ -2488,3 +2529,6 @@ mod worktree_copies_tests;
 
 #[cfg(unix)]
 mod archive_delete_tests;
+
+#[cfg(unix)]
+mod delete_leak_tests;

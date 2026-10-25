@@ -14,6 +14,7 @@ mod parse;
 mod refname;
 mod repo;
 mod request_changes;
+pub mod session_space;
 pub mod snapshot;
 mod source;
 mod trailers;

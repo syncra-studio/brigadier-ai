@@ -41,16 +41,14 @@ use super::worker_events::HeldEvents;
 use super::workers::{TaskLive, Workspace, task_branch};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
-    Conversation, ConversationId, Environment, ModelChoice, PermissionLevel, Setup,
+    Conversation, ConversationId, Environment, Mention, ModelChoice, PermissionLevel, Setup,
 };
+use crate::sessions::short_title;
 use crate::work::{
     Approval, ApprovalSubject, AttachmentRef, AttemptEnd, CardId, CardState, MockupPart,
     PlainWorker, Task, TaskId, TaskState, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
-
-/// How much of a prompt a worker's title takes when `--title` gives none.
-const TITLE_MAX: usize = 60;
 
 /// How long a message sent to a worker still starting waits for its CLI.
 const CLI_START: Duration = Duration::from_secs(60);
@@ -58,6 +56,17 @@ const CLI_START: Duration = Duration::from_secs(60);
 const RESUMED_AFTER_RESTART: &str = "[Brigadier restarted while you were working on this, and \
 your turn goes on now. Your last steps may have finished after your record of them: check git \
 status and git log first, then carry on from where it stands.]";
+
+/// What a session's next turn hears of a message the user sent one of its workers directly.
+fn user_messaged_note(task: &Task, text: &str) -> String {
+    format!(
+        "[The user messaged worker {} (task-{}, \"{}\") directly, not through you: \"{text}\". \
+         It answers them in its own thread; act on this only if they ask you to.]",
+        short(&task.id.0),
+        task.number,
+        task.title
+    )
+}
 
 /// A new event of worker `task`'s (its own id given when it is kept).
 pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
@@ -90,21 +99,14 @@ fn permission_word(level: PermissionLevel) -> cli::Permission {
     }
 }
 
-/// A title from the prompt's first line.
-fn title_of(prompt: &str) -> String {
-    let line = prompt
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Worker");
-    if line.chars().count() <= TITLE_MAX {
-        return line.to_owned();
-    }
-    let cut: String = line.chars().take(TITLE_MAX).collect();
-    match cut.rfind(' ') {
-        Some(at) if at > TITLE_MAX / 2 => format!("{}…", &cut[..at]),
-        _ => format!("{cut}…"),
-    }
+/// A worker's title: the one `--title` gives or, without one, the prompt's; either kept to a
+/// few plain words (`short_title`).
+fn title_of(given: Option<&str>, prompt: &str) -> String {
+    [given.unwrap_or_default(), prompt]
+        .into_iter()
+        .map(short_title)
+        .find(|title| !title.is_empty())
+        .unwrap_or_else(|| "Worker".to_owned())
 }
 
 fn refused(message: impl Into<String>) -> CliReply {
@@ -355,7 +357,7 @@ impl SessionManager {
             Ok(mcps) => mcps,
             Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
         };
-        let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
+        let title = title_of(start.title.as_deref(), &start.prompt);
         let prompt = match &review {
             Some(authors) => format!("{}\n\n{}", start.prompt, authors.brief_line()),
             None => start.prompt,
@@ -600,6 +602,8 @@ impl SessionManager {
             task.number,
             &task.title,
         );
+        self.note_branch_namespace(&task.conversation_id, &repo, &branch)
+            .await?;
         let worktree = worker_dir;
         let warmed = self
             .make_worktree(
@@ -837,7 +841,7 @@ impl SessionManager {
             let began = manager.last_worker_native_id(&task).await.is_some();
             let went = if began {
                 manager
-                    .send_to_worker(&task.conversation_id, &task, RESUMED_AFTER_RESTART.into())
+                    .send_worker_text(&task.conversation_id, &task, RESUMED_AFTER_RESTART.into())
                     .await
             } else {
                 manager.relaunch_worker(&live, &task).await
@@ -966,6 +970,117 @@ impl SessionManager {
         Ok(())
     }
 
+    /// The user's message to one of session `conversation_id`'s workers, from its composer's
+    /// To: (one message, then the worker's thread). It goes as `brigadier send` sends, with
+    /// the user's pastes, attachments and mentions as a turn takes them; the session's thread
+    /// shows "You messaged ‹worker›" and its next turn hears it, without starting one. An
+    /// error means the worker did not take it; once it did, nothing after fails the send.
+    /// True when it went into a running turn.
+    pub async fn send_to_worker(
+        &self,
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+    ) -> Result<bool> {
+        self.admit()?;
+        // Held to the end: the session does not close under a message on its way.
+        let _working = self.enter(&conversation_id)?;
+        if text.trim().is_empty() && attachments.is_empty() {
+            return Err(Error::Invalid("write a message first".into()));
+        }
+        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        // Attachments uploaded a while ago must survive blob collection from now on.
+        for attachment in &attachments {
+            let Ok(hash) = attachment.id.parse::<brigadier_store::BlobHash>() else {
+                return Err(Error::Invalid(format!(
+                    "attachment {} is unknown",
+                    attachment.name
+                )));
+            };
+            if !self.core.store().blobs().touch(hash).await? {
+                return Err(Error::Invalid(format!(
+                    "{} is no longer stored; attach it again",
+                    attachment.name
+                )));
+            }
+        }
+        let live = self.task_live(&task);
+        if task.state == TaskState::Starting {
+            let up = tokio::time::Instant::now() + CLI_START;
+            while live.cli().await.is_none() && tokio::time::Instant::now() < up {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        // Under its settle lock, looked at again: a stop meanwhile wins, never a revival.
+        let settled = live.settle.lock().await;
+        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        if self.is_stopping(&task.id) {
+            return Err(Error::Invalid(format!(
+                "worker {} is stopping",
+                task.number
+            )));
+        }
+        let scratch = match &task.workspace {
+            Some(workspace) => PathBuf::from(&workspace.scratch),
+            None if attachments.is_empty() => PathBuf::new(),
+            None => {
+                return Err(Error::Invalid(format!(
+                    "worker {} hasn't started yet; send files once it has",
+                    task.number
+                )));
+            }
+        };
+        let input = self
+            .direct_input(&conversation_id, scratch, &text, &attachments, &mentions)
+            .await?;
+        let queued = live.busy().await;
+        self.deliver_to_worker(&conversation_id, &task, input)
+            .await?;
+        drop(settled);
+        // It reached the worker: the record and the note only log their failures.
+        let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
+        self.orchestrator_step(
+            &conversation_id,
+            crate::work::OrchestratorStepKind::Messaged {
+                task_id: task.id.clone(),
+                text: Some(shown.clone()),
+                by_user: true,
+            },
+        )
+        .await;
+        self.note_next_turn(&conversation_id, user_messaged_note(&task, &shown))
+            .await;
+        Ok(queued)
+    }
+
+    /// Session `conversation_id`'s own plain worker `task_id`, while it can take a message
+    /// from the user.
+    async fn direct_recipient(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: &TaskId,
+    ) -> Result<Task> {
+        let task = self
+            .task_by_id(conversation_id, task_id)
+            .await
+            .map_err(|_| Error::Invalid("that worker isn't this session's".into()))?;
+        let Some(plain) = &task.plain else {
+            return Err(Error::Invalid(format!(
+                "worker {} takes messages only from its session",
+                task.number
+            )));
+        };
+        if plain.closed {
+            return Err(Error::Invalid(format!("worker {} was closed", task.number)));
+        }
+        if task.state.is_final() {
+            return Err(Error::Invalid(format!("worker {} has ended", task.number)));
+        }
+        Ok(task)
+    }
+
     /// One of the caller's own workers, by an id `brigadier workers` showed; another
     /// session's worker, or a session, is refused.
     pub(super) async fn own_worker(
@@ -1062,6 +1177,7 @@ impl SessionManager {
             crate::work::OrchestratorStepKind::Messaged {
                 task_id: task.id.clone(),
                 text: Some(step),
+                by_user: false,
             },
         )
         .await;
@@ -1243,17 +1359,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_title_comes_from_the_prompts_first_line() {
+    fn a_title_is_a_few_words_from_the_given_title_or_the_prompts_first_line() {
         assert_eq!(
-            title_of("\n  Fix the login page\nand more"),
+            title_of(None, "\n  Fix the login page\nand more"),
             "Fix the login page"
         );
-        let long = "Write a long report on every module of the code base and what each one does";
-        let title = title_of(long);
-        assert!(
-            title.ends_with('…') && title.chars().count() <= TITLE_MAX + 1,
-            "{title}"
+        assert_eq!(
+            title_of(
+                None,
+                "Please write a long report on every module of the code base and what each one does"
+            ),
+            "Write a long report"
         );
-        assert_eq!(title_of("   "), "Worker");
+        assert_eq!(
+            title_of(
+                Some("Implement direct worker messaging between the thread and its workers"),
+                "x"
+            ),
+            "Implement direct worker messaging"
+        );
+        assert_eq!(title_of(Some("  "), "Fix it"), "Fix it");
+        assert_eq!(title_of(None, "   "), "Worker");
     }
 }

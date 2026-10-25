@@ -9,10 +9,13 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use brigadier_registry::Agent;
+use brigadier_registry::adapter::{output_within, wait_within};
 use brigadier_registry::library::{Library, SecretSink};
 
+use brigadier_registry::library::Entry;
+
 use super::ops::{self, Ctx, PluginAddCheck, PluginJobView, PluginStep, Secrets};
-use super::{PluginsView, provider};
+use super::{provider, share};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
@@ -20,14 +23,33 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Every job of this run, by id.
 static JOBS: LazyLock<Mutex<HashMap<String, PluginJobView>>> = LazyLock::new(Default::default);
-/// What each place picker job found before it moved its item, by the job's id: its Undo.
-static PLACES_BEFORE: LazyLock<Mutex<HashMap<String, (String, ops::Before)>>> =
-    LazyLock::new(Default::default);
-/// Held while a job changes the agents' configs.
+/// Held while a job (or a sharing pass) changes the agents' configs.
 static RUNNING: Mutex<()> = Mutex::new(());
+/// A sharing pass runs, and another was asked for meanwhile.
+static SYNC: Mutex<SyncState> = Mutex::new(SyncState {
+    running: false,
+    pending: None,
+});
+
+struct SyncState {
+    running: bool,
+    pending: Option<(Setup, bool)>,
+}
 /// Whether each Library item's source has moved on, and when that was read.
 static UPDATES: LazyLock<Mutex<HashMap<String, (Instant, bool)>>> = LazyLock::new(Default::default);
 const UPDATES_FRESH: Duration = Duration::from_secs(60 * 60);
+/// How long one `brigadier secret` call may take.
+const SECRET_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(30)
+};
+/// When a removed original waits for its confirming pass, how long until that pass.
+const CONFIRM_AFTER: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(15)
+};
 
 /// The values of `brigadier secret`, kept in the Keychain by the `brigadier` CLI.
 struct CliSecrets {
@@ -60,43 +82,56 @@ impl SecretSink for CliSecrets {
             .stdout(Stdio::null())
             .spawn()
             .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        // The deadline includes writing stdin: a CLI that never reads a large value must
+        // not block the queue before wait_within can start.
+        let value = value.clone();
+        let (send, receive) = std::sync::mpsc::channel();
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(value.expose().as_bytes())
-                .map_err(|err| err.to_string())?;
+            std::thread::spawn(move || {
+                let _ = send.send(stdin.write_all(value.expose().as_bytes()));
+            });
         }
-        let out = child.wait_with_output().map_err(|err| err.to_string())?;
+        let out = wait_within(child, SECRET_TIMEOUT).map_err(|err| err.to_string())?;
         if out.status.success() {
-            Ok(())
+            receive
+                .recv_timeout(SECRET_TIMEOUT)
+                .map_err(|_| "Couldn't save the value in the Keychain.".to_owned())?
+                .map_err(|_| "Couldn't save the value in the Keychain.".to_owned())
         } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+            Err("Brigadier couldn't save the value in the Keychain.".to_owned())
         }
     }
 }
 
 impl Secrets for CliSecrets {
     fn load(&self, server: &str) -> Result<BTreeMap<String, String>, String> {
-        let out = self
-            .command(&["secret", "headers", server])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        let out = output_within(
+            self.command(&["secret", "headers", server])
+                .stdin(Stdio::null()),
+            SECRET_TIMEOUT,
+        )
+        .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
         if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+            return Err(
+                "Brigadier couldn't read the server's values from the Keychain.".to_owned(),
+            );
         }
-        serde_json::from_slice(&out.stdout).map_err(|err| err.to_string())
+        serde_json::from_slice(&out.stdout).map_err(|_| {
+            "Brigadier couldn't read the server's values from the Keychain.".to_owned()
+        })
     }
 
     fn forget(&self, server: &str) -> Result<(), String> {
-        let out = self
-            .command(&["secret", "remove", server])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
+        let out = output_within(
+            self.command(&["secret", "remove", server])
+                .stdin(Stdio::null()),
+            SECRET_TIMEOUT,
+        )
+        .map_err(|err| format!("Couldn't run brigadier: {err}."))?;
         if out.status.success() {
             Ok(())
         } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+            Err("Brigadier couldn't remove the server's values from the Keychain.".to_owned())
         }
     }
 }
@@ -105,35 +140,23 @@ impl Secrets for CliSecrets {
 pub(crate) enum Action {
     Switch {
         key: String,
-        project: Option<PathBuf>,
         on: bool,
-        agent: Option<Agent>,
+    },
+    /// Every project (`scope` `None`), or exactly these projects.
+    SetScope {
+        key: String,
+        scope: Option<Vec<PathBuf>>,
+    },
+    /// Share with every agent.
+    Share {
+        key: String,
     },
     Add {
         text: String,
         name: Option<String>,
-        project: Option<PathBuf>,
+        scope: Option<Vec<PathBuf>>,
         shared: bool,
         options: ops::AddOptions,
-    },
-    /// Every project (`places` `None`), or exactly these projects.
-    SetPlaces {
-        key: String,
-        places: Option<Vec<PathBuf>>,
-    },
-    /// Undoes place picker job `job`: each agent back where it had the item.
-    UndoPlaces {
-        job: String,
-    },
-    /// Gives a Library item to the agents that lack it.
-    AddMissing {
-        key: String,
-    },
-    UseEverywhere {
-        key: String,
-    },
-    Undo {
-        key: String,
     },
     Remove {
         key: String,
@@ -141,9 +164,21 @@ pub(crate) enum Action {
     Update {
         key: String,
     },
+    /// Brings another app's server (`other:<id>`) to every agent.
+    Import {
+        key: String,
+        name: Option<String>,
+        scope: Option<Vec<PathBuf>>,
+    },
+    /// A skill file was saved: its copies follow.
+    FollowSkill {
+        key: String,
+        path: String,
+    },
 }
 
 /// What the actions run with.
+#[derive(Clone)]
 pub(crate) struct Setup {
     pub registry: Arc<brigadier_registry::Registry>,
     pub library: Library,
@@ -151,6 +186,30 @@ pub(crate) struct Setup {
     pub projects: Vec<PathBuf>,
     /// Each agent's CLI as sessions run it.
     pub binary: Arc<dyn Fn(Agent) -> Option<PathBuf> + Send + Sync>,
+}
+
+/// Runs `work` with an action's context for `setup`, each agent's part told to `report`.
+pub(crate) fn with_ctx<T>(
+    setup: &Setup,
+    report: &(dyn Fn(Agent, PluginStep) + Sync),
+    work: impl FnOnce(&Ctx<'_>) -> T,
+) -> T {
+    let roots = setup.registry.roots().clone();
+    let env: Vec<(String, String)> = roots.vars.clone().into_iter().collect();
+    let secrets = CliSecrets {
+        cli: setup.cli.clone(),
+        env: env.clone(),
+    };
+    let ctx = Ctx {
+        roots: &roots,
+        env: &env,
+        library: &setup.library,
+        secrets: &secrets,
+        projects: &setup.projects,
+        report,
+        binary: &*setup.binary,
+    };
+    work(&ctx)
 }
 
 /// Starts `action`; its job's id.
@@ -170,12 +229,6 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
     let job = id.clone();
     std::thread::spawn(move || {
         let _running = lock(&RUNNING);
-        let roots = setup.registry.roots().clone();
-        let env: Vec<(String, String)> = roots.vars.clone().into_iter().collect();
-        let secrets = CliSecrets {
-            cli: setup.cli.clone(),
-            env: env.clone(),
-        };
         let report = |agent: Agent, step: PluginStep| {
             if let Some(view) = lock(&JOBS).get_mut(&job) {
                 let agent = provider(agent);
@@ -184,80 +237,7 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
                 }
             }
         };
-        let ctx = Ctx {
-            roots: &roots,
-            env: &env,
-            library: &setup.library,
-            secrets: &secrets,
-            projects: &setup.projects,
-            report: &report,
-            binary: &*setup.binary,
-        };
-        let (result, warning): (Result<Vec<String>, String>, Option<String>) = match &action {
-            Action::Switch {
-                key,
-                project,
-                on,
-                agent,
-            } => (
-                ops::switch(&ctx, key, project.as_deref(), *on, *agent).map(|_| vec![key.clone()]),
-                None,
-            ),
-            Action::Add {
-                text,
-                name,
-                project,
-                shared,
-                options,
-            } => match ops::add(
-                &ctx,
-                text,
-                name.as_deref(),
-                project.as_deref(),
-                *shared,
-                options,
-            ) {
-                Ok((keys, warning)) => (Ok(keys), warning),
-                Err(err) => (Err(err), None),
-            },
-            Action::SetPlaces { key, places } => (
-                ops::set_places(&ctx, key, places.as_deref()).map(|before| {
-                    lock(&PLACES_BEFORE).insert(job.clone(), (key.clone(), before));
-                    vec![key.clone()]
-                }),
-                None,
-            ),
-            Action::UndoPlaces { job: undone } => {
-                let before = lock(&PLACES_BEFORE).remove(undone);
-                (
-                    before
-                        .ok_or_else(|| "There's nothing to undo any more.".to_owned())
-                        .and_then(|(key, before)| {
-                            ops::put_back(&ctx, &key, &before).map(|()| vec![key])
-                        }),
-                    None,
-                )
-            }
-            Action::AddMissing { key } => (
-                ops::add_missing(&ctx, key).map(|()| vec![key.clone()]),
-                None,
-            ),
-            Action::UseEverywhere { key } => {
-                (ops::use_everywhere(&ctx, key).map(|key| vec![key]), None)
-            }
-            Action::Undo { key } => (
-                ops::undo_use_everywhere(&ctx, key).map(|()| Vec::new()),
-                None,
-            ),
-            Action::Remove { key } => (ops::remove(&ctx, key).map(|()| Vec::new()), None),
-            Action::Update { key } => {
-                let done = ops::update(&ctx, key).map(|()| vec![key.clone()]);
-                if let Some(name) = key.strip_prefix("lib:") {
-                    lock(&UPDATES).remove(name);
-                }
-                (done, None)
-            }
-        };
+        let (result, warning) = with_ctx(&setup, &report, |ctx| run(ctx, &action));
         setup.registry.refresh();
         if let Some(view) = lock(&JOBS).get_mut(&job) {
             view.finished = true;
@@ -279,6 +259,105 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
     id
 }
 
+/// Carries out `action`: the keys it made or changed, and what the user should know.
+fn run(ctx: &Ctx<'_>, action: &Action) -> (Result<Vec<String>, String>, Option<String>) {
+    let cli = |adapter: &dyn brigadier_registry::adapter::AgentAdapter,
+               steps: &[brigadier_registry::adapter::Step]| ctx.run(adapter, steps);
+    let done = |key: &str| vec![key.to_owned()];
+    match action {
+        Action::Switch { key, on } => {
+            (share::switch(ctx, key, *on, &cli).map(|()| done(key)), None)
+        }
+        Action::SetScope { key, scope } => (
+            share::set_scope(ctx, key, scope.as_deref(), &cli).map(|()| done(key)),
+            None,
+        ),
+        Action::Share { key } => (share::share_again(ctx, key, &cli).map(|()| done(key)), None),
+        Action::Add {
+            text,
+            name,
+            scope,
+            shared,
+            options,
+        } => match ops::add(
+            ctx,
+            text,
+            name.as_deref(),
+            scope.as_deref(),
+            *shared,
+            options,
+            &cli,
+        ) {
+            Ok((keys, warning)) => (Ok(keys), warning),
+            Err(err) => (Err(err), None),
+        },
+        Action::Remove { key } => (share::remove(ctx, key, &cli).map(|()| Vec::new()), None),
+        Action::Update { key } => {
+            let done = share::library_of(ctx, key).and_then(|name| {
+                let updated = ops::update(ctx, &name);
+                lock(&UPDATES).remove(&name);
+                updated
+            });
+            (done.map(|()| vec![key.clone()]), None)
+        }
+        Action::Import { key, name, scope } => (
+            share::import(ctx, key, name.as_deref(), scope.as_deref(), &cli).map(|key| vec![key]),
+            None,
+        ),
+        Action::FollowSkill { key, path } => (
+            share::follow_skill(ctx, key, path, &cli).map(|()| done(key)),
+            None,
+        ),
+    }
+}
+
+/// Asks for a sharing pass over every item: now, or once the running one ends (passes asked
+/// for meanwhile are one). `retry`: try again what failed with the same inputs.
+pub(crate) fn request_sync(mut setup: Setup, retry: bool) {
+    {
+        let mut state = lock(&SYNC);
+        if state.running {
+            let retry = retry || state.pending.as_ref().is_some_and(|(_, retry)| *retry);
+            state.pending = Some((setup, retry));
+            return;
+        }
+        state.running = true;
+    }
+    std::thread::spawn(move || {
+        let mut retry = retry;
+        loop {
+            {
+                let _running = lock(&RUNNING);
+                let result = with_ctx(&setup, &|_, _| {}, |ctx| {
+                    share::sync(ctx, None, retry, &|adapter, steps| ctx.run(adapter, steps))
+                });
+                if let Err(error) = result {
+                    tracing::warn!(%error, "sharing the plugins with every agent");
+                }
+            }
+            setup.registry.refresh();
+            // A removed original waits for a second clean read: that pass comes by itself, not
+            // only with the next change (review #11).
+            let confirming = share::confirming(&setup.library);
+            if confirming && lock(&SYNC).pending.is_none() {
+                std::thread::sleep(CONFIRM_AFTER);
+            }
+            let mut state = lock(&SYNC);
+            if let Some((latest, requested_retry)) = state.pending.take() {
+                setup = latest;
+                retry = requested_retry;
+                continue;
+            }
+            if confirming {
+                retry = false;
+                continue;
+            }
+            state.running = false;
+            break;
+        }
+    });
+}
+
 /// How job `id` goes.
 pub(crate) fn job(id: &str) -> Option<PluginJobView> {
     lock(&JOBS).get(id).cloned()
@@ -289,26 +368,26 @@ pub(crate) fn check_add(home: &Path, text: &str, name: Option<&str>) -> PluginAd
     ops::check_add(home, text, name)
 }
 
-/// Marks each Library item of `view` that Use everywhere can undo, and whose source has moved
-/// on (read in the background, at most hourly).
-pub(crate) fn mark_library(view: &mut PluginsView, library: Library) {
+/// The Library items whose source has moved on, as last read; a stale or unread one is read
+/// again in the background (at most hourly).
+pub(crate) fn updates_waiting(library: Library, entries: &[Entry]) -> Vec<String> {
     let library = Arc::new(library);
     let mut stale = Vec::new();
-    for item in &mut view.items {
-        let Some(name) = item.key.strip_prefix("lib:") else {
-            continue;
-        };
-        item.can_undo = ops::can_undo(&library, name);
+    let mut waiting = Vec::new();
+    for entry in entries {
+        let name = &entry.name;
         let known = lock(&UPDATES).get(name).copied();
-        item.update_available = known.is_some_and(|(_, waiting)| waiting);
+        if known.is_some_and(|(_, waits)| waits) {
+            waiting.push(name.clone());
+        }
         if known.is_none_or(|(at, _)| at.elapsed() > UPDATES_FRESH)
             && library.origin(name).is_some()
         {
-            stale.push(name.to_owned());
+            stale.push(name.clone());
         }
     }
     if stale.is_empty() {
-        return;
+        return waiting;
     }
     for name in &stale {
         // Not read again while this read runs.
@@ -319,8 +398,9 @@ pub(crate) fn mark_library(view: &mut PluginsView, library: Library) {
     }
     std::thread::spawn(move || {
         for name in stale {
-            let waiting = ops::update_waiting(&library, &name);
-            lock(&UPDATES).insert(name, (Instant::now(), waiting));
+            let waits = ops::update_waiting(&library, &name);
+            lock(&UPDATES).insert(name, (Instant::now(), waits));
         }
     });
+    waiting
 }

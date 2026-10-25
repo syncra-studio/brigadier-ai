@@ -93,7 +93,7 @@ export function SettingsSelect<T extends string>({
               key={option.value}
               value={option.value}
               indicator={<Check className="size-icon-md" />}
-              className={option.hint ? "h-auto py-1.5" : undefined}
+              className={option.hint ? "h-auto py-2" : undefined}
             >
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{option.label}</span>

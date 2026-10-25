@@ -1141,28 +1141,51 @@ impl Provider for Codex {
             if threads.is_empty() && trusts.is_empty() {
                 return Ok(());
             }
-            self.control_with_privacy(private_logs, async |rpc: &Rpc| {
-                for path in trusts {
-                    remove_project_trust(rpc, &path).await?;
-                }
-                for thread_id in threads {
-                    let deleted: Result<Value> = rpc
-                        .call(
-                            "thread/delete",
-                            &p::ThreadDeleteParams {
-                                thread_id: thread_id.clone(),
-                            },
-                        )
-                        .await;
-                    match deleted {
-                        Ok(_) => {}
-                        Err(Error::Rejected(message)) if already_gone(&message) => {}
-                        Err(err) => return Err(err),
+            let mut deleted = Vec::new();
+            let removed = self
+                .control_with_privacy(private_logs, async |rpc: &Rpc| {
+                    for path in trusts {
+                        remove_project_trust(rpc, &path).await?;
                     }
-                }
+                    for thread_id in threads {
+                        let answer: Result<Value> = rpc
+                            .call(
+                                "thread/delete",
+                                &p::ThreadDeleteParams {
+                                    thread_id: thread_id.clone(),
+                                },
+                            )
+                            .await;
+                        match answer {
+                            Ok(_) => {}
+                            Err(Error::Rejected(message)) if already_gone(&message) => {}
+                            Err(err) => return Err(err),
+                        }
+                        deleted.push(thread_id);
+                    }
+                    Ok(())
+                })
+                .await;
+            // What Codex keeps of a thread outside its rollout, in the home it ran from (an
+            // extra account's own) and, should it have run there too, the main one.
+            let mut homes: Vec<PathBuf> = self.codex_home().into_iter().collect();
+            homes.extend(self.history_home().filter(|home| !homes.contains(home)));
+            let extras = if deleted.is_empty() {
                 Ok(())
-            })
-            .await
+            } else {
+                tokio::task::spawn_blocking(move || {
+                    deleted
+                        .iter()
+                        .flat_map(|id| homes.iter().map(move |home| (home, id)))
+                        .map(|(home, id)| files::remove_thread_extras(home, id))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .collect::<Result<()>>()
+                })
+                .await
+                .map_err(|err| Error::Invalid(err.to_string()))?
+            };
+            removed.and(extras)
         })
     }
 
@@ -3115,6 +3138,7 @@ mod tests {
             stop_hook: None,
             naked_worker: false,
             native_compaction: None,
+            temp_tag: None,
         }
     }
 

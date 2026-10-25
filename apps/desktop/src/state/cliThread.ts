@@ -332,9 +332,16 @@ export function useWorkerRow(taskId: string | null): WorkerRow | null {
  */
 export const useWorkerThreads = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
 
+/** The latest read asked for of each worker's thread. */
+const workerReads = new Map<string, number>();
+
 /** Reads worker `taskId`'s thread into `useWorkerThreads`. */
 export async function loadWorkerThread(conversationId: string, taskId: string): Promise<void> {
+  const read = (workerReads.get(taskId) ?? 0) + 1;
+  workerReads.set(taskId, read);
   const { view } = await request({ method: "workerThread", conversationId, taskId });
+  // An older read answering late never replaces a newer one.
+  if (workerReads.get(taskId) !== read) return;
   useWorkerThreads.setState((state) => ({ views: { ...state.views, [taskId]: view } }));
 }
 

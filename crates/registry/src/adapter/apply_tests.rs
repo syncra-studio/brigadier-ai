@@ -616,3 +616,35 @@ fn the_agents_own_cli_runs_from_its_resolved_path() {
         ]
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn review_a_stalled_cli_is_killed_before_returning() {
+    let started = Instant::now();
+    let error = output_within(
+        Command::new("/bin/sh").args(["-c", "exec /bin/sleep 30"]),
+        Duration::from_millis(60),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let output = output_within(
+        Command::new("/bin/sh").args(["-c", "printf ok"]),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(output.stdout, b"ok");
+}
+
+#[test]
+#[cfg(unix)]
+fn review_a_child_holding_output_open_cannot_extend_the_deadline() {
+    let started = Instant::now();
+    let error = output_within(
+        Command::new("/bin/sh").args(["-c", "/bin/sleep 1 & exit 0"]),
+        Duration::from_millis(60),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_millis(800));
+}

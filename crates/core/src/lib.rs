@@ -26,6 +26,7 @@ mod sessions;
 pub mod storage;
 pub mod thread_view;
 pub mod tools;
+mod traces;
 pub mod work;
 
 pub use app_call::*;
@@ -86,9 +87,12 @@ pub(crate) fn test_patience() -> std::time::Duration {
 }
 
 /// A test's git command must use its scratch repository, even inside a hook or bisect run.
+/// Its commits start no `git maintenance --detach`: that lives on in the repository after the
+/// commit returns, so a test that then asks what runs in the folder would find it (#586).
 #[cfg(test)]
 pub(crate) fn test_git_command() -> std::process::Command {
     let mut command = std::process::Command::new("git");
+    command.args(["-c", "maintenance.auto=false"]);
     for key in [
         "GIT_DIR",
         "GIT_WORK_TREE",

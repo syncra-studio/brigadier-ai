@@ -44,12 +44,16 @@ import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
+import { ToWorkerChip } from "@/app/conversation/ToWorkerChip";
+import { HeldDirectMessages } from "@/app/conversation/HeldDirect";
+import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { useOpenTurnStart } from "@/state/cliThread";
+import { useDirectTo } from "@/state/directTo";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { loadModelRules, useModelRulesRead } from "@/state/modelRules";
 import { folderTrust } from "@/state/trust";
@@ -84,6 +88,9 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
   const [replyingIn, setReplyingIn] = useState<string | null>(null);
   const shell = useRef<HTMLDivElement>(null);
   const working = useWorkingFor(target?.conversation?.id ?? null);
+  const directTo = useDirectTo(target?.conversation?.id ?? null);
+  const directWorker = useWorkerName(directTo ?? "");
+  const directName = directTo === null ? null : (directWorker ?? "the worker");
   const anyApproval = pending.some((entry) => entry.type === "approval");
   // Once none waits, the next approval takes the composer's place again.
   if (replyingIn !== null && !anyApproval) setReplyingIn(null);
@@ -119,6 +126,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
         <Mentions
           conversation={conversation}
           targets={targets}
+          direct={target.direct}
           projectId={!conversation && resolved.kind === "session" ? (resolved.project?.id ?? null) : null}
         />
         {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
@@ -146,6 +154,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
           {conversation && !archived && <ComposerStatusSlot conversationId={conversation.id} />}
           {conversation && <Notices conversationId={conversation.id} />}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
+          {conversation && !archived && <HeldDirectMessages conversationId={conversation.id} />}
           {current && (
             <PendingActionCard
               action={current}
@@ -180,6 +189,8 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
               placeholder={
                 archived
                   ? "Restore this conversation to continue it."
+                  : directName !== null
+                    ? `Message ${directName}`
                   : plan.on
                     ? PLAN_PLACEHOLDER
                     : (working ?? placeholder)
@@ -204,6 +215,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
                 )}
                 <PlanChip />
                 <NewSessionChip />
+                <ToWorkerChip />
               </div>
               <DictationNote owner={dictationOwner} />
               {conversation?.kind === "chat" && <ComposerContextRing />}

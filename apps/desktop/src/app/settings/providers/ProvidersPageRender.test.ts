@@ -120,7 +120,7 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.deepEqual(seen.afterLeaving, titles);
   // The old Usage page's links land on an agent's accounts.
   assert.deepEqual(seen.usageLink, {
-    page: { type: "settings", page: "providers" },
+    page: { type: "settings", page: "providers", detail: { provider: "claude" } },
     agent: "ClaudeMax",
     accountsInView: true,
   });

@@ -143,6 +143,12 @@ impl AgentAdapter for Codex {
         if let Some(entry) = entry.as_object_mut() {
             // It tells the two apart by `command` or `url`.
             entry.remove("type");
+            if let Some(oauth) = &spec.oauth {
+                entry.insert(
+                    "oauth".to_owned(),
+                    serde_json::json!({ "client_id": oauth.client_id }),
+                );
+            }
         }
         let value: toml::Value = serde_json::from_value(entry)
             .map_err(|err| Unsupported(format!("Codex can't take this server: {err}")))?;

@@ -57,6 +57,7 @@ const twMerge = extendTailwindMerge({
         "setup-agent-card",
         "picker",
         "agent-mark",
+        "plugin-file-height",
         "summary-inset",
         "browser-address",
         "browser-site-info",
@@ -74,7 +75,7 @@ const twMerge = extendTailwindMerge({
         "notice-close-icon",
         "add-project-list",
       ],
-      container: ["thread", "setup", "onboarding", "summary", "summary-stack", "thread-beside-summary", "settings", "settings-wide", "plugins", "question", "trust", "add-project", "project-dialog", "feedback", "palette"],
+      container: ["thread", "setup", "onboarding", "summary", "summary-stack", "thread-beside-summary", "settings", "settings-wide", "plugins", "plugin-file", "question", "trust", "add-project", "project-dialog", "feedback", "palette"],
       radius: [
         "document",
         "control",

@@ -127,6 +127,8 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 |---|---|---|---|---|
 | Icons | `Icon / <Name>`, `FileIcon/*`, `IdGlyph/*`, `BlockIcon/*`, `BrigadierGlyph`, `ProviderGlyph/*` | `components/icons/` | see Icons below | |
 | Icons | `Spinner/12`, `/14`, `/16`, `/20` | `components/icons/app-glyphs/spinner.tsx` | `Spinner` (sized by class) | |
+| Icons | — | `components/icons/app-glyphs/plugin-art.tsx` | `ServerArt`, `SkillArt` | code only: Settings › Plugins' illustrations for an item with no icon of its own |
+| Icons | — | `components/icons/marks/server-brands.tsx` | `ServerBrand`, `SERVER_BRANDS` | code only: well-known MCP servers' makers' marks (Simple Icons, CC0) |
 | Icons | `Icon / FileImage`, `Icon / FileDocument`, `Icon / FileCode`, `Icon / File` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | picks one of these icons by file type; no component of its own |
 | Primitives · Controls | `Badge/Default`, `Secondary`, `Destructive`, `Warning`, `Success`, `Outline`, `Ghost`, `Link` | `components/controls/badge.tsx` | `Badge` (`variant`) | |
 | Primitives · Controls | `Badge/Full access` | — | — | Pen only: the app's Full access pill is the access picker's trigger (`text-full-access`) in `app/shell/SetupPickers.tsx` |
@@ -203,6 +205,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
 | Shared app parts | — | `components/shared/banner.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
+| Shared app parts | — | `components/shared/code-editor.tsx` | `CodeFileHeader`, `CodeEditor` | code only: the file tab's header and lines; `CodeEditor` draws a small file whole, read only or editable (Settings › Plugins' Open) |
 | Shared app parts | `LabeledDivider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | look of `LabeledDivider` |
 | Shared app parts | `LabeledDivider` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | look of `LabeledDivider` |
 | Sidebar & shell | `Page corners` | `app/shell/PageCorners.tsx` | `PageCorners` | |

@@ -1,6 +1,6 @@
-import { revealSetting } from "@/app/settings/reveal";
+import { cancelSettingReveal, revealSetting } from "@/app/settings/reveal";
 import { expectSentTurn } from "@/components/conversation/thread-scroll";
-import { request } from "@/ipc/client";
+import { browserFocus, request } from "@/ipc/client";
 import type {
   AnswerInput,
   Access,
@@ -36,12 +36,13 @@ import type {
 import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
+import { useAgentPageAsk } from "@/state/agentSignIn";
+import { providerForSetting } from "@/state/providerDestination";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { realActivity, onRealActivity } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
-import { unmergedRows } from "@/app/conversation/activity/workerState";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
   boardHeld,
@@ -76,6 +77,7 @@ import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
+import { forgetHeldDirect } from "@/state/heldDirect";
 import { reopenable, rememberSelection, savedSelection } from "@/state/lastSelection";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
 import { stillGoing } from "@/state/tabStates";
@@ -278,6 +280,10 @@ function conversationHeld(id: string): boolean {
 
 function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
   const { selection: shown } = useApp.getState();
+  if (selection !== shown) {
+    cancelSettingReveal();
+    useAgentPageAsk.setState({ ask: null });
+  }
   // What leaving Settings goes back to, however it was reached (Back and Forward too).
   if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
   recordPlace(selection, mode);
@@ -332,14 +338,17 @@ export type SettingsPageLink = SettingsPageId | keyof typeof MERGED_SETTINGS_PAG
  * Shows a page of Settings (what to go back to is remembered by `select`). A merged page's id
  * opens the page it is part of at the row it held.
  */
-export function openSettings(page: SettingsPageLink = "general"): void {
+export function openSettings(page: SettingsPageLink = "general", row?: string): void {
   if (Object.hasOwn(MERGED_SETTINGS_PAGES, page)) {
     const merged = MERGED_SETTINGS_PAGES[page as keyof typeof MERGED_SETTINGS_PAGES];
-    select({ type: "settings", page: merged.page });
-    revealSetting(merged.row);
+    openSettings(merged.page, row ?? merged.row);
     return;
   }
-  select({ type: "settings", page: page as SettingsPageId });
+  const provider = page === "providers" && row ? providerForSetting(row) : null;
+  select(provider
+    ? { type: "settings", page: "providers", detail: { provider } }
+    : { type: "settings", page: page as SettingsPageId });
+  if (row) revealSetting(row);
 }
 
 /** Leaves Settings for what was shown before it (a new chat if that conversation is gone). */
@@ -364,6 +373,8 @@ export function toggleSettings(): void {
 export function stepHistory(delta: -1 | 1): void {
   const target = stepPlace(delta);
   if (!target) return;
+  // A native browser page can own the keyboard when the View menu asks to leave it.
+  if (typeof document !== "undefined" && !document.hasFocus()) void browserFocus(null).catch(() => {});
   const { conversations, projects } = useApp.getState();
   const gone =
     (target.type === "conversation" && !conversations[target.id]) ||
@@ -1213,6 +1224,19 @@ export async function sendMockupNotes(taskId: string, text: string, attachments:
   await request({ method: "sendMockupNotes", taskId, text, attachments });
 }
 
+/**
+ * The user's one message straight to one of the session's own workers (the composer's To:).
+ * Resolves once the worker took it (`queued`: into its running turn); rejects when it didn't.
+ */
+export async function sendToWorker(
+  conversationId: string,
+  taskId: string,
+  message: { text: string; attachments: AttachmentRef[]; mentions: Mention[] },
+): Promise<{ queued: boolean }> {
+  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message });
+  return { queued };
+}
+
 export async function pauseTask(taskId: string): Promise<void> {
   await request({ method: "pauseTask", taskId });
 }
@@ -1266,16 +1290,10 @@ function failureText(verb: string, failed: { conversation: Conversation; error: 
   return `Couldn't ${verb} ${naming(failed.map((entry) => entry.conversation))}: ${reasons.join("; ")}`;
 }
 
-/**
- * "Archived session", "Archived 3 chats"; with the titles of their workers whose work isn't
- * merged into them yet ("Archived session. Not merged: clamp util").
- */
+/** "Archived session", "Archived 3 chats": the noun only, never the titles. */
 function archivedText(list: Conversation[]): string {
   const noun = conversationNoun(list);
-  const text = list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
-  const { views } = useCliThread.getState();
-  const unmerged = list.flatMap((c) => unmergedRows(views[c.id]?.workers ?? []).map((row) => row.title));
-  return unmerged.length > 0 ? `${text}. Not merged: ${unmerged.join(", ")}` : text;
+  return list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
 }
 
 /** What each archive toast's Undo brings back, by toast. */
@@ -1501,12 +1519,19 @@ export async function deleteAll(ids: string[]): Promise<void> {
   const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
   // Their unsent drafts go only once they are surely going.
   for (const { id } of deleted) forgetDraft(id);
+  forgetHeldDirect(deleted.map((conversation) => conversation.id));
   forgetRightSidebarTabs(deleted.map((conversation) => conversation.id));
 }
 
-/** The branches deleting `ids` takes whose work never landed (or may not have). */
-export async function previewDelete(ids: string[]): Promise<UnlandedBranch[]> {
-  return (await request({ method: "previewDelete", ids })).branches;
+/**
+ * What deleting `ids` takes that the user may not expect: the branches whose work never landed
+ * (or may not have), and the files a Local checkout session left uncommitted in the checkout.
+ */
+export async function previewDelete(
+  ids: string[],
+): Promise<{ branches: UnlandedBranch[]; files: string[] }> {
+  const { branches, files } = await request({ method: "previewDelete", ids });
+  return { branches, files };
 }
 
 /** What removing a project takes with it. */
@@ -1528,6 +1553,7 @@ export async function removeProject(
     .map((conversation) => conversation.id);
   const { report } = await request({ method: "removeProject", id, deleteBranches, keepBrain });
   for (const conversation of gone) forgetDraft(conversation);
+  forgetHeldDirect(gone);
   forgetRightSidebarTabs(gone);
   const { selection } = useApp.getState();
   if (

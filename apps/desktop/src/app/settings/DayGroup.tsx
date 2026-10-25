@@ -11,7 +11,7 @@ import { SettingsCard } from "@/components/shared";
 /** One day of Browsing history: a card that folds, the day over its rows (`children`). */
 export function DayGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <SettingsCard>
+    <SettingsCard inset>
       <Collapsible defaultOpen>
         <CollapsibleTrigger className="group flex min-h-11 w-full items-center justify-between text-start text-sm font-medium">
           {label}

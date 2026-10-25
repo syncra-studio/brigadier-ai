@@ -1,126 +1,105 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
-import { Button, SettingsSelectTrigger } from "@/components/controls";
-import { Check, Folder, FolderPlus, Folders, Sparkle, Terminal } from "@/components/icons";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
+import { Button } from "@/components/controls";
+import { Plus, Sparkle, Terminal } from "@/components/icons";
 import { SettingsCard, SettingsSearch } from "@/components/shared";
-import type { PluginItemView, PluginKind, PluginProjectView, PluginsView } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { openSettings, select } from "@/state/actions";
+import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { AddDialog, ADD_HINT } from "./AddDialog";
-import { usePlugins, type PluginsAdapter } from "./adapter";
+import { usePlugins, type PluginAgentResult, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
-import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { elsewhereLine, has, placesWords, projectSummary, sections, signInAt, TAB_LABEL, type Row } from "./model";
-import { FoldCard, PluginRow } from "./parts";
-import { PlacesPicker } from "./PlacesPicker";
+import { checked, RemoveDialog, SignInDialog } from "./dialogs";
+import { FileDialog } from "./FileDialog";
+import { chipOf, lineOf, listed, TAB_LABEL } from "./model";
+import { PluginCard } from "./parts";
+import type { PluginItemView, PluginKind, PluginsView } from "./types";
 
-const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use. Pick a project to choose what's on there.";
+const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use.";
 
-/** What Settings search finds on the page: its tabs, then each item and project. */
+/** What Settings search finds on the page: its tabs, then each item. */
 export function pluginSearchRows() {
   const { view } = usePlugins.getState();
   return [
     { label: "MCP servers", description: "Servers every agent can use, in every project or only some" },
     { label: "Skills", description: "Skills every agent can use, in every project or only some" },
-    { label: "Found in other apps", description: "Servers only another app has", target: "Found in other apps" },
     ...view.items.map((item) => ({ label: item.name, description: item.description || item.detail, target: `plugin:${item.key}`, section: TAB_LABEL[item.kind] })),
   ];
 }
 
 /** A dialog open over the page. */
 type Open =
-  | { type: "add"; projectId: string | null }
-  /** `projectId`: where the sign-in runs, a place it's on (null: every project). */
-  | { type: "signIn"; key: string; projectId: string | null }
-  | { type: "useEverywhere"; key: string; after?: { projectId: string | null; on: boolean } }
-  | { type: "remove"; key: string };
+  | { type: "add" }
+  | { type: "signIn"; key: string; serverId: string; projectId: string | null }
+  | { type: "remove"; key: string }
+  | { type: "file"; key: string };
 
 export function PluginsPage() {
-  const { view, project, adapter, error, refresh, reload, setProject } = usePlugins();
-  return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} reload={reload} onProject={setProject} />;
+  const { view, adapter, error, refresh, reload } = usePlugins();
+  return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} reload={reload} />;
 }
 
 const TABS: PluginKind[] = ["server", "skill"];
 const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
-function PluginsScreen({ view, projectId, adapter, error, refresh, reload, onProject }: {
+function PluginsScreen({ view, adapter, error, refresh, reload }: {
   view: PluginsView;
-  projectId: string | null;
   adapter: PluginsAdapter | null;
   error: string | null;
   refresh: () => void;
   reload: () => Promise<void>;
-  onProject: (projectId: string | null) => void;
 }) {
   const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const selection = useApp((s) => s.selection);
+  const selected = selection.type === "settings" && selection.page === "plugins" ? selection.detail?.plugin : undefined;
   const [open, setOpen] = useState<Open | null>(null);
+  const liveDialog = useRef<Open | null>(null);
+  const setDialog = useCallback((dialog: Open | null) => {
+    liveDialog.current = dialog;
+    setOpen(dialog);
+  }, []);
+  useEffect(() => {
+    // Leaving a visit invalidates its dialog even if Back restores the same selection object.
+    const unsubscribe = useApp.subscribe((state, previous) => {
+      if (state.selection !== previous.selection) setDialog(null);
+    });
+    return () => {
+      liveDialog.current = null;
+      unsubscribe();
+    };
+  }, [setDialog]);
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
     if (label === "Skills" || label === "MCP servers") {
       setTab(revealTab(label));
-      setSelected(null);
       setQuery("");
     } else if (label?.startsWith("plugin:")) {
       const item = usePlugins.getState().view.items.find((entry) => `plugin:${entry.key}` === label);
       if (item) {
         setTab(item.kind);
-        setSelected(null);
         setQuery("");
       }
     }
   }), []);
-  const focus = view.projects.find((project) => project.id === projectId) ?? null;
-  const find = (key: string) => view.items.find((item) => item.key === key) ?? view.elsewhere.find((item) => item.key === key);
+  const find = (key: string) => view.items.find((item) => item.key === key);
   const busy = action.busy || !adapter;
 
-  /** The row switch: kept to a project or off there, else everywhere; an item that can't be kept to a project goes into the Library first. */
-  const flip = (item: PluginItemView, on: boolean, where: string | null = focus?.id ?? null) => {
-    if (!adapter) return;
-    if (!item.switchable) {
-      setOpen({ type: "useEverywhere", key: item.key, after: { projectId: where, on } });
-      return;
-    }
-    action.run(async () => {
-      await checked(view, () => adapter.switchPlugin(item.key, where, on));
-      refresh();
-    });
-  };
-
-  /**
-   * The place picker: applies at once, with an Undo that puts each agent back exactly where it
-   * had it. The page is read again before the picker takes the next pick, so each starts from
-   * the last one.
-   */
-  const place = (item: PluginItemView, projectIds: string[] | null) => {
+  /** Runs a change the agents take, then reads the page again. */
+  const change = (run: () => Promise<PluginAgentResult[]>, after?: () => void) => {
     if (!adapter) return;
     action.run(async () => {
-      let undo: string | null = null;
-      await checked(view, async () => {
-        const done = await adapter.setPlaces(item.key, projectIds);
-        undo = done.undo;
-        return done.results;
-      });
+      await checked(run);
       await reload();
-      const token = undo;
-      const back = (from: string) => checked(view, () => adapter.undoPlaces(from)).then(reload, (cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }));
-      toast(`${item.name} is ${placesWords(view, projectIds)} now`, { actions: token ? [{ label: "Undo", run: () => void back(token) }] : [] });
+      after?.();
     });
   };
-
-  /** A Library item some agents are missing: each of them gets it where the others have it. */
-  const addMissing = (item: PluginItemView) => {
-    if (!adapter) return;
-    action.run(async () => {
-      await checked(view, () => adapter.addMissing(item.key));
-      refresh();
-    });
-  };
+  /** The card's switch: the whole item on or off, in every agent, keeping where it's set to be. */
+  const flip = (item: PluginItemView, on: boolean) => adapter && change(() => adapter.switchPlugin(item.key, on));
 
   const current = selected ? find(selected) : undefined;
   let page;
@@ -129,41 +108,33 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, reload, onPro
       <DetailsPage
         view={view}
         item={current}
-        focus={focus}
         actions={{
           busy,
-          onBack: () => setSelected(null),
-          onSwitch: (where, on) => flip(current, on, where),
-          onSwitchAgent: (agent, on) => action.run(async () => {
-            await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
-            refresh();
-          }),
-          onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key, projectId: signInAt(view, current, focus) ?? focus?.id ?? null }) : undefined,
-          onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
-          onAddMissing: () => addMissing(current),
-          onRemove: () => setOpen({ type: "remove", key: current.key }),
+          onBack: () => openSettings("plugins"),
+          onScope: (projectIds) => change(() => adapter.setScope(current.key, projectIds)),
+          onSignIn: adapter.signIn && current.problem?.type === "needsSignIn"
+            ? (() => {
+              const { serverId, projectId } = current.problem;
+              return () => setDialog({ type: "signIn", key: current.key, serverId, projectId });
+            })()
+            : undefined,
+          onShare: () => change(() => adapter.share(current.key), () => toast(`${current.name} is in every agent now`)),
+          onRemove: () => setDialog({ type: "remove", key: current.key }),
           onRetry: refresh,
-          onUpdate: () => action.run(async () => {
-            await checked(view, () => adapter.update(current.key));
-            refresh();
-          }),
-          onTrust: (id) => action.run(async () => {
-            await adapter.trustProject(id);
-            refresh();
+          onUpdate: () => change(() => adapter.update(current.key)),
+          onOpen: () => setDialog({ type: "file", key: current.key }),
+          onTrust: (projectId) => action.run(async () => {
+            await adapter.trustProject(projectId);
+            await reload();
           }),
         }}
       />
     );
   } else {
     page = (
-      <SettingsPage
-        title="Plugins"
-        description={PLUGINS_DESCRIPTION}
-        actions={<Button size="sm" disabled={!adapter} onClick={() => setOpen({ type: "add", projectId: focus?.id ?? null })}>Add</Button>}
-      >
+      <SettingsPage title="Plugins" description={PLUGINS_DESCRIPTION}>
         <ListBody
           view={view}
-          focus={focus}
           tab={tab}
           query={query}
           busy={busy}
@@ -173,161 +144,100 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, reload, onPro
             setQuery("");
           }}
           onQuery={setQuery}
-          onProject={onProject}
-          onOpen={(item) => setSelected(item.key)}
-          onFlip={(item, on) => flip(item, on)}
-          onPlaces={place}
-          onDialog={setOpen}
+          onOpen={(item) => select({ type: "settings", page: "plugins", detail: { plugin: item.key } })}
+          onFlip={flip}
+          onAdd={() => setDialog({ type: "add" })}
         />
       </SettingsPage>
     );
   }
 
   const target = open && open.type !== "add" ? find(open.key) : undefined;
-  const close = () => setOpen(null);
+  // The same calls for as long as one item's file stays open, however often the page is read again.
+  const fileKey = open?.type === "file" ? open.key : null;
+  const fileCalls = useMemo(() => adapter && fileKey !== null ? {
+    details: () => adapter.details(fileKey),
+    save: (path: string, contents: string, expected: string) => adapter.saveSkill(fileKey, path, contents, expected),
+  } : null, [adapter, fileKey]);
+  const close = () => setDialog(null);
   return (
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
-      {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} projectId={open.projectId} refresh={refresh} onClose={close} />}
-      {adapter && open?.type === "signIn" && target && <SignInDialog view={view} item={target} projectId={open.projectId} adapter={adapter} refresh={refresh} onClose={close} />}
-      {adapter && open?.type === "useEverywhere" && target && (
-        <UseEverywhereDialog
-          view={view}
-          item={target}
-          adapter={adapter}
-          onClose={close}
-          onDone={() => {
-            const after = open.after;
-            if (!after) return refresh();
-            // The switch the user flipped, now on the Library's copy.
-            action.run(async () => {
-              const fresh = await adapter.read(focus?.id ?? null);
-              const copy = fresh.items.find((item) => item.library && item.name === target.name && item.kind === target.kind);
-              if (!copy) throw new Error(`${target.name} isn't in the library yet. Try the switch again in a moment.`);
-              await checked(fresh, () => adapter.switchPlugin(copy.key, after.projectId, after.on));
-              refresh();
-            });
-          }}
-        />
-      )}
+      {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} refresh={refresh} onClose={close} />}
+      {adapter && open?.type === "signIn" && target && <SignInDialog item={target} serverId={open.serverId} projectId={open.projectId} adapter={adapter} refresh={refresh} onClose={close} />}
       {adapter && open?.type === "remove" && target && (
         <RemoveDialog
-          view={view}
           item={target}
           adapter={adapter}
           onClose={close}
           onRemoved={() => {
-            setSelected(null);
+            // An item an agent has of its own stays listed: its details stay open.
+            if (target.removal === "everything" && liveDialog.current === open && useApp.getState().selection === selection) {
+              // The removed detail cannot be revisited; keep any existing Forward entries.
+              select({ type: "settings", page: "plugins" }, "replace");
+            }
+            if (liveDialog.current === open) close();
             refresh();
           }}
         />
+      )}
+      {fileCalls && open?.type === "file" && target && (
+        <FileDialog key={target.key} item={target} details={fileCalls.details} save={fileCalls.save} onClose={close} />
       )}
       {(action.error || error) && <p role="alert" className="text-destructive bg-background absolute right-5 bottom-4 left-5 text-xs whitespace-pre-wrap">{action.error ?? error}</p>}
     </div>
   );
 }
 
-function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onPlaces, onDialog }: {
+function ListBody({ view, tab, query, busy, adapter, onTab, onQuery, onOpen, onFlip, onAdd }: {
   view: PluginsView;
-  focus: PluginProjectView | null;
   tab: PluginKind;
   query: string;
   busy: boolean;
   adapter: PluginsAdapter | null;
   onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
-  onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
-  onPlaces: (item: PluginItemView, projectIds: string[] | null) => void;
-  onDialog: (open: Open) => void;
+  onAdd: () => void;
 }) {
   const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
-  const elsewhere = view.elsewhere.filter((item) => item.kind === tab);
-  const lists = sections(view, focus, tab, query);
-  const empty = count(tab) === 0;
-  const row = (entry: Row, dim: boolean) => {
-    const signIn = entry.item.attention?.type === "signIn" && adapter?.signIn ? signInAt(view, entry.item, focus) : undefined;
-    return (
-      <PluginRow
-        key={entry.item.key}
-        view={view}
-        item={entry.item}
-        line={entry.line}
-        dim={dim}
-        chips={entry.chips}
-        picker={entry.places && (
-          <PlacesPicker
-            view={view}
-            item={entry.item}
-            places={entry.places}
-            busy={busy}
-            onPlaces={(projectIds) => onPlaces(entry.item, projectIds)}
-            onEveryAgent={() => onDialog({ type: "useEverywhere", key: entry.item.key })}
-          />
-        )}
-        onOpen={() => onOpen(entry.item)}
-        end={
-          <>
-            {signIn !== undefined && <Button variant="soft" size="sm" onClick={() => onDialog({ type: "signIn", key: entry.item.key, projectId: signIn })}>Sign in</Button>}
-            <SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy || !!entry.locked} onCheckedChange={(on) => onFlip(entry.item, on)} />
-          </>
-        }
-      />
-    );
-  };
+  const items = listed(view, tab, query);
   return (
-    <div className="flex flex-col gap-10">
-      <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
-      {empty && !focus ? (
-        <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
+    <div className="flex flex-col gap-5">
+      <Toolbar tab={tab} query={query} count={count} adding={!!adapter} onTab={onTab} onQuery={onQuery} onAdd={onAdd} />
+      {count(tab) === 0 ? (
+        <EmptyTab tab={tab} onAdd={onAdd} />
+      ) : items.length === 0 ? (
+        <p data-slot="no-match" className="text-foreground/65 text-label py-6 text-center">Nothing matches “{query.trim()}”.</p>
       ) : (
-        lists.map((section) => {
-          if (!section.rows.length && section.key !== "own") return null;
-          return (
-            <SettingsSection key={section.key} title={section.title} description={section.description} aside={section.rows.length || undefined} setting={section.title}>
-              <SettingsCard>
-                {section.rows.length ? (
-                  section.rows.map((entry) => row(entry, !entry.on))
-                ) : (
-                  <div data-slot="empty-row" className="flex items-center gap-4 px-4 py-4">
-                    <span className="text-foreground/65 min-w-0 flex-1 text-label">Nothing only for {focus?.name} yet. Add one here, or turn one on below.</span>
-                    <Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "add", projectId: focus?.id ?? null })}>Add to {focus?.name}</Button>
-                  </div>
-                )}
-              </SettingsCard>
-            </SettingsSection>
-          );
-        })
-      )}
-      {!focus && elsewhere.length > 0 && (
-        <FoldCard title="Found in other apps" line={elsewhereLine(elsewhere)} setting="Found in other apps">
-          {elsewhere.map((item) => (
-            <PluginRow
+        <div data-slot="plugins-grid" className="grid grid-cols-1 gap-2.5 @thread:grid-cols-2">
+          {items.map((item) => (
+            <PluginCard
               key={item.key}
-              view={view}
               item={item}
-              line={{ text: item.description || item.detail, tone: "muted" }}
-              lit={has}
-              end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Add to every agent</Button>}
+              line={lineOf(item)}
+              chip={chipOf(view, item)}
+              busy={busy}
+              onOpen={() => onOpen(item)}
+              onSwitch={(on) => onFlip(item, on)}
             />
           ))}
-        </FoldCard>
+        </div>
       )}
     </div>
   );
 }
 
-function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, onAddProject }: {
-  view: PluginsView;
-  focus: PluginProjectView | null;
+/** The list's one row of controls: the two tabs, search and Add. */
+function Toolbar({ tab, query, count, adding, onTab, onQuery, onAdd }: {
   tab: PluginKind;
   query: string;
   count: (kind: PluginKind) => number;
+  adding: boolean;
   onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
-  onProject: (projectId: string | null) => void;
-  onAddProject: () => void;
+  onAdd: () => void;
 }) {
   const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginKind) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -338,9 +248,7 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
     event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]")[next]?.focus();
   };
   return (
-    <div data-slot="plugins-toolbar" className="flex items-center gap-3">
-      <ProjectFilter view={view} focus={focus} onProject={onProject} onAddProject={onAddProject} />
-      <span aria-hidden className="bg-divider h-5 w-px shrink-0" />
+    <div data-slot="plugins-toolbar" className="flex flex-wrap items-center gap-3">
       <div role="tablist" aria-label="Plugins" className="flex shrink-0 items-center gap-1">
         {TABS.map((kind) => (
           <button
@@ -360,79 +268,14 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
         ))}
       </div>
       <span className="flex-1" />
-      <SettingsSearch className="max-w-60" label={tab === "server" ? "Search MCP servers" : "Search skills"} value={query} onChange={onQuery} />
+      {/* "Search" alone fits a narrow window; the field's name still says what it searches. */}
+      <SettingsSearch className="max-w-60 min-w-28 flex-1" label={tab === "server" ? "Search MCP servers" : "Search skills"} placeholder="Search" value={query} onChange={onQuery} />
+      <Button size="sm" className="shrink-0" disabled={!adding} onClick={onAdd}><Plus aria-hidden />Add</Button>
     </div>
   );
 }
 
-/** The project filter: All projects, or one project, each with what it has. */
-function ProjectFilter({ view, focus, onProject, onAddProject }: {
-  view: PluginsView;
-  focus: PluginProjectView | null;
-  onProject: (projectId: string | null) => void;
-  onAddProject: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [find, setFind] = useState("");
-  const shown = view.projects.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(find.trim().toLowerCase()));
-  const pick = (projectId: string | null) => {
-    setOpen(false);
-    onProject(projectId);
-  };
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(value) => {
-        setOpen(value);
-        setFind("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <SettingsSelectTrigger label="Project" icon={<Folder aria-hidden className="text-foreground/65 size-icon-sm" />} className="h-8 w-44">
-          {focus?.name ?? "All projects"}
-        </SettingsSelectTrigger>
-      </PopoverTrigger>
-      <PopoverContent align="start" aria-label="Projects" data-slot="project-filter" className="flex max-h-(--radix-popover-content-available-height) w-75 flex-col gap-0.5 p-1.5">
-        <SettingsSearch variant="bordered" label="Find a project" value={find} onChange={setFind} clearOnEscape={false} className="border-divider rounded-none border-0 border-b" />
-        <FilterRow icon={Folders} title="All projects" line="What every project gets" selected={!focus} onPick={() => pick(null)} />
-        <p className="text-foreground/50 px-2.5 pt-1.5 pb-1 text-xs">Projects</p>
-        <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-          {shown.map((project) => (
-            <FilterRow key={project.id} icon={Folder} title={project.name} line={projectSummary(view, project)} selected={focus?.id === project.id} onPick={() => pick(project.id)} />
-          ))}
-        </div>
-        <div className="border-divider border-t pt-0.5">
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onAddProject();
-            }}
-            className="rounded-control hover:bg-foreground/5 flex h-9 w-full items-center gap-2.5 px-2.5 text-start text-label"
-          >
-            <FolderPlus aria-hidden className="text-foreground/65 size-icon-sm" />
-            Add project…
-          </button>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function FilterRow({ icon: Icon, title, line, selected, onPick }: { icon: typeof Folder; title: string; line: string; selected: boolean; onPick: () => void }) {
-  return (
-    <button type="button" aria-current={selected || undefined} onClick={onPick} className={cn("rounded-control hover:bg-foreground/5 flex w-full shrink-0 items-center gap-2.5 px-2.5 py-1.5 text-start", selected && "bg-foreground/5")}>
-      <Icon aria-hidden className="text-foreground/65 size-icon-sm shrink-0" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-label">{title}</span>
-        <span className="text-foreground/50 truncate text-xs">{line}</span>
-      </span>
-      {selected && <Check aria-hidden className="size-icon-sm shrink-0" />}
-    </button>
-  );
-}
-
-/** L7: a tab with nothing in it yet. */
+/** A tab with nothing in it yet. */
 function EmptyTab({ tab, onAdd }: { tab: PluginKind; onAdd: () => void }) {
   const [help, setHelp] = useState(false);
   const Icon = tab === "server" ? Terminal : Sparkle;
@@ -442,7 +285,7 @@ function EmptyTab({ tab, onAdd }: { tab: PluginKind; onAdd: () => void }) {
         <Icon aria-hidden className="text-foreground/65 size-5" />
       </span>
       <span className="pt-2 text-sm font-medium">No {TAB_LABEL[tab] === "Skills" ? "skills" : "MCP servers"} yet</span>
-      <span className="text-foreground/65 text-label">Add one once and every agent can use it, in all your projects or just one.</span>
+      <span className="text-foreground/65 text-label">Add one once and every agent can use it, in all your projects or just some.</span>
       <span className="flex items-center gap-3 pt-3">
         <Button size="sm" onClick={onAdd}>Add</Button>
         <Button variant="ghost" size="sm" aria-expanded={help} onClick={() => setHelp(!help)}>What can I add?</Button>

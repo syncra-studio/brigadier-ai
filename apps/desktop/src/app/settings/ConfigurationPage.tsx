@@ -265,12 +265,11 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
         value={value}
         options={PERMISSION_LEVELS.map((level) => ({
           value: level,
-          label:
-            level === "full" ? (
-              <Badge className="bg-full-access/15 text-full-access">{PERMISSION_LABELS[level]}</Badge>
-            ) : (
-              PERMISSION_LABELS[level]
-            ),
+          // A plain choice in the menu like the others; the closed pill keeps Full access's chip.
+          label: PERMISSION_LABELS[level],
+          ...(level === "full" && {
+            shown: <Badge className="bg-full-access/15 text-full-access">{PERMISSION_LABELS[level]}</Badge>,
+          }),
           hint: LEVEL_COPY[level],
         }))}
         onChange={(level) => save.run(() => setSetting("defaultPermission", level))}

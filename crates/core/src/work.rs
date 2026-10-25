@@ -1746,7 +1746,8 @@ pub enum OrchestratorStepKind {
         #[ts(optional)]
         turn: Option<i64>,
     },
-    /// "Sent message to {worker}".
+    /// "Sent message to {worker}"; "You messaged {worker}" when the user sent it from the
+    /// composer's To: (`by_user`).
     Messaged {
         task_id: TaskId,
         /// What it sent (`message_worker`), cut to 2000 bytes; none in
@@ -1754,6 +1755,9 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        by_user: bool,
     },
     /// "Stopped {worker}": the orchestrator's `stop_worker`, or the user's Stop all.
     Stopped { task_id: TaskId, reason: String },

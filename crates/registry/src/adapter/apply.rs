@@ -7,8 +7,10 @@
 //! once it runs leaves the steps before it done.
 
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -132,6 +134,76 @@ fn command(call: &CliCall) -> String {
         .join(" ")
 }
 
+/// How long one of a CLI's own commands may take before Brigadier stops it: a command that
+/// hangs never holds every later change back.
+pub const CLI_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Waits for `child` (its stdout and stderr piped), at most `timeout`: its output, or, past
+/// it, a `TimedOut` error once it is stopped.
+pub fn wait_within(mut child: Child, timeout: Duration) -> std::io::Result<Output> {
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            let _ = send.send(bytes);
+        });
+        receive
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("it didn't finish in {} s", timeout.as_secs().max(1)),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let read = |pipe: std::sync::mpsc::Receiver<Vec<u8>>| {
+        pipe.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "its output did not close in time",
+                )
+            })
+    };
+    Ok(Output {
+        status,
+        stdout: read(stdout)?,
+        stderr: read(stderr)?,
+    })
+}
+
+/// Runs `command` (stdout and stderr piped) for at most `timeout`: [`wait_within`].
+pub fn output_within(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    wait_within(child, timeout)
+}
+
 /// Runs the CLI's command with `binary`; its output, or its own words on why it failed.
 fn run(call: &CliCall, binary: &Path, env: &[(String, String)]) -> Result<String, ApplyError> {
     let mut cmd = Command::new(binary);
@@ -141,9 +213,17 @@ fn run(call: &CliCall, binary: &Path, env: &[(String, String)]) -> Result<String
     if let Some(dir) = &call.cwd {
         cmd.current_dir(dir);
     }
-    let output = cmd
-        .output()
-        .map_err(|err| spawn_error(call.program, &err))?;
+    let output = output_within(&mut cmd, CLI_TIMEOUT).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::TimedOut {
+            ApplyError::Cli(format!(
+                "`{}` didn't finish in {} s, so Brigadier stopped it.",
+                command(call),
+                CLI_TIMEOUT.as_secs()
+            ))
+        } else {
+            spawn_error(call.program, &err)
+        }
+    })?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if output.status.success() || already_so(&stdout) {
         return Ok(stdout);
@@ -258,14 +338,33 @@ fn project_file(
             ))
         })?;
     }
+    // The user may have changed it meanwhile (an editor, a terminal): the edit is made again on
+    // what it holds now, never over it.
+    let (text, new) = match read_and_edit(file, edit)? {
+        (now, again) if now != text => (now, again),
+        _ => (text, new),
+    };
     if new != text {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)
                 .map_err(|err| failed(file, "create the folder of", &err))?;
         }
-        std::fs::write(file, new).map_err(|err| failed(file, "write", &err))?;
+        write_whole(file, &new).map_err(|err| failed(file, "write", &err))?;
     }
     Ok(())
+}
+
+/// Writes `text` to `file` whole: into a file beside it, then moved over it.
+fn write_whole(file: &Path, text: &str) -> std::io::Result<()> {
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = file.with_file_name(format!(".{name}.brigadier-{}", std::process::id()));
+    std::fs::write(&temp, text)?;
+    std::fs::rename(&temp, file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 fn failed(file: &Path, what: &str, err: &dyn fmt::Display) -> ApplyError {
@@ -446,10 +545,11 @@ impl Repo {
     /// Whether git tracks the file (committed or staged).
     fn tracks_file(&self, env: &[(String, String)]) -> bool {
         let literal = format!(":(literal){}", self.file);
-        git_command(&self.top, env)
-            .args(["ls-files", "--error-unmatch", "--", &literal])
-            .output()
-            .is_ok_and(|output| output.status.success())
+        output_within(
+            git_command(&self.top, env).args(["ls-files", "--error-unmatch", "--", &literal]),
+            CLI_TIMEOUT,
+        )
+        .is_ok_and(|output| output.status.success())
     }
 
     /// The exclude line for the file: anchored to the checkout's top, special characters
@@ -481,7 +581,7 @@ fn git_command(dir: &Path, env: &[(String, String)]) -> Command {
 
 /// `git`'s one-line answer, when it succeeds.
 fn git(dir: &Path, args: &[&str], env: &[(String, String)]) -> Option<String> {
-    let output = git_command(dir, env).args(args).output().ok()?;
+    let output = output_within(git_command(dir, env).args(args), CLI_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }

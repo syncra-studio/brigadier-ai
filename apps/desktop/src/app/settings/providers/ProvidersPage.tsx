@@ -1,8 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-
-import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 
 import { AgentPage, AgentSettingsPage } from "@/app/settings/providers/AgentPage";
 
@@ -12,20 +10,14 @@ import { CheckAgainButton } from "@/app/settings/providers/parts";
 
 import { SettingsPage } from "@/app/settings/parts";
 
-import { useReveal } from "@/app/settings/reveal";
-
 import { StateDot } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 
-import type { ProviderKind } from "@/ipc/generated";
-
 import { formatAgo } from "@/lib/format";
 
-import { PROVIDERS } from "@/lib/routing";
+import { openSettings, refreshProviders } from "@/state/actions";
 
-import { refreshProviders } from "@/state/actions";
-
-import { useAgentPageAsk } from "@/state/agentPage";
+import { openAgentPage, useAgentPageAsk } from "@/state/agentPage";
 
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
 
@@ -64,13 +56,6 @@ export const PROVIDERS_ROWS = {
   },
 } as const;
 
-/** The rows on an agent's page: revealing one opens an agent's page. */
-const AGENT_PAGE_ROWS: readonly string[] = [
-  PROVIDERS_ROWS.installation.label,
-  PROVIDERS_ROWS.accounts.label,
-  PROVIDERS_ROWS.models.label,
-];
-
 const TITLE = "Providers";
 const DESCRIPTION = "The coding agents Brigadier runs, the accounts you use with them, and which models do what.";
 
@@ -86,51 +71,25 @@ export function ProvidersPage() {
   const accounts = useApp((s) => s.accounts?.accounts);
   const now = useNow(30_000);
   const refresh = useAction();
-  const [open, setOpen] = useState<{ provider: ProviderKind; signIn: boolean } | null>(null);
+  const selection = useApp((s) => s.selection);
+  const provider = selection.type === "settings" && selection.page === "providers" ? selection.detail?.provider : undefined;
+  const ask = useAgentPageAsk((s) => s.ask);
   useEffect(() => {
     loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
   }, []);
-  // An agent's page asked for from elsewhere (the usage list's Sign in) opens once, then the
-  // ask is cleared.
-  const ask = useAgentPageAsk((s) => s.ask);
-  const [taken, setTaken] = useState<typeof ask>(null);
-  if (ask && ask !== taken) {
-    setTaken(ask);
-    setOpen(ask);
-  }
-  useEffect(() => {
-    if (ask) useAgentPageAsk.setState({ ask: null });
-  }, [ask]);
-  // A search row on an agent's page opens it: a model's, its agent's; Installation, Accounts or
-  // Models, the open one's, else the first agent installed. One on the overview goes back to it.
-  const revealing = useReveal((s) => s.label);
-  if (revealing) {
-    const modelsAgent = overviews?.find((entry) =>
-      entry.models?.models.some((model) => model.displayName === revealing),
-    )?.provider;
-    const installed = PROVIDERS.find((provider) => {
-      const state = agentState(overviews?.find((entry) => entry.provider === provider));
-      return state !== "install";
-    });
-    const agent =
-      modelsAgent ?? (AGENT_PAGE_ROWS.includes(revealing) ? (open?.provider ?? installed ?? PROVIDERS[0]) : null);
-    if (agent && agent !== open?.provider) setOpen({ provider: agent, signIn: false });
-    else if (!agent && open) setOpen(null);
-  }
-
-  if (open) {
-    const overview = overviews?.find((entry) => entry.provider === open.provider);
+  if (provider) {
+    const overview = overviews?.find((entry) => entry.provider === provider);
     return (
       <div data-slot="providers" className="contents">
-        <AgentSettingsPage provider={open.provider} overview={overview} onBack={() => setOpen(null)}>
+        <AgentSettingsPage provider={provider} overview={overview} onBack={() => openSettings("providers")}>
           <AgentPage
-            key={open.provider}
-            provider={open.provider}
+            key={provider}
+            provider={provider}
             overview={overview}
-            accounts={accounts === undefined ? null : accountsOf(accounts, open.provider)}
+            accounts={accounts === undefined ? null : accountsOf(accounts, provider)}
             merged={merged}
             now={now}
-            signIn={open.signIn}
+            signIn={ask?.under === selection && ask.provider === provider}
           />
         </AgentSettingsPage>
       </div>
@@ -167,7 +126,7 @@ export function ProvidersPage() {
           overviews={overviews}
           accounts={accounts}
           now={now}
-          onOpen={(provider, signIn = false) => setOpen({ provider, signIn })}
+          onOpen={openAgentPage}
         />
       </SettingsPage>
     </div>

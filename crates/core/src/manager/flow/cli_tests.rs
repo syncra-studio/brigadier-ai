@@ -827,7 +827,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     assert_eq!(answers["start a"]["worker"]["title"], "Count lines");
     assert_eq!(answers["start a"]["worker"]["agent"], "claude");
     assert_eq!(answers["start a"]["permission"], "accept-edits");
-    assert_eq!(answers["start b"]["worker"]["title"], "Ask first.");
+    assert_eq!(answers["start b"]["worker"]["title"], "Ask first");
     assert_eq!(answers["start b"]["worker"]["agent"], "codex");
     assert_eq!(a.route.choice.model, None);
     assert_eq!(b.route.choice.model.as_deref(), Some("gpt-test"));
@@ -940,11 +940,11 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     let workspace = a.workspace.clone().unwrap();
     let branch = workspace.branch.clone().unwrap();
     assert_ne!(branch, parent);
-    let merges_into = super::git(
-        &flow.repo,
-        &["config", "--get", &format!("branch.{branch}.gh-merge-base")],
-    );
-    assert_eq!(merges_into.trim(), parent);
+    // Done, its branch went and its `gh-merge-base` config with it (D8): what it merges back
+    // into is in its record.
+    assert!(super::git(&flow.repo, &["branch", "--list", &branch]).is_empty());
+    let config = super::git(&flow.repo, &["config", "--local", "-l"]);
+    assert!(!config.contains(&format!("branch.{branch}.")), "{config}");
     let record = flow
         .manager
         .session_dir(&flow.conversation)
@@ -1087,6 +1087,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
             OrchestratorStepKind::Messaged {
                 task_id: a.id.clone(),
                 text: Some("And stop.".into()),
+                by_user: false,
             },
             OrchestratorStepKind::Stopped {
                 task_id: a.id.clone(),
@@ -1203,6 +1204,222 @@ async fn a_mockup_worker_shows_its_screens_as_each_turn_ends_and_hears_the_notes
     assert_eq!(std::fs::read(path).unwrap(), b"marked");
     let board = flow.board().await;
     assert_eq!(Flow::task(&board, 1).rework_rounds, 1);
+    flow.stop().await;
+}
+
+/// The composer's To: (one message from the user straight to a worker): it reaches the
+/// session's own worker with the user's attachments, each its own file, and mentions; into its
+/// running turn when it works. The session's thread shows it as the user's, and its next turn
+/// hears of it without the send starting one. Another session, an empty message, an unknown
+/// attachment and a worker that ended are refused before anything reaches the worker.
+#[tokio::test]
+async fn the_user_messages_a_worker_directly() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let push = |name: &str, value: String| {
+                    let mut answers = answers.lock().unwrap();
+                    let list = answers.entry(name.into()).or_insert_with(|| json!([]));
+                    list.as_array_mut().unwrap().push(json!(value));
+                };
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    push("worker", turn.input.clone());
+                    if turn.input.contains("Use blue.") {
+                        let steered = turn.steered().await.unwrap_or_default();
+                        push("steered", steered);
+                    }
+                    return Reply::text("Done.");
+                }
+                push("thread", turn.input.clone());
+                if turn.input.contains("Start one.") {
+                    brigadier(&turn, CliRequest::Start(Box::new(start("Build it.")))).await;
+                    return Reply::text("Started.");
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-direct", Options::default(), script).await;
+    let list = |name: &str| -> Vec<String> {
+        answers
+            .lock()
+            .unwrap()
+            .get(name)
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    flow.say("Start one.").await;
+    flow.until("the worker's first turn ends", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    // Its session heard that turn end, as it hears any.
+    super::eventually("the session to hear the turn end", || {
+        list("thread").len() == 2
+    })
+    .await;
+    flow.idle().await;
+    let task = Flow::task(&flow.board().await, 1).clone();
+    let threads = list("thread").len();
+
+    // Two files of one name: each reaches the worker as its own file.
+    let blobs = flow.core.store().blobs();
+    let file = |hash: brigadier_store::BlobHash| crate::work::AttachmentRef {
+        id: hash.to_string(),
+        name: "notes.txt".into(),
+        mime: "text/plain".into(),
+        bytes: 3,
+        pasted: false,
+        inline: None,
+    };
+    let one = file(blobs.put(b"one".to_vec()).await.unwrap());
+    let two = file(blobs.put(b"two".to_vec()).await.unwrap());
+    let queued = flow
+        .manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            task.id.clone(),
+            "Use blue.".into(),
+            vec![one, two],
+            vec![crate::model::Mention::Task {
+                id: task.id.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(!queued);
+    super::eventually("the worker to hear the user", || list("worker").len() == 2).await;
+    let input = list("worker")[1].clone();
+    assert!(input.starts_with("Use blue."), "{input}");
+    assert!(input.contains("[mentions task-1: "), "{input}");
+    let saved: Vec<String> = input
+        .split(", saved as ")
+        .skip(1)
+        .map(|rest| rest.split(']').next().unwrap().to_owned())
+        .collect();
+    assert_eq!(saved.len(), 2, "{input}");
+    let read: Vec<_> = saved
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    assert_eq!(read, [b"one".to_vec(), b"two".to_vec()]);
+
+    // The send started no turn of the session's.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(list("thread").len(), threads, "{:#?}", list("thread"));
+
+    // Into its running turn while it works.
+    let queued = flow
+        .manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            task.id.clone(),
+            "Also round the corners.".into(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    assert!(queued);
+    super::eventually("the running turn to take it", || {
+        list("steered")
+            .first()
+            .is_some_and(|steered| steered.contains("Also round the corners."))
+    })
+    .await;
+    flow.until("the worker's turn ends", |board| {
+        Flow::task(board, 1).state == crate::work::TaskState::Reported
+    })
+    .await;
+
+    // The session's next turn hears what the user told its worker.
+    flow.idle().await;
+    flow.say("What now?").await;
+    flow.idle().await;
+    let later = list("thread")[threads..].join("\n");
+    assert!(
+        later.contains("The user messaged worker") && later.contains("\"Use blue.\""),
+        "{later}"
+    );
+    use crate::work::OrchestratorStepKind;
+    let by_user: Vec<Option<String>> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::model::DomainEvent::OrchestratorStepped { step } => match step.kind {
+                OrchestratorStepKind::Messaged {
+                    text,
+                    by_user: true,
+                    ..
+                } => Some(text),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        by_user,
+        [
+            Some("Use blue.".to_owned()),
+            Some("Also round the corners.".to_owned())
+        ]
+    );
+
+    // Refused before it reaches the worker.
+    let heard = list("worker").len();
+    let other = flow.add_session("Other", None, ProviderKind::Claude).await;
+    let send = |to: crate::model::ConversationId, text: &str, files| {
+        flow.manager
+            .send_to_worker(to, task.id.clone(), text.into(), files, Vec::new())
+    };
+    let err = send(other, "Hi.", Vec::new()).await.unwrap_err();
+    assert!(err.to_string().contains("isn't this session's"), "{err}");
+    let err = send(flow.conversation.clone(), "  ", Vec::new())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("write a message"), "{err}");
+    // A file that can't be written for the worker (its attachments folder made a link) stops
+    // the message before the worker hears anything.
+    let folder = std::path::Path::new(&saved[0]).parent().unwrap().to_owned();
+    std::fs::remove_dir_all(&folder).unwrap();
+    let elsewhere = folder.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+    let blocked = file(blobs.put(b"three".to_vec()).await.unwrap());
+    let err = send(flow.conversation.clone(), "Hi.", vec![blocked])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("could not be saved"), "{err}");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    let unknown = file("0".repeat(64).parse().unwrap());
+    let err = send(flow.conversation.clone(), "Hi.", vec![unknown])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no longer stored"), "{err}");
+    flow.manager
+        .stop_task_by_user(task.id.clone())
+        .await
+        .unwrap();
+    let err = send(flow.conversation.clone(), "Hi.", Vec::new())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("has ended"), "{err}");
+    assert_eq!(list("worker").len(), heard);
     flow.stop().await;
 }
 

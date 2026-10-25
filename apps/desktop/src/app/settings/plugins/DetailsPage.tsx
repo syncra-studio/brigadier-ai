@@ -2,192 +2,153 @@ import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/pa
 import { Button } from "@/components/controls";
 import { Folder } from "@/components/icons";
 import { Banner, CopyButton, SettingsCard } from "@/components/shared";
-import type { AgentItemState, PluginItemView, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
-import { agentsIn, has, isOn, KIND_LABEL, labelOf, listNames, projectName, shownDetail, spreadOf, wontStartReason, type Tone } from "./model";
-import { AgentRow, FoldCard, ItemMark, StateBadge, stateOf } from "./parts";
+import { folderName, KIND_LABEL, shownDetail, wontStartReason } from "./model";
+import { FoldCard, PluginMark, RadioRow } from "./parts";
+import type { PluginItemView, PluginsView } from "./types";
 
 /** What the details page can ask of the list page that holds it. */
 type DetailsActions = {
   busy: boolean;
   onBack: () => void;
-  onSwitch: (projectId: string | null, on: boolean) => void;
-  /** One agent's switch, where the page looks. */
-  onSwitchAgent: (agent: ProviderKind, on: boolean) => void;
-  /** Absent while the agents can't be signed in from here. */
+  /** Where it's on: every project (null), or only these projects (by id), never none. */
+  onScope: (projectIds: string[] | null) => void;
+  /** Absent while it can't be signed in from here. */
   onSignIn?: (() => void) | undefined;
-  onUseEverywhere: () => void;
-  /** A Library item: gives it to the agents missing it. */
-  onAddMissing: () => void;
+  onShare: () => void;
   onRemove: () => void;
   onRetry: () => void;
   onUpdate: () => void;
+  onOpen: () => void;
   onTrust: (projectId: string) => void;
 };
 
-/** D1–D3: one item, how each agent stands with it, the projects it is on in, and Remove. */
-export function DetailsPage({ view, item, focus, actions }: { view: PluginsView; item: PluginItemView; focus: PluginProjectView | null; actions: DetailsActions }) {
-  const everywhere = item.everywhere;
-  const only = !everywhere && item.onIn.length > 0 ? listNames(item.onIn.map((path) => projectName(view, path))) : null;
+/** One item: what needs the user, where it's on, Advanced (how it runs, where it's saved, Open), and Remove. */
+export function DetailsPage({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
+  const some = item.scope.type === "someProjects" ? item.scope : null;
+  const on = some?.projectIds ?? [];
+  const locked = !!item.locked;
+  const scope = (projectId: string, next: boolean) => actions.onScope(next ? [...on, projectId] : on.filter((id) => id !== projectId));
+  const first = item.kind === "skill" ? "Folder" : item.url ? "Address" : "Command";
   return (
     <SettingsPage
       title={item.name}
-      description={`${KIND_LABEL[item.kind]} · ${shownDetail(item.detail)}`}
-      mark={<ItemMark item={item} large />}
+      description={`${KIND_LABEL[item.kind]} · ${item.description || shownDetail(item.detail)}`}
+      mark={<PluginMark item={item} large />}
       back={{ label: "Plugins", onBack: actions.onBack }}
       sectionsClassName="gap-9 pt-4"
     >
-      {(item.attention || lacking(item) || item.updateAvailable) && (
-        <div className="flex flex-col gap-2">
-          <AttentionBanner view={view} item={item} actions={actions} />
-          <SpreadBanner view={view} item={item} actions={actions} />
-          {item.updateAvailable && (
-            <Banner tone="info" text={`A newer version of ${item.name} is ready.`} className="rounded-control border-b-0">
-              <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onUpdate}>Update</Button>
-            </Banner>
-          )}
-        </div>
-      )}
-      <SettingsSection title="Agents" description="Each agent gets it through its own setup. New sessions pick up changes." className="[&>div:first-child]:min-h-0">
-        <SettingsCard>
-          {view.agents.map((agent) => {
-            // Looking at every project, an item kept to some projects is "off" for every agent:
-            // each one has it, in those projects.
-            const raw = stateOf(item, agent.agent);
-            const state: AgentItemState = !focus && only && raw.type === "off" ? { type: "ready" } : raw;
-            const note = focus?.notes.find((entry) => entry.agent === agent.agent);
-            const [line, tone] = agentLine(item, state, only, focus);
-            return (
-              <AgentRow key={agent.agent} agent={agent} line={note ? note.message : line} tone={note ? "warning" : tone} dim={state.type === "notSupported"} end={<StateBadge state={state} />} className="px-4 py-3">
-                {note && focus && (
-                  <Button variant="link-blue" size="inline" className="w-fit" disabled={actions.busy} onClick={() => actions.onTrust(focus.id)}>
-                    Trust {focus.name}
-                  </Button>
-                )}
-              </AgentRow>
-            );
-          })}
-        </SettingsCard>
-      </SettingsSection>
+      <Banners item={item} actions={actions} />
       <SettingsSection
         title="Projects"
-        description={everywhere ? "Where it's on. Turn it off in a project to skip it there." : only ? `Where it's on. It's only in ${only} now; turn on Global to use it everywhere.` : "Where it's on. It's off in every project now."}
+        description={item.locked ?? "Where it's on. New sessions pick up changes."}
         className="[&>div:first-child]:min-h-0"
+        setting="Projects"
       >
-        <SettingsCard>
-          <ProjectSwitch name="Global" line={everywhere ? "Also turns on in projects you add later." : "Turn on to use it in all your projects."} on={everywhere} busy={actions.busy} onChange={(on) => actions.onSwitch(null, on)} />
-          {view.projects.map((project) => (
-            <ProjectSwitch key={project.id} name={project.name} line={shortPath(project.path)} on={isOn(item, project)} busy={actions.busy} onChange={(on) => actions.onSwitch(project.id, on)} />
-          ))}
+        <SettingsCard role="radiogroup" aria-label="Where it's on">
+          <div className="px-4 py-3">
+            <RadioRow checked={!some} disabled={locked || actions.busy} title="All projects" line="On in every project, and in new ones you add." onSelect={() => some && actions.onScope(null)} />
+          </div>
+          <div className="px-4 py-3">
+            {/* From All projects, it starts on in each project: nothing changes until one is turned off. */}
+            <RadioRow
+              checked={!!some}
+              disabled={locked || actions.busy || view.projects.length === 0}
+              title="Only some projects"
+              line="On only in the projects you pick."
+              onSelect={() => !some && view.projects.length > 0 && actions.onScope(view.projects.map((project) => project.id))}
+            />
+          </div>
         </SettingsCard>
+        {some && (view.projects.length > 0 || some.folders.length > 0) && (
+          <SettingsCard>
+            {view.projects.map((project) => {
+              const note = project.notes[0];
+              const checked = on.includes(project.id);
+              return (
+                <div key={project.id} data-slot="project-switch" className="flex items-center gap-3 px-4 py-3">
+                  <Folder aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-label font-medium">{project.name}</span>
+                    <span className={note ? "text-warning text-xs" : "text-foreground/65 truncate text-xs"}>{note ? note.message : shortPath(project.path)}</span>
+                    {note && (
+                      <Button variant="link-blue" size="inline" className="w-fit" disabled={actions.busy} onClick={() => actions.onTrust(project.id)}>
+                        Trust {project.name}
+                      </Button>
+                    )}
+                  </span>
+                  {/* It stays on somewhere: the last project on can't be turned off. */}
+                  <SettingsSwitch label={project.name} checked={checked} disabled={locked || actions.busy || (checked && on.length === 1)} onCheckedChange={(next) => scope(project.id, next)} />
+                </div>
+              );
+            })}
+            {some.folders.map((folder) => (
+              <div key={folder} data-slot="folder-switch" className="flex items-center gap-3 px-4 py-3">
+                <Folder aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="text-label font-medium">{folderName(folder)}</span>
+                  <span className="text-foreground/65 truncate text-xs">{shortPath(folder)} · not one of your projects</span>
+                </span>
+                <SettingsSwitch label={folderName(folder)} checked disabled onCheckedChange={() => {}} />
+              </div>
+            ))}
+          </SettingsCard>
+        )}
       </SettingsSection>
-      <FoldCard title="Advanced" line={advancedLine(item)} setting="Advanced">
+      <FoldCard title="Advanced" line={`${first}, where it's saved, and its ${item.kind === "skill" ? "SKILL.md" : "settings"}.`} initiallyOpen setting="Advanced">
         <>
-          <InfoRow title={item.kind === "skill" ? "Folder" : item.remote ? "Address" : "Command"} value={item.detail} />
-          {item.remote && item.kind === "server" && (
-            <div className="flex items-center gap-6 px-4 py-3">
-              <span className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="text-label font-medium">Sign-in</span>
-                <span className="text-foreground/65 text-xs">{signInLine(view, item)}</span>
-              </span>
-              {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in again</Button>}
-            </div>
-          )}
-          {item.switchable && view.agents.map((agent) => {
-            const state = stateOf(item, agent.agent);
-            if (state.type === "missing" || state.type === "notSupported") return null;
-            const where = focus ? `in ${focus.name}` : "in every project";
-            const on = state.type !== "off";
-            return (
-              <AgentRow key={agent.agent} agent={agent} line={on ? `On ${where}.` : `Off ${where}.`} className="px-4 py-3"
-                end={<SettingsSwitch label={`${item.name} for ${agent.label}`} checked={on} disabled={actions.busy} onCheckedChange={(next) => actions.onSwitchAgent(agent.agent, next)} />} />
-            );
-          })}
+          <InfoRow title={first} value={item.url ?? item.detail} />
           {item.files.map((file) => <InfoRow key={file} title="Saved in" value={shortPath(file)} />)}
+          <div data-slot="open-row" className="flex items-center gap-6 px-4 py-3">
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="text-label font-medium">{item.kind === "skill" ? "SKILL.md" : "Settings"}</span>
+              <span className="text-foreground/65 text-xs">
+                {item.kind === "skill" ? "Read or edit the skill's instructions." : item.url ? "Its address and header names. Secret values stay hidden." : "Its command, arguments and env variable names. Secret values stay hidden."}
+              </span>
+            </span>
+            <Button variant="soft" size="sm" onClick={actions.onOpen}>Open</Button>
+          </div>
         </>
       </FoldCard>
-      <div data-slot="remove-row" className="flex items-center gap-4">
-        <Button variant="soft-destructive" size="sm" disabled={actions.busy} onClick={actions.onRemove}>Remove {item.name}</Button>
-        <span className="text-foreground/50 text-xs">Removes it from every agent and every project.</span>
-      </div>
+      {item.removal !== "none" && (
+        <div data-slot="remove-row" className="flex items-center gap-4">
+          <Button variant="soft-destructive" size="sm" disabled={actions.busy} onClick={actions.onRemove}>Remove {item.name}</Button>
+          <span className="text-foreground/50 text-xs">
+            {item.removal === "copies" ? "Takes out only what Brigadier added. Your own original stays as it is." : "Takes out what Brigadier added, from every agent and project."}
+          </span>
+        </div>
+      )}
     </SettingsPage>
   );
 }
 
-function AttentionBanner({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
-  const attention = item.attention;
-  if (!attention) return null;
-  if (attention.type === "wontStart") {
-    return (
-      <Banner tone="error" text={`${item.name} won't start: ${wontStartReason(attention.message)}. No agent can use it until the setup is fixed.`}>
-        <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onRetry}>Try again</Button>
-      </Banner>
-    );
-  }
-  if (attention.type === "signIn") {
-    const who = listNames(agentsIn(view, item, "needsSignIn"));
-    return (
-      <Banner tone="warning" text={`${who} ${agentsIn(view, item, "needsSignIn").length === 1 ? "needs" : "need"} you to sign in to ${item.name}. Until then, ${who} sessions can't use it.`}>
-        {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
-      </Banner>
-    );
-  }
-  return null;
-}
-
-/** Whether an agent that could have the item lacks it. */
-const lacking = (item: PluginItemView) => item.agents.some((entry) => entry.state.type === "missing");
-
-/** Add to every agent, whenever an agent lacks the item, whatever else the item needs. */
-function SpreadBanner({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
-  if (!lacking(item)) return null;
-  const holders = item.agents.filter((entry) => has(entry.state)).map((entry) => labelOf(view, entry.agent));
-  const only = item.attention?.type === "notEverywhere" ? item.attention.message : `Only ${listNames(holders)} ${holders.length === 1 ? "has" : "have"} it.`;
-  const spread = spreadOf(item);
-  if (!spread) return <Banner tone="info" text={`${only} It came in that agent's own plugin, so the other agents can't add it.`} />;
+/** What needs the user, over everything else: it won't start, a sign-in, an update, only some agents have it. */
+function Banners({ item, actions }: { item: PluginItemView; actions: DetailsActions }) {
+  const problem = item.problem;
+  if (!problem && !item.canShare) return null;
   return (
-    <Banner tone="info" text={`${only} Add it to every agent and they all get it.`}>
-      <Button variant="soft" size="sm" disabled={actions.busy} onClick={spread === "addMissing" ? actions.onAddMissing : actions.onUseEverywhere}>Add to every agent</Button>
-    </Banner>
-  );
-}
-
-/** An agent's line on the details page, and its colour. */
-function agentLine(item: PluginItemView, state: AgentItemState, only: string | null, focus: PluginProjectView | null): [string, Tone] {
-  switch (state.type) {
-    case "ready": return [item.remote && item.kind === "server" ? "Signed in." : only ? `Ready in ${only}.` : "Ready.", "muted"];
-    case "needsSignIn": return ["Waiting for you to sign in.", "warning"];
-    case "wontStart": return ["Couldn't start it.", "error"];
-    case "off": return [focus ? `Off in ${focus.name}.` : "Off in every project.", "muted"];
-    case "missing": return ["Doesn't have it yet.", "muted"];
-    case "notSupported": return [state.reason, "muted"];
-    case "working": return ["Working on it…", "muted"];
-  }
-}
-
-/** What Advanced holds, in a line. */
-function advancedLine(item: PluginItemView): string {
-  const one = item.switchable ? ", turn off for one agent" : "";
-  if (item.kind === "skill") return `Folder${one}, where it's saved.`;
-  return item.remote ? `Address, sign-in details${one}, where it's saved.` : `Command${one}, where it's saved.`;
-}
-
-function signInLine(view: PluginsView, item: PluginItemView): string {
-  const signed = agentsIn(view, item, "ready");
-  const waiting = agentsIn(view, item, "needsSignIn");
-  if (waiting.length) return `${listNames(waiting)} still ${waiting.length === 1 ? "needs" : "need"} to sign in.`;
-  return signed.length ? `Each agent keeps its own sign-in: ${listNames(signed)}.` : "No agent has signed in yet.";
-}
-
-function ProjectSwitch({ name, line, on, busy, onChange }: { name: string; line: string; on: boolean; busy: boolean; onChange: (on: boolean) => void }) {
-  return (
-    <div data-slot="project-switch" className="flex items-center gap-3 px-4 py-3">
-      <Folder aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-label font-medium">{name}</span>
-        <span className="text-foreground/65 truncate text-xs">{line}</span>
-      </span>
-      <SettingsSwitch label={name} checked={on} disabled={busy} onCheckedChange={onChange} />
+    <div data-slot="banners" className="flex flex-col gap-2">
+      {problem?.type === "wontStart" && (
+        <Banner tone="error" text={`${item.name} won't start: ${wontStartReason(problem.message)}. Sessions can't use it until its setup is fixed.`} className="rounded-control border-b-0">
+          <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onRetry}>Try again</Button>
+        </Banner>
+      )}
+      {problem?.type === "needsSignIn" && (
+        <Banner tone="warning" text={`${item.name} needs you to sign in. Until then, sessions can't use it.`} className="rounded-control border-b-0">
+          {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
+        </Banner>
+      )}
+      {problem?.type === "conflict" && <Banner tone="warning" text={problem.message} className="rounded-control border-b-0" />}
+      {problem?.type === "updateReady" && (
+        <Banner tone="info" text={`A newer version of ${item.name} is ready.`} className="rounded-control border-b-0">
+          <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onUpdate}>Update</Button>
+        </Banner>
+      )}
+      {(problem?.type === "onlyIn" || item.canShare) && (
+        <Banner tone="info" text={problem?.type === "onlyIn" ? problem.message : `Not every agent has ${item.name} yet.`} className="rounded-control border-b-0">
+          {item.canShare && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onShare}>Share with every agent</Button>}
+        </Banner>
+      )}
     </div>
   );
 }

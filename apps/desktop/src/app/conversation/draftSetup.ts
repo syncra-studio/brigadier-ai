@@ -102,6 +102,8 @@ export type ResolvedDraft = {
   target: DraftTarget | null;
   /** Why the draft can't be sent yet, in words. */
   problem: string | null;
+  /** The problem is only that the repository is still being read: nothing to tell yet. */
+  waiting: boolean;
   /** No model is available: every agent is off or all its models are hidden on Providers. */
   noModel: boolean;
 };
@@ -138,6 +140,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     const base = environment === "localCheckout" ? current : (draft.base ?? current);
 
     let problem: string | null = null;
+    let waiting = false;
     let target: DraftTarget | null = null;
     if (noModel) {
       problem = "No model is available. Turn one on in Providers.";
@@ -149,6 +152,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
       const place = environmentRequest({ ...draft, current, loading: repo.loading, holder });
       if ("problem" in place) {
         problem = place.problem;
+        waiting = place.waiting ?? false;
       } else {
         const setup: SetupRequest = {
           type: "session",
@@ -176,6 +180,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
       groups,
       target,
       problem,
+      waiting,
       noModel,
     };
   }, [kind, project, settings, draft, groups, noModel, repoPath, repo, holder, rules]);

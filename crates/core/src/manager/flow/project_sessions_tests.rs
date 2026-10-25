@@ -134,7 +134,7 @@ async fn a_background_session_starts_on_its_message() {
         )
         .await
         .unwrap();
-    assert_eq!(session.title, "Write gamma.", "titled by its message");
+    assert_eq!(session.title, "Write gamma", "titled by its message");
     flow.settled_in(&session.id).await;
     let (Some(path), _, _) = worktree(&flow, &session.id) else {
         panic!("the session's worktree");

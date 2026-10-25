@@ -89,3 +89,31 @@ test("nonempty drafts retain and pin deleted images for undo and reload", () => 
   assert.deepEqual(pins.at(-1)?.attachments, [image]);
   assert.deepEqual(draftRefs(draft!.text, [], draft!.attachments), [image]);
 });
+
+test("a refused direct message is kept whole apart with its worker, its #1 image and paste beside the session draft's own, pinned until dropped", async () => {
+  const { dropHeldDirect, heldDraft, holdDirect, useHeldDirect } = await import("@/state/heldDirect");
+  useHeldDirect.setState({ held: [] });
+  const paste: AttachmentRef = { id: "paste", name: "Pasted text.md", mime: "text/markdown", bytes: 3, pasted: true, inline: 1 };
+  const newer: AttachmentRef = { ...image, id: "newer", inline: 1 };
+  saveDraft("session", "typed since [Image #1]", [newer], []);
+  holdDirect("session", "worker-1", {
+    text: "[Image #1] see [Pasted text #1] @src/a.ts",
+    attachments: [{ ...image, inline: 1 }, paste],
+    mentions: [{ type: "file", path: "src/a.ts" }],
+  });
+  const [held] = useHeldDirect.getState().held ?? [];
+  assert.equal(held?.conversationId, "session");
+  assert.equal(held?.taskId, "worker-1");
+  // Nothing of it went into the session's draft, nor the other way round.
+  assert.deepEqual(loadDraft("session")?.attachments, [newer]);
+  assert.deepEqual(heldDraft(held!.scope), {
+    text: "[Image #1] see [Pasted text #1] @src/a.ts",
+    attachments: [{ ...image, inline: 1 }, paste],
+    mentions: [{ type: "file", path: "src/a.ts" }],
+  });
+  assert.deepEqual(pins.at(-1), { method: "pinDraftAttachments", scope: held!.scope, attachments: [{ ...image, inline: 1 }, paste] });
+  dropHeldDirect(held!.scope);
+  assert.equal(heldDraft(held!.scope), null);
+  assert.deepEqual(useHeldDirect.getState().held, []);
+  assert.deepEqual(pins.at(-1), { method: "pinDraftAttachments", scope: held!.scope, attachments: [] });
+});

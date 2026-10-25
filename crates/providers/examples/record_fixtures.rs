@@ -86,6 +86,7 @@ fn spec(
         redactor: None,
         owned_cwd: true,
         sweep_dir: Some(cwd.into()),
+        temp_tag: None,
         keeps_detached: false,
         auto_compact: true,
         // No subagents (an empty list) but in the subagent recording: Claude's on Haiku; Codex's

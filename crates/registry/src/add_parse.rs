@@ -249,6 +249,7 @@ fn url_item(url: &Url<'_>, text: &str, name: Option<&str>) -> Result<Item, AddEr
             url: text.to_owned(),
             headers: Vec::new(),
         },
+        oauth: None,
     }))
 }
 
@@ -511,7 +512,11 @@ fn claude_add(words: &[&str]) -> Result<Item, AddError> {
             cwd: None,
         }
     };
-    Ok(Item::Server(ServerSpec { name, transport }))
+    Ok(Item::Server(ServerSpec {
+        name,
+        transport,
+        oauth: None,
+    }))
 }
 
 fn url_only(
@@ -667,7 +672,11 @@ fn codex_add(words: &[&str]) -> Result<Item, AddError> {
             }
         }
     };
-    Ok(Item::Server(ServerSpec { name, transport }))
+    Ok(Item::Server(ServerSpec {
+        name,
+        transport,
+        oauth: None,
+    }))
 }
 
 /// The words after `skills add` when the line runs the skills CLI (`npx skills add`, ...).
@@ -849,7 +858,11 @@ fn json_server(name: String, object: &Map<String, Value>) -> Result<Item, AddErr
             cwd: text("cwd")?.map(PathBuf::from),
         }
     };
-    Ok(Item::Server(ServerSpec { name, transport }))
+    Ok(Item::Server(ServerSpec {
+        name,
+        transport,
+        oauth: None,
+    }))
 }
 
 /// A JSON string, number or boolean as text.

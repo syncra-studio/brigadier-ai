@@ -448,7 +448,7 @@ impl SessionManager {
     }
 
     /// Every kept-branch record, oldest first.
-    pub(super) async fn kept_branches(&self) -> Result<Vec<(String, KeptBranch)>> {
+    pub(in crate::manager) async fn kept_branches(&self) -> Result<Vec<(String, KeptBranch)>> {
         let mut kept = Vec::new();
         let mut after = 0;
         loop {
@@ -490,6 +490,9 @@ impl SessionManager {
                         Some(("session-snapshots", id)) => {
                             records.conversation(id).is_some() || records.task(id).is_some()
                         }
+                        // A session's branch namespaces go only with its Delete, or with the
+                        // launch sweep's checks once it is gone (D3): never offered here.
+                        Some(("session-branches", _)) => true,
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
                             | "checks" | "preview" | "preview-data" | "session-folder" | "lineage",
@@ -566,6 +569,8 @@ impl SessionManager {
         action: Action,
         context: ScanContext,
     ) -> std::result::Result<Cleaned, String> {
+        // What deleted sessions left behind goes with it (D3).
+        self.sweep_orphans().await;
         let instance = self.runtime.platform().paths().instance.clone();
         let platform = self.runtime.platform().clone();
         match action {
@@ -1897,7 +1902,7 @@ impl Scanner<'_> {
                 Some((
                     "orch" | "session" | "workers" | "thread-temp" | "background" | "checks"
                     | "preview" | "preview-data" | "session-folder" | "lineage"
-                    | "session-snapshots",
+                    | "session-snapshots" | "session-branches" | "delete" | "traces" | "orphan",
                     _,
                 )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),

@@ -175,6 +175,8 @@ impl SessionManager {
 
     /// A project was created or its repositories changed: (re)open its Brain and index.
     pub async fn project_changed(&self, project: &Project) {
+        // Its repositories are what sharing reads and watches.
+        self.plugin_projects_changed();
         let stale = self.brains.projects().get(&project.id).is_some_and(|open| {
             open.root.as_deref().map(Path::to_path_buf)
                 != project.repos.first().map(|repo| PathBuf::from(&repo.path))

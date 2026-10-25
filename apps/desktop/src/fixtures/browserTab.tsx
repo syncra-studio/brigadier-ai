@@ -307,7 +307,7 @@ function Fixture() {
           title: text(one("main h1")),
           dialog: text(one('[role="dialog"] h2')),
         };
-        useBrowserSettingsView.setState({ opened: null, clearing: null });
+        useBrowserSettingsView.setState({ clearing: null });
         useApp.setState({ selection: { type: "conversation", id: ID } });
         await until(() => field() !== null && one('[role="dialog"]') === null);
         await wait(100);
@@ -319,7 +319,7 @@ function Fixture() {
       await until(() => useApp.getState().selection.type === "settings");
       await wait(200);
       destinations["Site settings"] = { selection: useApp.getState().selection, title: text(one("main h1")), dialog: text(one('[role="dialog"] h2')) };
-      useBrowserSettingsView.setState({ opened: null, clearing: null });
+      useBrowserSettingsView.setState({ clearing: null });
       useApp.setState({ selection: { type: "conversation", id: ID } });
       await until(() => field() !== null);
       seen.destinations = destinations;

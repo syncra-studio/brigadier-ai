@@ -58,7 +58,7 @@ import {
   sameImages,
   splitAtMarkers,
 } from "@/app/conversation/inlineImages";
-import { mentionOf } from "@/app/conversation/Mentions";
+import { DIRECT_ITEM, directTaskOf, mentionOf } from "@/app/conversation/Mentions";
 import { usePlanMode } from "@/app/conversation/PlusMenu";
 import { askPausedSend } from "@/app/conversation/PausedSend";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/components/conversation/pasteContent";
@@ -91,6 +91,7 @@ import { useRichComposer } from "@/state/composerMode";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { directSendingOf, directToOf, setDirectTo } from "@/state/directTo";
 
 export type ComposerInputProps = {
   placeholder: string;
@@ -127,12 +128,25 @@ export default function ComposerEditor({
   // Images and pasted texts whose chip was deleted, by number, for undo to bring back.
   const deleted = useMemo(() => new Map<number, File | CreateAttachment>(), []);
   const deletedPastes = useMemo(() => new Map<number, File | CreateAttachment>(), []);
+  const conversationId = target?.conversation?.id ?? null;
+  const pulled = target?.queue.pulled ?? null;
   const onMention = useCallback(
     (item: Unstable_TriggerItem) => {
+      const direct = directTaskOf(item);
+      if (direct !== null) {
+        if (conversationId === null) return;
+        // A queued message being edited goes back to the session's queue, never to a worker.
+        if (pulled?.holds(conversationId)) {
+          toast(EDITING_QUEUED, { tone: "error" });
+          return;
+        }
+        setDirectTo(conversationId, direct);
+        return;
+      }
       const mention = mentionOf(item);
       if (mention && mention.type !== "task") memory?.record(mention, item.label);
     },
-    [memory],
+    [memory, conversationId, pulled],
   );
   return (
     <ChipComposerInput
@@ -143,6 +157,7 @@ export default function ComposerEditor({
       formatter={formatter}
       mentionLook={mentionLook}
       onMention={onMention}
+      isAction={isDirectItem}
       placeholder={placeholder}
       autoFocus={autoFocus}
       // Esc stops only on a second press (useEscToStop).
@@ -159,6 +174,12 @@ export default function ComposerEditor({
     </ChipComposerInput>
   );
 }
+
+/** The `@` menu's "Message directly" rows set the To: rather than leave a chip. */
+const isDirectItem = (item: Unstable_TriggerItem) => item.type === DIRECT_ITEM;
+
+/** Why "Message directly" can't be picked while a queued message is being edited. */
+const EDITING_QUEUED = "Send the queued message you're editing first";
 
 /** Where the user types elsewhere: a text field, or anything in a dialog. */
 const ELSEWHERE =
@@ -357,6 +378,14 @@ function ComposerKeys({
           event.preventDefault();
           // A ⌘⏎ whose send never came is not this send's.
           if (taskTab) clearBackgroundSend(taskTab);
+          if (directToOf(conversationId) !== null) {
+            // To a worker: never a new session, the paused queue's question or a steer; one at
+            // a time.
+            if (aui.composer().getState().isEmpty || directSendingOf(conversationId)) return true;
+            if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui, owner)) return true;
+            aui.composer().send();
+            return true;
+          }
           const thread = aui.thread().getState();
           if (action === "background" && taskTab) {
             // Not this conversation's send: it goes to a new tab (on the same model), running

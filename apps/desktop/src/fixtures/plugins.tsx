@@ -1,249 +1,242 @@
-/** Settings › Plugins over a faked daemon: every list, details and dialog state the Plugins board draws. No sample data enters the app. */
+/** Settings › Plugins over a faked daemon: every list, details and dialog state the page draws. No sample data enters the app. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
+import { GeneralPage } from "@/app/settings/GeneralPage";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
-import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
-import { revealSetting, useReveal } from "@/app/settings/reveal";
+import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
+import type { PluginElsewhereView, PluginItemDetails, PluginItemView, PluginProjectView, PluginsView } from "@/app/settings/plugins/types";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
-import type { AgentItemState, PluginAttention, PluginItemView, PluginKind, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
+import type { ProviderKind } from "@/ipc/generated";
+import { highlight } from "@/lib/highlight";
 import { useApp } from "@/state/store";
+import { openSettings, stepHistory } from "@/state/actions";
+import { useHistory } from "@/state/history";
 
 /*
- * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, G2A: G2's Advanced open, and P1: the place picker open) for shots; ?agents=2 keeps to the
- * two agents Brigadier drives today (the board draws six); ?drive=1 walks every state, flips
- * switches and confirms the dialogs, then writes what it saw to #plugins-result
- * (PluginsRender.test.ts reads it).
+ * ?state=<name> opens one state and writes what it shows to #plugins-result: L1 (MCP servers),
+ * L2 (Skills), D1 (a server's details: sign-in, only some projects), D2 (a skill's details), D3 (an
+ * item only Claude Code has, removed earlier), D4 (a locked item), F1 (a skill's SKILL.md open),
+ * F2 (a server's settings open), R1 (Remove of an item an agent has of its own), A1 (Add).
+ * ?width=<px> narrows the window. ?drive=1 walks the states, flips, scopes, edits and saves, then
+ * writes what it saw (PluginsRender.test.ts reads it); ?drive=removal walks a removal that
+ * answers late (PluginRemovalRender.test.ts).
  */
 const params = new URLSearchParams(location.search);
-if (params.has("drive") || params.has("state")) {
-  const still = document.createElement("style");
-  still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
-  document.head.append(still);
-}
+const deferredRemoval = params.get("drive") === "removal";
+const width = Number(params.get("width")) || null;
+let finishRemoval: (() => void) | null = null;
+let reads = 0;
+const still = document.createElement("style");
+still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
+document.head.append(still);
 useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info, selection: { type: "settings", page: "plugins" } }));
 
-const ALL_AGENTS = [
-  ["claude", "Claude Code"],
-  ["codex", "Codex"],
-  ["gemini", "Gemini CLI"],
-  ["cursor", "Cursor Agent"],
-  ["opencode", "OpenCode"],
-  ["amp", "Amp"],
-] as const;
-// Agents beyond the two the app drives today have no type of their own yet: the page takes any.
-const agents = ALL_AGENTS.slice(0, params.get("agents") === "2" ? 2 : 6).map(([agent, label]) => ({ agent: agent as ProviderKind, label }));
-const HOME = "/Users/me/Code";
-const BRIGADIER = `${HOME}/brigadier-ai`;
-const STEADY = `${HOME}/steady-app`;
-const LANDING = `${HOME}/landing`;
-/** A folder an agent knows that isn't a Brigadier project. */
-const FOREIGN = `${HOME}/clients/freelogo-fos-2026`;
+const AGENTS: ProviderKind[] = ["claude", "codex"];
+const HOME = "/Users/me";
+const LIB = `${HOME}/.brigadier/library/plugins`;
 const projects: PluginProjectView[] = [
-  { id: "p-brigadier", name: "brigadier-ai", path: BRIGADIER, notes: [] },
-  { id: "p-steady", name: "steady-app", path: STEADY, notes: [] },
-  { id: "p-landing", name: "landing", path: LANDING, notes: [{ agent: "codex", message: "Codex only reads this project's settings once you trust the project." }] },
+  { id: "p-brigadier", name: "brigadier-ai", path: `${HOME}/Code/brigadier-ai`, notes: [] },
+  { id: "p-steady", name: "steady-app", path: `${HOME}/Code/steady-app`, notes: [] },
+  { id: "p-landing", name: "landing", path: `${HOME}/Code/landing`, notes: [{ agent: "codex", message: "Codex only reads this project's settings once you trust the project." }] },
+  { id: "p-docs", name: "docs-site", path: `${HOME}/Code/docs-site`, notes: [] },
 ];
 
-/** One item as the fake daemon keeps it. */
-type Spec = {
-  key: string;
-  kind: PluginKind;
-  name: string;
-  description: string;
-  detail: string;
-  remote?: boolean;
-  library?: boolean;
-  switchable?: boolean;
-  everywhere: boolean;
-  onIn?: string[];
-  offIn?: string[];
-  /** The agents that have it; every agent when left out. */
-  only?: string[];
-  /** Each agent's state where it is on, when not Ready. */
-  special?: Record<string, AgentItemState>;
-  attention?: PluginAttention;
-  /** A plugin's skill count. */
-  skills?: number;
-  foundIn?: string;
-};
+/** A small green square, as the daemon sends a site's favicon. */
+const CONTEXT7_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPg7or+TwlmGDVg1IBRA4aLAQBgZO8Q38/aUAAAAABJRU5ErkJggg==";
+const some = (...projectIds: string[]) => ({ type: "someProjects" as const, projectIds, folders: [] });
+/** One item as the daemon sends it, from what sets it apart. */
+function item(spec: Pick<PluginItemView, "key" | "kind" | "name" | "detail"> & Partial<PluginItemView>): PluginItemView {
+  return {
+    description: "", url: null, icon: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false,
+    skillCount: spec.kind === "skill" ? 1 : 0, files: [spec.kind === "skill" ? `${LIB}/${spec.name}/skills/${spec.name}/SKILL.md` : `${LIB}/${spec.name}/.mcp.json`],
+    ...spec,
+  };
+}
 
-const wontStart: AgentItemState = { type: "wontStart", reason: 'unknown type "websocket"' };
-const needsSignIn: AgentItemState = { type: "needsSignIn" };
-
-function startingItems(signIns: number): Spec[] {
-  const waiting = ["codex", "gemini", "cursor", "opencode"].slice(0, signIns);
+function startingItems(): PluginItemView[] {
   return [
-    { key: "server:pencil", kind: "server", name: "pencil", description: "Reads and edits .pen design files.", detail: "pencil mcp --stdio", everywhere: true },
-    { key: "server:railway", kind: "server", name: "railway", description: "Railway projects, services and deploys.", detail: "railway mcp", everywhere: true, offIn: [STEADY] },
-    { key: "server:node_repl", kind: "server", name: "node_repl", description: "Runs JavaScript in a sandbox.", detail: "node-repl-mcp", everywhere: true, offIn: [BRIGADIER] },
-    {
-      key: "server:linear", kind: "server", name: "linear", description: "Issues and projects in Linear.", detail: "https://mcp.linear.app/mcp", remote: true, everywhere: true,
-      special: { ...Object.fromEntries(waiting.map((agent) => [agent, needsSignIn])), amp: { type: "notSupported", reason: "Amp can't sign in to servers on the web yet." } },
-      attention: { type: "signIn", message: signIns === 1 ? "Codex needs you to sign in." : "Codex, Gemini CLI, Cursor Agent and OpenCode need you to sign in." },
-    },
-    {
-      key: "server:figma-dev", kind: "server", name: "figma-dev", description: "Figma's local server.", detail: "ws://localhost:3845/mcp", remote: true, everywhere: true,
-      special: Object.fromEntries(ALL_AGENTS.map(([agent]) => [agent, wontStart])), attention: { type: "wontStart", message: 'Won\'t start: unknown type "websocket".' },
-    },
-    { key: "server:playwright", kind: "server", name: "playwright", description: "Drives a browser.", detail: "npx @playwright/mcp@latest", everywhere: false },
-    { key: "lib:postgres", kind: "server", name: "postgres", description: "Your local brigadier database.", detail: "npx @modelcontextprotocol/server-postgres", library: true, everywhere: false, onIn: [BRIGADIER] },
-    { key: "plugin:higgsfield", kind: "skill", name: "higgsfield", skills: 9, description: "Images, video, brand kits and websites.", detail: "~/.claude/plugins/higgsfield", everywhere: true },
-    { key: "skill:impeccable", kind: "skill", name: "impeccable", description: "Designs, critiques and polishes interfaces.", detail: "~/.agents/skills/impeccable", everywhere: true },
-    { key: "skill:hallmark", kind: "skill", name: "hallmark", description: "Keeps new pages free of generic AI styling.", detail: "~/.agents/skills/hallmark", everywhere: true, offIn: [BRIGADIER] },
-    { key: "skill:use-railway", kind: "skill", name: "use-railway", description: "Deploys and runs things on Railway.", detail: "~/.agents/skills/use-railway", everywhere: true, offIn: [STEADY] },
-    {
-      key: "skill:grill-me", kind: "skill", name: "grill-me", description: "Asks hard questions about a plan.", detail: "~/.claude/skills/grill-me", everywhere: true, only: ["claude"], switchable: false,
-      attention: { type: "notEverywhere", message: "Only Claude Code has it." },
-    },
-    { key: "lib:delegator", kind: "skill", name: "delegator", description: "Runs your plan with workers while you're away.", detail: "~/.brigadier/library/delegator", library: true, everywhere: false, onIn: [BRIGADIER] },
+    // Its site's icon, as the daemon sends it.
+    item({ key: "lib:context7", kind: "server", name: "Context7", description: "Up-to-date docs and code examples for the libraries you use.", detail: "https://mcp.context7.com/mcp", url: "https://mcp.context7.com/mcp", icon: CONTEXT7_ICON }),
+    // An icon that doesn't load: its card falls back to the illustration.
+    item({ key: "lib:error-feed", kind: "server", name: "error-feed", description: "Errors and slow pages from your apps.", detail: "https://errors.example.com/mcp", url: "https://errors.example.com/mcp", icon: "data:image/png;base64,broken" }),
+    item({ key: "lib:figma", kind: "server", name: "Figma", description: "Frames, components and variables from your Figma files.", detail: "http://127.0.0.1:3845/mcp", url: "http://127.0.0.1:3845/mcp" }),
+    item({
+      key: "server:github", kind: "server", name: "GitHub", description: "Issues, pull requests and code search across your repos.", detail: "npx -y @modelcontextprotocol/server-github",
+      removal: "copies", files: [`${HOME}/.claude.json`, `${LIB}/github/.mcp.json`],
+    }),
+    item({
+      key: "server:linear", kind: "server", name: "Linear", description: "Issues, projects and cycles from your Linear workspace.", detail: "https://mcp.linear.app/mcp", url: "https://mcp.linear.app/mcp",
+      scope: some("p-brigadier", "p-steady", "p-landing"), problem: { type: "needsSignIn", message: "Needs sign-in", serverId: "claude:user:linear", projectId: null },
+    }),
+    item({ key: "lib:playwright", kind: "server", name: "Playwright", description: "Drives a browser: clicks, types and takes screenshots.", detail: "npx @playwright/mcp@latest", scope: some("p-brigadier") }),
+    item({ key: "lib:postgres", kind: "server", name: "postgres", detail: "uvx postgres-mcp postgresql://localhost/steady", on: false, scope: some("p-steady") }),
+    item({
+      key: "server:team-db", kind: "server", name: "team-db", description: "The team's staging database.", detail: "npx team-db-mcp", scope: some("p-steady"),
+      locked: "Shared with your team in steady-app/.mcp.json: change it there.", removal: "none", files: [`${HOME}/Code/steady-app/.mcp.json`],
+    }),
+    item({ key: "lib:commit-messages", kind: "skill", name: "commit-messages", description: "Writes commit messages in this repo's style.", detail: `${LIB}/commit-messages/skills/commit-messages` }),
+    item({
+      key: "plugin:frontend-design", kind: "skill", name: "frontend-design", description: "Distinctive, production-grade web pages and components.", detail: `${HOME}/.claude/plugins/frontend-design`,
+      problem: { type: "onlyIn", message: "Only in Claude Code: came in Claude Code's own plugin.", agents: ["claude"], reason: "ownPlugin" }, removal: "none",
+    }),
+    item({ key: "lib:pdf-forms", kind: "skill", name: "pdf-forms", description: "Reads PDF forms and fills them in.", detail: `${LIB}/pdf-forms/skills/pdf-forms`, scope: some("p-brigadier", "p-docs") }),
+    item({
+      key: "skill:pr-review", kind: "skill", name: "pr-review", description: "Reviews a pull request for bugs, tests and naming.", detail: `${HOME}/.claude/skills/pr-review`,
+      problem: { type: "onlyIn", message: "Only in Claude Code", agents: ["claude"], reason: "removed" }, removal: "none", canShare: true, files: [`${HOME}/.claude/skills/pr-review/SKILL.md`],
+    }),
+    item({ key: "lib:release-notes", kind: "skill", name: "release-notes", description: "Drafts release notes from the pull requests merged since the last tag.", detail: `${LIB}/release-notes/skills/release-notes` }),
+    item({ key: "lib:rust-style", kind: "skill", name: "rust-style", description: "This workspace's Rust rules: errors, naming and tests.", detail: `${LIB}/rust-style/skills/rust-style`, scope: some("p-brigadier") }),
+    item({ key: "lib:tailwind-tokens", kind: "skill", name: "tailwind-tokens", detail: `${LIB}/tailwind-tokens/skills/tailwind-tokens`, on: false, scope: some("p-landing") }),
+    item({ key: "lib:webapp-testing", kind: "skill", name: "webapp-testing", description: "Tests a local web app in a browser and reports what broke.", detail: `${LIB}/webapp-testing/skills/webapp-testing`, scope: some("p-brigadier", "p-steady", "p-landing") }),
   ];
 }
 
-const elsewhere: Spec[] = [
-  { key: "other:desktop:filesystem", kind: "server", name: "filesystem", description: "Reads and writes files in folders you pick.", detail: "npx @modelcontextprotocol/server-filesystem", everywhere: false, only: [], foundIn: "Claude Desktop" },
-  { key: "other:desktop:brave-search", kind: "server", name: "brave-search", description: "Searches the web with Brave.", detail: "https://search.brave.com/mcp", remote: true, everywhere: false, only: [], foundIn: "Claude Desktop" },
-  { key: "other:cursor:context7", kind: "server", name: "context7", description: "Up-to-date library docs.", detail: "https://mcp.context7.com/mcp", remote: true, everywhere: false, only: [], foundIn: "Cursor" },
+const skillText = (name: string) => `---
+name: ${name}
+description: Drafts release notes from the pull requests merged since the last tag.
+---
+
+# Release notes
+
+1. Find the last tag with \`git describe --tags --abbrev=0\`.
+2. List the pull requests merged since then.
+3. Group them under New, Fixed and Changed.
+`;
+
+/** Other apps' servers, which no agent uses until they're imported. */
+const startingElsewhere = (): PluginElsewhereView[] => [
+  { key: "other:desktop:filesystem", name: "filesystem", detail: "npx -y @modelcontextprotocol/server-filesystem ~/Documents", url: null, foundIn: "Claude Desktop", file: `${HOME}/Library/Application Support/Claude/claude_desktop_config.json` },
+  { key: "other:cursor:brave-search", name: "brave-search", detail: "https://search.brave.com/mcp", url: "https://search.brave.com/mcp", foundIn: "Cursor", file: `${HOME}/.cursor/mcp.json` },
 ];
 
-let items: Spec[] = startingItems(1);
-/** How long a read of the page takes, to show what a slow daemon does. */
-let readDelay = 0;
-/** What each place picker change found before it, by its Undo. */
-const placesBefore = new Map<string, { key: string; spec: Pick<Spec, "everywhere" | "onIn" | "offIn"> }>();
+let items: PluginItemView[] = startingItems();
+let elsewhere = startingElsewhere();
 let empty = false;
 const calls: string[] = [];
+/** SKILL.md files as saved, by path. */
+const saved = new Map<string, string>();
 let adding: { resolve: (results: PluginAgentResult[]) => void } | null = null;
 
-function view(projectId: string | null): PluginsView {
-  const focus = projects.find((project) => project.id === projectId)?.path ?? null;
-  const shown = (spec: Spec): PluginItemView => {
-    const on = focus ? (spec.everywhere ? !(spec.offIn ?? []).includes(focus) : (spec.onIn ?? []).includes(focus)) : spec.everywhere;
-    return {
-      key: spec.key, kind: spec.kind, name: spec.name, description: spec.description, detail: spec.detail, remote: spec.remote ?? false,
-      library: spec.library ?? false, everywhere: spec.everywhere, onIn: spec.everywhere ? [] : spec.onIn ?? [], offIn: spec.everywhere ? spec.offIn ?? [] : [],
-      agents: agents.map(({ agent }) => ({
-        agent,
-        state: spec.only && !spec.only.includes(agent) ? { type: "missing" } : spec.special?.[agent] && (on || spec.special[agent]!.type === "working") ? spec.special[agent]! : on ? { type: "ready" } : { type: "off" },
-      })),
-      attention: spec.attention ?? null, switchable: spec.switchable ?? true, updateAvailable: false, canUndo: false, serverId: spec.remote ? `claude:user:${spec.name}` : null, files: [`${HOME}/.claude.json`], foundIn: spec.foundIn ?? null, skills: spec.skills ?? (spec.kind === "skill" ? 1 : 0),
-    };
-  };
-  if (empty) return { agents, projects, items: [], elsewhere: [] };
-  return { agents, projects, items: items.map(shown), elsewhere: elsewhere.map(shown) };
+const rank = (entry: PluginItemView) => (entry.problem ? 0 : 1);
+/** The page as the daemon sends it: problems first, then A–Z. */
+function view(): PluginsView {
+  if (empty) return { projects, items: [], elsewhere: [] };
+  return { projects, items: items.toSorted((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })), elsewhere };
 }
 
-const ok = (): PluginAgentResult[] => agents.map(({ agent }) => ({ agent, ok: true, message: null }));
+const ok = (): PluginAgentResult[] => AGENTS.map((agent) => ({ agent, ok: true, message: null }));
 const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((listener) => listener());
-const spec = (key: string) => items.find((item) => item.key === key) ?? elsewhere.find((item) => item.key === key);
-const toggle = (list: string[] = [], path: string, add: boolean) => (add ? [...new Set([...list, path])] : list.filter((entry) => entry !== path));
+const find = (key: string) => items.find((entry) => entry.key === key)!;
+const edit = (key: string, change: Partial<PluginItemView>) => {
+  items = items.map((entry) => (entry.key === key ? { ...entry, ...change } : entry));
+  changed();
+};
+
+function details(key: string): PluginItemDetails {
+  const shown = find(key);
+  if (shown.kind === "server") {
+    const server = shown.url
+      ? { type: "http" as const, url: shown.url, headerNames: shown.name === "Context7" ? ["CONTEXT7_API_KEY"] : [] }
+      : { type: "stdio" as const, command: shown.detail.split(" ")[0]!, args: shown.detail.split(" ").slice(1), cwd: null, envNames: shown.name === "GitHub" ? ["GITHUB_PERSONAL_ACCESS_TOKEN"] : [] };
+    return { key, kind: "server", skills: [], server };
+  }
+  const path = shown.files[0]!;
+  return {
+    key,
+    kind: "skill",
+    skills: [{ name: shown.name, path, contents: saved.get(path) ?? skillText(shown.name), readOnly: shown.problem?.type === "onlyIn" && shown.problem.reason === "ownPlugin" ? "It came in Claude Code's own plugin: its next update would undo an edit." : null }],
+    server: null,
+  };
+}
 
 const adapter: PluginsAdapter = {
-  read: async (projectId) => {
-    if (readDelay) await new Promise((resolve) => setTimeout(resolve, readDelay));
-    return view(projectId);
+  read: async () => {
+    reads++;
+    return view();
   },
   subscribe: (onChange) => {
     listeners.add(onChange);
     return () => listeners.delete(onChange);
   },
-  switchPlugin: async (key, projectId, on, agent) => {
-    calls.push(`switchPlugin ${key} ${projectId ?? "everywhere"} ${on ? "on" : "off"}${agent ? ` ${agent}` : ""}`);
-    const item = spec(key)!;
-    if (agent) {
-      const special = { ...item.special };
-      if (on) delete special[agent];
-      else special[agent] = { type: "off" };
-      item.special = special;
-      changed();
-      return ok();
-    }
-    const path = projects.find((project) => project.id === projectId)?.path;
-    if (!path) Object.assign(item, on ? { everywhere: true, offIn: [], onIn: [] } : { everywhere: false, onIn: [], offIn: [] });
-    else if (item.everywhere) item.offIn = toggle(item.offIn, path, !on);
-    else item.onIn = toggle(item.onIn, path, on);
-    changed();
+  switchPlugin: async (key, on) => {
+    calls.push(`switchPlugin ${key} ${on}`);
+    edit(key, { on });
     return ok();
   },
-  setPlaces: async (key, projectIds) => {
-    calls.push(`setPlaces ${key} ${projectIds?.join(",") ?? "global"}`);
-    const item = spec(key)!;
-    const undo = `undo-${placesBefore.size + 1}`;
-    placesBefore.set(undo, { key, spec: { everywhere: item.everywhere, onIn: [...(item.onIn ?? [])], offIn: [...(item.offIn ?? [])] } });
-    if (!projectIds) Object.assign(item, { everywhere: true, offIn: [], onIn: [] });
-    else Object.assign(item, { everywhere: false, offIn: [], onIn: projectIds.map((id) => projects.find((project) => project.id === id)!.path) });
-    changed();
-    return { results: ok(), undo };
-  },
-  undoPlaces: async (undo) => {
-    calls.push(`undoPlaces ${undo}`);
-    const before = placesBefore.get(undo)!;
-    Object.assign(spec(before.key)!, before.spec);
-    changed();
+  setScope: async (key, projectIds) => {
+    calls.push(`setPluginScope ${key} ${projectIds ? projectIds.join(",") : "all"}`);
+    edit(key, { scope: projectIds ? some(...projectIds) : { type: "allProjects" } });
     return ok();
   },
-  addMissing: async (key) => {
-    calls.push(`addMissing ${key}`);
-    Object.assign(spec(key)!, { only: undefined, attention: undefined });
-    changed();
+  share: async (key) => {
+    calls.push(`sharePlugin ${key}`);
+    edit(key, { problem: null, canShare: false, removal: "copies" });
     return ok();
   },
   checkAdd: async (text, name) => {
     calls.push(`checkPluginAdd ${text}${name ? ` name ${name}` : ""}`);
-    // A bare server object has no name of its own.
-    if (text.startsWith("{")) return name ? { drafts: [{ name, kind: "server", detail: "docs", remote: false, signsIn: false, secrets: [], error: null }], needsName: false } : { drafts: [], needsName: true };
-    // A command server that carries a value: its name comes along, its value stays behind.
-    if (text.includes("docs-mcp")) return { drafts: [{ name: "docs", kind: "server", detail: "npx docs-mcp", remote: false, signsIn: false, secrets: ["API_KEY"], error: null }], needsName: false };
     if (!text.includes("sentry")) return { drafts: [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, secrets: [], error: "That doesn't look like an MCP server or a skill." }], needsName: false };
     return { drafts: [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, secrets: [], error: null }], needsName: false };
   },
-  add: (_text, name, projectId, shared, more) => {
-    const picked = more.agents ? ` agents ${more.agents.join(",")}` : "";
-    const values = more.values ? ` values ${Object.entries(more.values).map(([key, value]) => `${key}=${value}`).join(",")}` : "";
-    calls.push(`addPlugin ${name ?? "-"} ${projectId ?? "everywhere"} ${shared ? "shared" : "just me"}${picked}${values}`);
-    // Claude Code and Codex have it already; the next is adding it.
-    items.push({
-      key: "lib:sentry", kind: "server", name: "sentry", description: "Errors and issues in Sentry.", detail: "https://mcp.sentry.dev/mcp", remote: true, library: true,
-      everywhere: projectId === null, onIn: projectId ? [projects.find((project) => project.id === projectId)!.path] : [],
-      special: Object.fromEntries(agents.slice(2).map(({ agent }) => [agent, { type: "missing" } as AgentItemState])),
-      only: agents.slice(0, 2).map(({ agent }) => agent),
-    });
+  add: (_text, name, projectIds, values) => {
+    calls.push(`addPlugin ${name ?? "-"} ${projectIds ? projectIds.join(",") : "all"}${values ? ` values ${Object.keys(values).join(",")}` : ""}`);
+    items.push(item({ key: "lib:sentry", kind: "server", name: "sentry", description: "Errors and slow pages from your Sentry projects.", detail: "https://mcp.sentry.dev/mcp", url: "https://mcp.sentry.dev/mcp", scope: projectIds ? some(...projectIds) : { type: "allProjects" } }));
     changed();
     return new Promise((resolve) => {
       adding = { resolve };
     });
   },
-  everyAgent: async (key) => {
-    calls.push(`useEverywhere ${key}`);
-    const item = spec(key)!;
-    Object.assign(item, { key: `lib:${item.name}`, library: true, only: undefined, attention: undefined, switchable: true });
+  importPlugin: (key, name, projectIds) => {
+    calls.push(`importPlugin ${key} ${name ?? "-"} ${projectIds ? projectIds.join(",") : "all"}`);
+    const entry = elsewhere.find((other) => other.key === key)!;
+    elsewhere = elsewhere.filter((other) => other.key !== key);
+    items.push(item({ key: `lib:${name ?? entry.name}`, kind: "server", name: name ?? entry.name, detail: entry.detail, url: entry.url, scope: projectIds ? some(...projectIds) : { type: "allProjects" } }));
     changed();
-    return { results: ok(), key: item.key };
-  },
-  undoEveryAgent: async (key) => {
-    calls.push(`undoUseEverywhere ${key}`);
-    return ok();
+    return new Promise((resolve) => {
+      adding = { resolve };
+    });
   },
   remove: async (key) => {
     calls.push(`removePlugin ${key}`);
-    items = items.filter((item) => item.key !== key);
-    changed();
+    if (deferredRemoval) await new Promise<void>((resolve) => { finishRemoval = resolve; });
+    const removed = find(key);
+    // An item an agent has of its own stays, only in that agent; anything else goes.
+    if (removed.removal === "copies") {
+      items = items.map((entry) => entry.key === key ? { ...entry, problem: { type: "onlyIn", message: "Only in Claude Code", agents: ["claude"], reason: "removed" }, canShare: true, removal: "none" } : entry);
+    } else {
+      items = items.filter((entry) => entry.key !== key);
+    }
+    // The deferred drive relies on completion to refresh, rather than a subscription event.
+    if (!deferredRemoval) changed();
     return ok();
   },
   update: async (key) => {
     calls.push(`updatePlugin ${key}`);
     return ok();
   },
-  signIn: async (key, projectId) => {
-    calls.push(`signInPlugin ${key} ${projectId ?? "everywhere"}`);
+  details: async (key) => {
+    calls.push(`getPluginItem ${key}`);
+    return details(key);
+  },
+  saveSkill: async (key, path, contents, expected) => {
+    calls.push(`savePluginSkill ${key} ${path}`);
+    // Refused when the file changed since it was opened.
+    const current = saved.get(path) ?? skillText(find(key).name);
+    if (current !== expected) return { type: "changed", current };
+    saved.set(path, contents);
+    return { type: "saved" };
+  },
+  signIn: async (key, serverId, projectId) => {
+    calls.push(`signInMcpServer ${key} ${serverId} ${projectId ?? "all"}`);
     return new Promise(() => {});
   },
   cancelSignIn: async (key) => {
-    calls.push(`cancelPluginSignIn ${key}`);
+    calls.push(`cancelMcpSignIn ${key}`);
   },
   pickFolder: async () => {
     calls.push("pickFolder");
@@ -252,52 +245,86 @@ const adapter: PluginsAdapter = {
   trustProject: async (projectId) => {
     calls.push(`trustProject ${projectId}`);
   },
-  addProject: () => calls.push("addProject"),
 };
 connectPlugins(adapter);
 
 const pause = (ms = 60) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/**
+ * Resolves once `selector` matches. A DOM change wakes it, never a timer: the page runs on
+ * Chrome's virtual clock, which races through timers while work runs off the main thread (the
+ * highlighter's engine compiling under load), so a timed wait could run out before the work did.
+ */
+function appear(selector: string): Promise<void> {
+  if (document.querySelector(selector)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const watch = new MutationObserver(() => {
+      if (!document.querySelector(selector)) return;
+      watch.disconnect();
+      resolve();
+    });
+    watch.observe(document.body, { childList: true, subtree: true, attributes: true });
+  });
+}
+/**
+ * The highlighter's engine and the JSON grammar, loaded before any state opens: a server's
+ * settings then show their colours as they open, not after a load whose length the page can't
+ * know. Awaited, not timed, for the reason above.
+ */
+const ready = highlight('{"a": 1}', "json");
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [...root.querySelectorAll<T>(selector)];
 const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
 const main = () => document.querySelector("main")!;
 function click(label: string, root: ParentNode = document) {
-  const button = all<HTMLButtonElement>("button, [role=switch]", root).find((node) => node.getAttribute("aria-label") === label || text(node) === label);
+  const button = all<HTMLButtonElement>("button, [role=switch], [role=tab], [role=radio]", root).find((node) => node.getAttribute("aria-label") === label || text(node) === label);
   if (!button) throw new Error(`No button: ${label}`);
   button.click();
 }
-/** Types `value` into the field named `label` (the last one so named, with `last`). */
-function type(label: string, value: string, last = false) {
-  const fields = all<HTMLTextAreaElement | HTMLInputElement>("textarea, input").filter((node) => node.getAttribute("aria-label") === label);
-  const field = last ? fields.at(-1) : fields[0];
+/** Picks the radio row titled `title`. */
+function choose(title: string) {
+  const radio = all<HTMLButtonElement>("main [role=radio]").find((node) => text(node).startsWith(title));
+  if (!radio) throw new Error(`No choice: ${title}`);
+  radio.click();
+}
+/** Types `value` into the field named `label`. */
+function type(label: string, value: string) {
+  const field = all<HTMLTextAreaElement | HTMLInputElement>("textarea, input").find((node) => node.getAttribute("aria-label") === label);
   if (!field) throw new Error(`No field: ${label}`);
   const proto = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(field, value);
   field.dispatchEvent(new Event("input", { bubbles: true }));
 }
-/** The switch of row `name` in the list (the first such row). */
+/** The switch of card `name`. */
 function flip(name: string) {
-  const row = all('[data-slot="plugin-row"]', main()).find((node) => text(node.querySelector(".font-medium")) === name && node.querySelector("[role=switch]"));
-  if (!row) throw new Error(`No row with a switch: ${name}`);
-  row.querySelector<HTMLButtonElement>("[role=switch]")!.click();
+  const card = all('[data-slot="plugin-row"]', main()).find((node) => text(node.querySelector('[data-slot="row-name"]')) === name);
+  if (!card) throw new Error(`No card: ${name}`);
+  card.querySelector<HTMLButtonElement>("[role=switch]")!.click();
 }
+const tab = (name: "MCP servers" | "Skills") => document.querySelector<HTMLButtonElement>(`main [role=tab][data-setting="${name}"]`)!.click();
 
-function rowsOf(root: ParentNode) {
-  return all('[data-slot="plugin-row"]', root).map((row) => {
-    const line = row.querySelector('[data-slot="row-line"]');
+function cards() {
+  return all('[data-slot="plugin-row"]', main()).map((card) => {
+    const line = card.querySelector('[data-slot="row-line"]');
+    const toggle = card.querySelector("[role=switch]");
     return {
-      name: text(row.querySelector(".font-medium")),
-      kind: text(row.querySelector('[data-slot="row-kind"]')),
+      name: text(card.querySelector('[data-slot="row-name"]')),
       line: text(line),
       tone: line?.getAttribute("data-tone") ?? null,
-      off: row.hasAttribute("data-off"),
-      lit: all('[data-slot="agent-mark"]', row).filter((mark) => !mark.hasAttribute("data-dim")).map((mark) => mark.getAttribute("data-agent")),
-      chips: all('[data-slot="scope-chip"]', row).map(text),
-      picker: text(row.querySelector('[data-slot="places-picker"]')) || null,
-      switch: row.querySelector("[role=switch]")?.getAttribute("aria-checked") ?? null,
-      locked: row.querySelector("[role=switch]")?.hasAttribute("disabled") ?? false,
-      button: text(row.querySelector("button[data-slot=button]")) || null,
+      chip: text(card.querySelector('[data-slot="scope-chip"]')) || null,
+      mark: card.querySelector('[data-slot="plugin-mark"]')?.getAttribute("data-mark") ?? null,
+      on: toggle?.getAttribute("aria-checked") === "true",
+      locked: toggle?.hasAttribute("disabled") ?? false,
+      dim: card.hasAttribute("data-off"),
     };
   });
+}
+
+/** Whether a field's placeholder shows whole. */
+function fits(field: HTMLInputElement) {
+  const style = getComputedStyle(field);
+  const context = document.createElement("canvas").getContext("2d")!;
+  context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const room = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return context.measureText(field.placeholder).width <= room;
 }
 
 function read() {
@@ -306,51 +333,45 @@ function read() {
   const settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
   probe.remove();
   const dialog = document.querySelector<HTMLElement>("[data-dialog]");
-  const menu = document.querySelector('[data-slot="project-filter"]');
-  const places = document.querySelector('[data-slot="places-picker-menu"]');
+  const grid = document.querySelector<HTMLElement>('[data-slot="plugins-grid"]');
+  const search = document.querySelector<HTMLInputElement>('[data-slot="plugins-toolbar"] input');
+  const editor = dialog?.querySelector('[data-slot="code-editor"]');
   return {
     settingsColumn,
     title: text(document.querySelector("main h1")),
     description: text(document.querySelector("main h1")?.nextElementSibling),
-    sections: all("main section").map((section) => ({
-      title: text(section.querySelector("h2")),
-      description: text(section.querySelector("h2")?.nextElementSibling),
-      count: text(section.querySelector("h2")?.parentElement?.nextElementSibling),
-      rows: rowsOf(section),
-    })),
-    rows: rowsOf(main()),
-    search: document.querySelector<HTMLInputElement>('[data-slot="plugins-toolbar"] input')?.value ?? null,
-    focusedTab: document.activeElement?.getAttribute("data-setting") ?? null,
-    tabs: all('main [role="tab"]').map((tab) => `${text(tab)}${tab.getAttribute("aria-selected") === "true" ? " *" : ""}`),
-    filter: text(document.querySelector('main [data-slot="plugins-toolbar"] button')),
-    folds: all('main [data-slot="fold"]').map((fold) => ({ text: text(fold.querySelector("button")), open: fold.querySelector("button")?.getAttribute("aria-expanded") === "true", rows: rowsOf(fold) })),
-    agentRows: all('main [data-slot="agent-row"]').map((row) => text(row)),
-    projectSwitches: all('main [data-slot="project-switch"]').map((row) => `${text(row)} ${row.querySelector("[role=switch]")?.getAttribute("aria-checked")}`),
-    banner: text(document.querySelector('main [data-slot="banner"]')),
+    tabs: all('main [role="tab"]').map((entry) => `${text(entry)}${entry.getAttribute("aria-selected") === "true" ? " *" : ""}`),
+    toolbar: all('main [data-slot="plugins-toolbar"] button:not([role=tab])').map((button) => button.getAttribute("aria-label") ?? text(button)).filter(Boolean),
+    search: search ? { placeholder: search.placeholder, label: search.getAttribute("aria-label"), fits: fits(search) } : null,
+    columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
+    cards: cards(),
     banners: all('main [data-slot="banner"]').map(text),
-    empty: text(document.querySelector('main [data-slot="plugins-empty"]')),
-    emptyRow: text(document.querySelector('main [data-slot="empty-row"]')),
+    radios: all('main [role="radiogroup"] [role="radio"]').map((radio) => `${text(radio)}${radio.getAttribute("aria-checked") === "true" ? " *" : ""}${radio.hasAttribute("disabled") ? " locked" : ""}`),
+    projectSwitches: all('main [data-slot="project-switch"]').map((row) => {
+      const toggle = row.querySelector("[role=switch]");
+      return `${text(row)} ${toggle?.getAttribute("aria-checked")}${toggle?.hasAttribute("disabled") ? " locked" : ""}`;
+    }),
+    sectionLine: text(document.querySelector('main section[data-setting="Projects"] p')),
+    advanced: all('main [data-slot="fold"]').map((fold) => ({ open: fold.querySelector("button")?.getAttribute("aria-expanded") === "true", text: text(fold) })),
     removeRow: text(document.querySelector('main [data-slot="remove-row"]')),
-    menu: menu ? { rows: all("button", menu).map(text), current: text(menu.querySelector("[aria-current]")) } : null,
-    places: places
-      ? all("button", places).map((button) => `${text(button)}${button.hasAttribute("aria-current") || button.getAttribute("aria-checked") === "true" ? " *" : ""}${button.hasAttribute("aria-disabled") ? " locked" : ""}`)
-      : null,
+    empty: text(document.querySelector('main [data-slot="plugins-empty"]')),
     dialog: dialog
       ? {
           slot: dialog.getAttribute("data-dialog"),
-          width: dialog.getBoundingClientRect().width,
+          width: Math.round(dialog.getBoundingClientRect().width),
+          viewport: innerWidth,
+          spills: dialog.scrollWidth > dialog.clientWidth,
+          rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+          height: Math.round(dialog.getBoundingClientRect().height),
           title: text(dialog.querySelector("h2")),
-          description: text(dialog.querySelector("p")),
           text: text(dialog),
-          agents: all('[data-slot="agent-row"]', dialog).map(text),
           buttons: all("button", dialog).map((button) => button.getAttribute("aria-label") ?? text(button)).filter(Boolean),
-          radios: all("[role=radio]", dialog).map((radio) => `${text(radio)}${radio.getAttribute("aria-checked") === "true" ? " *" : ""}`),
-          values: all('[data-slot="value-row"]', dialog).map((row) => all<HTMLInputElement>("input", row).map((input) => `${input.type} ${input.value || `(${input.placeholder})`}`).join(" = ")),
-          picks: all('[data-slot="agent-pick"]', dialog).map((pick) => {
-            const box = pick.querySelector("[role=checkbox]");
-            return `${pick.getAttribute("data-agent")} ${box?.getAttribute("aria-checked")}${box?.hasAttribute("disabled") ? " fixed" : ""}`;
-          }),
-          count: text(dialog.querySelector('[data-slot="agent-count"]')),
+          editable: !!dialog.querySelector('[data-slot="code-editor"] textarea'),
+          lines: editor ? all("[data-line]", editor).length : 0,
+          coloured: editor ? all("[data-line] span[style]", editor).length > 0 : false,
+          status: text(dialog.querySelector("footer [role=status], footer [role=alert]")),
+          banner: text(dialog.querySelector('[data-slot="banner"]')),
+          body: text(dialog.querySelector('[data-slot="code-editor"]')),
         }
       : null,
     toasts: all('[data-slot="toast"]').map(text),
@@ -359,424 +380,267 @@ function read() {
   };
 }
 
-const project = (id: string | null) => usePlugins.getState().setProject(id);
-async function reset(setKey: (key: number) => void, signIns = 1) {
-  items = startingItems(signIns);
-  readDelay = 0;
+async function reset(setKey: (key: number) => void) {
+  items = startingItems();
+  elsewhere = startingElsewhere();
   empty = false;
   adding = null;
+  saved.clear();
   document.querySelectorAll('[data-dialog] button[aria-label="Close"]').forEach((button) => (button as HTMLButtonElement).click());
-  usePlugins.setState({ project: null });
+  useApp.setState({ selection: { type: "settings", page: "plugins" } });
   setKey(Date.now());
   usePlugins.getState().refresh();
   await pause();
 }
 
-/** Opens each drawn state from a fresh page. */
+/** Opens each state from a fresh page. */
 const OPENERS: Record<string, () => Promise<void>> = {
   L1: async () => {},
-  L2: async () => click("Skills6"),
-  L3: async () => project("p-brigadier"),
-  L4: async () => project("p-steady"),
-  L5: async () => click("Project"),
-  L6: async () => click("Found in other apps3 in Claude Desktop and Cursor. Your agents can't use them until you bring them in."),
-  L7: async () => {
+  L2: async () => tab("Skills"),
+  L3: async () => {
     empty = true;
     usePlugins.getState().refresh();
   },
-  D1: async () => click("Open linear"),
-  D2: async () => click("Open figma-dev"),
-  D3: async () => click("Open postgres"),
-  G1: async () => {
-    click("Add");
+  D1: async () => click("Open Linear"),
+  D2: async () => {
+    tab("Skills");
     await pause();
-    type("What to add", "claude mcp add --transport http sentry https://mcp.sentry.dev/mcp");
+    click("Open release-notes");
   },
-  G2: async () => {
-    await OPENERS.G1!();
+  D3: async () => {
+    tab("Skills");
     await pause();
-    click("Continue");
+    click("Open pr-review");
   },
-  G3: async () => {
-    project("p-brigadier");
+  D4: async () => click("Open team-db"),
+  F1: async () => {
+    await OPENERS.D2!();
     await pause();
-    await OPENERS.G1!();
-    await pause();
-    click("Continue");
+    click("Open");
   },
-  G4: async () => {
-    await OPENERS.G2!();
+  F2: async () => {
+    click("Open GitHub");
     await pause();
-    click("Add", document.querySelector("[data-dialog]")!);
+    click("Open");
+    // Colours come once the highlighter has run: the engine and the grammar load before any state opens (`ready`).
+    await appear('[data-slot="code-editor"] [data-line] span[style]');
   },
-  /** G2 with Advanced open, for a command server whose paste carried a value. */
-  G2A: async () => {
-    click("Add");
+  R1: async () => {
+    click("Open GitHub");
     await pause();
-    type("What to add", "claude mcp add docs -e API_KEY=pasted -- npx docs-mcp");
-    await pause();
-    click("Continue");
-    await pause();
-    all<HTMLButtonElement>("[data-dialog] button[aria-expanded]").find((button) => text(button).startsWith("Advanced"))!.click();
+    click("Remove GitHub");
   },
-  G5: async () => click("Sign in"),
-  G6: async () => {
-    click("Skills6");
-    await pause();
-    click("Open grill-me");
-    await pause();
-    click("Add to every agent");
-  },
-  /** The place picker open on postgres's project tag. */
-  P1: async () => all<HTMLButtonElement>('main [data-slot="places-picker"]').find((button) => text(button) === "brigadier-ai")!.click(),
-  G7: async () => {
-    click("Open linear");
-    await pause();
-    click("Remove linear");
-  },
+  A1: async () => click("Add"),
 };
 
 async function drive(setKey: (key: number) => void) {
   const seen: Record<string, unknown> = {};
-  const open = async (state: string, signIns = 1) => {
-    await reset(setKey, signIns);
+  for (const state of ["L1", "L2", "L3", "D1", "D2", "D3", "D4", "F1", "F2", "R1"]) {
+    await reset(setKey);
     await OPENERS[state]!();
-    await pause(120);
+    await pause(150);
     seen[state] = read();
-  };
-  for (const state of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "D1", "D2", "D3", "G1", "G2", "G2A", "G3", "G4", "G6", "G7"]) await open(state);
-  await open("G5", 4);
+  }
 
-  // The project filter picks a project: the menu closes and the list follows it.
-  await open("L5");
-  all<HTMLButtonElement>('[data-slot="project-filter"] button').find((button) => text(button.querySelector(".truncate")) === "steady-app")!.click();
-  await pause(120);
-  seen.picked = read();
-
-  // Switches: everywhere off, off in one project, and on in one project.
+  // The card's switch: the whole item, in every agent.
   await reset(setKey);
-  const before = calls.length;
-  flip("railway");
+  flip("Context7");
   await pause(120);
-  seen.offEverywhere = read();
-  project("p-brigadier");
-  await pause(120);
-  flip("pencil");
-  await pause(120);
-  flip("playwright");
-  await pause(120);
-  seen.inProject = read();
-  seen.switchCalls = calls.slice(before);
+  seen.flipped = read();
 
-  // A switch that can't keep to a project asks to use the item everywhere first, then flips.
-  await reset(setKey);
-  project("p-brigadier");
-  await pause();
-  click("Skills6");
-  await pause();
-  const asked = calls.length;
-  flip("grill-me");
-  await pause(120);
-  seen.notSwitchable = read();
-  click("Add to every agent", document.querySelector("[data-dialog]")!);
-  await pause(300);
-  seen.afterUseEverywhere = read();
-  seen.useEverywhereCalls = calls.slice(asked);
-  const undo = all<HTMLButtonElement>('[data-slot="toast"] button').find((button) => text(button) === "Undo");
-  undo?.click();
-  await pause();
-  seen.undoCalls = calls.slice(asked);
+  // A locked item's switch does nothing.
+  flip("team-db");
+  await pause(60);
 
-  // Add: a paste that isn't anything says so; the picked project is the default; adding shows each agent.
+  // Scope: one more project, then every project, then back to only some.
   await reset(setKey);
-  await OPENERS.G1!();
-  type("What to add", "hello");
+  await OPENERS.D1!();
   await pause();
-  click("Continue");
+  click("docs-site");
   await pause(120);
-  seen.badPaste = read();
-  await reset(setKey);
-  await OPENERS.G4!();
+  seen.scoped = read();
+  choose("All projects");
   await pause(120);
-  adding?.resolve(ok());
+  seen.everywhere = read();
+  choose("Only some projects");
   await pause(120);
-  seen.added = read();
-  seen.addCalls = calls.filter((call) => call.startsWith("addPlugin"));
+  seen.someAgain = read();
 
-  // A name the paste lacks is asked for in place, then sent; a warning from a good add shows.
+  // Edit and save a SKILL.md; it opens again with the saved text.
+  await reset(setKey);
+  await OPENERS.F1!();
+  await pause(120);
+  type("release-notes's SKILL.md", `${skillText("release-notes")}4. Keep it under 300 words.\n`);
+  await pause(60);
+  seen.edited = read();
+  // Escape doesn't close it while it has unsaved edits.
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  document.querySelector("[data-dialog]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await pause(60);
+  seen.escaped = read();
+  click("Save");
+  await pause(150);
+  seen.savedClosed = read();
+  click("Open");
+  await pause(150);
+  seen.reopened = read();
+
+  // Saved over a file that changed since it was opened: refused, said plainly, Reload shows it now.
+  await reset(setKey);
+  await OPENERS.F1!();
+  await pause(120);
+  type("release-notes's SKILL.md", `${skillText("release-notes")}4. Mine.\n`);
+  saved.set(`${LIB}/release-notes/skills/release-notes/SKILL.md`, `${skillText("release-notes")}4. Theirs.\n`);
+  // The page reads everything again (as it does every few seconds) while the edit waits.
+  changed();
+  await pause(150);
+  seen.refreshedWhileEditing = read();
+  click("Save");
+  await pause(150);
+  seen.refused = read();
+  click("Reload");
+  await pause(150);
+  seen.reloaded = read();
+
+  // Share an item only Claude Code has; Remove one an agent has of its own: it stays, only there.
+  await reset(setKey);
+  await OPENERS.D3!();
+  await pause();
+  click("Share with every agent");
+  await pause(150);
+  seen.shared = read();
+  await reset(setKey);
+  await OPENERS.R1!();
+  await pause();
+  click("Remove", document.querySelector("[data-dialog]")!);
+  await pause(150);
+  seen.removedCopies = read();
+
+  // Add: every agent, all projects, its results after.
   await reset(setKey);
   click("Add");
   await pause();
-  type("What to add", '{"command":"docs"}');
-  await pause();
-  const named = calls.length;
+  type("What to add", "claude mcp add --transport http sentry https://mcp.sentry.dev/mcp");
   click("Continue");
   await pause(120);
-  seen.askName = read();
-  type("Name", "docs");
-  await pause();
-  click("Continue");
-  await pause(120);
+  seen.addReview = read();
   click("Add", document.querySelector("[data-dialog]")!);
   await pause(120);
-  adding?.resolve(agents.map(({ agent }, index) => ({ agent, ok: true, message: index === 0 ? "docs is added, but it didn't start: docs: command not found." : null })));
+  seen.adding = read();
+  adding?.resolve(ok());
   await pause(120);
-  seen.addedWithWarning = read();
-  seen.nameCalls = calls.slice(named).filter((call) => !call.startsWith("switch"));
+  seen.added = read();
 
-  // Advanced: a value typed over the pasted one and one more, kept to two agents; the last
-  // picked agent can't be left out; Add sends both and only those agents show.
-  await open("G2A");
-  const advanced = calls.length;
-  type("API_KEY value", "typed-key");
-  click("Add a value");
-  await pause();
-  type("Environment name", "REGION", true);
-  await pause();
-  type("REGION value", "eu-west");
-  for (const label of ["Gemini CLI", "Cursor Agent", "OpenCode", "Amp"]) click(label, document.querySelector("[data-dialog]")!);
-  await pause();
-  seen.advancedTwo = read();
-  click("Codex", document.querySelector("[data-dialog]")!);
-  await pause();
-  seen.advancedOne = read();
-  click("Codex", document.querySelector("[data-dialog]")!);
-  await pause();
-  click("Add", document.querySelector("[data-dialog]")!);
-  await pause(120);
-  seen.addingPicked = read();
-  adding?.resolve(ok().slice(0, 2));
-  await pause(120);
-  seen.advancedCalls = calls.slice(advanced).filter((call) => call.startsWith("addPlugin"));
-
-  // Only some agents have it: the rows keep their own line; on the details page a Library item
-  // goes to the rest where the others have it; another agent's plugin has no fix to offer.
+  // Import another app's server: listed by its app on Add's first step, then reviewed and imported.
   await reset(setKey);
-  Object.assign(spec("lib:delegator")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
-  Object.assign(spec("plugin:higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
-  Object.assign(spec("server:linear")!, { only: ["claude", "codex"] });
-  usePlugins.getState().refresh();
-  click("Skills6");
-  await pause(120);
-  seen.partial = read();
-  click("Open delegator");
-  await pause(120);
-  seen.delegatorBanner = read();
-  const spread = calls.length;
-  click("Add to every agent");
-  await pause(120);
-  seen.spreadCalls = calls.slice(spread);
-  click("Plugins", main());
+  click("Add");
   await pause();
-  Object.assign(spec("lib:delegator")!, { only: ["claude"], onIn: [], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
-  usePlugins.getState().refresh();
+  seen.importList = read();
+  click("Import filesystem");
   await pause(120);
-  click("Open delegator");
+  seen.importReview = read();
+  click("Import", document.querySelector("[data-dialog]")!);
   await pause(120);
-  const nowhere = calls.length;
-  click("Add to every agent");
+  adding?.resolve(ok());
   await pause(120);
-  seen.nowhereCalls = calls.slice(nowhere);
-  click("Plugins", main());
-  await pause();
-  click("Open higgsfield");
+  seen.imported = read();
+  click("Done");
   await pause(120);
-  seen.pluginBanner = read();
-  click("Plugins", main());
-  await pause();
-  click("MCP servers7");
-  await pause();
-  click("Open linear");
-  await pause(120);
-  seen.signInAndMissing = read();
+  seen.afterImport = read();
 
-  // A real problem shows on a row that is off where the page looks too.
+  // Search narrows the grid.
   await reset(setKey);
-  Object.assign(spec("server:linear")!, { offIn: [STEADY] });
-  project("p-steady");
-  await pause(120);
-  seen.offProblem = read();
-
-  // An agent's own copy in a folder that isn't a Brigadier project: a plain tag with that folder,
-  // and in a project, where it's on.
-  await reset(setKey);
-  items.push({ key: "server:codescene", kind: "server", name: "codescene", description: "Code health checks.", detail: "codescene-mcp", everywhere: false, onIn: [FOREIGN], only: ["claude"], switchable: false });
-  usePlugins.getState().refresh();
-  await pause(120);
-  seen.foreign = read();
-  project("p-brigadier");
-  await pause(120);
-  seen.foreignInProject = read();
-
-  // Details: the Projects card's switches, Remove, and a project note's fix.
-  await open("D3");
-  const detail = calls.length;
-  click("brigadier-ai");
-  await pause(120);
-  click("Global");
-  await pause(120);
-  seen.detailCalls = calls.slice(detail);
-  // Advanced: one agent's switch.
-  await open("D1");
-  document.querySelector<HTMLButtonElement>('[data-setting="Advanced"] button')!.click();
-  await pause(120);
-  const agentSwitch = calls.length;
-  click("linear for Codex");
-  await pause(120);
-  seen.agentCalls = calls.slice(agentSwitch);
-  seen.agentSwitches = all('[data-setting="Advanced"] [data-slot="agent-row"]').map((row) => `${row.getAttribute("data-agent")} ${text(row.querySelector('[data-slot="row-line"]'))} ${row.querySelector("[role=switch]")?.getAttribute("aria-checked")}`);
-  await open("G7");
-  click("Remove", document.querySelector("[data-dialog]")!);
-  await pause(120);
-  seen.removed = read();
-  await reset(setKey);
-  project("p-landing");
-  await pause();
-  click("Open pencil");
-  await pause(120);
-  seen.noted = read();
-  click("Trust landing");
-  await pause();
-  seen.trustCalls = calls.filter((call) => call.startsWith("trust"));
-
-  // The tabs follow the arrow keys, selecting and focusing; Settings search has no Needs attention.
-  await reset(setKey);
-  const navigate = async (key: string) => {
-    document.querySelector<HTMLButtonElement>('main [role="tab"][aria-selected="true"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
-    await pause();
-    return read();
-  };
-  seen.tabKeys = [];
-  for (const key of ["ArrowLeft", "ArrowRight", "ArrowRight", "End", "Home"]) (seen.tabKeys as unknown[]).push(await navigate(key));
-  seen.searchRows = pluginSearchRows().slice(0, 3).map((entry) => entry.label);
-  revealSetting("Skills");
-  await pause(120);
-  seen.revealSkills = read();
-  useReveal.setState({ label: null });
-
-  // The place picker: a project tag and a Global tag open one menu; each pick applies at once,
-  // with Undo; the last project can't be unchecked; another agent's item is added to every
-  // agent first.
-  await reset(setKey);
-  const picker = (name: string) => {
-    const tag = all('[data-slot="plugin-row"]', main()).find((row) => text(row.querySelector(".font-medium")) === name)?.querySelector<HTMLButtonElement>('[data-slot="places-picker"]');
-    if (!tag) throw new Error(`No place picker on ${name}: ${JSON.stringify(read().sections.map((entry) => [entry.title, entry.rows.map((seenRow) => seenRow.name)]))}`);
-    return tag;
-  };
-  /** Opens `name`'s picker, closing one still open (a click elsewhere would). */
-  const openPicker = async (name: string) => {
-    document.querySelector('[data-slot="places-picker-menu"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await pause();
-    picker(name).click();
-    await pause(120);
-  };
-  const pick = (label: string) => {
-    const button = all<HTMLButtonElement>('[data-slot="places-picker-menu"] button').find((entry) => text(entry).startsWith(label));
-    if (!button) throw new Error(`No ${label} in the place picker: ${JSON.stringify(read().places)}`);
-    button.click();
-  };
-  const placed = calls.length;
-  await openPicker("postgres");
-  seen.placesOpen = read();
-  pick("brigadier-ai");
-  await pause(120);
-  pick("steady-app");
-  await pause(300);
-  seen.placesTwo = read();
-  const undoPlaces = all<HTMLButtonElement>('[data-slot="toast"] button').find((button) => text(button) === "Undo");
-  if (!undoPlaces) throw new Error(`No Undo: ${JSON.stringify(read().toasts)} ${read().alert}`);
-  undoPlaces.click();
-  await pause(300);
-  seen.placesUndone = read();
-  await openPicker("postgres");
-  pick("Global");
-  await pause(300);
-  seen.placesGlobal = read();
-  await openPicker("postgres");
-  seen.placesGlobalOpen = read();
-  pick("landing");
-  await pause(300);
-  seen.placesLanding = read();
-  await openPicker("pencil");
-  seen.placesOther = read();
-  pick("Add to every agent first");
-  await pause(120);
-  seen.placesOtherDialog = read();
-  seen.placesCalls = calls.slice(placed);
-
-  // Undo puts back exactly where it was: a project it was off in stays off.
-  await reset(setKey);
-  Object.assign(spec("lib:postgres")!, { everywhere: true, onIn: [], offIn: [STEADY] });
-  usePlugins.getState().refresh();
-  await pause(120);
-  const undone = calls.length;
-  await openPicker("postgres");
-  pick("landing");
-  await pause(300);
-  all<HTMLButtonElement>('[data-slot="toast"] button').filter((button) => text(button) === "Undo").at(-1)!.click();
-  await pause(300);
-  seen.placesUndoExact = read();
-  seen.placesUndoCalls = calls.slice(undone);
-
-  // A slow read: the next pick waits for it, so it starts from the last pick.
-  await reset(setKey);
-  readDelay = 300;
-  usePlugins.getState().refresh();
-  await pause(400);
-  const quick = calls.length;
-  await openPicker("postgres");
-  pick("steady-app");
-  await pause(60);
-  pick("landing");
-  await pause(700);
-  if (!read().places?.some((entry) => entry.startsWith("landing") && entry.includes("*"))) pick("landing");
-  await pause(700);
-  seen.quickCalls = calls.slice(quick);
-  readDelay = 0;
-
-  // A sign-in on a row kept to a project runs there, and the dialog shows that project's agents.
-  await reset(setKey);
-  Object.assign(spec("lib:postgres")!, { remote: true, special: { codex: { type: "needsSignIn" } }, attention: { type: "signIn", message: "Codex needs you to sign in." } });
-  usePlugins.getState().refresh();
-  await pause(120);
-  const signedAt = calls.length;
-  all<HTMLButtonElement>("button", all('[data-slot="plugin-row"]', main()).find((entry) => text(entry.querySelector(".font-medium")) === "postgres")!).find((button) => text(button) === "Sign in")!.click();
-  await pause(300);
-  seen.signInElsewhere = read();
-  seen.signInElsewhereCalls = calls.slice(signedAt);
-
-  // Search keeps the rows that match.
-  await reset(setKey);
-  type("Search MCP servers", "rail");
+  type("Search MCP servers", "git");
   await pause(120);
   seen.searched = read();
+  type("Search MCP servers", "nothing like this");
+  await pause(120);
+  seen.noMatch = read();
+
+  seen.calls = calls;
+  return seen;
+}
+
+/** A removal can complete after dismissal, after leaving and returning, or while still live. */
+const removalSnapshot = () => ({
+  selection: useApp.getState().selection,
+  history: useHistory.getState(),
+  title: text(main().querySelector("h1")),
+  dialog: text(document.querySelector("[data-dialog] h2")),
+});
+
+async function driveRemoval(setKey: (key: number) => void) {
+  const seen: Record<string, unknown> = {};
+  for (const scenario of ["cancel", "close-general", "close-back", "navigate-back", "active"] as const) {
+    await reset(setKey);
+    useHistory.setState({ entries: [], index: -1 });
+    await OPENERS.D1!();
+    await pause();
+    if (scenario === "active") {
+      // Successful active removal must replace detail without dropping this Forward entry.
+      openSettings("general");
+      await pause();
+      stepHistory(-1);
+      await pause();
+    }
+    click("Remove Linear");
+    await pause();
+    click("Remove", document.querySelector("[data-dialog]")!);
+    await pause();
+    if (!finishRemoval) throw new Error("Removal did not wait for its deferred answer");
+    const pending = {
+      cancel: all<HTMLButtonElement>("[data-dialog] button").find((node) => text(node) === "Cancel")?.disabled,
+      close: document.querySelector<HTMLButtonElement>('[data-dialog] button[aria-label="Close"]')?.disabled,
+    };
+    if (scenario === "cancel") click("Cancel");
+    if (scenario.startsWith("close-")) click("Close", document.querySelector("[data-dialog]")!);
+    await pause();
+    if (["close-general", "close-back", "navigate-back"].includes(scenario)) {
+      openSettings("general");
+      await pause();
+      if (scenario.endsWith("back")) {
+        stepHistory(-1);
+        await pause();
+      }
+    }
+    const before = removalSnapshot();
+    const beforeReads = reads;
+    finishRemoval();
+    finishRemoval = null;
+    await pause(150);
+    seen[scenario] = {
+      pending, before, after: removalSnapshot(), refreshed: reads > beforeReads,
+      removed: !usePlugins.getState().view.items.some((entry) => entry.key === "server:linear"),
+    };
+  }
   return seen;
 }
 
 function Fixture() {
+  const selection = useApp((state) => state.selection);
   const [key, setKey] = useState(0);
   const [result, setResult] = useState("");
   useEffect(() => {
+    const done = (value: unknown) => setResult(JSON.stringify(value));
+    const failed = (cause: unknown) => setResult(JSON.stringify({ error: String(cause) }));
     if (params.has("drive")) {
-      void drive(setKey).then((value) => setResult(JSON.stringify(value))).catch((cause: unknown) => setResult(JSON.stringify({ error: String(cause) })));
+      void ready.then(() => (deferredRemoval ? driveRemoval(setKey) : drive(setKey))).then(done, failed);
     } else {
       const state = params.get("state");
-      if (state && OPENERS[state]) {
-        const signIns = state === "G5" ? 4 : 1;
-        void reset(setKey, signIns).then(() => pause()).then(() => OPENERS[state]!());
-      }
+      if (state && OPENERS[state]) void ready.then(() => reset(setKey)).then(() => OPENERS[state]!()).then(() => pause(150)).then(() => done(read()), failed);
     }
   }, []);
   return (
     <TooltipProvider>
-      <div className="bg-chrome text-foreground flex h-screen flex-col px-1 pb-1">
+      <div className="bg-chrome text-foreground flex h-screen flex-col px-1 pb-1" style={width ? { width: `${width}px` } : undefined}>
         <SidebarProvider keepOpen className="relative min-h-0 flex-1 flex-col">
           <div className="relative flex min-h-0 min-w-0 flex-1">
             <SidebarPanel><SettingsNav /></SidebarPanel>
             <div className="relative flex min-w-0 flex-1 flex-col">
               <SettingsTitlebarStrip><TerminalButton /></SettingsTitlebarStrip>
               <main className="bg-background border-divider rounded-e-page min-h-0 flex-1 overflow-hidden border-l">
-                <PluginsPage key={key} />
+                {deferredRemoval && selection.type === "settings" && selection.page === "general"
+                  ? <GeneralPage /> : <PluginsPage key={key} />}
               </main>
               <Toaster className="top-titlebar pt-2" />
             </div>

@@ -7,9 +7,14 @@ use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Vis
 use serde_json::{Map, Value};
 
 use crate::{
-    Agent, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport, plugins,
-    server_id,
+    Agent, AsWritten, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
+    plugins, server_id,
 };
+
+/// Whether `text` names a variable: `${…}`.
+fn names_variable(text: &str) -> bool {
+    text.contains("${")
+}
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -207,15 +212,35 @@ pub(crate) fn codex_layers(
     for folder in dir.ancestors() {
         let file = folder.join(".codex").join("config.toml");
         if let Some(mut layer) = read_toml(&file, Source::CodexProject, Some(project), problems) {
+            // An entry that names no command or url of its own only switches the user's server
+            // of its name: it is that server, switched here, not a server of the project's.
+            let switches: Vec<String> = layer
+                .get("mcp_servers")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flatten()
+                .filter(|(_, entry)| {
+                    entry.as_table().is_some_and(|table| {
+                        table.contains_key("enabled") && table.keys().all(|key| key == "enabled")
+                    })
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
             inherit(&mut layer, user.as_ref());
-            for server in toml_servers(
+            for mut server in toml_servers_with(
                 &layer,
                 Source::CodexProject,
                 Some((project, folder)),
                 &file,
                 roots,
                 problems,
+                true,
             ) {
+                server.overrides_user = switches.contains(&server.name);
+                // Switched off over the user's server: what `codex_off_here` tells.
+                if server.disabled && server.overrides_user {
+                    continue;
+                }
                 if !servers.iter().any(|known| known.name == server.name) {
                     servers.push(server);
                 }
@@ -325,22 +350,50 @@ fn json_servers(
         let Some(config) = config.as_object() else {
             continue;
         };
-        // A server switched off where it is configured is off for every session.
-        if config.get("disabled").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
+        // A server switched off where it is configured is off for every session, but still
+        // the user's: kept as switched off.
+        let disabled = config.get("disabled").and_then(Value::as_bool) == Some(true);
+        let raw = |key: &str| config.get(key).and_then(Value::as_str).map(str::to_owned);
+        let written = AsWritten {
+            command: raw("command"),
+            args: config
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            url: raw("url"),
+            cwd: raw("cwd"),
+        };
+        let templated = !matches!(origin.variables, Variables::None)
+            && (written.command.as_deref().is_some_and(names_variable)
+                || written.args.iter().any(|arg| names_variable(arg))
+                || written.url.as_deref().is_some_and(names_variable)
+                || written.cwd.as_deref().is_some_and(names_variable)
+                || config
+                    .get("oauth")
+                    .and_then(|oauth| oauth.get("clientId"))
+                    .and_then(Value::as_str)
+                    .is_some_and(names_variable)
+                || ["env", "headers"].iter().any(|key| {
+                    string_map(config.get(*key)).any(|(_, value)| names_variable(&value))
+                }));
         let kind = config.get("type").and_then(Value::as_str);
         let transport = if let Some(url) = config.get("url").and_then(Value::as_str) {
             // Legacy SSE servers aren't shared: Codex has no SSE transport.
             if kind == Some("sse") {
                 continue;
             }
+            let raw_url = url;
             let url = expand(url);
             if !(url.starts_with("http://") || url.starts_with("https://")) {
-                let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
+                let scheme = raw_url.split_once("://").map_or("", |(scheme, _)| scheme);
+                // As written: what a variable expands to never leaves the config.
                 problem(
                     name,
-                    Some(url.clone()),
+                    Some(raw_url.to_owned()),
                     format!("Unsupported address “{scheme}://”: only http and https"),
                 );
                 continue;
@@ -361,7 +414,7 @@ fn json_servers(
             if let Some(kind) = kind.filter(|kind| *kind != "stdio") {
                 problem(
                     name,
-                    Some(expand(command)),
+                    Some(command.to_owned()),
                     format!("Unknown type “{kind}”"),
                 );
                 continue;
@@ -391,6 +444,9 @@ fn json_servers(
             continue;
         };
         let mut server = server(name, origin.source, origin.project, origin.file, transport);
+        server.disabled = disabled;
+        server.written = written;
+        server.templated = templated;
         server.oauth = config
             .get("oauth")
             .and_then(|oauth| oauth.get("clientId"))
@@ -442,6 +498,20 @@ fn toml_servers(
     roots: &Roots,
     problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
+    toml_servers_with(config, source, layer, file, roots, problems, false)
+}
+
+/// [`toml_servers`]; `keep_disabled`: an entry set `enabled = false` comes too, marked
+/// [`Server::disabled`] (a project's own server switched off is still the user's).
+fn toml_servers_with(
+    config: &toml::Table,
+    source: Source,
+    layer: Option<(&Path, &Path)>,
+    file: &Path,
+    roots: &Roots,
+    problems: &mut Vec<Problem>,
+    keep_disabled: bool,
+) -> Vec<Server> {
     let Some(own) = config.get("mcp_servers").and_then(toml::Value::as_table) else {
         return Vec::new();
     };
@@ -452,7 +522,8 @@ fn toml_servers(
         let Some(config) = config.as_table() else {
             continue;
         };
-        if config.get("enabled").and_then(toml::Value::as_bool) == Some(false) {
+        let disabled = config.get("enabled").and_then(toml::Value::as_bool) == Some(false);
+        if disabled && !keep_disabled {
             continue;
         }
         let strings = |key: &str| -> Vec<(String, String)> {
@@ -543,6 +614,37 @@ fn toml_servers(
             file,
             transport,
         );
+        let raw = |key: &str| {
+            config
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        };
+        server.written = AsWritten {
+            command: raw("command"),
+            args: config
+                .get("args")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            url: raw("url"),
+            cwd: raw("cwd"),
+        };
+        server.templated = ["env_vars", "env_http_headers", "bearer_token_env_var"]
+            .iter()
+            .any(|key| config.contains_key(*key))
+            || server
+                .written
+                .command
+                .as_deref()
+                .is_some_and(names_variable)
+            || server.written.args.iter().any(|arg| names_variable(arg))
+            || server.written.url.as_deref().is_some_and(names_variable)
+            || server.written.cwd.as_deref().is_some_and(names_variable);
+        server.disabled = disabled;
         server.oauth = config
             .get("oauth")
             .and_then(toml::Value::as_table)
@@ -577,6 +679,10 @@ fn server(
         plugin: None,
         file: file.to_owned(),
         oauth: None,
+        disabled: false,
+        written: AsWritten::default(),
+        templated: false,
+        overrides_user: false,
     }
 }
 
@@ -638,6 +744,7 @@ pub(crate) fn plugin(
         }
         (Some(_), _) => Vec::new(),
     };
+    servers.retain(|server| !server.disabled);
     for server in &mut servers {
         server.id = format!("{}:{}", plugin.prefix(), server.name);
         server.project.clone_from(&plugin.project);

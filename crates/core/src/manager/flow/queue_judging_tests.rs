@@ -671,11 +671,13 @@ async fn unjudged_it_joins_the_working_answer_and_a_late_judgment_hears_so() {
     )
     .await;
     let item = judging.send_while_working().await;
-    let board = judging
+    // Its request is recorded first and said to be inside the working answer just after.
+    judging
         .flow
-        .until("it to join by itself", |board| joined(board, &item))
+        .until("it to join the working answer by itself", |board| {
+            joined(board, &item) && board.requests[&item.id].steered_into.is_some()
+        })
         .await;
-    assert!(board.requests[&item.id].steered_into.is_some());
     let judged = judging.judged().await;
     assert_eq!(judged["state"], "joined", "{judged:#}");
     assert_eq!(judged["already"], true);

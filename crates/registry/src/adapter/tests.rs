@@ -234,6 +234,7 @@ fn a_server_goes_back_through_each_agents_own_setup() {
             env: vec![("PGPASS".into(), Secret::new("s"))],
             cwd: None,
         },
+        oauth: None,
     };
     let steps = adapter(Agent::Claude)
         .add_server("pg", &spec, &project())
@@ -259,6 +260,7 @@ fn a_server_goes_back_through_each_agents_own_setup() {
             url: "https://mcp.linear.app/mcp".into(),
             headers: vec![("X-Team".into(), Secret::new("t"))],
         },
+        oauth: None,
     };
     let steps = adapter(Agent::Codex)
         .add_server("linear", &http, &Place::Everywhere)

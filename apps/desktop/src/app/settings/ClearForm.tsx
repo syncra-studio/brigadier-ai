@@ -92,7 +92,7 @@ export function ClearForm({
   return (
     <>
       <Segmented label="Time range" value={range} options={RANGES} onChange={setRange} />
-      <SettingsCard>
+      <SettingsCard inset>
         {kinds.map(({ kind, icon, label, detail }) => (
           <TickRow
             key={kind}

@@ -1449,7 +1449,7 @@ impl Provider for Claude {
                     .iter()
                     .any(|(name, _)| name == "CLAUDE_CODE_TMPDIR")
             {
-                let dir = match files::temp_dir_path() {
+                let dir = match files::temp_dir_path(spec.temp_tag.as_deref()) {
                     Some(dir) => {
                         let path = dir.display().to_string();
                         ledger
@@ -1585,6 +1585,17 @@ impl Provider for Claude {
             tokio::task::spawn_blocking(move || files::remove(&config, &artifacts))
                 .await
                 .map_err(|err| Error::Io(std::io::Error::other(err)))?
+        })
+    }
+
+    fn made_worktrees(&self, artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
+        Box::pin(async move {
+            let Some(config) = self.history_dir() else {
+                return Vec::new();
+            };
+            tokio::task::spawn_blocking(move || files::subagent_worktrees(&config, &artifacts))
+                .await
+                .unwrap_or_default()
         })
     }
 
@@ -2817,6 +2828,7 @@ for line in sys.stdin:
             stop_hook: None,
             naked_worker: false,
             native_compaction: None,
+            temp_tag: None,
         }
     }
 
@@ -3708,6 +3720,7 @@ for line in sys.stdin:
         // Off, as before: no backstop, and Claude's own compaction refused.
         let seam = SessionSpec {
             native_compaction: None,
+            temp_tag: None,
             ..long
         };
         assert_eq!(backstop(&seam, cwd.path(), None), None);

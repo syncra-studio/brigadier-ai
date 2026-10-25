@@ -1536,6 +1536,10 @@ pub struct SessionSpec {
     /// compaction instead of the session moving to a fresh one at a size. `None`: as
     /// [`Self::auto_compact`] says.
     pub native_compaction: Option<NativeCompaction>,
+    /// Names the session's own temp folder after the Brigadier session it is for (Claude, a
+    /// session given a TMPDIR): 8 lowercase hex characters make `/tmp/brigadier-<tag>-<4 hex>`;
+    /// `None` or anything else, an untagged `/tmp/brigadier-<12 hex>`.
+    pub temp_tag: Option<String>,
 }
 
 /// How a session's CLI compacts natively ([`SessionSpec::native_compaction`]). Brigadier
@@ -1653,6 +1657,29 @@ pub enum Artifact {
     /// Git tree refs retained with the session record. Archive keeps this owner; Delete
     /// removes the entire namespace, including the branch-history anchors.
     GitRefs { repo: String, namespace: String },
+    /// A session's branch namespace in `repo` (`<prefix><short id>/`): every branch in it, the
+    /// session's and its workers' and those their CLIs made there, with their
+    /// `branch.<name>.*` config. Without its `/`, one branch by its exact name (one a CLI
+    /// made outside the namespace for a worktree of its own). Only Delete disposes of it; a
+    /// branch some worktree has out stays.
+    GitBranches { repo: String, namespace: String },
+    /// An untracked file a Local checkout session's turns made (`path` in the checkout `repo`)
+    /// with the blob its last turn snapshot holds: removed only while still untracked and
+    /// unchanged, else left where it is.
+    CheckoutFile {
+        repo: String,
+        path: String,
+        blob: String,
+    },
+    /// What a deleted conversation left in Brigadier's own records: its catalog and cleanup
+    /// ledger events and the log lines naming any of `ids` (it and its workers, their CLI
+    /// sessions) or `needles` (its folder, branch namespaces). Removed last, once nothing else
+    /// of it is left.
+    Traces {
+        conversation: String,
+        ids: Vec<String>,
+        needles: Vec<String>,
+    },
     /// A folder Brigadier created in its data directory (a worker's scratch folder, the
     /// orchestrator's or a Chat's working folder).
     ScratchDir { path: String },

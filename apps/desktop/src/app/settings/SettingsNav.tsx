@@ -9,7 +9,6 @@ import {
   shownSettingsPages,
   type SettingsSearchResult,
 } from "@/app/settings/pages";
-import { revealSetting } from "@/app/settings/reveal";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { NavRow } from "@/components/controls";
@@ -17,8 +16,7 @@ import { EmptyState, NavHeader, NavList, NavSection, SettingsSearch } from "@/co
 
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {
-  openSettings(page.id);
-  if (row) revealSetting(row.target ?? row.label);
+  openSettings(page.id, row?.target ?? row?.label);
 }
 
 /**

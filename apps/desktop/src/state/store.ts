@@ -16,6 +16,7 @@ import type {
   PermissionLevel,
   Project,
   ProvidersView,
+  ProviderKind,
   RawEntry,
   RawSession,
   Settings,
@@ -41,13 +42,22 @@ export type SettingsPageId =
   | "browser"
   | "browserImport";
 
+/** A nested Settings page is a destination; dialogs and list filters are not. */
+export type BrowserSubView = "history" | "downloads" | "sites";
+export type SettingsSelection = { type: "settings" } & (
+  | { page: SettingsPageId; detail?: never }
+  | { page: "providers"; detail: { provider: ProviderKind } }
+  | { page: "plugins"; detail: { plugin: string } }
+  | { page: "browser"; detail: { view: BrowserSubView } }
+);
+
 /**
  * What the main area shows. Drafts become real conversations on their first message. Settings
  * takes the sidebar panel (its navigation) and the main area (the page).
  */
 export type Selection =
   | { type: "none" }
-  | { type: "settings"; page: SettingsPageId }
+  | SettingsSelection
   | { type: "conversation"; id: string }
   | { type: "draft"; kind: "chat" }
   | { type: "draft"; kind: "session"; projectId: string };

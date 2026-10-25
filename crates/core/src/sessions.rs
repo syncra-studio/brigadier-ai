@@ -31,7 +31,9 @@ const MAX_USER_NAME_CHARS: usize = 80;
 /// Messages longer than this keep only a preview inline; the full text goes to the blob store.
 const INLINE_TEXT_BYTES: usize = 64 * 1024;
 const PREVIEW_BYTES: usize = 4 * 1024;
-const TITLE_CHARS: usize = 60;
+/// A title's most words and characters: a few plain words, like "Nightly build".
+const TITLE_WORDS: usize = 5;
+const TITLE_CHARS: usize = 36;
 const REQUEST_PREVIEW_CHARS: usize = 80;
 const NEW_SESSION_TITLE: &str = "New session";
 const NEW_CHAT_TITLE: &str = "New chat";
@@ -2157,6 +2159,12 @@ impl Core {
         Ok(board)
     }
 
+    /// The tasks a conversation the catalog no longer has left in its stream, read without
+    /// keeping its board.
+    pub(crate) async fn deleted_tasks(&self, id: &ConversationId) -> Result<Vec<Task>> {
+        Ok(self.load_board(id).await?.sorted_tasks())
+    }
+
     /// Folds a conversation's stream into its board, newest page first.
     async fn load_board(&self, id: &ConversationId) -> Result<Board> {
         let mut events = Vec::new();
@@ -2782,11 +2790,132 @@ pub(crate) fn display_text(text: &str, attachments: &[AttachmentRef]) -> String 
 }
 
 fn title_from(text: &str) -> String {
+    let title = short_title(text);
+    if title.is_empty() {
+        one_line(text, TITLE_CHARS)
+    } else {
+        title
+    }
+}
+
+/// Words a request opens with that name nothing: "Please start the build" is titled
+/// "Start the build".
+const OPENERS: &[&str] = &[
+    "i would like you to",
+    "i'd like you to",
+    "i want you to",
+    "i need you to",
+    "can you please",
+    "could you please",
+    "can you",
+    "could you",
+    "would you",
+    "will you",
+    "can u",
+    "let's",
+    "lets",
+    "let us",
+    "please",
+    "pls",
+    "hey",
+    "hi",
+    "hello",
+    "ok",
+    "okay",
+    "so",
+    "also",
+];
+
+/// Words a cut title doesn't end on.
+const DANGLING: &[&str] = &[
+    "a", "an", "the", "to", "from", "of", "for", "with", "in", "on", "at", "by", "into", "and",
+    "or", "but", "that", "this", "my", "our", "your", "its", "is", "are",
+];
+
+/// A few plain words naming what `text` asks, from its first line's first sentence, without a
+/// polite opener ("Please …", "Can you …") or a closing stop: "Please start the nightly build
+/// from the main branch" reads "Start the nightly build". At most `TITLE_WORDS` words and
+/// `TITLE_CHARS` characters; empty for a blank text.
+pub(crate) fn short_title(text: &str) -> String {
     let line = text
         .lines()
         .find(|line| !line.trim().is_empty())
-        .unwrap_or(text);
-    one_line(line, TITLE_CHARS)
+        .unwrap_or_default();
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return line;
+    }
+    let mut rest = line.as_str();
+    let mut opened = false;
+    'strip: loop {
+        for opener in OPENERS {
+            let Some(after) = rest
+                .get(..opener.len())
+                .filter(|head| head.eq_ignore_ascii_case(opener))
+                .map(|_| &rest[opener.len()..])
+            else {
+                continue;
+            };
+            // Only a whole opener ("so", not "some"), with its comma or stop.
+            let tail = after.trim_start_matches([',', '.', '!', ':']);
+            if !tail.is_empty() && !tail.starts_with(' ') {
+                continue;
+            }
+            let stripped = tail.trim_start();
+            if stripped.is_empty() {
+                break 'strip;
+            }
+            rest = stripped;
+            opened = true;
+            continue 'strip;
+        }
+        break;
+    }
+    // Its first sentence or clause.
+    let sentence = [". ", "? ", "! ", ": ", "; "]
+        .iter()
+        .filter_map(|stop| rest.find(stop))
+        .min()
+        .filter(|&at| at > 0)
+        .map_or(rest, |at| &rest[..at]);
+    let words: Vec<&str> = sentence
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut chars = 0;
+    for word in &words {
+        let more = word.chars().count() + usize::from(!kept.is_empty());
+        if kept.len() == TITLE_WORDS || chars + more > TITLE_CHARS {
+            break;
+        }
+        kept.push(word);
+        chars += more;
+    }
+    let cut = kept.len() < words.len();
+    if cut {
+        while kept.len() > 1
+            && kept
+                .last()
+                .is_some_and(|word| DANGLING.contains(&word.to_lowercase().as_str()))
+        {
+            kept.pop();
+        }
+    }
+    let mut title = if kept.is_empty() {
+        // One word longer than a title (a long path, or a script without spaces).
+        let mut cut: String = sentence.chars().take(TITLE_CHARS - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        kept.join(" ")
+            .trim_end_matches(['.', ',', ';', ':', '!', '?', '…'])
+            .to_owned()
+    };
+    if opened && let Some(first) = title.chars().next() {
+        title = first.to_uppercase().chain(title.chars().skip(1)).collect();
+    }
+    title
 }
 
 /// A request's preview: the start of the user's message, on one line.
@@ -3371,6 +3500,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn auto_titles_are_a_few_plain_words() {
+        for (text, title) in [
+            (
+                "Please start the nightly build from the main branch and tell me when it's done",
+                "Start the nightly build",
+            ),
+            ("Fix the login page", "Fix the login page"),
+            ("\n  Write gamma.\nand more", "Write gamma"),
+            (
+                "Can you add direct messages to workers? The composer should…",
+                "Add direct messages to workers",
+            ),
+            ("Hey, so let's rename the toast", "Rename the toast"),
+            ("Some cleanup in the sidebar", "Some cleanup in the sidebar"),
+            (
+                "/fusion how to start trading?",
+                "/fusion how to start trading",
+            ),
+            ("iPhone layout", "iPhone layout"),
+            ("Please.", "Please"),
+            ("   ", ""),
+        ] {
+            assert_eq!(short_title(text), title, "{text}");
+        }
+        let long = short_title(&"x".repeat(80));
+        assert_eq!(long.chars().count(), TITLE_CHARS);
+        assert!(long.ends_with('…'));
+        for text in [
+            "Reconcile navigation with latest main and keep the Plugins placement",
+            "Implement direct worker messaging from the composer's To: chip",
+        ] {
+            let title = short_title(text);
+            assert!(
+                title.split(' ').count() <= TITLE_WORDS && title.chars().count() <= TITLE_CHARS,
+                "{title}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn auto_titles_name_a_pasted_text_in_plain_words() {
         let dir =
@@ -3434,7 +3603,7 @@ mod tests {
         for (text, expected) in [
             (
                 format!("Paste test. Here is an icon: [image:{}]", attachment.id),
-                "Paste test. Here is an icon: [image]".to_owned(),
+                "Paste test".to_owned(),
             ),
             (format!("[image:{}]", attachment.id), "[image]".to_owned()),
             (
@@ -3450,7 +3619,7 @@ mod tests {
             ),
             (
                 format!("{}[image:{}] after", "界".repeat(54), attachment.id),
-                format!("{}[imag…", "界".repeat(54)),
+                format!("{}…", "界".repeat(35)),
             ),
         ] {
             let conversation = core

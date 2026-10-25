@@ -11,6 +11,7 @@ import { pickFile, request } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
+import { useAgentPageAsk } from "@/state/agentPage";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { startUpdate, useUpdates } from "@/state/updates";
@@ -37,6 +38,7 @@ export function Installation({
   // The agents list's Sign in starts it as the page opens, once.
   const started = useRef(false);
   useEffect(() => {
+    if (signIn && state !== "checking") useAgentPageAsk.setState({ ask: null });
     if (!signIn || started.current || state !== "signIn") return;
     started.current = true;
     void connectAgent(provider);

@@ -140,9 +140,13 @@ impl AgentAdapter for Claude {
         place: &Place,
     ) -> Result<Vec<Step>, Unsupported> {
         let (scope, dir) = scope(place);
+        let mut entry = server_json(spec, "headers");
+        if let Some(oauth) = &spec.oauth {
+            entry["oauth"] = serde_json::json!({ "clientId": oauth.client_id });
+        }
         let call = CliCall::new(PROGRAM, &["mcp", "add-json"])
             .arg(name)
-            .arg(server_json(spec, "headers").to_string())
+            .arg(entry.to_string())
             .arg("--scope")
             .arg(scope);
         Ok(vec![Step::Run(match dir {

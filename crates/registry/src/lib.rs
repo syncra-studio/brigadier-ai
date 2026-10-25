@@ -251,6 +251,27 @@ pub struct Server {
     /// `oauth.clientId`), which renewing its sign-in needs: no CLI stores a configured secret
     /// with the token.
     pub oauth: Option<OAuthClient>,
+    /// Its config switches it off (Claude's `disabled: true`): kept in
+    /// [`SwitchedOff::servers`], never loaded.
+    pub disabled: bool,
+    /// Its settings as the config writes them, before any variable is expanded: all that may
+    /// be shown or copied, so no expanded value leaves the config.
+    pub written: AsWritten,
+    /// Some value of it comes from the environment (`${VAR}`, Codex's `env_vars`,
+    /// `env_http_headers`, `bearer_token_env_var`).
+    pub templated: bool,
+    /// A project's Codex entry that only switches the user's server of its name (no command or
+    /// url of its own): the user's server, switched in that project.
+    pub overrides_user: bool,
+}
+
+/// A server's command, arguments, address and working folder as its config writes them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AsWritten {
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub url: Option<String>,
+    pub cwd: Option<String>,
 }
 
 impl Server {
@@ -359,8 +380,12 @@ impl Catalog {
     fn user(roots: &Roots) -> Self {
         let mut problems = Vec::new();
         let codex = servers::codex_config(roots, &mut problems);
+        let (servers, disabled): (Vec<Server>, Vec<Server>) =
+            servers::user(roots, codex.as_ref(), &mut problems)
+                .into_iter()
+                .partition(|server| !server.disabled);
         let mut catalog = Self {
-            servers: servers::user(roots, codex.as_ref(), &mut problems),
+            servers,
             problems,
             skills: Vec::new(),
             codex_skill_config: codex
@@ -382,6 +407,7 @@ impl Catalog {
             catalog.add_plugin(roots, plugin, codex.as_ref());
         }
         catalog.off = Self::switched_off(roots, codex.as_ref());
+        catalog.off.servers.extend(disabled);
         catalog
     }
 
@@ -408,8 +434,13 @@ impl Catalog {
     }
 
     fn add_project(&mut self, roots: &Roots, project: &Path) {
-        self.servers
-            .extend(servers::project(roots, project, &mut self.problems));
+        for server in servers::project(roots, project, &mut self.problems) {
+            if server.disabled {
+                self.off.servers.push(server);
+            } else {
+                self.servers.push(server);
+            }
+        }
         skills::add_project(&mut self.skills, project);
         // A project's settings switch Claude's plugins on and off for its sessions, and its
         // installs count there.
@@ -605,11 +636,17 @@ fn server_id(source: Source, project: Option<&Path>, name: &str) -> String {
     }
 }
 
+/// Told when the watcher sees a config or skill change.
+type Listener = Box<dyn Fn() + Send + Sync>;
+
 /// The user's catalog, kept current by a watcher, and a project's read when asked.
 pub struct Registry {
     roots: Roots,
     user: RwLock<Arc<Catalog>>,
     watcher: Mutex<Option<watch::Watcher>>,
+    /// The projects whose own configs and skills the watcher looks at too.
+    projects: Mutex<Vec<PathBuf>>,
+    listeners: Mutex<Vec<Listener>>,
 }
 
 impl Registry {
@@ -620,6 +657,8 @@ impl Registry {
             roots,
             user: RwLock::new(Arc::new(user)),
             watcher: Mutex::new(None),
+            projects: Mutex::new(Vec::new()),
+            listeners: Mutex::new(Vec::new()),
         })
     }
 
@@ -648,7 +687,7 @@ impl Registry {
     ) {
         let servers = servers::project(&self.roots, project, &mut Vec::new());
         for server in servers {
-            if keep_server(&server.id) && catalog.server(&server.id).is_none() {
+            if !server.disabled && keep_server(&server.id) && catalog.server(&server.id).is_none() {
                 catalog.servers.push(server);
             }
         }
@@ -679,6 +718,49 @@ impl Registry {
         }
     }
 
+    /// Calls `listener` after each change the watcher sees (the user's catalog read again
+    /// first), from the watcher's thread.
+    pub fn on_change(&self, listener: impl Fn() + Send + Sync + 'static) {
+        self.listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(Box::new(listener));
+    }
+
+    /// Watches `projects`' own configs and skill folders too (their `.mcp.json`,
+    /// `.codex/config.toml`, Claude's settings and `.claude/skills`, `.agents/skills`).
+    pub fn watch_projects(&self, projects: &[PathBuf]) {
+        {
+            let mut known = self.projects.lock().unwrap_or_else(|p| p.into_inner());
+            if known.as_slice() == projects {
+                return;
+            }
+            *known = projects.to_vec();
+        }
+        if let Some(watcher) = self
+            .watcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+        {
+            watcher.rewatch(&self.watched());
+        }
+    }
+
+    /// What the watcher does on a change: reads the user's configs again, then tells each
+    /// listener.
+    pub(crate) fn changed(&self) {
+        self.refresh();
+        for listener in self
+            .listeners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            listener();
+        }
+    }
+
     /// Keeps the user's catalog current: a change to any config or skill (a skill's
     /// `SKILL.md` through a symlink too) reads them again, half a second after the last one.
     /// Idle, it costs nothing. Ends with the registry.
@@ -688,7 +770,7 @@ impl Registry {
             &self.watched(),
             Box::new(move || {
                 if let Some(registry) = registry.upgrade() {
-                    registry.refresh();
+                    registry.changed();
                 }
             }),
         )?;
@@ -735,8 +817,30 @@ impl Registry {
                 .filter(|server| server.plugin.is_some())
                 .map(|server| server.file.clone()),
         );
+        for project in self
+            .projects
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            files.push(project.join(".mcp.json"));
+            files.push(adapter::codex::project_file(project));
+            files.push(project.join(".claude").join("settings.json"));
+            files.push(project.join(".claude").join("settings.local.json"));
+            trees.push(project.join(".claude").join("skills"));
+            trees.push(project.join(".agents").join("skills"));
+        }
+        let mut project_skills = Vec::new();
+        for project in self
+            .projects
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+        {
+            skills::add_project(&mut project_skills, project);
+        }
         // A skill reached through a symlink: its own folder, wherever it is.
-        for skill in &user.skills {
+        for skill in user.skills.iter().chain(&project_skills) {
             if !trees.iter().any(|tree| skill.dir.starts_with(tree)) {
                 trees.push(skill.dir.clone());
             }

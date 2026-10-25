@@ -33,7 +33,7 @@ export function ProviderUsage({
       className="size-icon-md shrink-0"
     />
   );
-  const row = "h-control-sm rounded-capsule flex w-full items-center gap-2 px-2 text-sm";
+  const row = "h-control-sm rounded-2xl flex w-full items-center gap-2 px-2 text-sm";
   if (entry.needs) {
     return (
       <div data-slot="usage-row" className={row}>

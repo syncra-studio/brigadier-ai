@@ -628,7 +628,9 @@ impl SessionManager {
         let mut files = Vec::new();
         let mut copied = HashMap::new();
         for attachment in item.attachments.iter().filter(|a| !a.pasted) {
-            let path = self.copied_file(conv, attachment, &mut copied).await;
+            let path = self
+                .copied_file(&super::FilesAt::Conversation(conv), attachment, &mut copied)
+                .await;
             files.push((
                 attachment.name.clone(),
                 path.map(|path| path.display().to_string()),

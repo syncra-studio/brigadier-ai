@@ -483,6 +483,29 @@ fn is_same(processes: &dyn brigadier_sandbox::Processes, pid: u32, started: Opti
             .is_ok_and(|now| (now - started).abs() < 1_000.0)
 }
 
+/// Whether a process with this id exists, for files a CLI keeps only while it runs: a process
+/// of another user's counts. Where that can't be told, every process does.
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+        let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 0) else {
+            return false;
+        };
+        // Signal 0 sends nothing: it only checks that the process exists.
+        match kill(Pid::from_raw(pid), None) {
+            Ok(()) => true,
+            Err(err) => err != nix::errno::Errno::ESRCH,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 /// The signal that ended a process, when one did.
 #[cfg(unix)]
 fn exit_signal(status: std::process::ExitStatus) -> Option<i32> {

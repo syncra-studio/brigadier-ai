@@ -9,7 +9,7 @@ import {
 } from "@assistant-ui/react-lexical";
 import { $isCodeNode } from "@lexical/code";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { mergeRegister } from "@lexical/utils";
+import { $dfs, mergeRegister } from "@lexical/utils";
 import {
   $createTextNode,
   $getNearestNodeFromDOMNode,
@@ -344,6 +344,8 @@ export const ChipComposerInput: FC<
     mentionLook?: MentionLook;
     /** Hears each item picked from a menu (it's in the text as a chip by then). */
     onMention?: (item: Unstable_TriggerItem) => void;
+    /** Menu items that do something rather than mention: picked, they leave no chip. */
+    isAction?: (item: Unstable_TriggerItem) => boolean;
     /** One line (under an action card): it doesn't grow, it scrolls. */
     line?: boolean;
     /** The rich field, whose text is Markdown. */
@@ -351,12 +353,25 @@ export const ChipComposerInput: FC<
     /** The chips its text makes (all of them by default). */
     kinds?: ChipKinds;
   }
-> = ({ formatter, mentionLook, onMention, line = false, rich = false, kinds = ALL_CHIPS, className, children, ...props }) => {
+> = ({ formatter, mentionLook, onMention, isAction, line = false, rich = false, kinds = ALL_CHIPS, className, children, ...props }) => {
   const [scrolled, setScrolled] = useState(false);
   const editor = useRef<LexicalEditor | null>(null);
   const directivePluginProps = useMemo(
     () => ({
       onDirectiveSelect: (item: Unstable_TriggerItem) => {
+        if (isAction?.(item)) {
+          // Its `@query` went with the chip the menu put there; the chip goes too.
+          editor.current?.update(
+            () => {
+              for (const { node } of $dfs()) {
+                if ($isDirectiveNode(node) && node.exportJSON().directiveId === item.id) node.remove();
+              }
+            },
+            { tag: HISTORY_MERGE_TAG },
+          );
+          onMention?.(item);
+          return;
+        }
         // A space after the chip, as a picked mention gets.
         editor.current?.update(
           () => {
@@ -373,7 +388,7 @@ export const ChipComposerInput: FC<
         onMention?.(item);
       },
     }),
-    [onMention],
+    [onMention, isAction],
   );
   const { submitMode, cancelOnEscape, ...shared } = props;
   const Input = rich ? RichComposerInput : LexicalComposerInput;

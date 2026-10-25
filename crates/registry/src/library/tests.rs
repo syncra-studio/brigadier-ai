@@ -45,6 +45,7 @@ fn stdio(name: &str, command: &str, args: &[&str], env: &[(&str, &str)]) -> Item
                 .collect(),
             cwd: None,
         },
+        oauth: None,
     })
 }
 
@@ -125,6 +126,7 @@ fn a_remote_servers_headers_reach_each_agent_through_the_helper() {
             url: "https://mcp.example.com/mcp".to_owned(),
             headers: vec![("Authorization".to_owned(), Secret::new("Bearer s3cret"))],
         },
+        oauth: None,
     });
     let packed = library.pack("api", &item, None, &[], false, &kept).unwrap();
     let helper = json!("/bin/brigadier secret headers api/api");
@@ -150,6 +152,7 @@ fn a_remote_servers_headers_reach_each_agent_through_the_helper() {
             url: "https://open.example.com/mcp".to_owned(),
             headers: Vec::new(),
         },
+        oauth: None,
     });
     let packed = library
         .pack("open", &bare, None, &[], false, &kept)

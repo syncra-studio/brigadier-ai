@@ -41,6 +41,7 @@ import {
 import { armBackgroundSend } from "@/state/backgroundSend";
 import { useBoard } from "@/state/board";
 import { isTaskTab } from "@/state/tabStates";
+import { setDirectTo } from "@/state/directTo";
 
 /** What `/init` asks the orchestrator, as Codex's `/init` asks its agent. */
 const INIT_PROMPT =
@@ -230,6 +231,7 @@ export const SlashCommands: FC<{
         description: "Send the message as a new session in the background, and stay here",
         icon: <ArrowUpRight />,
         run: () => {
+          setDirectTo(id, null);
           armBackgroundSend(id, true);
           requestAnimationFrame(() =>
             document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus(),

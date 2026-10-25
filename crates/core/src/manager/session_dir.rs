@@ -287,7 +287,7 @@ impl SessionManager {
     /// Delete's last step for a conversation's folder: the folder and its `record/` go
     /// ([`folder_owner`]), once nothing else of the ledger still holds a worktree in it (one a
     /// WIP commit couldn't keep stays, with its folder, as the archive leaves it).
-    pub(super) async fn remove_session_dir(&self, id: &ConversationId) {
+    pub(super) async fn remove_session_dir(&self, id: &ConversationId) -> bool {
         let owner = folder_owner(id);
         let ledger = self.runtime.ledger();
         let dir = self.session_dir(id);
@@ -299,12 +299,13 @@ impl SessionManager {
         });
         if worktree_left {
             tracing::warn!(conversation = %id, "a worktree stays in the deleted session's folder, so the folder stays");
-            return;
+            return false;
         }
         let leftovers = ledger.dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(conversation = %id, ?leftovers, "some of the session's folder will be retried at the next launch");
         }
+        leftovers.is_clean()
     }
 }
 

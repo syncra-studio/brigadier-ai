@@ -126,8 +126,3 @@ export function rowName(rows: readonly WorkerRow[], id: string): string | null {
   }
   return names.get(id) ?? null;
 }
-
-/** Rows that changed work its session's branch lacks: what archiving would leave unmerged. */
-export function unmergedRows(rows: readonly WorkerRow[]): WorkerRow[] {
-  return rows.filter(unmerged);
-}

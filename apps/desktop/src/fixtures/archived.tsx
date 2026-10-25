@@ -88,10 +88,14 @@ mockIPC((command, payload) => {
       if (req.ids.length > 1) {
         return new Promise((resolve) => {
           releasePreview = () =>
-            resolve({ method: req.method, branches: [{ repo: "/repo", name: "brigadier/912a9469/session", unknown: false }] });
+            resolve({
+              method: req.method,
+              branches: [{ repo: "/repo", name: "brigadier/912a9469/session", unknown: false }],
+              files: [],
+            });
         });
       }
-      return { method: req.method, branches: [] };
+      return { method: req.method, branches: [], files: [] };
     case "delete":
       calls.push(`delete ${req.ids.join(",")}`);
       return { method: req.method, outcomes: req.ids.map((id) => ({ id, conversation: null, error: null })) };

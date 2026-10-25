@@ -71,11 +71,8 @@ export function BrowserPage() {
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
   const shown = useApp((s) => s.selection);
-  // A sub-view or the Clear dialog lasts while Settings shows what it was opened under (see
-  // state/browserSettings.ts): Browser picked again in the sidebar opens the page itself.
-  const opened = useBrowserSettingsView((s) => s.opened);
   const clearingUnder = useBrowserSettingsView((s) => s.clearing);
-  const view = opened?.under === shown ? opened.view : "page";
+  const view = shown.type === "settings" && shown.page === "browser" ? shown.detail?.view ?? "page" : "page";
   const clearing = clearingUnder !== null && clearingUnder === shown;
   const [cleared, setCleared] = useState(0);
   const clearDialog = (

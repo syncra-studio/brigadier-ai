@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-import type { PluginKind, PluginsView, ProviderKind } from "@/ipc/generated";
+import type { ProviderKind } from "@/ipc/generated";
+import type { PluginItemDetails, PluginKind, PluginsView } from "./types";
 
 /** Something read from what the user pasted, before it is added. */
 export type PluginDraft = {
@@ -26,77 +27,73 @@ export type PluginAgentResult = {
   message: string | null;
 };
 
-/** Add's Advanced beyond the name and where. */
-export type PluginAddMore = {
-  /** Only these agents get it; null: every agent. */
-  agents: ProviderKind[] | null;
-  /** The one server's env (or headers) the user typed, by name: they go to the Keychain. */
-  values: Record<string, string> | null;
-};
+/** How a SKILL.md save went: written, or refused because the file changed since it was opened. */
+export type SkillSave = { type: "saved" } | { type: "changed"; current: string };
 
 /** The page's boundary to the daemon; fixtures supply the same data and actions. */
 export type PluginsAdapter = {
-  /** The page, looking at project `projectId`, else at every project. */
-  read: (projectId: string | null) => Promise<PluginsView>;
+  read: () => Promise<PluginsView>;
   /** Calls `onChange` when the page may have changed (the agents' setup, the projects). */
   subscribe: (onChange: () => void) => () => void;
-  /** The row switch: `projectId` null means every project; `agent`, for that agent alone. */
-  switchPlugin: (key: string, projectId: string | null, on: boolean, agent?: ProviderKind) => Promise<PluginAgentResult[]>;
-  /**
-   * The place picker: a Library item on in every project (`projectIds` null), or in exactly these
-   * projects. `undo`: what its Undo takes, each agent back exactly where it had it.
-   */
-  setPlaces: (key: string, projectIds: string[] | null) => Promise<{ results: PluginAgentResult[]; undo: string | null }>;
-  undoPlaces: (undo: string) => Promise<PluginAgentResult[]>;
-  /** Add to every agent, for a Library item: the agents missing it get it where the others have it. */
-  addMissing: (key: string) => Promise<PluginAgentResult[]>;
+  /** The card's switch: the whole item, in every agent, keeping where it's set to be. */
+  switchPlugin: (key: string, on: boolean) => Promise<PluginAgentResult[]>;
+  /** Where it's on: every project (null), or only these projects (never none). */
+  setScope: (key: string, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
+  /** Share with every agent: an item only some agents have goes to the rest. */
+  share: (key: string) => Promise<PluginAgentResult[]>;
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
-  add: (text: string, name: string | null, projectId: string | null, shared: boolean, more: PluginAddMore) => Promise<PluginAgentResult[]>;
-  /** Add to every agent: into the Library, for every agent. `key`: the Library's copy, what Undo takes. */
-  everyAgent: (key: string) => Promise<{ results: PluginAgentResult[]; key: string | null }>;
-  undoEveryAgent: (key: string) => Promise<PluginAgentResult[]>;
+  /** Adds it to every agent, in every project (`projectIds` null) or these; `values`: env or headers typed in Advanced. */
+  add: (text: string, name: string | null, projectIds: string[] | null, values: Record<string, string> | null) => Promise<PluginAgentResult[]>;
+  /**
+   * Imports another app's server (an `elsewhere` entry, by key) into every agent, its settings
+   * and values with it; `name` when its own clashes. The app's own stays as it is.
+   */
+  importPlugin: (key: string, name: string | null, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
+  /** Takes out what Brigadier added (its `removal`); an original stays as it is. */
   remove: (key: string) => Promise<PluginAgentResult[]>;
   update: (key: string) => Promise<PluginAgentResult[]>;
+  /** What Open shows: a skill's SKILL.md files, a server's settings. */
+  details: (key: string) => Promise<PluginItemDetails>;
   /**
-   * Signs each agent in to the item's server in turn, opening the browser for the next. Absent
-   * while the daemon can't: the page offers no Sign in then.
+   * Writes one of a skill's SKILL.md files, if it still holds `expected` (the text as opened);
+   * the copies follow it. "changed" when the file changed since: nothing is written, and
+   * `current` is what it holds now.
    */
-  signIn?: (key: string, projectId: string | null) => Promise<PluginAgentResult[]>;
+  saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<SkillSave>;
+  /**
+   * Signs each agent in to a server in turn, opening the browser for the next: `serverId` and
+   * `projectId` from its problem. Absent while the daemon can't: the page offers no Sign in then.
+   */
+  signIn?: (key: string, serverId: string, projectId: string | null) => Promise<PluginAgentResult[]>;
   cancelSignIn?: (key: string) => Promise<void>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;
-  /** Trusts the project's folder, in Brigadier and in each agent's own settings. */
+  /** Trusts the project's folder, in Brigadier and in each agent's own settings (a project's note asks for it). */
   trustProject: (projectId: string) => Promise<void>;
-  /** Opens Add project. */
-  addProject: () => void;
 };
 
-const EMPTY: PluginsView = { agents: [], projects: [], items: [], elsewhere: [] };
+const EMPTY: PluginsView = { projects: [], items: [], elsewhere: [] };
 
 /** The page's data: no example items enter the app; the live adapter fills it. */
 export const usePlugins = create<{
   view: PluginsView;
-  /** The project the filter picks, by id; null for All projects. */
-  project: string | null;
   adapter: PluginsAdapter | null;
   error: string | null;
   /** Reads the page again now. */
   refresh: () => void;
   /** Reads the page again, done once it's read. */
   reload: () => Promise<void>;
-  setProject: (project: string | null) => void;
-}>(() => ({ view: EMPTY, project: null, adapter: null, error: null, refresh: () => {}, reload: async () => {}, setProject: () => {} }));
+}>(() => ({ view: EMPTY, adapter: null, error: null, refresh: () => {}, reload: async () => {} }));
 
-/** Installs `adapter` and follows its changes; a read for an older project or connection is dropped. */
+/** Installs `adapter` and follows its changes; a read older than the last one, or for an old connection, is dropped. */
 export function connectPlugins(adapter: PluginsAdapter): () => void {
   let active = true;
   let generation = 0;
   const refresh = async () => {
     const current = ++generation;
-    const { project } = usePlugins.getState();
     try {
-      const view = await adapter.read(project);
+      const view = await adapter.read();
       if (active && current === generation) usePlugins.setState({ view, error: null });
     } catch (cause) {
       if (active && current === generation) usePlugins.setState({ error: cause instanceof Error ? cause.message : String(cause) });
@@ -106,16 +103,12 @@ export function connectPlugins(adapter: PluginsAdapter): () => void {
     adapter,
     refresh: () => void refresh(),
     reload: refresh,
-    setProject: (project) => {
-      usePlugins.setState({ project });
-      void refresh();
-    },
   });
   const unsubscribe = adapter.subscribe(() => void refresh());
   void refresh();
   return () => {
     active = false;
     unsubscribe();
-    if (usePlugins.getState().adapter === adapter) usePlugins.setState({ adapter: null, refresh: () => {}, reload: async () => {}, setProject: () => {} });
+    if (usePlugins.getState().adapter === adapter) usePlugins.setState({ adapter: null, refresh: () => {}, reload: async () => {} });
   };
 }

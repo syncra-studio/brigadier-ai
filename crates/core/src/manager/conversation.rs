@@ -1581,6 +1581,16 @@ impl SessionManager {
         state.notes.push(text);
     }
 
+    /// Says `text` to conversation `id`'s next turn, without starting one.
+    pub(super) async fn note_next_turn(&self, id: &ConversationId, text: String) {
+        match self.conv(id) {
+            Ok(conv) => conv.state.lock().await.notes.push(text),
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not note a direct message for the next turn")
+            }
+        }
+    }
+
     /// Puts `envelope` before the thread now: steered into its running turn when one runs and
     /// may take it (not compacting, stopped, held at a seam or behind a running command), else
     /// into its inbox once (by its label), starting a turn when it is idle. `Some(true)`: its
@@ -2886,6 +2896,8 @@ impl SessionManager {
             stop_hook,
             naked_worker: false,
             native_compaction: self.native_compaction(conv, choice.provider),
+            // Its temp folder names it, so Delete and the sweep find it (D7).
+            temp_tag: Some(conv.id.short().to_owned()),
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);
@@ -3090,94 +3102,18 @@ impl SessionManager {
             if let Some(frame) = conv.take_frame(&message.id) {
                 user_text.insert_str(0, &frame);
             }
-            let plan = image_plan(&user_text, &message.attachments, &copied);
-            for attachment in &plan.copies {
-                copied.insert(
-                    attachment.id.clone(),
-                    self.attachment_file(conv, attachment).await,
-                );
-            }
-            let text = name_inline_images(
-                &user_text,
-                &message.attachments,
-                &copied,
-                conv.kind,
-                &mut files,
-            );
-            // Text pasted as a chip goes where it was pasted, marked as the user's paste.
-            let mut pastes = Vec::new();
-            for attachment in &message.attachments {
-                if let Some(n) = inline_paste(attachment)
-                    && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
-                {
-                    let whole = self
-                        .whole_paste(conv, attachment, &pasted, &mut copied)
-                        .await;
-                    pastes.push((n, pasted_inline(&pasted, whole.as_deref())));
-                }
-            }
-            let mut inline = vec![InputPart::Text(place_inline_pastes(&text, &pastes))];
-            for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
-                if attachment.pasted
-                    && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
-                {
-                    let whole = self
-                        .whole_paste(conv, attachment, &pasted, &mut copied)
-                        .await;
-                    push_input_block(&mut inline, &pasted_inline(&pasted, whole.as_deref()));
-                    continue;
-                }
-                if conv.kind == ConversationKind::Chat && !is_image(&attachment.mime) {
-                    append_input_text(&mut inline, &self.inline_attachment(attachment).await);
-                    continue;
-                }
-                if conv.kind == ConversationKind::Session {
-                    // A file other than an image is read from its copy in the session's folder.
-                    let copy = match is_image(&attachment.mime) {
-                        true => None,
-                        false => self.copied_file(conv, attachment, &mut copied).await,
-                    };
-                    let place = copy
-                        .map(|path| format!(", saved as {}", path.display()))
-                        .unwrap_or_default();
-                    append_input_text(
-                        &mut inline,
-                        &format!(
-                            "\n[attachment {} \"{}\" ({}, {} bytes){place}]",
-                            attachment.id, attachment.name, attachment.mime, attachment.bytes,
-                        ),
-                    );
-                }
-            }
-            for mention in &message.mentions {
-                match mention {
-                    Mention::Task { id } => {
-                        if let Ok(tasks) = self.core.tasks(&conv.id).await
-                            && let Some(task) = tasks.iter().find(|t| &t.id == id)
-                        {
-                            append_input_text(
-                                &mut inline,
-                                &format!("\n[mentions task-{}: {}]", task.number, task.title),
-                            );
-                        }
-                    }
-                    Mention::File { path } => {
-                        append_input_text(&mut inline, &format!("\n[mentions the file {path}]"));
-                    }
-                    Mention::Folder { path } => {
-                        append_input_text(&mut inline, &format!("\n[mentions the folder {path}]"));
-                    }
-                    Mention::Chat { id, title } => {
-                        append_input_text(&mut inline, &self.mentioned_chat(id, title).await);
-                    }
-                    Mention::Page { id, title } => {
-                        append_input_text(&mut inline, &super::page_tools::page_note(id, title));
-                    }
-                    Mention::BrowserTab { tab, title, url } => {
-                        append_input_text(&mut inline, &browser_tab_note(tab, title, url));
-                    }
-                }
-            }
+            let mut inline = self
+                .message_input(
+                    &FilesAt::Conversation(conv),
+                    &conv.id,
+                    conv.kind,
+                    &user_text,
+                    &message.attachments,
+                    &message.mentions,
+                    &mut copied,
+                    &mut files,
+                )
+                .await;
             if !ordered.is_empty() {
                 ordered.push(InputPart::Text("\n\n".into()));
             }
@@ -3201,21 +3137,161 @@ impl SessionManager {
             }
             ordered.push(InputPart::Text(parts.join("\n\n")));
         }
-        // Row images keep today's image-first order. Inline images stay in the user text.
-        let mut merged: Vec<_> = files.into_iter().map(InputPart::Image).collect();
-        // Joining adjacent text preserves today's single text block for ordinary turns.
-        for part in ordered {
-            match (merged.last_mut(), part) {
-                (Some(InputPart::Text(previous)), InputPart::Text(text)) => {
-                    previous.push_str(&text)
-                }
-                (_, part) => merged.push(part),
+        merged_input(files, ordered)
+    }
+
+    /// What the user sent one of `owner`'s workers directly, as its CLI takes it: their words,
+    /// pastes, attachments and mentions as a session's turn takes them, with the files written
+    /// in the worker's `scratch` folder. Every attachment is written (and every paste read)
+    /// first: one that can't be is an error, before anything reaches the worker.
+    pub(crate) async fn direct_input(
+        &self,
+        owner: &ConversationId,
+        scratch: PathBuf,
+        text: &str,
+        attachments: &[AttachmentRef],
+        mentions: &[Mention],
+    ) -> Result<TurnInput> {
+        let at = FilesAt::Worker(scratch);
+        let mut copied = HashMap::new();
+        for attachment in attachments {
+            if attachment.pasted
+                && self
+                    .core
+                    .read_blob_text(attachment.id.clone())
+                    .await
+                    .is_err()
+            {
+                return Err(Error::Invalid(format!(
+                    "the pasted text \"{}\" could not be read; paste it again",
+                    attachment.name
+                )));
+            }
+            if copied.contains_key(&attachment.id) {
+                continue;
+            }
+            let Some(file) = self.attachment_file(&at, attachment).await else {
+                return Err(Error::Invalid(format!(
+                    "{} could not be saved for the worker",
+                    attachment.name
+                )));
+            };
+            copied.insert(attachment.id.clone(), Some(file));
+        }
+        let mut files = Vec::new();
+        let parts = self
+            .message_input(
+                &at,
+                owner,
+                ConversationKind::Session,
+                text,
+                attachments,
+                mentions,
+                &mut copied,
+                &mut files,
+            )
+            .await;
+        Ok(merged_input(files, parts))
+    }
+
+    /// One message's part of a CLI's input (see [`Self::turn_input`]): its text with what it
+    /// pasted, its attachments and what it mentions. Its files are written `at` the folder of
+    /// whoever reads them; `owner` is the session whose workers and Chats it may mention.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn message_input(
+        &self,
+        at: &FilesAt<'_>,
+        owner: &ConversationId,
+        kind: ConversationKind,
+        user_text: &str,
+        attachments: &[AttachmentRef],
+        mentions: &[Mention],
+        copied: &mut HashMap<String, Option<InputFile>>,
+        files: &mut Vec<InputFile>,
+    ) -> Vec<InputPart> {
+        let plan = image_plan(user_text, attachments, copied);
+        for attachment in &plan.copies {
+            copied.insert(
+                attachment.id.clone(),
+                self.attachment_file(at, attachment).await,
+            );
+        }
+        let text = name_inline_images(user_text, attachments, copied, kind, files);
+        // Text pasted as a chip goes where it was pasted, marked as the user's paste.
+        let mut pastes = Vec::new();
+        for attachment in attachments {
+            if let Some(n) = inline_paste(attachment)
+                && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
+            {
+                let whole = self
+                    .whole_paste(at, kind, attachment, &pasted, copied)
+                    .await;
+                pastes.push((n, pasted_inline(&pasted, whole.as_deref())));
             }
         }
-        TurnInput {
-            parts: merged,
-            files: Vec::new(),
+        let mut inline = vec![InputPart::Text(place_inline_pastes(&text, &pastes))];
+        for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
+            if attachment.pasted
+                && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
+            {
+                let whole = self
+                    .whole_paste(at, kind, attachment, &pasted, copied)
+                    .await;
+                push_input_block(&mut inline, &pasted_inline(&pasted, whole.as_deref()));
+                continue;
+            }
+            if kind == ConversationKind::Chat && !is_image(&attachment.mime) {
+                append_input_text(&mut inline, &self.inline_attachment(attachment).await);
+                continue;
+            }
+            if kind == ConversationKind::Session {
+                // A file other than an image is read from its copy in the session's folder.
+                let copy = match is_image(&attachment.mime) {
+                    true => None,
+                    false => self.copied_file(at, attachment, copied).await,
+                };
+                let place = copy
+                    .map(|path| format!(", saved as {}", path.display()))
+                    .unwrap_or_default();
+                append_input_text(
+                    &mut inline,
+                    &format!(
+                        "\n[attachment {} \"{}\" ({}, {} bytes){place}]",
+                        attachment.id, attachment.name, attachment.mime, attachment.bytes,
+                    ),
+                );
+            }
         }
+        for mention in mentions {
+            match mention {
+                Mention::Task { id } => {
+                    if let Ok(tasks) = self.core.tasks(owner).await
+                        && let Some(task) = tasks.iter().find(|t| &t.id == id)
+                    {
+                        append_input_text(
+                            &mut inline,
+                            &format!("\n[mentions task-{}: {}]", task.number, task.title),
+                        );
+                    }
+                }
+                Mention::File { path } => {
+                    append_input_text(&mut inline, &format!("\n[mentions the file {path}]"));
+                }
+                Mention::Folder { path } => {
+                    append_input_text(&mut inline, &format!("\n[mentions the folder {path}]"));
+                }
+                Mention::Chat { id, title } => {
+                    append_input_text(&mut inline, &self.mentioned_chat(id, title).await);
+                }
+                Mention::Page { id, title } => {
+                    append_input_text(&mut inline, &super::page_tools::page_note(id, title));
+                }
+                Mention::BrowserTab { tab, title, url } => {
+                    append_input_text(&mut inline, &browser_tab_note(tab, title, url));
+                }
+            }
+        }
+        inline
     }
 
     /// Another conversation the user @-mentioned, as context: its latest messages on the
@@ -3387,12 +3463,12 @@ impl SessionManager {
     /// Where `attachment` is copied for the session to read, copied once per turn (`copied`).
     async fn copied_file(
         &self,
-        conv: &Arc<ConvLive>,
+        at: &FilesAt<'_>,
         attachment: &AttachmentRef,
         copied: &mut HashMap<String, Option<InputFile>>,
     ) -> Option<PathBuf> {
         if !copied.contains_key(&attachment.id) {
-            let file = self.attachment_file(conv, attachment).await;
+            let file = self.attachment_file(at, attachment).await;
             copied.insert(attachment.id.clone(), file);
         }
         copied
@@ -3405,33 +3481,41 @@ impl SessionManager {
     /// paste sent whole.
     async fn whole_paste(
         &self,
-        conv: &Arc<ConvLive>,
+        at: &FilesAt<'_>,
+        kind: ConversationKind,
         attachment: &AttachmentRef,
         pasted: &str,
         copied: &mut HashMap<String, Option<InputFile>>,
     ) -> Option<PathBuf> {
-        if conv.kind != ConversationKind::Session || pasted.len() <= INLINE_TEXT_MAX_BYTES {
+        if kind != ConversationKind::Session || pasted.len() <= INLINE_TEXT_MAX_BYTES {
             return None;
         }
-        self.copied_file(conv, attachment, copied).await
+        self.copied_file(at, attachment, copied).await
     }
 
     async fn attachment_file(
         &self,
-        conv: &Arc<ConvLive>,
+        at: &FilesAt<'_>,
         attachment: &AttachmentRef,
     ) -> Option<InputFile> {
-        let area = match self.core.conversation(&conv.id) {
-            Ok(record) => super::lifecycle::conversation_owner(&record).1,
-            Err(_) if conv.kind == ConversationKind::Session => "orch",
-            Err(_) => "chat",
+        let dir = match at {
+            FilesAt::Conversation(conv) => {
+                let area = match self.core.conversation(&conv.id) {
+                    Ok(record) => super::lifecycle::conversation_owner(&record).1,
+                    Err(_) if conv.kind == ConversationKind::Session => "orch",
+                    Err(_) => "chat",
+                };
+                self.owned_dir(area, &conv.id.0).join("attachments")
+            }
+            FilesAt::Worker(scratch) => scratch.join("attachments"),
         };
-        let dir = self.owned_dir(area, &conv.id.0).join("attachments");
-        let path = dir.join(format!(
+        // Named by its content too: two files of one name never overwrite each other.
+        let name = format!(
             "{}-{}",
             &attachment.id[..attachment.id.len().min(12)],
             safe_file_name(&attachment.name)
-        ));
+        );
+        let path = dir.join(&name);
         let bytes = self
             .core
             .store()
@@ -3439,10 +3523,14 @@ impl SessionManager {
             .get(attachment.id.parse::<brigadier_store::BlobHash>().ok()?)
             .await
             .ok()??;
-        let target = path.clone();
+        let worker = matches!(at, FilesAt::Worker(_));
         super::blocking(move || {
+            if worker {
+                // The worker runs meanwhile: never written through its links.
+                return super::outputs::write_unfollowed(&dir, &name, &bytes);
+            }
             std::fs::create_dir_all(&dir).map_err(|err| Error::Invalid(err.to_string()))?;
-            std::fs::write(&target, bytes).map_err(|err| Error::Invalid(err.to_string()))
+            std::fs::write(dir.join(&name), bytes).map_err(|err| Error::Invalid(err.to_string()))
         })
         .await
         .ok()?;
@@ -5611,6 +5699,8 @@ fn name_inline_images(
         let sent = copied
             .get(&attachment.id)
             .and_then(Option::as_ref)
+            // Only images go as images; another file copied for the turn is named in its text.
+            .filter(|_| is_image(&attachment.mime))
             .map(|file| {
                 files.push(InputFile {
                     path: file.path.clone(),
@@ -5686,6 +5776,31 @@ fn place_inline_image(text: &mut String, marker: &str, n: u32, note: &str) {
             text,
             &format!("[Image #{n}, pasted with this message: {note}]"),
         );
+    }
+}
+
+/// Where a message's files are written for the CLI that reads them.
+pub(super) enum FilesAt<'a> {
+    /// The conversation's own folder.
+    Conversation(&'a Arc<ConvLive>),
+    /// A worker's scratch folder.
+    Worker(PathBuf),
+}
+
+/// A turn's input from its images and its parts in order.
+fn merged_input(files: Vec<InputFile>, ordered: Vec<InputPart>) -> TurnInput {
+    // Row images keep today's image-first order. Inline images stay in the user text.
+    let mut merged: Vec<_> = files.into_iter().map(InputPart::Image).collect();
+    // Joining adjacent text preserves today's single text block for ordinary turns.
+    for part in ordered {
+        match (merged.last_mut(), part) {
+            (Some(InputPart::Text(previous)), InputPart::Text(text)) => previous.push_str(&text),
+            (_, part) => merged.push(part),
+        }
+    }
+    TurnInput {
+        parts: merged,
+        files: Vec::new(),
     }
 }
 

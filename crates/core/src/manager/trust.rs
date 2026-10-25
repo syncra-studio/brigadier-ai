@@ -78,6 +78,7 @@ impl SessionManager {
             failures
         };
         tracing::info!(project = %id, path, trusted, ?failures, "folder trust decided");
+        self.plugin_projects_changed();
         Ok(FolderTrustReport { project, failures })
     }
 

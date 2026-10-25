@@ -23,8 +23,8 @@ use std::time::Duration;
 use brigadier_git::{Oid, PatchOutcome, WorktreeSpec};
 use brigadier_providers::policy;
 use brigadier_providers::{
-    ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider, InputFile, Origin,
-    ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider, InputFile, InputPart,
+    Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -809,6 +809,8 @@ impl SessionManager {
             stop_hook: None,
             naked_worker: task.plain.is_some(),
             native_compaction: None,
+            // Its temp folder names its session, so Delete and the sweep find it (D7).
+            temp_tag: Some(task.conversation_id.short().to_owned()),
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
@@ -951,21 +953,28 @@ impl SessionManager {
     }
 
     /// Starts a worker whose CLI session stopped (the conversation hibernated, or Brigadier
-    /// restarted) again, resuming its CLI session with `text`.
-    async fn revive_worker(&self, live: &Arc<TaskLive>, task: &Task, text: String) -> Result<()> {
+    /// restarted) again, resuming its CLI session with `input`.
+    async fn revive_worker(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        input: TurnInput,
+    ) -> Result<()> {
         // One start at a time: a worker resumed meanwhile takes the message in the turn it
         // runs.
         let _handing = live.reroute.lock().await;
         if let Some(cli) = live.cli().await {
             return cli
                 .session
-                .steer(TurnInput::text(text))
+                .steer(input)
                 .await
                 .map_err(|err| Error::Provider(err.to_string()));
         }
         // Its generation closed at a hand-off (D14): the message goes to its successor.
         if self.worker_seam_closed(task).await {
-            return self.worker_successor(live, task, vec![text]).await;
+            return self
+                .worker_successor(live, task, vec![held_text(&input)])
+                .await;
         }
         let Some(native_id) = self.last_worker_native_id(task).await else {
             return Err(Error::Invalid(format!(
@@ -973,13 +982,8 @@ impl SessionManager {
                 task.number
             )));
         };
-        self.launch_worker(
-            live,
-            task,
-            Origin::Resume { native_id },
-            TurnInput::text(text),
-        )
-        .await
+        self.launch_worker(live, task, Origin::Resume { native_id }, input)
+            .await
     }
 
     /// The worker's CLI session to resume: the one recorded on the task, else (a task recorded
@@ -1169,6 +1173,8 @@ impl SessionManager {
                             path: worktree.to_string_lossy().into_owned(),
                         },
                     )
+                    .await?;
+                self.note_branch_namespace(conversation_id, repo, branch)
                     .await?;
                 let (git, repo_path, path, base_name, name, from) = (
                     self.git.clone(),
@@ -1907,18 +1913,32 @@ impl SessionManager {
             })
             .await?;
         }
-        self.send_to_worker(conversation_id, task, text).await
+        self.send_worker_text(conversation_id, task, text).await
     }
 
     /// [`Self::message_worker`] without its being something new from the session: a turn
     /// going on by itself after a restart (D9 a).
-    pub(crate) async fn send_to_worker(
+    pub(crate) async fn send_worker_text(
         &self,
         conversation_id: &ConversationId,
         task: &Task,
         text: String,
     ) -> Result<()> {
         drop(self.enter(conversation_id)?);
+        self.deliver_to_worker(conversation_id, task, TurnInput::text(text))
+            .await
+    }
+
+    /// `input` to a worker's CLI: into its running turn, or as a new turn of the session its
+    /// CLI keeps (started again when it had stopped). An error means its CLI did not take it;
+    /// once it did, failing to record the worker running is only logged, so nobody sends it
+    /// twice.
+    pub(crate) async fn deliver_to_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        input: TurnInput,
+    ) -> Result<()> {
         if task.state.is_final() {
             return Err(Error::Invalid(format!("worker {} has ended", task.number)));
         }
@@ -1926,29 +1946,34 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         // Handing off (D14): its successor's first input carries it.
         if state.seam.as_ref().is_some_and(|seam| seam.holds()) {
-            state.seam_held.push(text);
+            state.seam_held.push(held_text(&input));
             return Ok(());
         }
         let Some(cli) = state.cli.clone() else {
             drop(state);
-            return self.revive_worker(&live, task, text).await;
+            return self.revive_worker(&live, task, input).await;
         };
-        let input = TurnInput::text(text);
         if state.busy {
             cli.session.steer(input).await
         } else {
-            state.busy = true;
-            cli.session.send(input).await
+            // Busy only once a turn really started: a refused send leaves it idle.
+            let sent = cli.session.send(input).await;
+            state.busy = sent.is_ok();
+            sent
         }
         .map_err(|err| Error::Provider(err.to_string()))?;
         drop(state);
-        self.update_task(conversation_id, &task.id, |task| {
-            if !task.state.is_final() {
-                task.state = TaskState::Running;
-                task.blocked_reason = None;
-            }
-        })
-        .await?;
+        let running = self
+            .update_task(conversation_id, &task.id, |task| {
+                if !task.state.is_final() {
+                    task.state = TaskState::Running;
+                    task.blocked_reason = None;
+                }
+            })
+            .await;
+        if let Err(err) = running {
+            tracing::warn!(task = %task.id, error = %err, "could not record a messaged worker running");
+        }
         Ok(())
     }
 
@@ -2522,6 +2547,25 @@ pub(crate) fn temp_dir_in_tmp() -> Option<PathBuf> {
 
 /// The reason a "Stopped" row gives for the user's Stop all.
 pub(crate) const USER_STOP_REASON: &str = "Stopped by the user";
+
+/// A message a worker's hand-off holds for its successor, which takes text (D14): an image
+/// goes by its path, like an attached file.
+fn held_text(input: &TurnInput) -> String {
+    input
+        .parts_with_file_notes()
+        .into_iter()
+        .map(|part| match part {
+            InputPart::Text(text) => text,
+            InputPart::Image(file) => format!(
+                "[Attached image \"{}\" ({}): {}]",
+                file.name,
+                file.mime,
+                file.path.display()
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// The start of a worker that was stopped as it started.
 fn stopped_as_it_started(task: &Task) -> Error {

@@ -1477,3 +1477,87 @@ fn a_codex_project_entry_that_only_switches_a_server_keeps_the_users_command() {
     let figma = here.servers.iter().find(|s| s.name == "figma").unwrap();
     assert!(!here.server_native(figma, &session));
 }
+
+#[test]
+fn a_disabled_server_is_kept_off_and_raw_text_is_kept_as_written() {
+    let home = fixture("disabled-raw");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {
+            "quiet": {"command": "q-mcp", "disabled": true},
+            "tmpl": {"command": "t-mcp", "args": ["--key=${KEY}"], "env": {"A": "plain"}},
+            "plain": {"type": "http", "url": "https://mcp.example.com/${PATH_PART}"}}}"#,
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.fromenv]\ncommand = \"e-mcp\"\nenv_vars = [\"TOKEN\"]\n",
+    );
+    let catalog = Catalog::read(
+        &roots(&home, &[("KEY", "secret-key"), ("PATH_PART", "mcp")]),
+        None,
+    );
+    // Switched off, but still the user's: kept with the switched-off servers, never loaded.
+    assert!(!catalog.servers.iter().any(|server| server.name == "quiet"));
+    let quiet = catalog
+        .off
+        .servers
+        .iter()
+        .find(|server| server.name == "quiet")
+        .unwrap();
+    assert!(quiet.disabled);
+    // What a variable expands to never replaces what the config wrote.
+    let tmpl = catalog.server("claude:user:tmpl").unwrap();
+    assert_eq!(tmpl.written.args, ["--key=${KEY}"]);
+    assert!(tmpl.templated);
+    let plain = catalog.server("claude:user:plain").unwrap();
+    assert_eq!(
+        plain.written.url.as_deref(),
+        Some("https://mcp.example.com/${PATH_PART}")
+    );
+    assert!(plain.templated);
+    assert!(catalog.server("codex:user:fromenv").unwrap().templated);
+}
+
+#[test]
+fn a_change_reads_again_then_tells_each_listener() {
+    let home = fixture("listeners");
+    let registry = Registry::new(roots(&home, &[]));
+    let told = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = told.clone();
+    registry.on_change(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+    });
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {"late": {"command": "late-mcp"}}}"#,
+    );
+    registry.changed();
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+    assert!(registry.catalog(None).server("claude:user:late").is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_watcher_looks_at_each_projects_own_configs_and_skills() {
+    let home = fixture("watch-projects");
+    let project = home.join("proj");
+    let elsewhere = home.join("elsewhere/linked");
+    skill(&elsewhere, "linked", "Linked from elsewhere.");
+    std::fs::create_dir_all(project.join(".claude/skills")).unwrap();
+    link(&elsewhere, &project.join(".claude/skills/linked"));
+    let registry = Registry::new(roots(&home, &[]));
+    registry.watch_projects(std::slice::from_ref(&project));
+    let watched = registry.watched();
+    for file in [
+        project.join(".mcp.json"),
+        project.join(".codex/config.toml"),
+        project.join(".claude/settings.json"),
+        project.join(".claude/settings.local.json"),
+    ] {
+        assert!(watched.files.contains(&file), "{}", file.display());
+    }
+    assert!(watched.trees.contains(&project.join(".agents/skills")));
+    // A project skill linked from elsewhere: its own folder too.
+    let real = std::fs::canonicalize(&elsewhere).unwrap();
+    assert!(watched.trees.contains(&real), "{:?}", watched.trees);
+}

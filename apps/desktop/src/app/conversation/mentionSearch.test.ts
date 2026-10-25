@@ -104,3 +104,17 @@ test("the session's Browser tabs are a section of their own, and a query finds o
   ]);
   assert.deepEqual(mentionSections("checko", { ...sources, tabs })[0]?.rows[0]?.mention.type, "browserTab");
 });
+
+test("the workers a message can go to directly have a section of their own, and a query finds each after its mention", () => {
+  const direct = { ...sources, direct: sources.workers };
+  const sections = mentionSections("", direct);
+  assert.deepEqual(sections.map((section) => section.title), ["Workers", "Message directly", "Files", "Folders", "Chats"]);
+  assert.deepEqual(sections[1]?.rows.map((row) => [row.name, row.direct, row.trailing]), [["Compose the release notes", true, undefined]]);
+  const [ranked] = mentionSections("release", direct);
+  assert.deepEqual(ranked?.rows.slice(0, 2).map((row) => [row.name, row.direct ?? false, row.detail]), [
+    ["Compose the release notes", false, undefined],
+    ["Compose the release notes", true, "Message directly"],
+  ]);
+  // None to message, no section.
+  assert.equal(mentionSections("", sources).some((section) => section.title === "Message directly"), false);
+});

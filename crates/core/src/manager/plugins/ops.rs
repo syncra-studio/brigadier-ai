@@ -1,28 +1,26 @@
-//! Settings › Plugins' actions: a switch, Add, Use everywhere and its Undo, Remove and Update.
+//! Settings › Plugins' actions on the Library and plugins: placing a plugin per agent (on in
+//! every project, in some, off), Add, Update, and taking a Library plugin away.
 //!
 //! Every action is carried out by each agent's own commands (and, for Codex in one project, the
 //! project's own file: D8), planned by its adapter, so a plain `claude` or `codex` started in a
 //! terminal gets what the page shows. Nothing here names an agent: each runs through
-//! [`adapters()`].
+//! [`adapters()`]. Sharing an agent's own items with the others is [`super::share`]'s.
 //!
 //! - A Library item (`lib:<name>`) is a plugin every agent installs. Every project: on in the
 //!   user's scope. One project: on in that project's scope; when it is off in the user's scope
 //!   that makes it that project's only (Claude Code's `--scope local`, Codex's project file).
 //! - Another marketplace's plugin is switched the same way; it isn't installed by Brigadier.
-//! - An agent's own server or skill (not a plugin's) goes into the Library first (Use
-//!   everywhere: D9), keeping the original until every agent has the copy, for Undo (D5).
+//! - What the old Use everywhere moved aside ([`Moved`]) stays the user's: Remove puts it back.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::{AgentAdapter, Place, Step, adapter, adapters, apply, owner};
+use brigadier_registry::adapter::{AgentAdapter, Place, Step, adapter, adapters, apply};
 use brigadier_registry::add_parse;
 use brigadier_registry::item::{Item, ServerSpec, SkillSource, SkillSpec, TransportSpec};
-use brigadier_registry::library::{
-    self, Entry, Library, LibraryError, Origin, SecretSink, plugin_id,
-};
-use brigadier_registry::{Agent, Catalog, Roots, Secret, Skill, SkillRoot, Source, Transport};
+use brigadier_registry::library::{self, Entry, Library, Origin, SecretSink, plugin_id};
+use brigadier_registry::{Agent, Catalog, Roots, Secret};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -129,7 +127,7 @@ impl Ctx<'_> {
     }
 
     /// Carries out `steps` for `adapter`.
-    fn run(&self, adapter: &dyn AgentAdapter, steps: &[Step]) -> Result<(), String> {
+    pub(super) fn run(&self, adapter: &dyn AgentAdapter, steps: &[Step]) -> Result<(), String> {
         if steps.is_empty() {
             return Ok(());
         }
@@ -145,75 +143,9 @@ impl Ctx<'_> {
         .map(|_| ())
         .map_err(|err| err.to_string())
     }
-
-    /// Runs `plan` for each agent (or only `only`), telling the page how each goes; whether
-    /// every agent's part went.
-    fn each(
-        &self,
-        only: Option<Agent>,
-        plan: impl FnMut(&dyn AgentAdapter) -> Result<Option<Vec<Step>>, String>,
-    ) -> bool {
-        self.each_of(|agent| only.is_none_or(|only| only == agent), plan)
-    }
-
-    /// [`Self::each`] for the agents `keep` takes.
-    fn each_of(
-        &self,
-        keep: impl Fn(Agent) -> bool,
-        mut plan: impl FnMut(&dyn AgentAdapter) -> Result<Option<Vec<Step>>, String>,
-    ) -> bool {
-        let mut all = true;
-        for adapter in adapters() {
-            let agent = adapter.agent();
-            if !keep(agent) {
-                continue;
-            }
-            (self.report)(agent, PluginStep::Working);
-            let step = match plan(adapter) {
-                Ok(None) => PluginStep::Skipped {
-                    reason: format!("{} doesn't have it.", adapter.label()),
-                },
-                Ok(Some(steps)) => match self.run(adapter, &steps) {
-                    Ok(()) => PluginStep::Done,
-                    Err(reason) => PluginStep::Failed { reason },
-                },
-                Err(reason) => PluginStep::Failed { reason },
-            };
-            all &= !matches!(step, PluginStep::Failed { .. });
-            (self.report)(agent, step);
-        }
-        all
-    }
 }
 
-/// What a page key names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Target {
-    Library(String),
-    /// Another marketplace's plugin, by its name, and the item in it.
-    Plugin(String),
-    Server(String),
-    Skill(String),
-    /// Another app's server, by its id.
-    Other(String),
-}
-
-fn target(key: &str) -> Result<Target, String> {
-    let (kind, name) = key
-        .split_once(':')
-        .ok_or_else(|| format!("Brigadier doesn't know \"{key}\"."))?;
-    let name = name.to_owned();
-    Ok(match kind {
-        "lib" => Target::Library(name),
-        "plugin" => Target::Plugin(name.split('/').next().unwrap_or_default().to_owned()),
-        "server" => Target::Server(name),
-        "skill" => Target::Skill(name),
-        "other" => Target::Other(name),
-        _ => return Err(format!("Brigadier doesn't know \"{key}\".")),
-    })
-}
-
-fn just_me(project: &Path) -> Place {
+pub(super) fn just_me(project: &Path) -> Place {
     Place::Project {
         path: project.to_owned(),
         shared: false,
@@ -240,7 +172,7 @@ fn kept_on_in(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str, project: &Pat
 
 /// `agent`'s id for the plugin named `name` (another marketplace's), wherever it has it, on or
 /// off.
-fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<String> {
+pub(super) fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<String> {
     std::iter::once(None)
         .chain(ctx.projects.iter().map(|path| Some(path.as_path())))
         .find_map(|project| {
@@ -254,149 +186,47 @@ fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<String> {
         })
 }
 
-/// The steps that turn plugin `id` on or off for `adapter`'s agent: in `project`, else in every
-/// project. `library`: it is the Library's, installed when missing.
-fn plugin_plan(
-    ctx: &Ctx<'_>,
-    adapter: &dyn AgentAdapter,
-    id: &str,
-    project: Option<&Path>,
-    on: bool,
-    library: bool,
-) -> Result<Option<Vec<Step>>, String> {
-    let agent = adapter.agent();
-    let installed = adapter.installed(ctx.roots, id);
-    let unsupported = |err: brigadier_registry::adapter::Unsupported| err.0;
-    let mut steps = Vec::new();
-    let install = |place: &Place, steps: &mut Vec<Step>| -> Result<(), String> {
-        steps.extend(ctx.library.market_steps(adapter));
-        steps.extend(adapter.install_plugin(id, place).map_err(unsupported)?);
-        Ok(())
-    };
-    match project {
-        Some(path) => {
-            let place = just_me(path);
-            let here = plugin_on(&ctx.read(Some(path)), agent, id, false);
-            if here == on {
-                return Ok(Some(steps));
-            }
-            if on && !installed && !here {
-                if !library {
-                    return Ok(None);
-                }
-                install(&place, &mut steps)?;
-            } else {
-                steps.extend(adapter.set_plugin(id, &place, on).map_err(unsupported)?);
-            }
-        }
-        None if on => {
-            if !installed {
-                if !library {
-                    return Ok(None);
-                }
-                install(&Place::Everywhere, &mut steps)?;
-            }
-            steps.extend(
-                adapter
-                    .set_plugin(id, &Place::Everywhere, true)
-                    .map_err(unsupported)?,
-            );
-        }
-        None => {
-            if installed {
-                steps.extend(
-                    adapter
-                        .set_plugin(id, &Place::Everywhere, false)
-                        .map_err(unsupported)?,
-                );
-            }
-            // Where a project turns it on by itself, it stays on: each is turned off too.
-            for path in ctx.projects {
-                if kept_on_in(ctx, adapter, id, path) {
-                    steps.extend(
-                        adapter
-                            .set_plugin(id, &just_me(path), false)
-                            .map_err(unsupported)?,
-                    );
-                }
-            }
-            if !installed && steps.is_empty() {
-                return Ok(None);
-            }
-        }
-    }
-    Ok(Some(steps))
-}
-
-/// Whether `adapter`'s agent has its own server `name` (not a plugin's), on or off.
-fn has_server(catalog: &Catalog, adapter: &dyn AgentAdapter, name: &str) -> bool {
-    catalog
-        .servers
-        .iter()
-        .chain(&catalog.off.servers)
-        .any(|server| server.name == name && server.plugin.is_none() && adapter.owns(server.source))
-}
-
-const ADD_TO_EVERY_AGENT_FIRST: &str =
-    "Add to every agent first: then every agent can turn it on or off per project.";
-
-/// Turns the item `key` on or off: in `project`, else in every project; for one agent only
-/// when `only`.
-pub(crate) fn switch(
-    ctx: &Ctx<'_>,
-    key: &str,
-    project: Option<&Path>,
-    on: bool,
-    only: Option<Agent>,
-) -> Result<bool, String> {
-    Ok(match target(key)? {
-        Target::Library(name) => {
-            if ctx.library.entry(&name).is_none() {
-                return Err(format!("{name} isn't in your Library any more."));
-            }
-            let id = plugin_id(&name);
-            ctx.each(only, |adapter| {
-                plugin_plan(ctx, adapter, &id, project, on, true)
-            })
-        }
-        Target::Plugin(name) => ctx.each(only, |adapter| {
-            match plugin_id_of(ctx, adapter.agent(), &name) {
-                Some(id) => plugin_plan(ctx, adapter, &id, project, on, false),
-                None => Ok(None),
-            }
-        }),
-        Target::Server(name) => {
-            let place = project.map_or(Place::Everywhere, just_me);
-            let catalog = ctx.read(project);
-            ctx.each(only, |adapter| {
-                if !has_server(&catalog, adapter, &name) {
-                    return Ok(None);
-                }
-                adapter
-                    .set_server(&name, &place, on)
-                    .map(Some)
-                    .map_err(|err| err.0)
-            })
-        }
-        Target::Skill(_) | Target::Other(_) => return Err(ADD_TO_EVERY_AGENT_FIRST.to_owned()),
-    })
-}
-
-/// Where one agent has a Library item: what Settings › Plugins' place picker sets, what its
-/// Undo and a failed move put back.
+/// Where one agent has a plugin: what the scope sets, and what a failed move puts back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Placed {
     /// It has it at all: installed, for every project or one, or on somewhere.
-    has: bool,
+    pub has: bool,
     /// On in the user's scope: every project, but where a project turns it off.
-    global: bool,
+    pub global: bool,
     /// The user's projects it is on in.
-    on_in: Vec<PathBuf>,
+    pub on_in: Vec<PathBuf>,
 }
 
 impl Placed {
+    /// Not had at all.
+    pub fn none() -> Self {
+        Self {
+            has: false,
+            global: false,
+            on_in: Vec::new(),
+        }
+    }
+
+    /// On in every project (`None`) or in exactly `projects`, of the user's `all`.
+    pub fn at(scope: Option<&[PathBuf]>, all: &[PathBuf]) -> Self {
+        Self {
+            has: true,
+            global: scope.is_none(),
+            on_in: scope.map_or_else(|| all.to_vec(), <[PathBuf]>::to_vec),
+        }
+    }
+
+    /// Installed, off in every project.
+    pub fn off() -> Self {
+        Self {
+            has: true,
+            global: false,
+            on_in: Vec::new(),
+        }
+    }
+
     /// The same places, whatever order the projects come in.
-    fn same(&self, other: &Self) -> bool {
+    pub fn same(&self, other: &Self) -> bool {
         let sorted = |paths: &[PathBuf]| {
             let mut paths = paths.to_vec();
             paths.sort();
@@ -408,10 +238,7 @@ impl Placed {
     }
 }
 
-/// Every agent's places before a change: what its Undo puts back.
-pub(crate) type Before = Vec<(Agent, Placed)>;
-
-fn placed(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
+pub(super) fn placed(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
     let agent = adapter.agent();
     let global = plugin_on(&ctx.read(None), agent, id, false);
     let on_in: Vec<PathBuf> = ctx
@@ -598,7 +425,7 @@ fn moves_to(want: &Placed, projects: &[PathBuf]) -> [Vec<Move>; 3] {
 }
 
 /// A folder's name, as the page shows a project.
-fn folder_name(path: &Path) -> String {
+pub(super) fn folder_name(path: &Path) -> String {
     path.file_name().map_or_else(
         || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
@@ -708,23 +535,31 @@ fn settings_left(before: &[(Agent, Held)], after: &[(Agent, Held)]) -> Vec<Strin
 }
 
 /// Carries out one agent's steps.
-type Runner<'a> = &'a dyn Fn(&dyn AgentAdapter, &[Step]) -> Result<(), String>;
+pub(crate) type Runner<'a> = &'a dyn Fn(&dyn AgentAdapter, &[Step]) -> Result<(), String>;
 
 /// Brings each agent of `wants` to its places, every agent taking each round before the next
 /// starts, then reads each again: an agent that isn't where it should be failed.
+/// `seen` keeps how each agent's settings read after its last move: one that reads otherwise
+/// later was changed by someone else meanwhile.
 fn drive(
     ctx: &Ctx<'_>,
     id: &str,
     wants: &[(Agent, Placed)],
     run: Runner<'_>,
+    seen: &mut Vec<(Agent, Held)>,
 ) -> Result<(), (Agent, String)> {
     for round in 0..3 {
         for (agent, want) in wants {
             let adapter = adapter(*agent);
-            for step in &moves_to(want, ctx.projects)[round] {
+            let moves = &moves_to(want, ctx.projects)[round];
+            for step in moves {
                 move_steps(ctx, adapter, id, step)
                     .and_then(|steps| run(adapter, &steps))
                     .map_err(|reason| (*agent, reason))?;
+            }
+            if !moves.is_empty() {
+                seen.retain(|(known, _)| known != agent);
+                seen.push((*agent, held(ctx, adapter, id)));
             }
         }
     }
@@ -771,7 +606,10 @@ fn put_back_with(ctx: &Ctx<'_>, id: &str, before: &[(Agent, Placed)], run: Runne
 /// Brings each agent of `wants` to its places for Library plugin `id`. If a move fails, those
 /// agents go back where they had it, as far as they can, and the error says what was left
 /// changed: "Nothing was changed" only when the agents' settings read the same as before.
-fn change(
+///
+/// An agent whose settings someone else changed since this change last moved it (a terminal,
+/// the user's own editor) isn't put back: what they did stays.
+pub(super) fn change(
     ctx: &Ctx<'_>,
     id: &str,
     wants: &[(Agent, Placed)],
@@ -787,7 +625,8 @@ fn change(
     for (agent, _) in wants {
         (ctx.report)(*agent, PluginStep::Working);
     }
-    let Err((agent, reason)) = drive(ctx, id, wants, run) else {
+    let mut seen = Vec::new();
+    let Err((agent, reason)) = drive(ctx, id, wants, run, &mut seen) else {
         for (agent, _) in wants {
             (ctx.report)(*agent, PluginStep::Done);
         }
@@ -801,7 +640,13 @@ fn change(
     );
     let back: Vec<(Agent, Placed)> = before
         .iter()
-        .filter(|(agent, _)| wants.iter().any(|(wanted, _)| wanted == agent))
+        .filter(|(other, _)| wants.iter().any(|(wanted, _)| wanted == other))
+        .filter(|(other, _)| {
+            *other == agent
+                || seen
+                    .iter()
+                    .all(|(known, then)| known != other || *then == held(ctx, adapter(*other), id))
+        })
         .map(|(agent, held)| (*agent, held.placed.clone()))
         .collect();
     put_back_with(ctx, id, &back, run);
@@ -822,18 +667,18 @@ fn change(
     })
 }
 
-/// The Library plugin id of page key `key`, which must be a Library item's.
+/// The Library plugin id of `lib:<name>`.
 fn library_id(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
-    let Target::Library(name) = target(key)? else {
-        return Err(ADD_TO_EVERY_AGENT_FIRST.to_owned());
-    };
-    if ctx.library.entry(&name).is_none() {
+    let name = key
+        .strip_prefix("lib:")
+        .ok_or_else(|| format!("Brigadier doesn't know \"{key}\"."))?;
+    if ctx.library.entry(name).is_none() {
         return Err(format!("{name} isn't in your Library any more."));
     }
-    Ok(plugin_id(&name))
+    Ok(plugin_id(name))
 }
 
-fn every_placed(ctx: &Ctx<'_>, id: &str) -> Before {
+fn every_placed(ctx: &Ctx<'_>, id: &str) -> Vec<(Agent, Placed)> {
     adapters()
         .into_iter()
         .map(|adapter| (adapter.agent(), placed(ctx, adapter, id)))
@@ -841,63 +686,29 @@ fn every_placed(ctx: &Ctx<'_>, id: &str) -> Before {
 }
 
 /// Puts Library item `key` on in every project (`places` `None`) or in exactly the user's
-/// projects `places`, for every agent. Each agent's places before, for its Undo.
-pub(crate) fn set_places(
+/// projects `places`, for every agent, carrying out each agent's steps with `run`.
+#[cfg(test)]
+pub(super) fn set_places_with(
     ctx: &Ctx<'_>,
     key: &str,
     places: Option<&[PathBuf]>,
-) -> Result<Before, String> {
-    set_places_with(ctx, key, places, &|adapter, steps| ctx.run(adapter, steps))
-}
-
-/// [`set_places`], carrying out each agent's steps with `run`.
-fn set_places_with(
-    ctx: &Ctx<'_>,
-    key: &str,
-    places: Option<&[PathBuf]>,
-    run: Runner<'_>,
-) -> Result<Before, String> {
-    let id = library_id(ctx, key)?;
-    if places.is_some_and(<[PathBuf]>::is_empty) {
-        return Err("Pick a project, or Global.".to_owned());
-    }
-    let want = Placed {
-        has: true,
-        global: places.is_none(),
-        on_in: places.map_or_else(|| ctx.projects.to_vec(), <[PathBuf]>::to_vec),
-    };
-    let before = every_placed(ctx, &id);
-    let wants: Vec<(Agent, Placed)> = before
-        .iter()
-        .map(|(agent, _)| (*agent, want.clone()))
-        .collect();
-    change(ctx, &id, &wants, run)?;
-    Ok(before)
-}
-
-/// The place picker's Undo: each agent back exactly where `before` had it, missing agents too.
-pub(crate) fn put_back(ctx: &Ctx<'_>, key: &str, before: &Before) -> Result<(), String> {
-    put_back_places_with(ctx, key, before, &|adapter, steps| ctx.run(adapter, steps))
-}
-
-fn put_back_places_with(
-    ctx: &Ctx<'_>,
-    key: &str,
-    before: &Before,
     run: Runner<'_>,
 ) -> Result<(), String> {
     let id = library_id(ctx, key)?;
-    change(ctx, &id, before, run)
+    if places.is_some_and(<[PathBuf]>::is_empty) {
+        return Err("Pick a project, or All projects.".to_owned());
+    }
+    let want = Placed::at(places, ctx.projects);
+    let wants: Vec<(Agent, Placed)> = adapters()
+        .into_iter()
+        .map(|adapter| (adapter.agent(), want.clone()))
+        .collect();
+    change(ctx, &id, &wants, run)
 }
 
-/// Add to every agent, for a Library item some agents lack: each of them gets it where the
-/// others have it, every project's switch included (a project the others leave it off in stays
-/// off); when no agent has it anywhere, installed and off.
-pub(crate) fn add_missing(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
-    add_missing_with(ctx, key, &|adapter, steps| ctx.run(adapter, steps))
-}
-
-fn add_missing_with(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), String> {
+/// Gives Library item `key` to the agents that lack it, where the others have it (installed
+/// and off when no agent has it on anywhere).
+pub(super) fn add_missing_with(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), String> {
     let id = library_id(ctx, key)?;
     let now = every_placed(ctx, &id);
     let others: Vec<&Placed> = now
@@ -1015,10 +826,19 @@ pub(crate) fn check_add(home: &Path, text: &str, name: Option<&str>) -> PluginAd
 }
 
 /// Every MCP server name the agents know, in every project, but those of `except`'s plugin.
-fn server_names(ctx: &Ctx<'_>, except: Option<&str>) -> Vec<String> {
+pub(super) fn server_names(ctx: &Ctx<'_>, except: Option<&str>) -> Vec<String> {
     let mut names = Vec::new();
     for project in std::iter::once(None).chain(ctx.projects.iter().map(|p| Some(p.as_path()))) {
-        for server in ctx.read(project).servers {
+        let catalog = ctx.read(project);
+        for server in catalog.servers.into_iter().chain(catalog.off.servers) {
+            if matches!(
+                server.source,
+                brigadier_registry::Source::Desktop
+                    | brigadier_registry::Source::CursorUser
+                    | brigadier_registry::Source::CursorProject
+            ) {
+                continue;
+            }
             let ours = except.is_some_and(|name| {
                 server
                     .plugin
@@ -1097,8 +917,6 @@ fn check_started(ctx: &Ctx<'_>, entry: &Entry) -> Option<String> {
 /// What Add's Advanced asks for beyond the name and where.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AddOptions {
-    /// Only these agents get it (`None`: every agent).
-    pub agents: Option<Vec<Agent>>,
     /// Set or added to the one pasted server's env (a command) or headers (an address). They
     /// go to the Keychain, as pasted values do, never into a file.
     pub values: BTreeMap<String, String>,
@@ -1135,35 +953,24 @@ fn give_values(items: &mut [Item], values: &BTreeMap<String, String>) -> Result<
     Ok(())
 }
 
-/// Adds what `text` holds to the Library and gives it to every agent (or the ones `options`
-/// picks): in `project` only ("just me" unless `shared`), else everywhere. Its keys, and what
-/// the user should know.
+/// Adds what `text` holds to the Library and gives it to every agent: in every project
+/// (`scope` `None`) or in exactly the user's projects `scope`. `shared` (the CLI's `--shared`,
+/// one project only) installs it in the form the project commits, for the whole team. Its
+/// keys, and what the user should know.
 pub(crate) fn add(
     ctx: &Ctx<'_>,
     text: &str,
     name: Option<&str>,
-    project: Option<&Path>,
+    scope: Option<&[PathBuf]>,
     shared: bool,
     options: &AddOptions,
+    run: Runner<'_>,
 ) -> Result<(Vec<String>, Option<String>), String> {
-    if options.agents.as_ref().is_some_and(Vec::is_empty) {
-        return Err("Pick at least one agent to add it to.".to_owned());
+    if scope.is_some_and(<[PathBuf]>::is_empty) {
+        return Err("Pick a project, or All projects.".to_owned());
     }
-    let picked = |agent: Agent| {
-        options
-            .agents
-            .as_ref()
-            .is_none_or(|agents| agents.contains(&agent))
-    };
     let mut items = add_parse::parse(text, name, &ctx.roots.home).map_err(|err| err.to_string())?;
     give_values(&mut items, &options.values)?;
-    let place = match project {
-        Some(path) => Place::Project {
-            path: path.to_owned(),
-            shared,
-        },
-        None => Place::Everywhere,
-    };
     let mut keys = Vec::new();
     let mut warning = None;
     let mut failed = None;
@@ -1192,13 +999,35 @@ pub(crate) fn add(
                 .map_err(|err| err.to_string())?;
         }
         let entry = packed.entry;
-        let all = ctx.each_of(picked, |adapter| {
-            ctx.library
-                .sync(adapter, &entry, &place, false)
-                .map(Some)
-                .map_err(|err| err.0)
-        });
-        if !all {
+        let given = match (shared, scope) {
+            (true, Some([project])) => {
+                let place = Place::Project {
+                    path: project.clone(),
+                    shared: true,
+                };
+                adapters().into_iter().all(|adapter| {
+                    ctx.library
+                        .sync(adapter, &entry, &place, false)
+                        .map_err(|err| err.0)
+                        .and_then(|steps| run(adapter, &steps))
+                        .is_ok()
+                })
+            }
+            (true, _) => {
+                return Err(
+                    "Shared with the team goes to one project: pick just that one.".to_owned(),
+                );
+            }
+            (false, _) => {
+                let want = Placed::at(scope, ctx.projects);
+                let wants: Vec<(Agent, Placed)> = adapters()
+                    .into_iter()
+                    .map(|adapter| (adapter.agent(), want.clone()))
+                    .collect();
+                change(ctx, &entry.id(), &wants, run).is_ok()
+            }
+        };
+        if !given {
             failed = Some(format!("Not every agent could add {name}."));
         }
         if packed.server.is_some()
@@ -1211,11 +1040,30 @@ pub(crate) fn add(
     Ok((keys, failed.or(warning)))
 }
 
-/// What Use everywhere moved, kept for its Undo.
+/// What the old Use everywhere moved: the user's originals, which Remove puts back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Moved {
-    originals: Vec<Original>,
+pub(super) struct Moved {
+    pub originals: Vec<Original>,
+    /// Which of them a Remove has put back already, by index.
+    #[serde(default)]
+    pub restored: Vec<usize>,
+}
+
+/// Keeps what Remove did of `moved` (Library item `name`'s), for a Remove tried again.
+pub(super) fn write_moved(library: &Library, name: &str, moved: &Moved) -> Result<(), String> {
+    let file = moved_file(library, name);
+    let text = serde_json::to_string_pretty(moved).map_err(|err| err.to_string())?;
+    let temp = file.with_extension("json.new");
+    (|| {
+        use std::io::Write;
+        let mut staged = std::fs::File::create(&temp)?;
+        staged.write_all(text.as_bytes())?;
+        staged.sync_all()
+    })()
+    .and_then(|()| std::fs::rename(&temp, &file))
+    .and_then(|()| std::fs::File::open(file.parent().unwrap())?.sync_all())
+    .map_err(|err| format!("Couldn't keep track of {name}'s originals: {err}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1224,7 +1072,7 @@ struct Moved {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-enum Original {
+pub(super) enum Original {
     /// An agent's own server: put back by its own commands. Its values are in the Keychain,
     /// under `secrets`.
     Server {
@@ -1246,7 +1094,7 @@ enum Original {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-enum SavedTransport {
+pub(super) enum SavedTransport {
     Stdio {
         command: String,
         args: Vec<String>,
@@ -1260,14 +1108,46 @@ enum SavedTransport {
 }
 
 impl Original {
-    /// Puts it back as it was.
-    fn restore(&self, ctx: &Ctx<'_>) -> Result<(), String> {
+    /// Already where it was: a skill's folder back, its kept copy gone.
+    pub fn back(&self) -> bool {
         match self {
             Self::Skill { from, kept } => {
+                from.symlink_metadata().is_ok()
+                    && kept
+                        .symlink_metadata()
+                        .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+            }
+            Self::Server { .. } => false,
+        }
+    }
+
+    /// Where a server's values are kept until it is back.
+    pub fn secrets(&self) -> Option<&str> {
+        match self {
+            Self::Server { secrets, .. } => Some(secrets),
+            Self::Skill { .. } => None,
+        }
+    }
+
+    /// Puts it back as it was (a server's values stay kept: [`Self::secrets`]).
+    pub fn restore(&self, ctx: &Ctx<'_>) -> Result<(), String> {
+        match self {
+            Self::Skill { from, kept } => {
+                if self.back() {
+                    return Ok(());
+                }
+                if from.symlink_metadata().is_ok() {
+                    return Err(format!(
+                        "Couldn't put {} back: something is already there.",
+                        from.display()
+                    ));
+                }
                 if let Some(dir) = from.parent() {
                     std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
                 }
                 std::fs::rename(kept, from)
+                    .and_then(|()| std::fs::File::open(from.parent().unwrap())?.sync_all())
+                    .and_then(|()| std::fs::File::open(kept.parent().unwrap())?.sync_all())
                     .map_err(|err| format!("Couldn't put {} back: {err}.", from.display()))
             }
             Self::Server {
@@ -1278,16 +1158,11 @@ impl Original {
                 secrets,
             } => {
                 let mut values = ctx.secrets.load(secrets)?;
-                let mut take = |names: &[String]| -> Vec<(String, Secret)> {
-                    names
-                        .iter()
-                        .map(|name| {
-                            (
-                                name.clone(),
-                                Secret::new(values.remove(name).unwrap_or_default()),
-                            )
-                        })
-                        .collect()
+                let mut take = |names: &[String]| -> Result<Vec<(String, Secret)>, String> {
+                    names.iter().map(|name| {
+                        let value = values.remove(name).ok_or_else(|| format!("Couldn't put the server back: its saved value {name} is missing."))?;
+                        Ok((name.clone(), Secret::new(value)))
+                    }).collect()
                 };
                 let transport = match transport {
                     SavedTransport::Stdio {
@@ -1298,425 +1173,114 @@ impl Original {
                     } => TransportSpec::Stdio {
                         command: command.clone(),
                         args: args.clone(),
-                        env: take(env),
+                        env: take(env)?,
                         cwd: cwd.clone(),
                     },
                     SavedTransport::Http { url, headers } => TransportSpec::Http {
                         url: url.clone(),
-                        headers: take(headers),
+                        headers: take(headers)?,
                     },
                 };
                 let spec = ServerSpec {
                     name: name.clone(),
                     transport,
+                    oauth: None,
                 };
                 let place = project.as_deref().map_or(Place::Everywhere, just_me);
                 let agent = adapter(
                     agent_of(*agent).ok_or("Brigadier no longer drives the agent it came from.")?,
                 );
+                // A crash after the CLI restored it but before the checkpoint must be safe
+                // to retry. An independently changed entry is never overwritten.
+                let catalog = ctx.read(project.as_deref());
+                if let Some(existing) =
+                    catalog
+                        .servers
+                        .iter()
+                        .chain(&catalog.off.servers)
+                        .find(|server| {
+                            server.name == *name
+                                && server.project == *project
+                                && server.plugin.is_none()
+                                && agent.owns(server.source)
+                        })
+                {
+                    let same_values = |a: &[(String, Secret)], b: &[(String, Secret)]| {
+                        a.len() == b.len() && a.iter().all(|value| b.contains(value))
+                    };
+                    let same = match (&spec.transport, &existing.transport) {
+                        (
+                            TransportSpec::Stdio {
+                                command,
+                                args,
+                                env,
+                                cwd,
+                            },
+                            brigadier_registry::Transport::Stdio {
+                                command: other,
+                                args: other_args,
+                                env: other_env,
+                                cwd: other_cwd,
+                                ..
+                            },
+                        ) => {
+                            command == existing.written.command.as_ref().unwrap_or(other)
+                                && args == other_args
+                                && cwd == other_cwd
+                                && same_values(env, other_env)
+                        }
+                        (
+                            TransportSpec::Http { url, headers },
+                            brigadier_registry::Transport::Http {
+                                url: other,
+                                headers: other_headers,
+                            },
+                        ) => url == other && same_values(headers, other_headers),
+                        _ => false,
+                    };
+                    return if same && existing.oauth.is_none() {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Couldn't put {name} back: a different server is already there."
+                        ))
+                    };
+                }
                 let steps = agent.add_server(name, &spec, &place).map_err(|err| err.0)?;
                 ctx.run(agent, &steps)?;
-                let _ = ctx.secrets.forget(secrets);
                 Ok(())
             }
         }
     }
 }
 
-fn moved_dir(library: &Library) -> PathBuf {
+pub(super) fn moved_dir(library: &Library) -> PathBuf {
     library.root().join(".moved")
 }
 
-fn moved_file(library: &Library, name: &str) -> PathBuf {
+pub(super) fn moved_file(library: &Library, name: &str) -> PathBuf {
     moved_dir(library).join(format!("{name}.json"))
 }
 
-fn read_moved(library: &Library, name: &str) -> Option<Moved> {
-    serde_json::from_str(&std::fs::read_to_string(moved_file(library, name)).ok()?).ok()
-}
-
-/// Whether Library item `name` came from Use everywhere and can be undone.
-pub(crate) fn can_undo(library: &Library, name: &str) -> bool {
-    moved_file(library, name).is_file()
-}
-
-fn spec_of(name: &str, transport: &Transport) -> ServerSpec {
-    ServerSpec {
-        name: name.to_owned(),
-        transport: match transport {
-            Transport::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-                ..
-            } => TransportSpec::Stdio {
-                command: command.clone(),
-                args: args.clone(),
-                env: env.clone(),
-                cwd: cwd.clone(),
-            },
-            Transport::Http { url, headers } => TransportSpec::Http {
-                url: url.clone(),
-                headers: headers.clone(),
-            },
-        },
-    }
-}
-
-/// A user's own skill folder Brigadier may move aside: the agents' user folders, never one
-/// synced from a Claude account, a system skill or a plugin's.
-fn movable(root: &SkillRoot) -> bool {
-    matches!(
-        root,
-        SkillRoot::AgentsUser | SkillRoot::ClaudeUser | SkillRoot::CodexUser
-    )
-}
-
-/// What Use everywhere starts from: the item, where its copy goes, and its originals.
-struct Found {
-    name: String,
-    item: Item,
-    /// The original skill's folder, to copy.
-    skill_dir: Option<PathBuf>,
-    /// `None`: every project; else the projects it was kept to.
-    projects: Option<Vec<PathBuf>>,
-    servers: Vec<(Agent, Option<PathBuf>, ServerSpec)>,
-    skills: Vec<PathBuf>,
-}
-
-fn find(ctx: &Ctx<'_>, target: &Target) -> Result<Found, String> {
-    let mut found: Option<Found> = None;
-    let mut everywhere = false;
-    let mut kept_to = Vec::new();
-    for catalog in
-        std::iter::once(ctx.read(None)).chain(ctx.projects.iter().map(|path| ctx.read(Some(path))))
-    {
-        match target {
-            Target::Server(name) | Target::Other(name) => {
-                for server in &catalog.servers {
-                    let other = matches!(target, Target::Other(_));
-                    let matches = if other {
-                        server.id == *name
-                    } else {
-                        server.name == *name && server.plugin.is_none()
-                    };
-                    if !matches {
-                        continue;
-                    }
-                    let spec = spec_of(&server.name, &server.transport);
-                    let entry = found.get_or_insert_with(|| Found {
-                        name: server.name.clone(),
-                        item: Item::Server(spec.clone()),
-                        skill_dir: None,
-                        projects: None,
-                        servers: Vec::new(),
-                        skills: Vec::new(),
-                    });
-                    if other {
-                        everywhere = true;
-                        continue;
-                    }
-                    if server.source == Source::ClaudeProject {
-                        return Err(format!(
-                            "{} is shared with your team in {}, so Brigadier leaves it as it is.",
-                            server.name,
-                            server.file.display()
-                        ));
-                    }
-                    let Some(agent) = owner(server.source) else {
-                        continue;
-                    };
-                    match &server.project {
-                        Some(path) => push(&mut kept_to, path.clone()),
-                        None => everywhere = true,
-                    }
-                    let known = (agent, server.project.clone());
-                    if !entry
-                        .servers
-                        .iter()
-                        .any(|(a, p, _)| (*a, p.clone()) == known)
-                    {
-                        entry.servers.push((agent, server.project.clone(), spec));
-                    }
-                }
-            }
-            Target::Skill(name) => {
-                for skill in catalog
-                    .skills
-                    .iter()
-                    .filter(|skill| skill.name == *name && skill.plugin().is_none())
-                {
-                    if let Some((root, _)) = skill.entries.iter().find(|(root, _)| !movable(root))
-                        && !matches!(root, SkillRoot::ClaudeSynced(_))
-                    {
-                        return Err(format!(
-                            "{name} is part of a project's own files, so Brigadier leaves it as it is."
-                        ));
-                    }
-                    let entry = found.get_or_insert_with(|| skill_found(name, skill));
-                    everywhere = true;
-                    for (root, path) in &skill.entries {
-                        if movable(root) && !entry.skills.contains(path) {
-                            entry.skills.push(path.clone());
-                        }
-                    }
-                }
-            }
-            Target::Library(_) | Target::Plugin(_) => {
-                return Err("It's already one every agent can have.".to_owned());
-            }
+pub(super) fn read_moved(library: &Library, name: &str) -> Result<Option<Moved>, String> {
+    let file = moved_file(library, name);
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "Couldn't read the saved originals of {name}: {err}"
+            ));
         }
-    }
-    let mut found = found.ok_or("It's gone: none of your agents has it now.")?;
-    found.projects = (!everywhere).then_some(kept_to);
-    Ok(found)
-}
-
-/// Leaves out of `found` what sits in a folder that isn't one of `projects`: an agent's own copy
-/// there stays as it is, and the Library's copy isn't turned on there, so it never reaches
-/// further than it was (kept only to such folders, it is off in every project).
-fn within_projects(found: &mut Found, projects: &[PathBuf]) {
-    let project = |path: &PathBuf| projects.contains(path);
-    found
-        .servers
-        .retain(|(_, folder, _)| folder.as_ref().is_none_or(project));
-    if let Some(kept_to) = &mut found.projects {
-        kept_to.retain(project);
-    }
-}
-
-fn skill_found(name: &str, skill: &Skill) -> Found {
-    Found {
-        name: name.to_owned(),
-        item: Item::Skill(SkillSpec {
-            name: Some(name.to_owned()),
-            source: SkillSource::Folder(skill.dir.clone()),
-        }),
-        skill_dir: Some(skill.dir.clone()),
-        projects: None,
-        servers: Vec::new(),
-        skills: Vec::new(),
-    }
-}
-
-fn push<T: PartialEq>(list: &mut Vec<T>, item: T) {
-    if !list.contains(&item) {
-        list.push(item);
-    }
-}
-
-/// Whether `agent` has Library item `id`'s skills or servers where it should: every project,
-/// or each of `projects`.
-fn lists(ctx: &Ctx<'_>, agent: Agent, id: &str, projects: Option<&[PathBuf]>) -> bool {
-    let has = |catalog: &Catalog| {
-        catalog.servers.iter().any(|server| {
-            server
-                .plugin
-                .as_ref()
-                .is_some_and(|p| p.agent == agent && p.id == id)
-        }) || catalog.skills.iter().any(|skill| {
-            // One skill copied into several plugins is one entry, with each as a root.
-            skill
-                .roots
-                .iter()
-                .any(|root| matches!(root, SkillRoot::Plugin(p) if p.agent == agent && p.id == id))
-        })
     };
-    match projects {
-        None => has(&ctx.read(None)),
-        Some(projects) => projects.iter().all(|path| has(&ctx.read(Some(path)))),
-    }
-}
-
-/// Moves an agent's own server or skill into the Library and gives it to every agent, where it
-/// was: every project, or the projects it was kept to. The original goes only once every agent
-/// has the copy staged, and comes back if any agent doesn't end up with it (D5). Its key.
-pub(crate) fn use_everywhere(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
-    let target = target(key)?;
-    let mut found = find(ctx, &target)?;
-    within_projects(&mut found, ctx.projects);
-    let name = found.name.clone();
-    if ctx.library.entry(&name).is_some() {
-        return Err(LibraryError::NameTaken(name).to_string());
-    }
-    let mut taken = server_names(ctx, None);
-    taken.retain(|known| *known != name);
-    let packed = ctx
-        .library
-        .pack(
-            &name,
-            &found.item,
-            found.skill_dir.as_deref(),
-            &taken,
-            false,
-            ctx.secrets,
-        )
-        .map_err(|err| err.to_string())?;
-    let id = packed.entry.id();
-    let undo_all = |ctx: &Ctx<'_>, originals: &[Original]| {
-        for original in originals {
-            let _ = original.restore(ctx);
-        }
-        for adapter in adapters() {
-            let _ = ctx.run(adapter, &removal(ctx, adapter, &id));
-        }
-        let _ = ctx.library.remove(&name);
-    };
-
-    // 1. Every agent has the copy, off: two servers of one name (or address) don't both load.
-    let staged = ctx.each(None, |adapter| {
-        let mut steps = ctx.library.market_steps(adapter);
-        if !adapter.installed(ctx.roots, &id) {
-            steps.extend(
-                adapter
-                    .install_plugin(&id, &Place::Everywhere)
-                    .map_err(|err| err.0)?,
-            );
-        }
-        steps.extend(
-            adapter
-                .set_plugin(&id, &Place::Everywhere, false)
-                .map_err(|err| err.0)?,
-        );
-        Ok(Some(steps))
-    });
-    let missing: Vec<&str> = adapters()
-        .into_iter()
-        .filter(|adapter| !adapter.installed(ctx.roots, &id))
-        .map(|adapter| adapter.label())
-        .collect();
-    if !staged || !missing.is_empty() {
-        undo_all(ctx, &[]);
-        return Err(format!(
-            "Nothing was changed: {} couldn't take the copy.",
-            if missing.is_empty() {
-                "an agent".to_owned()
-            } else {
-                missing.join(" and ")
-            }
-        ));
-    }
-
-    // 2. The originals go, kept for Undo.
-    let mut originals = Vec::new();
-    let kept = moved_dir(ctx.library).join(&name);
-    for (n, (agent, project, spec)) in found.servers.iter().enumerate() {
-        let secrets = format!("{name}/original-{n}");
-        let (transport, values) = match &spec.transport {
-            TransportSpec::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-            } => (
-                SavedTransport::Stdio {
-                    command: command.clone(),
-                    args: args.clone(),
-                    env: env.iter().map(|(name, _)| name.clone()).collect(),
-                    cwd: cwd.clone(),
-                },
-                env,
-            ),
-            TransportSpec::Http { url, headers } => (
-                SavedTransport::Http {
-                    url: url.clone(),
-                    headers: headers.iter().map(|(name, _)| name.clone()).collect(),
-                },
-                headers,
-            ),
-        };
-        for (value_name, value) in values {
-            if let Err(err) = ctx.secrets.store(&secrets, value_name, value) {
-                undo_all(ctx, &originals);
-                return Err(format!("Nothing was changed: {err}"));
-            }
-        }
-        let place = project.as_deref().map_or(Place::Everywhere, just_me);
-        let agent_adapter = adapter(*agent);
-        let removed = agent_adapter
-            .remove_server(&spec.name, &place)
-            .map_err(|err| err.0)
-            .and_then(|steps| ctx.run(agent_adapter, &steps));
-        if let Err(err) = removed {
-            let _ = ctx.secrets.forget(&secrets);
-            undo_all(ctx, &originals);
-            return Err(format!("Nothing was changed: {err}"));
-        }
-        originals.push(Original::Server {
-            agent: provider(*agent),
-            name: spec.name.clone(),
-            project: project.clone(),
-            transport,
-            secrets,
-        });
-    }
-    for (n, from) in found.skills.iter().enumerate() {
-        let to = kept.join(format!("skill-{n}"));
-        let moved = std::fs::create_dir_all(&kept)
-            .and_then(|()| std::fs::rename(from, &to))
-            .map_err(|err| format!("Couldn't move {} aside: {err}.", from.display()));
-        if let Err(err) = moved {
-            undo_all(ctx, &originals);
-            return Err(format!("Nothing was changed: {err}"));
-        }
-        originals.push(Original::Skill {
-            from: from.clone(),
-            kept: to,
-        });
-    }
-    let record = Moved {
-        originals: originals.clone(),
-    };
-    let saved = serde_json::to_string_pretty(&record)
-        .map_err(|err| err.to_string())
-        .and_then(|text| {
-            std::fs::create_dir_all(moved_dir(ctx.library))
-                .and_then(|()| std::fs::write(moved_file(ctx.library, &name), text))
-                .map_err(|err| err.to_string())
-        });
-    if let Err(err) = saved {
-        undo_all(ctx, &originals);
-        return Err(format!("Nothing was changed: {err}"));
-    }
-
-    // 3. The copy goes on where the original was, and every agent must have it.
-    let on = ctx.each(None, |adapter| match &found.projects {
-        None => plugin_plan(ctx, adapter, &id, None, true, true),
-        Some(projects) => {
-            let mut steps = Vec::new();
-            for path in projects {
-                steps.extend(
-                    plugin_plan(ctx, adapter, &id, Some(path), true, true)?.unwrap_or_default(),
-                );
-            }
-            Ok(Some(steps))
-        }
-    });
-    let without: Vec<&str> = adapters()
-        .into_iter()
-        .filter(|adapter| !lists(ctx, adapter.agent(), &id, found.projects.as_deref()))
-        .map(|adapter| adapter.label())
-        .collect();
-    if !on || !without.is_empty() {
-        undo_all(ctx, &originals);
-        let _ = std::fs::remove_file(moved_file(ctx.library, &name));
-        let _ = std::fs::remove_dir_all(&kept);
-        return Err(format!(
-            "Nothing was changed: {} didn't pick up the copy, so the original stays.",
-            if without.is_empty() {
-                "an agent".to_owned()
-            } else {
-                without.join(" and ")
-            }
-        ));
-    }
-    Ok(format!("lib:{name}"))
+    serde_json::from_str(&text).map(Some).map_err(|_| {
+        format!("Couldn't read the saved originals of {name}; Brigadier kept its copy.")
+    })
 }
 
 /// The steps that take Library plugin `id` away from `adapter`'s agent: off in each project
 /// that turns it on by itself (such a project keeps loading it otherwise), then uninstalled.
-fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Vec<Step> {
+pub(super) fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Vec<Step> {
     let mut steps = Vec::new();
     for path in ctx.projects {
         if kept_on_in(ctx, adapter, id, path) {
@@ -1744,58 +1308,42 @@ fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Vec<Step> {
     steps
 }
 
-/// Undoes Use everywhere: the originals come back, the copy goes from every agent and the
-/// Library.
-pub(crate) fn undo_use_everywhere(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
-    let Target::Library(name) = target(key)? else {
-        return Err("Only an item Use everywhere moved can be undone.".to_owned());
-    };
-    let moved = read_moved(ctx.library, &name).ok_or_else(|| {
-        format!("{name} wasn't moved by Use everywhere, so there's nothing to undo.")
-    })?;
-    let id = plugin_id(&name);
-    // Off first: an original and its copy don't both load.
-    ctx.each(None, |adapter| {
-        if !adapter.installed(ctx.roots, &id) {
-            return Ok(None);
-        }
-        adapter
-            .set_plugin(&id, &Place::Everywhere, false)
-            .map(Some)
-            .map_err(|err| err.0)
-    });
-    let mut errors = Vec::new();
-    for original in &moved.originals {
-        if let Err(err) = original.restore(ctx) {
-            errors.push(err);
-        }
-    }
-    if !errors.is_empty() {
-        return Err(errors.join(" "));
-    }
-    remove_library(ctx, &name)?;
-    let _ = std::fs::remove_file(moved_file(ctx.library, &name));
-    let _ = std::fs::remove_dir_all(moved_dir(ctx.library).join(&name));
-    Ok(())
-}
-
-fn remove_library(ctx: &Ctx<'_>, name: &str) -> Result<(), String> {
+/// Takes Library item `name` from every agent and out of the Library, with its values.
+pub(super) fn remove_library_with(
+    ctx: &Ctx<'_>,
+    name: &str,
+    run: Runner<'_>,
+) -> Result<(), String> {
     let id = plugin_id(name);
-    let all = ctx.each(None, |adapter| {
+    let mut failed = Vec::new();
+    for adapter in adapters() {
         let steps = removal(ctx, adapter, &id);
-        Ok((!steps.is_empty()).then_some(steps))
-    });
-    if !all {
+        if steps.is_empty() {
+            continue;
+        }
+        (ctx.report)(adapter.agent(), PluginStep::Working);
+        match run(adapter, &steps) {
+            Ok(()) => (ctx.report)(adapter.agent(), PluginStep::Done),
+            Err(reason) => {
+                (ctx.report)(adapter.agent(), PluginStep::Failed { reason });
+                failed.push(adapter.label());
+            }
+        }
+    }
+    if !failed.is_empty() {
         return Err(format!(
-            "Not every agent let go of {name}; it stays in your Library."
+            "{} didn't let go of {name}; it stays in your Library.",
+            failed.join(" and ")
         ));
     }
     let servers = server_names_of(ctx, name);
-    ctx.library.remove(name).map_err(|err| err.to_string())?;
-    let _ = ctx.library.set_origin(name, None);
     for server in servers {
-        let _ = ctx.secrets.forget(&format!("{name}/{server}"));
+        ctx.secrets.forget(&format!("{name}/{server}"))?;
     }
+    ctx.library.remove(name).map_err(|err| err.to_string())?;
+    ctx.library
+        .set_origin(name, None)
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -1816,147 +1364,82 @@ fn server_names_of(ctx: &Ctx<'_>, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Where each agent has its own server `name` (not a plugin's), on or off: what Remove takes.
-fn server_places(ctx: &Ctx<'_>, name: &str) -> Result<Vec<(Agent, Place)>, String> {
-    let mut places: Vec<(Agent, Place)> = Vec::new();
-    for project in std::iter::once(None).chain(ctx.projects.iter().map(|p| Some(p.as_path()))) {
-        let catalog = ctx.read(project);
-        for server in catalog.servers.into_iter().chain(catalog.off.servers) {
-            if server.name != name || server.plugin.is_some() {
-                continue;
-            }
-            if server.source == Source::ClaudeProject {
-                return Err(format!(
-                    "{name} is shared with your team in {}: remove it there.",
-                    server.file.display()
-                ));
-            }
-            if let Some(agent) = owner(server.source) {
-                push(
-                    &mut places,
-                    (
-                        agent,
-                        server.project.as_deref().map_or(Place::Everywhere, just_me),
-                    ),
-                );
-            }
-        }
-    }
-    Ok(places)
-}
-
-/// Removes item `key` from every agent and project: through each agent's own commands.
-pub(crate) fn remove(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
-    match target(key)? {
-        Target::Library(name) => {
-            remove_library(ctx, &name)?;
-            let _ = std::fs::remove_file(moved_file(ctx.library, &name));
-            let _ = std::fs::remove_dir_all(moved_dir(ctx.library).join(&name));
-            Ok(())
-        }
-        Target::Plugin(name) => {
-            ctx.each(None, |adapter| {
-                Ok(plugin_id_of(ctx, adapter.agent(), &name).map(|id| removal(ctx, adapter, &id)))
-            });
-            Ok(())
-        }
-        Target::Server(name) => {
-            let places = server_places(ctx, &name)?;
-            ctx.each(None, |adapter| {
-                let mut steps = Vec::new();
-                for (_, place) in places.iter().filter(|(agent, _)| *agent == adapter.agent()) {
-                    steps.extend(adapter.remove_server(&name, place).map_err(|err| err.0)?);
-                }
-                Ok((!steps.is_empty()).then_some(steps))
-            });
-            Ok(())
-        }
-        Target::Skill(name) => {
-            let found = find(ctx, &Target::Skill(name.clone()))?;
-            let trash = ctx.roots.home.join(".Trash");
-            for from in &found.skills {
-                let to = trash.join(format!(
-                    "{name} {}",
-                    uuid::Uuid::new_v4()
-                        .simple()
-                        .to_string()
-                        .get(..6)
-                        .unwrap_or_default()
-                ));
-                std::fs::create_dir_all(&trash)
-                    .and_then(|()| std::fs::rename(from, &to))
-                    .map_err(|err| {
-                        format!("Couldn't move {} to the Trash: {err}.", from.display())
-                    })?;
-            }
-            Ok(())
-        }
-        Target::Other(_) => Err("It belongs to another app: remove it there.".to_owned()),
-    }
-}
-
-/// Fetches Library item `key`'s source again and brings every agent's copy up to date.
-pub(crate) fn update(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
-    let Target::Library(name) = target(key)? else {
-        return Err("Only an item in your Library can be updated here.".to_owned());
-    };
+/// Fetches Library item `name`'s source again and brings every agent's copy up to date.
+pub(crate) fn update(ctx: &Ctx<'_>, name: &str) -> Result<(), String> {
     let origin = ctx
         .library
-        .origin(&name)
+        .origin(name)
         .ok_or_else(|| format!("{name} has nothing to update from."))?;
     let scratch = Scratch::new()?;
     let item = Item::Skill(SkillSpec {
-        name: Some(name.clone()),
+        name: Some(name.to_owned()),
         source: origin.source.clone(),
     });
     let (dir, fetched) = fetch(&item, &scratch)?;
     let packed = ctx
         .library
         .pack(
-            &name,
+            name,
             &item,
             dir.as_deref(),
-            &server_names(ctx, Some(&name)),
+            &server_names(ctx, Some(name)),
             true,
             ctx.secrets,
         )
         .map_err(|err| err.to_string())?;
     if let Some(fetched) = &fetched {
         ctx.library
-            .set_origin(&name, Some(fetched))
+            .set_origin(name, Some(fetched))
             .map_err(|err| err.to_string())?;
     }
     if !packed.changed {
         return Ok(());
     }
     let id = packed.entry.id();
-    let all = ctx.each(None, |adapter| {
-        let mut steps = ctx.library.market_steps(adapter);
-        if adapter.installed(ctx.roots, &id) {
-            steps.extend(
-                adapter
-                    .update_plugin(&id, &Place::Everywhere)
-                    .map_err(|err| err.0)?,
-            );
+    let mut failed = Vec::new();
+    for adapter in adapters() {
+        if let Err(err) = refresh_copy(ctx, adapter, &id, &|adapter, steps| ctx.run(adapter, steps))
+        {
+            failed.push(format!("{}: {err}", adapter.label()));
         }
-        for path in ctx.projects {
-            if plugin_on(&ctx.read(Some(path)), adapter.agent(), &id, true)
-                && !adapter.installed(ctx.roots, &id)
-            {
-                steps.extend(
-                    adapter
-                        .update_plugin(&id, &just_me(path))
-                        .map_err(|err| err.0)?,
-                );
-            }
-        }
-        Ok(Some(steps))
-    });
-    if all {
+    }
+    if failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("Not every agent took the new version of {name}."))
+        Err(format!(
+            "Not every agent took the new version of {name}: {}",
+            failed.join("; ")
+        ))
     }
+}
+
+/// Brings `adapter`'s agent's installs of Library plugin `id` to the Library's version: each
+/// with the CLI's own update. Nothing when it has none.
+pub(super) fn refresh_copy(
+    ctx: &Ctx<'_>,
+    adapter: &dyn AgentAdapter,
+    id: &str,
+    run: Runner<'_>,
+) -> Result<(), String> {
+    let installed = adapter.installed(ctx.roots, id);
+    let projects = adapter.installed_in_projects(ctx.roots, id);
+    if !installed && projects.is_empty() {
+        return Ok(());
+    }
+    let mut steps = ctx.library.market_steps(adapter);
+    if installed {
+        steps.extend(
+            adapter
+                .update_plugin(id, &Place::Everywhere)
+                .map_err(|err| err.0)?,
+        );
+    }
+    for place in projects {
+        if matches!(&place, Place::Project { path, .. } if path.is_dir()) {
+            steps.extend(adapter.update_plugin(id, &place).map_err(|err| err.0)?);
+        }
+    }
+    run(adapter, &steps)
 }
 
 /// Whether Library item `name`'s source has moved on since it was fetched (reads the remote).
