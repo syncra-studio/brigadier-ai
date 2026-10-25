@@ -721,3 +721,69 @@ async fn a_pending_move_takes_a_model_named_later() {
     assert_eq!(orchestrator(&flow).model.as_deref(), Some("named-model"));
     flow.stop().await;
 }
+
+/// D34: a move to another CLI takes the first `Fallback` row of the user's routing that names
+/// that CLI and that the rules allow, never a model or effort no row names; with none, it is
+/// refused in words that point to Settings › Routing, and nothing moves.
+#[tokio::test]
+async fn a_move_takes_the_fallback_row_the_rules_allow_and_never_another_model() {
+    let script: Script = Arc::new(|_turn: Turn| Box::pin(async { Reply::text("Noted.") }));
+    let flow = Flow::start("continue-on-routing", options(), script).await;
+    let rules = |text: &str| std::fs::write(flow.manager.models_rules_path(), text).unwrap();
+    let pick = |provider| flow.manager.successor_model(provider);
+
+    // The shipped rows: Codex's own default at high, Claude's newest opus at high.
+    let codex = pick(ProviderKind::Codex).unwrap();
+    assert_eq!(
+        (codex.model.as_deref(), codex.effort.as_deref()),
+        (None, Some("high"))
+    );
+    let claude = pick(ProviderKind::Claude).unwrap();
+    assert_eq!(
+        claude.model,
+        Some(flow.manager.listed_model(ProviderKind::Claude, "opus"))
+    );
+    assert_eq!(claude.effort.as_deref(), Some("high"));
+
+    // The user's rows replace them, in order: a row the rules refuse gives way to the next.
+    let table = "| Work | Agent | Model | Effort | Reason |\n|---|---|---|---|---|\n";
+    rules(&format!(
+        "# My rules\n\n- effort-ceiling: high\n\n{table}\
+         | Fallback | codex | gpt-test | xhigh | Too much. |\n\
+         | Fallback | codex | gpt-test | medium | Mine. |\n"
+    ));
+    let codex = pick(ProviderKind::Codex).unwrap();
+    assert_eq!(
+        (codex.model.as_deref(), codex.effort.as_deref()),
+        (Some("gpt-test"), Some("medium"))
+    );
+
+    // Every row for Codex refused: no model the rows don't name, only the reason.
+    rules(&format!(
+        "# My rules\n\n- effort-ceiling: high\n\n{table}\
+         | Fallback | codex | gpt-test | xhigh | Too much. |\n"
+    ));
+    let refused = pick(ProviderKind::Codex).unwrap_err();
+    assert!(refused.contains("Settings › Routing"), "{refused}");
+    assert!(refused.contains("refuse"), "{refused}");
+
+    // No row names Codex: refused, and the session stays where it is.
+    rules(&format!(
+        "# My rules\n\n{table}| Fallback | claude | opus | high | Only Claude. |\n"
+    ));
+    let refused = pick(ProviderKind::Codex).unwrap_err();
+    assert!(
+        refused.contains("no Fallback row in Settings › Routing names Codex"),
+        "{refused}"
+    );
+    let moved = flow
+        .manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap_err();
+    assert!(moved.contains("Settings › Routing"), "{moved}");
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Claude);
+    let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
+    assert!(file.moving.is_none() && file.seams.is_empty(), "{file:?}");
+    flow.stop().await;
+}

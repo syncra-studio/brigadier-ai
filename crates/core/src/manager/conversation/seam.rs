@@ -428,9 +428,10 @@ impl SessionManager {
     }
 
     /// The agent another one goes on with when every account of `from`'s is at its limit,
-    /// with "Switch to another agent automatically" on (S38, D23): another agent that is on
-    /// and has an account that can take work, on the first model the user's rules allow
-    /// ([`Self::successor_model`]). `None`: the session waits for the reset (Q11).
+    /// with "Switch to another agent automatically" on (S38, D23): the first `Fallback` row of
+    /// the user's routing, in its order, on another agent that is on and has an account that
+    /// can take work, and that the user's rules allow (D34). `None`: the session waits for the
+    /// reset (Q11).
     pub(super) fn fallback_agent(
         &self,
         conv: &ConvLive,
@@ -441,61 +442,63 @@ impl SessionManager {
             return None;
         }
         let now = now_ms();
-        ProviderKind::ALL
+        self.fallback_rows()
             .into_iter()
-            .filter(|provider| {
-                *provider != from.provider
-                    && crate::routing::availability::provider_on(&settings, *provider)
+            .filter(|choice| {
+                choice.provider != from.provider
+                    && crate::routing::availability::provider_on(&settings, choice.provider)
                     && crate::accounts::ready(
                         &settings,
-                        *provider,
+                        choice.provider,
                         None,
-                        &self.runtime.account_candidates(*provider),
+                        &self.runtime.account_candidates(choice.provider),
                         &[],
                         now,
                     )
                     .is_some()
             })
-            .find_map(|provider| self.successor_model(provider).ok())
+            .find(|choice| self.fallback_refusal(choice).is_none())
     }
 
-    /// The model a session goes on with on another agent, `provider` (D25): the rules file's
-    /// `Fallback` row's when it names that agent, else its CLI's own, else each model it lists:
-    /// the first the user's rules allow, through the same refusal `brigadier start` uses. None
-    /// allowed: the first rule's words.
-    pub(super) fn successor_model(&self, provider: ProviderKind) -> Result<ModelChoice, String> {
-        let listed = self
-            .runtime
-            .overview(provider)
-            .and_then(|overview| overview.models)
-            .map(|catalog| catalog.models)
-            .unwrap_or_default()
+    /// The model and effort a session goes on with on another agent, `provider` (D25, D34): the
+    /// first `Fallback` row of the user's routing that names that agent and that the user's
+    /// rules allow. Never a model or effort no row names; with none, why, in plain words.
+    pub(crate) fn successor_model(&self, provider: ProviderKind) -> Result<ModelChoice, String> {
+        let rows: Vec<ModelChoice> = self
+            .fallback_rows()
             .into_iter()
-            .filter(|model| !model.legacy)
-            .map(|model| (Some(model.id), None));
+            .filter(|choice| choice.provider == provider)
+            .collect();
         let mut refused = None;
-        std::iter::once(self.fallback_row(provider))
-            .chain(std::iter::once((None, None)))
-            .chain(listed)
-            .map(|(model, effort)| ModelChoice {
-                provider,
-                model,
-                effort,
-                fast: None,
-                account: None,
-            })
-            .find(|choice| match self.check_choice(choice) {
-                Ok(()) => true,
-                Err(err) => {
-                    refused.get_or_insert_with(|| err.to_string());
-                    false
+        for choice in rows {
+            match self.fallback_refusal(&choice) {
+                None => return Ok(choice),
+                Some(rule) => {
+                    refused.get_or_insert(rule);
                 }
-            })
-            .ok_or_else(|| {
-                refused.unwrap_or_else(|| {
-                    format!("{} lists no model to continue on", provider.label())
-                })
-            })
+            }
+        }
+        let label = provider.label();
+        Err(match refused {
+            Some(rule) => format!(
+                "your model rules refuse every Fallback row for {label} ({rule}); change the \
+                 rows or the rules in Settings › Routing"
+            ),
+            None => format!(
+                "no Fallback row in Settings › Routing names {label}; add one to continue there"
+            ),
+        })
+    }
+
+    /// Why the user's rules refuse a `Fallback` row's `choice` (`None`: they allow it).
+    fn fallback_refusal(&self, choice: &ModelChoice) -> Option<String> {
+        self.model_refusal(
+            choice.provider,
+            choice.model.as_deref(),
+            choice.effort.as_deref(),
+            Some(crate::manager::models::FALLBACK_WORK),
+        )
+        .unwrap_or_else(|err| Some(err.to_string()))
     }
 
     /// Every account of the session's agent (`from`) is at its limit: the generation ends

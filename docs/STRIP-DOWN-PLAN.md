@@ -5,7 +5,7 @@
 > what a CLI can't do by itself: seeing and driving other sessions, previews, the browser, computer use, asking
 > the user as a card, and searching the record. This plan only removes and re-wires.
 
-> **Amendment, 2026-10-25 (run `20261025-1046-harness-research`, D13–D18).** These supersede the lines below
+> **Amendment, 2026-10-25 (run `20261025-1046-harness-research`, D13–D18, D34).** These supersede the lines below
 > where they differ.
 > - **Pull, never push (D13).** After a compaction or a hand-off, Brigadier puts nothing into the conversation:
 >   no SessionStart restore hook, no Codex `thread/inject_items` note, no decisions note. This supersedes
@@ -40,6 +40,16 @@
 >   - **After a failure or a thrash.** The session hears nothing of the broken turn, and the successor carries on
 >     at once.
 >   - **The successor.** Same worker, same worktree. The setup script and the secrets copy are not run again.
+> - **Routing is respected (D34).**
+>   - **Workers.** A worker's successor, after a count or a failure, keeps the worker's routing pick exactly:
+>     agent, model, effort, account rules and `--mcp` grants.
+>   - **Sessions.** A session's move to another CLI takes the first `Fallback` row of the user's routing that
+>     names that CLI and that the rules allow. A move at a limit tries the other agents in row order. The CLI
+>     default and "first listed model" steps of S38/D25 are gone.
+>   - **Shipped rows.** Two editable `Fallback` rows ship: `claude · opus · high` and `codex · default · high`.
+>   - **No usable row.** The move is refused in plain words pointing to Settings › Routing. After a limit,
+>     the session waits for the reset.
+>   - **Explicit model.** `brigadier continue-on <cli> --model X` stays, judged by the user's rules.
 
 > Status: plan, 2026-10-22, from the user's decisions G1–G21 (project memory `plain-cli-threads-1022`), the
 > 10-22 diagnosis (run `20261022-0805-take-over-5-sessions`, `DIAGNOSIS.md`) and the long-sessions research

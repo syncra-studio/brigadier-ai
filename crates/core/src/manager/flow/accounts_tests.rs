@@ -2348,13 +2348,58 @@ async fn the_users_rules_bind_the_agent_fallback() {
     flow.stop().await;
 }
 
-/// S38: the fallback takes the first choice of the other agent the user's rules allow: its
-/// `Fallback` row's effort is over their ceiling, so the CLI's own default goes on.
+/// S38, D34: the fallback takes the first `Fallback` row of the other agent the user's rules
+/// allow, in the routing's order: its first row's effort is over their ceiling, so the next
+/// row's model and effort go on, never the CLI's own default.
 #[tokio::test]
-async fn the_agent_fallback_takes_the_first_choice_the_rules_allow() {
+async fn the_agent_fallback_takes_the_next_fallback_row_the_rules_allow() {
     let log = Log::default();
     let flow = Flow::start(
         "accounts-agent-fallback-allowed",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "# My rules\n\n- effort-ceiling: high\n\n\
+         | Work | Agent | Model | Effort | Reason |\n|---|---|---|---|---|\n\
+         | Fallback | codex | default | xhigh | Mine. |\n\
+         | Fallback | codex | gpt-test | medium | Then this. |\n",
+    )
+    .unwrap();
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say("Do the thing.").await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let on = orchestrator(&flow);
+    assert_eq!(on.provider, ProviderKind::Codex);
+    assert_eq!(
+        (on.model.as_deref(), on.effort.as_deref()),
+        (Some("gpt-test"), Some("medium")),
+        "{on:?}"
+    );
+    flow.stop().await;
+}
+
+/// D34: with no `Fallback` row of another agent the user's rules allow, a session at its limit
+/// waits for the reset rather than moving on a model no row names.
+#[tokio::test]
+async fn with_no_fallback_row_the_rules_allow_a_session_waits_for_the_reset() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-none",
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
@@ -2374,16 +2419,23 @@ async fn the_agent_fallback_takes_the_first_choice_the_rules_allow() {
     flow.core.update_settings(settings).await.unwrap();
 
     flow.say("Do the thing.").await;
-    flow.until("a turn on Codex", |_| {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !moments(&flow)
+        .await
+        .iter()
+        .any(|text| text.contains("Your message waits"))
+    {
+        assert!(tokio::time::Instant::now() < deadline, "no wait");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
         seen(&log)
             .iter()
-            .any(|turn| turn.provider == ProviderKind::Codex)
-    })
-    .await;
-    flow.settled().await;
-    let on = orchestrator(&flow);
-    assert_eq!(on.provider, ProviderKind::Codex);
-    assert_eq!(on.effort, None, "{on:?}");
+            .all(|turn| turn.provider == ProviderKind::Claude),
+        "{:?}",
+        seen(&log)
+    );
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Claude);
     flow.stop().await;
 }
 

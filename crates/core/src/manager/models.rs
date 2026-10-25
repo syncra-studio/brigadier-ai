@@ -10,7 +10,8 @@ use std::path::PathBuf;
 const GUIDANCE: &str = include_str!("models_guidance.md");
 pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
 /// The rules file's Work for a session that goes on with another agent (S38).
-const FALLBACK_WORK: &str = "Fallback";
+/// The Work whose rows a session moves to another agent with (S38, D25, D34).
+pub(crate) const FALLBACK_WORK: &str = "Fallback";
 
 fn agent(provider: ProviderKind) -> Agent {
     match provider {
@@ -399,22 +400,28 @@ impl SessionManager {
             .filter(|row| same_work(&row.work, work))
             .collect())
     }
-    /// The first row of a work's order.
-    pub(super) fn work_row(&self, work: &str) -> Result<Option<Guidance>> {
-        Ok(self.work_rows(work)?.into_iter().next())
-    }
-    /// The model (`None`: the CLI's default) and effort a session goes on with on `provider`
-    /// when its own agent is out (S38): the rules file's `Fallback` row's, when it names
-    /// `provider`.
-    pub(super) fn fallback_row(&self, provider: ProviderKind) -> (Option<String>, Option<String>) {
-        match self.work_row(FALLBACK_WORK) {
-            Ok(Some(row)) if row.agent == agent(provider) => (
-                (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
-                    .then(|| self.listed_model(provider, &row.model)),
-                row.effort,
-            ),
-            _ => (None, None),
-        }
+    /// The `Fallback` rows of the user's routing, in its order (else the shipped ones), as the
+    /// choices a session moves to another agent with (S38, D25, D34). A `default` model is the
+    /// CLI's own default, as the row says.
+    pub(super) fn fallback_rows(&self) -> Vec<crate::model::ModelChoice> {
+        self.work_rows(FALLBACK_WORK)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                let provider = match row.agent {
+                    Agent::Claude => ProviderKind::Claude,
+                    Agent::Codex => ProviderKind::Codex,
+                };
+                crate::model::ModelChoice {
+                    provider,
+                    model: (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
+                        .then(|| self.listed_model(provider, &row.model)),
+                    effort: row.effort,
+                    fast: None,
+                    account: None,
+                }
+            })
+            .collect()
     }
     /// A row's model as its CLI takes it: a listed id as it is; a family word (`sol`, what the
     /// page's "Newest … sol" saves) the newest listed model it names, so it follows releases;
