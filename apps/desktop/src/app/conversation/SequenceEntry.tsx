@@ -18,30 +18,7 @@ import { TimeSeparator } from "@/components/conversation";
  */
 export const loadCardBody = cardBody.preload;
 
-export function entryKey(entry: Entry): string {
-  switch (entry.kind) {
-    case "thinking":
-      return `thinking:${entry.segment.itemId}`;
-    case "text":
-      return `text:${entry.index}`;
-    case "card":
-      return `${entry.card.type}:${entry.card.id}`;
-    case "steer":
-      return `steer:${entry.position}`;
-    case "orchestrator":
-      return `orchestrator:${entry.position}`;
-    case "compaction":
-      return `compaction:${entry.compaction.id}`;
-    case "nudge":
-      return `nudge:${entry.position}`;
-    case "taskNotice":
-      return `task-notice:${entry.position}`;
-    case "row":
-      return `task:${entry.row.taskId}:${entry.position}`;
-    case "gap":
-      return `gap:${entry.position}`;
-  }
-}
+export { entryKey } from "@/app/conversation/entryKey";
 
 function CardEntry({ card }: { card: BlockCard }) {
   return (

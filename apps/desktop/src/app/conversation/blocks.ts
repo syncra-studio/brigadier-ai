@@ -210,6 +210,8 @@ export type BlockState = RequestState["type"];
  */
 export type BlockTaskNotice = {
   position: number;
+  /** The id of the CLI's item it came from, which keeps its row across a reread (D44). */
+  id?: string;
   text: string;
   /** The CLI's own words of it, on hover, when the line says them shorter. */
   detail?: string;
@@ -542,7 +544,7 @@ export type SequenceEntry =
   /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
   | { kind: "nudge"; position: number }
   /** A quiet line of what a worker did ("Worker "…" finished · …"). */
-  | { kind: "taskNotice"; text: string; position: number; inWork?: boolean; detail?: string }
+  | { kind: "taskNotice"; text: string; position: number; id?: string; inWork?: boolean; detail?: string }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
   | { kind: "gap"; atMs: number; position: number };

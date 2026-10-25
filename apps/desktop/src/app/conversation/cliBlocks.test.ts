@@ -272,6 +272,7 @@ test("a background job's end Claude took up is one plain line in the same work, 
   assert.deepEqual(block.steers, []);
   assert.deepEqual(block.taskNotices, [{
     position: 2,
+    id: "n1",
     text: "Background command finished · exit 0",
     detail: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)',
     inWork: true,
@@ -393,7 +394,7 @@ test("Brigadier's word of what workers did joins the block that started them, as
   assert.equal(first.endedAtMs, 5200);
   assert.deepEqual(first.worked, [{ fromMs: 1000, toMs: 1200 }, { fromMs: 5000, toMs: 5200 }]);
   // The worker's line is in the work: done, it folds with it, under one answer.
-  assert.deepEqual(first.taskNotices, [{ position: 2, text: 'Worker "Fix" finished · Done.', inWork: true }]);
+  assert.deepEqual(first.taskNotices, [{ position: 2, id: "n1:0", text: 'Worker "Fix" finished · Done.', inWork: true }]);
   const sequence = blockSequence({ ...first, steers: [] });
   const answer = answerIndex(first.texts, true);
   assert.equal(answer, 1);
@@ -504,7 +505,7 @@ test("a Codex command's end after its turn is one plain line, a turn more of the
   assert.ok(block);
   assert.deepEqual(block.texts.map((text) => text.messageId), ["a1", "a2"]);
   assert.deepEqual(block.worked, [{ fromMs: 1000, toMs: 1200 }, { fromMs: 61_000, toMs: 61_200 }]);
-  assert.deepEqual(block.taskNotices, [{ position: 2, text: "Background command finished · exit 0", detail: woke, inWork: true }]);
+  assert.deepEqual(block.taskNotices, [{ position: 2, id: "u2", text: "Background command finished · exit 0", detail: woke, inWork: true }]);
   const sequence = blockSequence({ ...block, steers: [] });
   assert.deepEqual(sequence.map((entry) => entry.kind), ["text", "taskNotice", "text"]);
   const answer = answerIndex(block.texts, true);
@@ -533,7 +534,7 @@ test("a Codex command's end after a later message of the user's stays a turn of 
   assert.deepEqual(tree.nodes.filter((node) => node.kind === "user").map((node) => node.id), ["r1", "r2"]);
   const blocks = cliBlocks(noted, "conv");
   assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"], ["u2", "message"], ["u3", null]]);
-  assert.deepEqual(blocks[2]?.taskNotices, [{ position: 4, text: "Background command failed · exit 1", detail: woke, inWork: true }]);
+  assert.deepEqual(blocks[2]?.taskNotices, [{ position: 4, id: "u3", text: "Background command failed · exit 1", detail: woke, inWork: true }]);
 });
 
 const decision = (requestId: string | null, atMs: number) =>

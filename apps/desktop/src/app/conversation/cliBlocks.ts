@@ -668,8 +668,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         times.push([[position, entry.atMs ?? 0]]);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
-      if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text, ...(joins && { inWork: true }) }));
-      if (woke && !waitEnded(asked.text, view)) block?.taskNotices.push({ position, text: wakeWords(asked.text), detail: asked.text, inWork: true });
+      if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, id: `${asked.itemId}:${nth}`, text, ...(joins && { inWork: true }) }));
+      if (woke && !waitEnded(asked.text, view)) block?.taskNotices.push({ position, id: asked.itemId, text: wakeWords(asked.text), detail: asked.text, inWork: true });
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
@@ -752,7 +752,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice":
         if (waitEnded(event.text, view)) return;
-        current.taskNotices.push({ position, text: wakeWords(event.text), detail: event.text, inWork: true });
+        current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
       case "compactionEnded": {
         const atMs = entry.atMs ?? current.startedAtMs;

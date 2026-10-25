@@ -8,7 +8,7 @@
         {
           "work": [
             {
-              "group": "step:1",
+              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
               "summary": "Ran a command",
               "rows": [
                 "Ran sleep 2"
@@ -43,7 +43,7 @@
         {
           "work": [
             {
-              "group": "step:8",
+              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"
@@ -69,7 +69,7 @@
         {
           "work": [
             {
-              "group": "step:1",
+              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
               "summary": "Ran a command",
               "rows": [
                 "Ran sleep 2"
@@ -104,7 +104,7 @@
         {
           "work": [
             {
-              "group": "step:8",
+              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"

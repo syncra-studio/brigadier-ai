@@ -122,6 +122,19 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
   return out;
 }
 
+/**
+ * A lead step's key, and its group's when it leads one: the CLI's id for the call, else what
+ * names the step on the board, never where it stands, so a reread that moves it keeps its row
+ * and an opened group open (D44).
+ */
+export function stepKey(step: LeadStep): string {
+  const { kind } = step;
+  if (kind.type === "tool") return `step:${kind.itemId}`;
+  if (kind.type === "peerSent" && kind.messageIds[0] !== undefined) return `step:peer:${kind.messageIds[0]}`;
+  const of = "taskId" in kind ? `:${kind.taskId}` : "";
+  return step.atMs === undefined ? `step:${kind.type}${of}:at-${step.position}` : `step:${kind.type}${of}:${step.atMs}`;
+}
+
 function groupLead(sequence: readonly SequenceEntry[]): Activity<LeadStep, SequenceEntry>[] {
   return groupActivity<LeadStep, SequenceEntry>(sequence, (entry) => {
     switch (entry.kind) {
@@ -134,7 +147,7 @@ function groupLead(sequence: readonly SequenceEntry[]): Activity<LeadStep, Seque
         if (!step || entry.steps.length > 1 || isImageStep(step)) return { type: "break" };
         const work = leadWork(step);
         if (work === "hidden") return { type: "skip" };
-        return work === "work" ? { type: "step", key: `step:${step.position}`, step } : { type: "break" };
+        return work === "work" ? { type: "step", key: stepKey(step), step } : { type: "break" };
       }
       default:
         return { type: "break" };

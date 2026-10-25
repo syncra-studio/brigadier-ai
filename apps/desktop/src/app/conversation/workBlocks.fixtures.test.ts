@@ -82,6 +82,39 @@ function noRunningRowAfterItsTurn(view: ThreadView, where: string) {
   }
 }
 
+/** The newest block's calls in the order drawn, and its groups' keys. */
+function newestShape(view: ThreadView): { order: string[]; groups: Map<string, string> } {
+  const block = cliBlocks(view, "recorded-thread").at(-1);
+  if (!block) return { order: [], groups: new Map() };
+  const steers = block.steers.map((steer) => ({ position: steer.position, text: steer.text, atMs: steer.message.createdAtMs, attachments: steer.message.attachments }));
+  const activity = turnActivity(blockSequence({ ...block, steers }), false);
+  const groups = new Map<string, string>();
+  const order: string[] = [];
+  for (const item of activity) {
+    if (item.type !== "group") continue;
+    const ids = item.items.flatMap((each) => (each.step.kind.type === "tool" ? [each.step.kind.itemId] : []));
+    order.push(...ids);
+    if (ids[0] !== undefined) groups.set(ids[0], item.key);
+  }
+  return { order, groups };
+}
+
+/** The calls of `order` that `other` has too, in the order of `order`. */
+function both(order: string[], other: string[]): string[] {
+  return order.filter((id) => other.includes(id));
+}
+
+/**
+ * The turn as read again from the file at its end against how it was drawn live just before:
+ * no call changes place, and each group keeps its key (an opened one stays open, D44).
+ */
+function keepsItsPlace(live: ReturnType<typeof newestShape>, reread: ReturnType<typeof newestShape>, where: string) {
+  assert.deepEqual(both(reread.order, live.order), both(live.order, reread.order), `${where}: a call moved`);
+  for (const [first, key] of live.groups) {
+    if (reread.groups.has(first)) assert.equal(reread.groups.get(first), key, `${where}: group of ${first}`);
+  }
+}
+
 /** The view after each recorded event, the turn running until its end, then read again from the file. */
 function* replay(fixture: Fixture): Generator<[string, ThreadView]> {
   const view = fixture.persisted;
@@ -113,7 +146,14 @@ for (const folder of folders) {
       const shown = { live: work(fixture.live), persisted: work(fixture.persisted) };
       noRunningRowAfterItsTurn(fixture.live, "live");
       noRunningRowAfterItsTurn(fixture.persisted, "persisted");
-      for (const [frame, view] of replay(fixture)) noRunningRowAfterItsTurn(view, frame);
+      let live: ReturnType<typeof newestShape> | null = null;
+      for (const [frame, view] of replay(fixture)) {
+        noRunningRowAfterItsTurn(view, frame);
+        const shape = newestShape(view);
+        const reread = frame.endsWith("reread)");
+        if (reread && live) keepsItsPlace(live, shape, frame);
+        live = reread ? null : shape;
+      }
       const path = new URL(`${name}.work.json`, base);
       if (process.env.UPDATE_FIXTURES === "1") writeFileSync(path, `${JSON.stringify(shown, null, 2)}\n`);
       assert.deepEqual(shown, JSON.parse(readFileSync(path, "utf8")), `${fileURLToPath(path)} changed; inspect before UPDATE_FIXTURES=1`);
