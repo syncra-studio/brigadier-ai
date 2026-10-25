@@ -39,7 +39,10 @@ export type StepWords = {
   given?: string;
 };
 
-export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }>;
+export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }> & {
+  /** Still running in the background after its turn ended (the thread's own steps only, D44). */
+  background?: boolean;
+};
 
 /** Providers wrap the same tool in different namespaces; those are never UI copy. */
 export function toolName(name: string): string {
@@ -446,7 +449,9 @@ export function labelParts(words: StepWords, label: string): { verb: string; obj
 /** A lead's tool step's words, with its workers named. */
 export function toolStepWords(kind: ToolStep, tasks: Readonly<Record<string, Task>> = {}): StepWords {
   const worker = kind.detail ? tasks[kind.detail] : undefined;
-  return stepWords({ ...kind, detail: worker ? workerName(tasks, worker) : kind.detail }, tasks);
+  const words = stepWords({ ...kind, detail: worker ? workerName(tasks, worker) : kind.detail }, tasks);
+  // "Running sleep 20 in the background" once its turn ended (D44).
+  return kind.background && kind.status === "inProgress" ? { ...words, doing: `${words.doing} in the background` } : words;
 }
 
 /** How a kind leads a summary, for one step and for several. Reading, searching and listing all read as "Read files". */

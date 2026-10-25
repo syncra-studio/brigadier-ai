@@ -1,0 +1,102 @@
+{
+  "live": [
+    {
+      "key": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:3",
+              "summary": "Ran a command",
+              "rows": [
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "text"
+            },
+            {
+              "group": "step:9",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "01a172e9-cebc-7651-93a0-58aaf65398d5",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:3",
+              "summary": "Ran a command",
+              "rows": [
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-92b8-7920-8a80-a0df5d72173e",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "text"
+            },
+            {
+              "group": "step:9",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "live": [
+    {
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:1",
+              "summary": "Ran a command",
+              "rows": [
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:8",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:1",
+              "summary": "Ran a command",
+              "rows": [
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:8",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ]
+}

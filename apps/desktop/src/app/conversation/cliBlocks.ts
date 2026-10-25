@@ -12,6 +12,7 @@ import {
 import { shownText } from "@/app/conversation/streamRelease";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import type {
+  BackgroundTask,
   FileChange,
   FileChangeKind,
   FileEntry,
@@ -264,15 +265,37 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
   }
 }
 
-/** Each entry's row as last made: an item the stream left alone keeps its entry (`mergeEntries`). */
-const madeSteps = new WeakMap<FileEntry, { stopped: boolean; step: ToolStep | null }>();
+/**
+ * A call's row as its turn and the CLI's background tasks leave it (D44). A call the CLI runs in
+ * the background stands as its task does: running while the task runs, "in the background" once
+ * its turn ended (the call itself answered at once), then as the task ended. Any other call
+ * still running when its turn ended was cut off with it: it reads stopped, never running for good.
+ */
+export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
+  if (!step) return null;
+  const ended = turn?.end != null;
+  const { endedAtMs: _endedAtMs, exit: _exit, stopped: _stopped, ...running } = step;
+  if (task?.status === "running") return { ...running, status: "inProgress", ...(ended && { background: true }) };
+  const taskEnd = task?.endedAtMs ?? undefined;
+  if (task?.status === "stopped") return { ...running, status: "failed", stopped: true, ...(taskEnd !== undefined && { endedAtMs: taskEnd }) };
+  if (task?.status === "failed") return { ...step, status: "failed", ...(taskEnd !== undefined && { endedAtMs: taskEnd }) };
+  if (task && taskEnd !== undefined) return { ...step, endedAtMs: Math.max(taskEnd, step.endedAtMs ?? taskEnd) };
+  if (step.status !== "inProgress" || !ended) return step;
+  return { ...running, status: "failed", stopped: true, ...(turn?.endedAtMs != null && { endedAtMs: turn.endedAtMs }) };
+}
 
-/** `toolStep`, made once per entry: the thread is made again with each streamed word. */
-function keptToolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
-  const made = madeSteps.get(entry);
-  if (made?.stopped === stopped) return made.step;
-  const step = toolStep(entry, stopped);
-  madeSteps.set(entry, { stopped, step });
+/** Each entry's row as last made: an item the stream left alone keeps its entry (`mergeEntries`). */
+const madeSteps = new WeakMap<FileEntry, { made: string; step: ToolStep | null }>();
+
+/** `toolStep`, made once per entry and what it depends on: the thread is made again with each streamed word. */
+function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: readonly BackgroundTask[] | undefined): ToolStep | null {
+  const itemId = "itemId" in entry.event ? entry.event.itemId : undefined;
+  const task = itemId === undefined ? undefined : background?.find((each) => each.itemId === itemId);
+  const made = `${turn?.end ?? ""}|${turn?.endedAtMs ?? ""}|${task?.status ?? ""}|${task?.endedAtMs ?? ""}`;
+  const kept = madeSteps.get(entry);
+  if (kept?.made === made) return kept.step;
+  const step = stepInTurn(toolStep(entry, turn?.end === "stopped"), turn, task);
+  madeSteps.set(entry, { made, step });
   return step;
 }
 
@@ -636,7 +659,6 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (!block) return;
     const current: Block = block;
     if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
-    const ended = turnOf.get(current)?.end ?? null;
     switch (event.type) {
       case "message":
       case "messageDelta": {
@@ -706,7 +728,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         return;
       }
       default: {
-        const kind = keptToolStep(entry, ended === "stopped");
+        const kind = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }

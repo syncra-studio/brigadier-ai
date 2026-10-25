@@ -1,0 +1,92 @@
+{
+  "live": [
+    {
+      "key": "33e94e34-6f06-4755-894b-d088fc3e36b8",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:2",
+              "summary": "Edited a file",
+              "rows": [
+                "Edited use-your-askuserquestion-tool-composed-beacon.md"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8b56b295-4795-4c6d-a732-32d11cd515a9",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:7",
+              "summary": "Edited a file, read files",
+              "rows": [
+                "Edited c.txt",
+                "Read c.txt"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ],
+  "persisted": [
+    {
+      "key": "33e94e34-6f06-4755-894b-d088fc3e36b8",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:2",
+              "summary": "Edited a file",
+              "rows": [
+                "Edited use-your-askuserquestion-tool-composed-beacon.md"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8b56b295-4795-4c6d-a732-32d11cd515a9",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:7",
+              "summary": "Edited a file, read files",
+              "rows": [
+                "Edited c.txt",
+                "Read c.txt"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
+      "state": "done",
+      "folded": true,
+      "parts": []
+    }
+  ]
+}

@@ -148,9 +148,9 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
   assert.deepEqual(stopped.worked, [{ fromMs: 5000, toMs: 6000 }]);
   // The error is the turn's, not a row of its own.
   assert.deepEqual(failed.orchestratorSteps, []);
-  // A call the CLI never finished runs no clock.
+  // A call the CLI never finished was cut off with its turn: it reads stopped when the turn ended (D44).
   assert.deepEqual(interrupted.orchestratorSteps.map((step) => step.kind), [
-    { type: "tool", itemId: "b1", name: "Bash", detail: "cargo build", status: "inProgress", throughPosition: 0, item: "command" },
+    { type: "tool", itemId: "b1", name: "Bash", detail: "cargo build", status: "failed", stopped: true, throughPosition: 0, item: "command", endedAtMs: 8200 },
   ]);
 
   // The running turn works on, its time open, its reasoning still coming and its line between steps streaming.
