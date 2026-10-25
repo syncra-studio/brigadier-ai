@@ -9,12 +9,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { SettingsCard, SettingsSearch } from "@/components/shared";
 import type { PluginItemView, PluginKind, PluginProjectView, PluginsView } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { toast } from "@/state/toasts";
 import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { elsewhereLine, has, placesOf, projectSummary, sections, TAB_LABEL, type Row } from "./model";
+import { elsewhereLine, has, placesOf, placesWords, projectSummary, sections, TAB_LABEL, type Row } from "./model";
 import { FoldCard, PluginRow } from "./parts";
+import { PlacesPicker } from "./PlacesPicker";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use. Pick a project to choose what's on there.";
 
@@ -88,6 +90,18 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     });
   };
 
+  /** The place picker: applies at once, with an Undo that puts back where it was. */
+  const place = (item: PluginItemView, projectIds: string[] | null) => {
+    if (!adapter) return;
+    const before = item.everywhere ? null : item.onIn.flatMap((path) => view.projects.find((project) => project.path === path)?.id ?? []);
+    action.run(async () => {
+      await checked(view, () => adapter.setPlaces(item.key, projectIds));
+      refresh();
+      const undo = () => checked(view, () => adapter.setPlaces(item.key, before)).then(refresh, (cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }));
+      toast(`${item.name} is ${placesWords(view, projectIds)} now`, { actions: before?.length === 0 ? [] : [{ label: "Undo", run: () => void undo() }] });
+    });
+  };
+
   /** A Library item some agents are missing: each of them gets it where the others have it. */
   const addMissing = (item: PluginItemView) => {
     if (!adapter) return;
@@ -153,6 +167,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           onProject={onProject}
           onOpen={(item) => setSelected(item.key)}
           onFlip={(item, on) => flip(item, on)}
+          onPlaces={place}
           onDialog={setOpen}
         />
       </SettingsPage>
@@ -203,7 +218,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   );
 }
 
-function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onDialog }: {
+function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onPlaces, onDialog }: {
   view: PluginsView;
   focus: PluginProjectView | null;
   tab: PluginKind;
@@ -215,6 +230,7 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
   onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
+  onPlaces: (item: PluginItemView, projectIds: string[] | null) => void;
   onDialog: (open: Open) => void;
 }) {
   const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
@@ -229,6 +245,16 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
       line={entry.line}
       dim={dim}
       chips={entry.chips}
+      picker={entry.places && (
+        <PlacesPicker
+          view={view}
+          item={entry.item}
+          places={entry.places}
+          busy={busy}
+          onPlaces={(projectIds) => onPlaces(entry.item, projectIds)}
+          onEveryAgent={() => onDialog({ type: "useEverywhere", key: entry.item.key })}
+        />
+      )}
       onOpen={() => onOpen(entry.item)}
       end={
         <>

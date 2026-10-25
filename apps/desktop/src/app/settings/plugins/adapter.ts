@@ -42,6 +42,8 @@ export type PluginsAdapter = {
   subscribe: (onChange: () => void) => () => void;
   /** The row switch: `projectId` null means every project; `agent`, for that agent alone. */
   switchPlugin: (key: string, projectId: string | null, on: boolean, agent?: ProviderKind) => Promise<PluginAgentResult[]>;
+  /** The place picker: a Library item on in every project (`projectIds` null), or in exactly these projects. */
+  setPlaces: (key: string, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   add: (text: string, name: string | null, projectId: string | null, shared: boolean, more: PluginAddMore) => Promise<PluginAgentResult[]>;

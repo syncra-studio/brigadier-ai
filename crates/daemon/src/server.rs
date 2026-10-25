@@ -2451,6 +2451,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::SwitchPlugin {
             job: daemon.sessions.switch_plugin(key, project_id, on, agent)?,
         },
+        Request::SetPluginPlaces { key, project_ids } => Response::SetPluginPlaces {
+            job: daemon.sessions.set_plugin_places(key, project_ids)?,
+        },
         Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
             check: daemon.sessions.check_plugin_add(text, name).await?,
         },

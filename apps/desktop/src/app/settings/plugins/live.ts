@@ -74,6 +74,7 @@ export function livePlugins(): PluginsAdapter {
     },
     switchPlugin: async (key, projectId, on, agent) =>
       finished((await request({ method: "switchPlugin", key, projectId, on, agent: agent ?? null })).job),
+    setPlaces: async (key, projectIds) => finished((await request({ method: "setPluginPlaces", key, projectIds })).job),
     checkAdd: async (text, name) => {
       const { check } = await request({ method: "checkPluginAdd", text, name });
       if (check.needsName && !name?.trim()) return { drafts: [], needsName: true };

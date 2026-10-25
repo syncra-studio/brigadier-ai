@@ -1215,3 +1215,248 @@ fn plain_clis_have_what_the_page_shows() {
     );
     let _ = std::fs::remove_dir_all(home);
 }
+
+/// Does what `step` asks to the fixture's files, as the CLIs would: Claude's `enabledPlugins`
+/// in its user or local settings, Codex's `enabled` keys.
+fn simulate(home: &Path, step: &Step) {
+    fn set_toml(file: &Path, key: &[String], value: Option<&toml::Value>) {
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let mut doc: toml::Table = toml::from_str(&text).unwrap();
+        let (last, path) = key.split_last().unwrap();
+        let mut table = &mut doc;
+        for part in path {
+            table = table
+                .entry(part.clone())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                .as_table_mut()
+                .unwrap();
+        }
+        match value {
+            Some(value) => {
+                table.insert(last.clone(), value.clone());
+            }
+            None => {
+                table.remove(last);
+            }
+        }
+        write(file, &toml::to_string(&doc).unwrap());
+    }
+    match step {
+        Step::Run(call) if call.args.first().map(String::as_str) == Some("plugin") => {
+            let on = match call.args[1].as_str() {
+                "enable" => true,
+                "disable" => false,
+                other => panic!("not simulated: plugin {other}"),
+            };
+            let file = if call.args.contains(&"user".to_owned()) {
+                home.join(".claude/settings.json")
+            } else {
+                call.cwd
+                    .as_ref()
+                    .unwrap()
+                    .join(".claude/settings.local.json")
+            };
+            let mut settings: serde_json::Value = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            settings["enabledPlugins"][&call.args[2]] = on.into();
+            write(&file, &settings.to_string());
+        }
+        Step::Run(call) => panic!("not simulated: {}", call.args.join(" ")),
+        Step::UserConfig(TomlEdit { key, value }) => {
+            set_toml(&home.join(".codex/config.toml"), key, value.as_ref());
+        }
+        Step::ProjectFile {
+            file,
+            edit: TomlEdit { key, value },
+            ..
+        } => set_toml(file, key, value.as_ref()),
+    }
+}
+
+/// The fixture with a second project, both trusted by Codex.
+fn two_projects(name: &str, claude: Option<bool>, codex: Option<bool>) -> (Fixture, [PathBuf; 2]) {
+    let fx = Fixture::new(name, claude, codex);
+    let other = fx.home.join("proj2");
+    std::fs::create_dir_all(&other).unwrap();
+    let config = fx.home.join(".codex/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &format!(
+            "{text}\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            other.display()
+        ),
+    );
+    let projects = [fx.project.clone(), other];
+    (fx, projects)
+}
+
+fn places_ctx<'a>(fx: &'a Fixture, projects: &'a [PathBuf]) -> Ctx<'a> {
+    Ctx {
+        roots: &fx.roots,
+        env: &[],
+        library: &fx.library,
+        secrets: &fx.secrets,
+        projects,
+        report: &|_, _| {},
+        binary: &|_| None,
+    }
+}
+
+/// Each agent's places now: (global, the projects' names it is on in).
+fn places_now(ctx: &Ctx<'_>) -> Vec<(bool, Vec<String>)> {
+    adapters()
+        .into_iter()
+        .map(|adapter| {
+            let placed = placed(ctx, adapter, "tidy@brigadier");
+            (
+                placed.global,
+                placed.on_in.iter().map(|path| folder_name(path)).collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_picker_moves_an_item_between_global_and_projects_on_before_off() {
+    let (fx, projects) = two_projects("places", Some(true), Some(true));
+    let ctx = places_ctx(&fx, &projects);
+    let done = std::sync::Mutex::new(Vec::new());
+    let run = |adapter: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
+        for step in steps {
+            simulate(&fx.home, step);
+        }
+        done.lock().unwrap().extend(
+            lines(steps)
+                .into_iter()
+                .map(|line| format!("{:?} {line}", adapter.agent())),
+        );
+        Ok(())
+    };
+    let taken = || std::mem::take(&mut *done.lock().unwrap());
+    let both = |global: bool, on_in: &[&str]| {
+        vec![
+            (
+                global,
+                on_in
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<Vec<_>>()
+            );
+            2
+        ]
+    };
+    assert_eq!(places_now(&ctx), both(true, &["proj", "proj2"]));
+
+    // Global to one project: on there by itself first, then off for every project.
+    set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &run).unwrap();
+    assert_eq!(
+        taken(),
+        [
+            "Claude claude plugin enable tidy@brigadier --scope local --json".to_owned(),
+            format!("Codex project plugins.tidy@brigadier.enabled = {ON:?}"),
+            "Claude claude plugin disable tidy@brigadier --scope user --json".to_owned(),
+            format!("Codex user plugins.tidy@brigadier.enabled = {OFF:?}"),
+        ]
+    );
+    assert_eq!(places_now(&ctx), both(false, &["proj"]));
+
+    // To the other project: on in the new one before off in the old one.
+    set_places_with(&ctx, "lib:tidy", Some(&projects[1..]), &run).unwrap();
+    let moved = taken();
+    let on_new = moved
+        .iter()
+        .position(|line| line.contains("enable"))
+        .unwrap();
+    let off_old = moved
+        .iter()
+        .position(|line| line.contains("disable"))
+        .unwrap();
+    assert!(on_new < off_old, "{moved:?}");
+    assert_eq!(places_now(&ctx), both(false, &["proj2"]));
+
+    // Several at once, then Global again: every project, with nothing left off.
+    set_places_with(&ctx, "lib:tidy", Some(&projects), &run).unwrap();
+    assert_eq!(places_now(&ctx), both(false, &["proj", "proj2"]));
+    taken();
+    set_places_with(&ctx, "lib:tidy", None, &run).unwrap();
+    let global = taken();
+    assert!(
+        global
+            .iter()
+            .all(|line| !line.contains("disable") && !line.contains("Some(Boolean(false))")),
+        "{global:?}"
+    );
+    assert_eq!(places_now(&ctx), both(true, &["proj", "proj2"]));
+}
+
+#[test]
+fn a_move_that_fails_puts_every_agent_back_and_says_what_it_couldnt() {
+    let (fx, projects) = two_projects("places-fail", Some(true), Some(true));
+    let ctx = places_ctx(&fx, &projects);
+    // Codex can't switch it off for every project; everything else goes.
+    let fail_codex_off = |adapter: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
+        for step in steps {
+            if matches!(step, Step::UserConfig(TomlEdit { value, .. }) if *value == OFF) {
+                return Err("codex said no".to_owned());
+            }
+            simulate(&fx.home, step);
+        }
+        let _ = adapter;
+        Ok(())
+    };
+    assert_eq!(
+        set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &fail_codex_off),
+        Err("Nothing was changed: Codex: codex said no.".to_owned())
+    );
+    assert_eq!(
+        places_now(&ctx),
+        vec![(true, vec!["proj".to_owned(), "proj2".to_owned()]); 2]
+    );
+
+    // Claude Code can't be switched back on for every project either: what's left is said.
+    let (fx, projects) = two_projects("places-left", Some(true), Some(true));
+    let ctx = places_ctx(&fx, &projects);
+    let stuck = |adapter: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
+        for step in steps {
+            if matches!(step, Step::UserConfig(TomlEdit { value, .. }) if *value == OFF) {
+                return Err("codex said no".to_owned());
+            }
+            if matches!(step, Step::Run(call) if call.args[1] == "enable" && call.args.contains(&"user".to_owned()))
+            {
+                return Err("claude said no".to_owned());
+            }
+            simulate(&fx.home, step);
+        }
+        let _ = adapter;
+        Ok(())
+    };
+    // It goes back on in each project by itself, as far as it can.
+    assert_eq!(
+        set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &stuck),
+        Err(
+            "Codex: codex said no. It couldn't all be put back: Claude Code has it on only in \
+             proj and proj2, where it had it on in every project."
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn only_a_library_item_has_places_and_it_needs_one() {
+    let fx = Fixture::new("places-what", Some(true), Some(true));
+    let projects = [fx.project.clone()];
+    let ctx = places_ctx(&fx, &projects);
+    let run = |_: &dyn AgentAdapter, _: &[Step]| -> Result<(), String> { panic!("nothing runs") };
+    assert_eq!(
+        set_places_with(&ctx, "server:pencil", None, &run),
+        Err(ADD_TO_EVERY_AGENT_FIRST.to_owned())
+    );
+    assert_eq!(
+        set_places_with(&ctx, "lib:tidy", Some(&[]), &run),
+        Err("Pick a project, or Global.".to_owned())
+    );
+    assert!(set_places_with(&ctx, "lib:gone", None, &run).is_err());
+}

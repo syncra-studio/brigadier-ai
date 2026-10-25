@@ -113,6 +113,11 @@ pub(crate) enum Action {
         shared: bool,
         options: ops::AddOptions,
     },
+    /// Every project (`places` `None`), or exactly these projects.
+    SetPlaces {
+        key: String,
+        places: Option<Vec<PathBuf>>,
+    },
     UseEverywhere {
         key: String,
     },
@@ -204,6 +209,10 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
                 Ok((keys, warning)) => (Ok(keys), warning),
                 Err(err) => (Err(err), None),
             },
+            Action::SetPlaces { key, places } => (
+                ops::set_places(&ctx, key, places.as_deref()).map(|()| vec![key.clone()]),
+                None,
+            ),
             Action::UseEverywhere { key } => {
                 (ops::use_everywhere(&ctx, key).map(|key| vec![key]), None)
             }

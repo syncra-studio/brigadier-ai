@@ -78,13 +78,15 @@ function ScopeChip({ children }: { children: ReactNode }) {
 }
 
 /** One item: its tile, name and kind, a line, its agents, tags, and its switch or button. */
-export function PluginRow({ view, item, line, dim = false, chips = [], lit, end, onOpen }: {
+export function PluginRow({ view, item, line, dim = false, chips = [], picker, lit, end, onOpen }: {
   view: PluginsView;
   item: PluginItemView;
   line: Line;
   /** Off where the page looks. */
   dim?: boolean;
   chips?: { text: string }[];
+  /** The place picker, after the tags. */
+  picker?: ReactNode;
   lit?: (state: AgentItemState) => boolean;
   /** Its switch or button. */
   end: ReactNode;
@@ -112,6 +114,7 @@ export function PluginRow({ view, item, line, dim = false, chips = [], lit, end,
       <span className={cn("flex shrink-0 items-center gap-3", dim && "opacity-50")}>
         <AgentStrip view={view} item={item} lit={dim ? () => false : (lit ?? has)} />
         {chips.map((chip) => <ScopeChip key={chip.text}>{chip.text}</ScopeChip>)}
+        {picker}
       </span>
       {end}
     </div>

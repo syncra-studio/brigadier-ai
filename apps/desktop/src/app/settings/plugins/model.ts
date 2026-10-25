@@ -19,7 +19,24 @@ export type Row = {
   line: Line;
   /** Project tags: where it's on, or off. */
   chips: { text: string; off: boolean }[];
+  /** The place picker's tag, where the row has one: Global, or the projects (folders) it's on in. */
+  places?: Places;
 };
+
+/** Where an item is on, as the place picker shows it: every project, or these projects' folders. */
+export type Places = "global" | string[];
+
+/** The place picker's tag: "Global", "freelogo", "2 projects". */
+export function placesLabel(view: PluginsView, places: Places): string {
+  if (places === "global") return "Global";
+  return places.length === 1 ? projectName(view, places[0]!) : `${places.length} projects`;
+}
+
+/** Where `projectIds` (null: every project) puts an item, in words: "on in every project". */
+export function placesWords(view: PluginsView, projectIds: string[] | null): string {
+  if (!projectIds) return "on in every project";
+  return `on only in ${listNames(projectIds.map((id) => view.projects.find((project) => project.id === id)?.name ?? id))}`;
+}
 
 type Section = {
   key: "every" | "some" | "own" | "fromEvery" | "fromOther";
@@ -90,19 +107,24 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
         description: "On in every project, and in new ones you add. Turn one off to stop it everywhere.",
         rows: items.filter((item) => item.everywhere || nowhere(item)).map((item) => {
           const on = isOn(item, null);
-          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips: on ? offChips(view, item) : [] };
+          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips: on ? offChips(view, item) : [], ...(on ? { places: "global" as const } : {}) };
         }),
       },
       {
         key: "some",
         title: "Only in some projects",
         description: "Each one is on only in the projects on its tag. Click the tag to change where.",
-        rows: items.filter((item) => !item.everywhere && item.onIn.length > 0).map((item) => ({
-          item,
-          on: true,
-          line: problem(item) ?? about(item),
-          chips: item.onIn.map((path) => ({ text: projectName(view, path), off: false })),
-        })),
+        rows: items.filter((item) => !item.everywhere && item.onIn.length > 0).map((item) => {
+          // The projects it's on in go on the picker; a folder that isn't a project is a plain tag.
+          const projects = item.onIn.filter((path) => isProject(view, path));
+          return {
+            item,
+            on: true,
+            line: problem(item) ?? about(item),
+            chips: item.onIn.filter((path) => !isProject(view, path)).map((path) => ({ text: projectName(view, path), off: false })),
+            ...(projects.length ? { places: projects } : {}),
+          };
+        }),
       },
     ];
   }

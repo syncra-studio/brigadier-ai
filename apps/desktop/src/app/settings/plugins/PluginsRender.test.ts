@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; switch: string | null; button: string | null };
+type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; picker: string | null; switch: string | null; button: string | null };
 type SectionSeen = { title: string; description: string; count: string; rows: RowSeen[] };
 type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[]; values: string[]; picks: string[]; count: string };
 type Seen = {
@@ -25,6 +25,7 @@ type Seen = {
   emptyRow: string;
   removeRow: string;
   menu: { rows: string[]; current: string } | null;
+  places: string[] | null;
   dialog: DialogSeen | null;
   toasts: string[];
   overflow: boolean;
@@ -68,7 +69,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.deepEqual(row(every.rows, "playwright"), { ...row(every.rows, "playwright"), line: "Off in every project.", off: true, switch: "false", lit: [] });
   const some = section(l1, "Only in some projects");
   assert.equal(some.description, "Each one is on only in the projects on its tag. Click the tag to change where.");
-  assert.deepEqual([some.rows[0]!.name, some.rows[0]!.chips, some.rows[0]!.switch], ["postgres", ["brigadier-ai"], "true"]);
+  assert.deepEqual([some.rows[0]!.name, some.rows[0]!.chips, some.rows[0]!.picker, some.rows[0]!.switch], ["postgres", [], "brigadier-ai", "true"]);
   // D4: Found in other apps, folded until opened.
   assert.deepEqual(l1.folds, [{ text: "Found in other apps3 in Claude Desktop and Cursor. Your agents can't use them until you bring them in.", open: false, rows: [] }]);
   // A dimmed row keeps its problem.
@@ -310,6 +311,32 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   // A project's note shows on its agent's line, with its one fix.
   assert.match(seen.noted!.agentRows[1]!, /^CodexCodex only reads this project's settings once you trust the project\.Trust landing/);
   assert.deepEqual(seen.trustCalls, ["trustProject p-landing"]);
+
+  // The place picker. Each row's tag: Global on Global rows, its project on the others; none
+  // where it's off, and a folder that isn't a project stays a plain tag.
+  assert.deepEqual([row(every.rows, "pencil").picker, row(every.rows, "playwright").picker, some.rows[0]!.picker], ["Global", null, "brigadier-ai"]);
+  assert.deepEqual([foreign.picker, foreign.chips], [null, ["freelogo-fos-2026"]]);
+  assert.ok(seen.L3!.sections.every((entry) => entry.rows.every((seenRow) => seenRow.picker === null)), "a project's view has no tags");
+  // Global at the top, then the projects; the last one checked can't be unchecked.
+  assert.deepEqual(seen.placesOpen!.places, ["GlobalOn in every project", "brigadier-ai~/Code/brigadier-ai * locked", "steady-app~/Code/steady-app", "landing~/Code/landing"]);
+  const twoPlaces = row(section(seen.placesTwo!, "Only in some projects").rows, "postgres");
+  assert.equal(twoPlaces.picker, "2 projects");
+  assert.deepEqual(seen.placesTwo!.places, ["GlobalOn in every project", "brigadier-ai~/Code/brigadier-ai *", "steady-app~/Code/steady-app *", "landing~/Code/landing"]);
+  assert.ok(seen.placesTwo!.toasts.includes("postgres is on only in brigadier-ai and steady-app nowUndo"), seen.placesTwo!.toasts.join(" | "));
+  assert.equal(row(section(seen.placesUndone!, "Only in some projects").rows, "postgres").picker, "brigadier-ai");
+  // Global moves it to the Global section; checking a project there makes it that project's only.
+  assert.equal(row(section(seen.placesGlobal!, "Global").rows, "postgres").picker, "Global");
+  assert.deepEqual(seen.placesGlobalOpen!.places, ["GlobalOn in every project *", "brigadier-ai~/Code/brigadier-ai", "steady-app~/Code/steady-app", "landing~/Code/landing"]);
+  assert.equal(row(section(seen.placesLanding!, "Only in some projects").rows, "postgres").picker, "landing");
+  assert.deepEqual(seen.placesCalls, [
+    "setPlaces lib:postgres p-brigadier,p-steady",
+    "setPlaces lib:postgres p-brigadier",
+    "setPlaces lib:postgres global",
+    "setPlaces lib:postgres p-landing",
+  ]);
+  // Not a Library item: one line, which adds it to every agent first.
+  assert.deepEqual(seen.placesOther!.places, ["Add to every agent first"]);
+  assert.equal(seen.placesOtherDialog!.dialog!.title, "Add pencil to every agent?");
 
   // Search keeps the rows that match; an empty section goes.
   assert.deepEqual(seen.searched!.sections.map((entry) => [entry.title, names(entry.rows)]), [["Global", ["railway"]]]);

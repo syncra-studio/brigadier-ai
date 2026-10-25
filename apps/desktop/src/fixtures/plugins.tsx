@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
-import { revealSetting } from "@/app/settings/reveal";
+import { revealSetting, useReveal } from "@/app/settings/reveal";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
@@ -13,7 +13,7 @@ import type { AgentItemState, PluginAttention, PluginItemView, PluginKind, Plugi
 import { useApp } from "@/state/store";
 
 /*
- * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, and G2A: G2's Advanced open) for shots; ?agents=2 keeps to the
+ * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, G2A: G2's Advanced open, and P1: the place picker open) for shots; ?agents=2 keeps to the
  * two agents Brigadier drives today (the board draws six); ?drive=1 walks every state, flips
  * switches and confirms the dialogs, then writes what it saw to #plugins-result
  * (PluginsRender.test.ts reads it).
@@ -162,6 +162,14 @@ const adapter: PluginsAdapter = {
     changed();
     return ok();
   },
+  setPlaces: async (key, projectIds) => {
+    calls.push(`setPlaces ${key} ${projectIds?.join(",") ?? "global"}`);
+    const item = spec(key)!;
+    if (!projectIds) Object.assign(item, { everywhere: true, offIn: [], onIn: [] });
+    else Object.assign(item, { everywhere: false, offIn: [], onIn: projectIds.map((id) => projects.find((project) => project.id === id)!.path) });
+    changed();
+    return ok();
+  },
   checkAdd: async (text, name) => {
     calls.push(`checkPluginAdd ${text}${name ? ` name ${name}` : ""}`);
     // A bare server object has no name of its own.
@@ -262,6 +270,7 @@ function rowsOf(root: ParentNode) {
       off: row.hasAttribute("data-off"),
       lit: all('[data-slot="agent-mark"]', row).filter((mark) => !mark.hasAttribute("data-dim")).map((mark) => mark.getAttribute("data-agent")),
       chips: all('[data-slot="scope-chip"]', row).map(text),
+      picker: text(row.querySelector('[data-slot="places-picker"]')) || null,
       switch: row.querySelector("[role=switch]")?.getAttribute("aria-checked") ?? null,
       button: text(row.querySelector("button[data-slot=button]")) || null,
     };
@@ -275,6 +284,7 @@ function read() {
   probe.remove();
   const dialog = document.querySelector<HTMLElement>("[data-dialog]");
   const menu = document.querySelector('[data-slot="project-filter"]');
+  const places = document.querySelector('[data-slot="places-picker-menu"]');
   return {
     settingsColumn,
     title: text(document.querySelector("main h1")),
@@ -299,6 +309,9 @@ function read() {
     emptyRow: text(document.querySelector('main [data-slot="empty-row"]')),
     removeRow: text(document.querySelector('main [data-slot="remove-row"]')),
     menu: menu ? { rows: all("button", menu).map(text), current: text(menu.querySelector("[aria-current]")) } : null,
+    places: places
+      ? all("button", places).map((button) => `${text(button)}${button.hasAttribute("aria-current") || button.getAttribute("aria-checked") === "true" ? " *" : ""}${button.hasAttribute("aria-disabled") ? " locked" : ""}`)
+      : null,
     dialog: dialog
       ? {
           slot: dialog.getAttribute("data-dialog"),
@@ -390,6 +403,8 @@ const OPENERS: Record<string, () => Promise<void>> = {
     await pause();
     click("Add to every agent");
   },
+  /** The place picker open on postgres's project tag. */
+  P1: async () => all<HTMLButtonElement>('main [data-slot="places-picker"]').find((button) => text(button) === "brigadier-ai")!.click(),
   G7: async () => {
     click("Open linear");
     await pause();
@@ -602,6 +617,57 @@ async function drive(setKey: (key: number) => void) {
   revealSetting("Skills");
   await pause(120);
   seen.revealSkills = read();
+  useReveal.setState({ label: null });
+
+  // The place picker: a project tag and a Global tag open one menu; each pick applies at once,
+  // with Undo; the last project can't be unchecked; another agent's item is added to every
+  // agent first.
+  await reset(setKey);
+  const picker = (name: string) => {
+    const tag = all('[data-slot="plugin-row"]', main()).find((row) => text(row.querySelector(".font-medium")) === name)?.querySelector<HTMLButtonElement>('[data-slot="places-picker"]');
+    if (!tag) throw new Error(`No place picker on ${name}: ${JSON.stringify(read().sections.map((entry) => [entry.title, entry.rows.map((seenRow) => seenRow.name)]))}`);
+    return tag;
+  };
+  /** Opens `name`'s picker, closing one still open (a click elsewhere would). */
+  const openPicker = async (name: string) => {
+    document.querySelector('[data-slot="places-picker-menu"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await pause();
+    picker(name).click();
+    await pause(120);
+  };
+  const pick = (label: string) => {
+    const button = all<HTMLButtonElement>('[data-slot="places-picker-menu"] button').find((entry) => text(entry).startsWith(label));
+    if (!button) throw new Error(`No ${label} in the place picker: ${JSON.stringify(read().places)}`);
+    button.click();
+  };
+  const placed = calls.length;
+  await openPicker("postgres");
+  seen.placesOpen = read();
+  pick("brigadier-ai");
+  await pause(120);
+  pick("steady-app");
+  await pause(300);
+  seen.placesTwo = read();
+  const undoPlaces = all<HTMLButtonElement>('[data-slot="toast"] button').find((button) => text(button) === "Undo");
+  if (!undoPlaces) throw new Error(`No Undo: ${JSON.stringify(read().toasts)} ${read().alert}`);
+  undoPlaces.click();
+  await pause(300);
+  seen.placesUndone = read();
+  await openPicker("postgres");
+  pick("Global");
+  await pause(300);
+  seen.placesGlobal = read();
+  await openPicker("postgres");
+  seen.placesGlobalOpen = read();
+  pick("landing");
+  await pause(300);
+  seen.placesLanding = read();
+  await openPicker("pencil");
+  seen.placesOther = read();
+  pick("Add to every agent first");
+  await pause(120);
+  seen.placesOtherDialog = read();
+  seen.placesCalls = calls.slice(placed);
 
   // Search keeps the rows that match.
   await reset(setKey);

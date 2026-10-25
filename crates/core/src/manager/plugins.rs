@@ -93,12 +93,12 @@ pub struct PluginItemView {
     pub agents: Vec<PluginAgentState>,
     /// What needs the user, if anything.
     pub attention: Option<PluginAttention>,
-    /// Its switch works as it is; else it goes into the Library first (Use everywhere): one
+    /// Its switch works as it is; else it goes into the Library first (Add to every agent): one
     /// of the agents that has it can't keep it to a project by itself.
     pub switchable: bool,
     /// A newer version is waiting (a Library item from Git or skills.sh).
     pub update_available: bool,
-    /// It came into the Library by Use everywhere, which can be undone.
+    /// It came into the Library by Add to every agent, which can be undone.
     pub can_undo: bool,
     /// The server to sign in to (`Request::SignInMcpServer`'s id), for one that signs in.
     pub server_id: Option<String>,
@@ -1008,6 +1008,27 @@ impl super::SessionManager {
             on,
             agent: agent.and_then(ops::agent_of),
         }))
+    }
+
+    /// Puts Library item `key` on in every project (`project_ids` `None`, Global), or in
+    /// exactly the user's projects `project_ids`, for every agent. Its job's id.
+    pub fn set_plugin_places(
+        &self,
+        key: String,
+        project_ids: Option<Vec<String>>,
+    ) -> crate::Result<String> {
+        let places = match project_ids {
+            None => None,
+            Some(ids) if ids.is_empty() => {
+                return Err(crate::Error::Invalid("no projects picked".to_owned()));
+            }
+            Some(ids) => Some(
+                ids.into_iter()
+                    .map(|id| self.plugin_project(Some(id)).map(Option::unwrap_or_default))
+                    .collect::<crate::Result<Vec<PathBuf>>>()?,
+            ),
+        };
+        Ok(self.plugin_job(jobs::Action::SetPlaces { key, places }))
     }
 
     /// What pasted `text` would add, before anything is added.
