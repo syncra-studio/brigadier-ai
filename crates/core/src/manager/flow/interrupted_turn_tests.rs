@@ -23,7 +23,7 @@ fn holding_resumes(seen: Arc<Mutex<Vec<String>>>, hold_resumes: Arc<AtomicBool>)
         Box::pin(async move {
             seen.lock().unwrap().push(turn.input.clone());
             if turn.input.contains("Hold.")
-                || (turn.input.contains("Brigadier quit") && hold_resumes.load(Ordering::SeqCst))
+                || (turn.input.contains(GOES_ON) && hold_resumes.load(Ordering::SeqCst))
             {
                 std::future::pending::<()>().await;
             }
@@ -31,6 +31,15 @@ fn holding_resumes(seen: Arc<Mutex<Vec<String>>>, hold_resumes: Arc<AtomicBool>)
         })
     })
 }
+
+/// How the word to a turn that goes on by itself after a restart begins: no one asked for it.
+const GOES_ON: &str = "[Brigadier restarted while you were working on this request, and your turn \
+goes on by itself now.";
+/// How Continue's word to a turn cut off mid-way begins: the user asked for it.
+const CONTINUED: &str = "[Brigadier quit while you were working on this request, and the user asked \
+you to continue.";
+/// What only the user's Continue says.
+const ASKED: &str = "the user asked you to continue";
 
 fn holding(seen: Arc<Mutex<Vec<String>>>) -> Script {
     holding_resumes(seen, Arc::default())
@@ -94,10 +103,9 @@ async fn went_on_by_itself(flow: &Flow, request: &str, seen: &Arc<Mutex<Vec<Stri
     assert_eq!(board.latest_request().expect("a request").id, request);
     let inputs = seen.lock().unwrap().clone();
     assert!(
-        inputs.last().is_some_and(
-            |input| input.contains("Brigadier quit while you were working")
-                && input.contains("git status")
-        ),
+        inputs.last().is_some_and(|input| input.contains(GOES_ON)
+            && input.contains("git status")
+            && !input.contains(ASKED)),
         "{inputs:#?}"
     );
     assert_eq!(auto_resumes(flow).await, 1);
@@ -137,10 +145,9 @@ async fn interrupted_then_continued(flow: &Flow, request: &str, seen: &Arc<Mutex
     assert_eq!(board.latest_request().expect("a request").id, request);
     let inputs = seen.lock().unwrap().clone();
     assert!(
-        inputs.last().is_some_and(
-            |input| input.contains("Brigadier quit while you were working")
-                && input.contains("git status")
-        ),
+        inputs
+            .last()
+            .is_some_and(|input| input.contains(CONTINUED) && input.contains("git status")),
         "{inputs:#?}"
     );
 }
@@ -193,7 +200,7 @@ async fn cut_off_again_it_waits_for_continue() {
         seen.lock()
             .unwrap()
             .iter()
-            .any(|input| input.contains("Brigadier quit while you were working"))
+            .any(|input| input.contains(GOES_ON))
     })
     .await;
     flow.until("its turn running", |board| board.run == RunState::Running)
@@ -282,9 +289,17 @@ async fn a_turn_that_cannot_go_on_by_itself_waits_for_continue() {
         seen.lock()
             .unwrap()
             .iter()
-            .filter(|input| input.contains("Brigadier quit while you were working"))
+            .filter(|input| input.contains(CONTINUED))
             .count(),
         1
+    );
+    // The turn that was to go on by itself never began: no word of it reached the thread.
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains(GOES_ON))
     );
     flow.stop().await;
 }
@@ -402,9 +417,70 @@ async fn a_crash_after_the_send_sends_it_again_with_a_word_to_check() {
         inputs
             .last()
             .is_some_and(|input| input.contains("Add a test.")
-                && input.contains("check git status and git log")),
+                && input.contains("[Brigadier restarted as this message was being sent to you, and it is sent again by itself.")
+                && input.contains("check git status and git log")
+                && !input.contains(ASKED)),
         "{inputs:#?}"
     );
     assert_eq!(auto_resumes(&flow).await, 1);
+    flow.stop().await;
+}
+
+/// A crash after the CLI took the message, and its CLI won't start when it would go again by
+/// itself: Continue sends it again with the user's own word, never the restart's.
+#[tokio::test]
+async fn a_message_continue_sends_again_says_the_user_asked() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-after-send-continue",
+        Options::default(),
+        holding(seen.clone()),
+    )
+    .await;
+    flow.say("Say hi.").await;
+    flow.until("the first request answered", |board| {
+        board
+            .latest_request()
+            .is_some_and(|r| r.state == RequestState::Done)
+    })
+    .await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send.lock().unwrap() = Some((reached.clone(), release));
+    flow.say("Add a test.").await;
+    reached.notified().await;
+    let request = flow
+        .board()
+        .await
+        .latest_request()
+        .expect("a request")
+        .id
+        .clone();
+    flow.behavior.fail_starts.store(true, Ordering::SeqCst);
+    flow.crash().await;
+    // Sending it again by itself was taken, and its CLI failed to start: interrupted again.
+    super::eventually("a start that failed", || {
+        flow.behavior.failed_starts.load(Ordering::SeqCst) > 0
+    })
+    .await;
+    flow.until("the request interrupted", |board| {
+        interrupted(board, &request) && board.run == RunState::Failed
+    })
+    .await;
+    assert_eq!(auto_resumes(&flow).await, 1);
+    flow.behavior.fail_starts.store(false, Ordering::SeqCst);
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    answered(&flow, &request).await;
+    let inputs = seen.lock().unwrap().clone();
+    let last = inputs.last().expect("an input");
+    assert!(
+        last.contains("Add a test.")
+            && last.contains("[Brigadier quit as this message was being sent to you, and the user asked you to continue.")
+            && !last.contains("Brigadier restarted"),
+        "{inputs:#?}"
+    );
     flow.stop().await;
 }

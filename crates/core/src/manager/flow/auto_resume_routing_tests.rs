@@ -137,7 +137,6 @@ fn starts_of(flow: &Flow, who: &str) -> Vec<(ProviderKind, SessionSpec)> {
 /// A turn that went on by itself after the restart (a worker's note, or the thread's).
 fn went_on(input: &str) -> bool {
     input.contains("Brigadier restarted while you were working")
-        || input.contains("Brigadier quit while you were working")
 }
 
 /// The account the user's account rules pick for new `provider` work now.

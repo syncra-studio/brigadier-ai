@@ -38,7 +38,7 @@ const CARRY_ON = "Carry on from the hand-off note.";
  * a carry-on after a limit. The CLI's reply to one still shows.
  */
 const BRIGADIER_SAYS =
-  /^\[(?:message from session |decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier: this conversation continues |Your last turn stopped early)/;
+  /^\[(?:message from session |decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early)/;
 
 /** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
 const CODEX_WAKE = /^\[your background command /;

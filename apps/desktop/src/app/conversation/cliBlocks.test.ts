@@ -700,6 +700,9 @@ test("Brigadier's own words to the CLI are no bubble, as a turn's start or a ste
       user("q1", "[answer] You asked the user:\nYes\n[card c1]", 4000),
       user("r1", "[The user stopped you, then asked you to resume. Continue their request from where you left off.]", 5000),
       user("p1", "[preview ended: failed] p1 \"web\" stopped on its own; it is not running now.", 6000),
+      // A turn a restart cut off, going on by itself (D9 a), and one the user continued.
+      user("g1", "[Brigadier restarted while you were working on this request, and your turn goes on by itself now. Check git status and git log first.]", 7000),
+      user("c1", "[Brigadier quit while you were working on this request, and the user asked you to continue. Check git status and git log first.]", 8000),
     ],
     turns: [
       turn("u1", 1000, 1500, "done"),
@@ -708,11 +711,13 @@ test("Brigadier's own words to the CLI are no bubble, as a turn's start or a ste
       turn("q1", 4000, 4100, "done"),
       turn("r1", 5000, 5100, "done"),
       turn("p1", 6000, 6100, "done"),
+      turn("g1", 7000, 7100, "done"),
+      turn("c1", 8000, 8100, "done"),
     ],
   };
   const blocks = cliBlocks(peers, "c1", NO_BOARD);
   assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [
-    ["u1", null], ["u2", "message"], ["d1", null], ["q1", null], ["r1", null], ["p1", null],
+    ["u1", null], ["u2", "message"], ["d1", null], ["q1", null], ["r1", null], ["p1", null], ["g1", null], ["c1", null],
   ]);
   assert.deepEqual(blocks[0]!.steers, []);
   assert.deepEqual(blocks[0]!.texts.map((text) => text.text), ["Checked."]);

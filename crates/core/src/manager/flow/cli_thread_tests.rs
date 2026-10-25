@@ -219,7 +219,7 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
         script(move |turn| {
             let held = held.clone();
             async move {
-                if turn.input.contains("Hold.") && !turn.input.contains("Brigadier quit") {
+                if turn.input.contains("Hold.") && !turn.input.contains("Brigadier restarted") {
                     held.notify_one();
                     std::future::pending::<()>().await;
                 }

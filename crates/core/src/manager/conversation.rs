@@ -135,6 +135,20 @@ pub(crate) const INTERRUPTED_BEFORE_START: &str = "Brigadier quit before this st
 const RESENT_AFTER_QUIT: &str = "[Brigadier quit as this message was being sent to you, and the \
 user asked you to continue. If you had already begun on it, check git status and git log \
 first, then carry on from where it stands.]";
+/// Sent with the user's message a restart cut off as it was being sent, sent again by itself
+/// (D9 a): no one asked for it.
+const RESENT_AFTER_RESTART: &str = "[Brigadier restarted as this message was being sent to you, \
+and it is sent again by itself. If you had already begun on it, check git status and git log \
+first, then carry on from where it stands.]";
+/// Continue's word to a turn that was running when Brigadier quit: the user asked for it.
+const CONTINUED_AFTER_QUIT: &str = "[Brigadier quit while you were working on this request, and \
+the user asked you to continue. Your last steps may have finished after your record of them: \
+check git status and git log first, then continue their request from where it stands.]";
+/// The word to a turn a restart cut off, going on by itself (D9 a): no one asked for it.
+const GOES_ON_AFTER_RESTART: &str = "[Brigadier restarted while you were working on this \
+request, and your turn goes on by itself now. Your last steps may have finished after your \
+record of them: check git status and git log first, then continue the user's request from where \
+it stands.]";
 
 /// Whether a request ended because Brigadier quit while its turn ran or started.
 pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
@@ -1886,7 +1900,7 @@ impl SessionManager {
             request: request.clone(),
             error,
         });
-        if let Err(err) = self.resume(id.clone()).await {
+        if let Err(err) = self.resume_turn(id.clone(), true).await {
             conv.state.lock().await.auto_resume = None;
             tracing::info!(conversation = %id, error = %err, "a cut-off turn waits for Continue");
         }
@@ -1896,6 +1910,12 @@ impl SessionManager {
     /// block, telling the model to carry on. Workers are untouched (a stop never ends them);
     /// the queue unpauses and runs after this turn.
     pub async fn resume(&self, id: ConversationId) -> Result<()> {
+        self.resume_turn(id, false).await
+    }
+
+    /// [`Self::resume`], asked by the user (Continue), or `by_itself` after a restart cut the
+    /// turn off (D9 a): its word to the thread says which.
+    async fn resume_turn(&self, id: ConversationId, by_itself: bool) -> Result<()> {
         let conv = self.conv(&id)?;
         {
             let state = conv.state.lock().await;
@@ -1928,16 +1948,21 @@ impl SessionManager {
                 .find(|message| message.id == request && message.role == MessageRole::User)
         {
             let mut state = conv.state.lock().await;
-            state.notes.push(RESENT_AFTER_QUIT.into());
+            let note = if by_itself {
+                RESENT_AFTER_RESTART
+            } else {
+                RESENT_AFTER_QUIT
+            };
+            state.notes.push(note.into());
             state.pending.push(message);
             drop(state);
             self.kick(&conv);
             return Ok(());
         }
-        let text = if interrupted {
-            "[Brigadier quit while you were working on this request, and the user asked you to \
-             continue. Your last steps may have finished after your record of them: check git \
-             status and git log first, then continue their request from where it stands.]"
+        let text = if interrupted && by_itself {
+            GOES_ON_AFTER_RESTART
+        } else if interrupted {
+            CONTINUED_AFTER_QUIT
         } else {
             "[The user stopped you, then asked you to resume. Continue their request from where \
              you left off.]"
@@ -2545,7 +2570,7 @@ impl SessionManager {
                 envelopes.retain(|(envelope, of)| {
                     envelope.kind != InjectionKind::Resume || of.as_ref() != Some(request)
                 });
-                state.notes.retain(|note| note != RESENT_AFTER_QUIT);
+                state.notes.retain(|note| note != RESENT_AFTER_RESTART);
             }
             if let Some(request) = &failed {
                 state.outcomes.insert(
