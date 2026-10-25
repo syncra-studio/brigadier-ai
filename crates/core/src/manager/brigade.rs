@@ -139,8 +139,10 @@ mod tests {
         // added 0.7 KB to save a whole call (w155); keeping a watcher on what ends after the
         // turn, 0.27 KB (D21); grilling every new job with the CLI's own question tool,
         // 0.09 KB (harness D7, D28); the session's own subagents and quick checks, naked workers
-        // and the review flow, 0.61 KB after tightening (harness D3, D8, D13, D22; proposed).
-        assert!(SKILL.len() <= 10_560, "{} bytes", SKILL.len());
+        // and the review flow, 0.61 KB after tightening (harness D3, D8, D13, D22; proposed); the
+        // question tool winning over another skill's text format, and a round too big for one
+        // call on one card, 0.28 KB (harness D36).
+        assert!(SKILL.len() <= 10_840, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
@@ -254,6 +256,10 @@ mod tests {
             "Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled \"… (Recommended)\", why in its description; a next round only for what hangs on those answers, never one call per question.",
             "`brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
             "Say the shared understanding back in a few lines, then start.",
+            // Another skill's text format never wins over the card; a round bigger than one
+            // call of the question tool goes on one `brigadier ask` card (harness D36).
+            "More questions or options than one call takes: one `brigadier ask` card instead.",
+            "Questions go in the question tool or on a card, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown.",
             "answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once",
             "Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.",
         ] {

@@ -28,8 +28,10 @@ Every new job (build, change, fix, design, research) opens with a grilling round
 
 1. First answer all you can yourself (the code, the ledger, a web search, a research worker).
 2. Map the decisions the job needs, each after those it depends on.
-3. Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled "… (Recommended)", why in its description; a next round only for what hangs on those answers, never one call per question.
+3. Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled "… (Recommended)", why in its description; a next round only for what hangs on those answers, never one call per question. More questions or options than one call takes: one `brigadier ask` card instead.
 4. Stop when nothing is assumed silently. Say the shared understanding back in a few lines, then start.
+
+Questions go in the question tool or on a card, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown.
 
 Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction. The user unsure which way: run the fusion skill and answer from it.
 

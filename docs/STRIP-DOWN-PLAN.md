@@ -238,7 +238,10 @@ just like the delegator, how an orchestrator works"; supersedes old-run D43 "Def
   question; this supersedes "one question at a time"), and says the shared understanding back
   before work starts. (Superseded by harness D7/D28: every new job opens with a grilling round in the CLI's own
   question tool, skipped only when nothing is left to decide; `brigadier ask` stays for a worker's question
-  passed up and a CLI without one.) It answers its workers' questions itself when the code or a web search settle them, else
+  passed up and a CLI without one. Harness D36: questions always go in that tool or on a card, never as text, even
+  when another skill such as the user's own grilling skill shows a text format for them; that skill decides what
+  to ask, never how it is shown. A round with more questions or options than one call takes (Claude 4 × 4,
+  Codex 3 × 3) goes on one `brigadier ask` card, up to 10 questions of 8 options.) It answers its workers' questions itself when the code or a web search settle them, else
   asks the user; the user always decides spending money, a push or publish they didn't ask for, credentials,
   and changes to their settled decisions (run2-D32; the always-ask list is proposed, from the Delegator's
   rules). A Chat's and side chat's own grilling line points to the skill's: all at once on one card, no

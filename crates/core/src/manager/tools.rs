@@ -350,9 +350,11 @@ impl SessionManager {
     }
 }
 
-/// The most questions one card asks, and the most options one question offers.
-const ROUND_MAX: usize = 6;
-const OPTIONS_MAX: usize = 4;
+/// The most questions one card asks, and the most options one question offers: a grilling
+/// round bigger than the CLI's own question tool takes in one call goes on one card (harness
+/// D36), whose options keep digit keys 1 to 8, the free answer the ninth.
+const ROUND_MAX: usize = 10;
+const OPTIONS_MAX: usize = 8;
 
 /// An `ask_user` round as the card's questions, or why it can't be asked as it is.
 pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
@@ -434,6 +436,33 @@ mod tests {
         // Recommending the blank one recommends nothing: the thread is asked to say which.
         let blank = round(options, 0).unwrap_err().to_string();
         assert!(blank.contains("recommend"), "{blank}");
+    }
+
+    /// A grilling round bigger than one call of the CLI's own question tool fits one card:
+    /// 10 questions of 8 options; one more of either is refused (harness D36).
+    #[test]
+    fn one_card_holds_ten_questions_of_eight_options() {
+        let round = |questions: usize, options: usize| {
+            ask_round(
+                (0..questions)
+                    .map(|n| {
+                        serde_json::from_value(serde_json::json!({
+                            "question": format!("Q{n}?"),
+                            "options": (0..options)
+                                .map(|o| serde_json::json!({ "label": format!("O{o}") }))
+                                .collect::<Vec<_>>(),
+                            "recommended": 0,
+                        }))
+                        .unwrap()
+                    })
+                    .collect(),
+            )
+        };
+        let items = round(10, 8).unwrap();
+        assert_eq!(items.len(), 10);
+        assert!(items.iter().all(|item| item.options.len() == 8));
+        assert!(round(11, 2).unwrap_err().to_string().contains("1 to 10"));
+        assert!(round(1, 9).unwrap_err().to_string().contains("2 to 8"));
     }
 
     /// Every await of `run_orchestrator_call` goes through [`crate::heap`]: an unoptimized

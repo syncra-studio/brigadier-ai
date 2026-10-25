@@ -40,7 +40,7 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
 /// after its own small edit, what goes to its workers, and how it replies. A worker goes without it:
 /// `brigadier start` refuses a worker's own workers, it has no brigade skill, and it keeps
 /// full reports (run2-D27).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: ask in your CLI's question tool (never as text, whatever a skill shows), plan, look things up, make small edits (few lines), run git and CI, check workers' evidence; your subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -246,7 +246,7 @@ pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
 /// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then all
 /// it can ask at once with the CLI's own question tool, the shared understanding said back
 /// before it acts. Every new job opens with it (harness D7, D28).
-const CHAT_GRILLING: &str = "Every new job the user gives you (build, change, fix, design, research) opens with a grilling round, as does an invitation to question a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"). Grill them as the brigade skill says: first look up all you can, then ask all you can at once in one call of your CLI's own question tool (without one, on one `brigadier ask` card), each with your recommended option first, labelled \"… (Recommended)\", and its why; a next round only for questions that hang on those answers, never one call per question. Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction. Say the shared understanding back in a few lines before you act on it.";
+const CHAT_GRILLING: &str = "Every new job the user gives you (build, change, fix, design, research) opens with a grilling round, as does an invitation to question a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"). Grill them as the brigade skill says: first look up all you can, then ask all you can at once in one call of your CLI's own question tool (without one, or for more questions or options than one call takes, on one `brigadier ask` card), each with your recommended option first, labelled \"… (Recommended)\", and its why; a next round only for questions that hang on those answers, never one call per question. Questions go there, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown. Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction. Say the shared understanding back in a few lines before you act on it.";
 
 /// What a Chat can do as a thread (Q76, S28).
 const CHAT_THREAD: &str = chat_thread!();
@@ -435,7 +435,11 @@ mod tests {
         }
         // A session or Chat asks with its CLI's own question tool (harness D7); a worker never
         // asks the user (G19.Q6), so its instructions say nothing of asking.
-        assert!(WORKERS_LINE.contains("ask with your CLI's question tool"));
+        assert!(
+            WORKERS_LINE.contains(
+                "ask in your CLI's question tool (never as text, whatever a skill shows)"
+            )
+        );
         assert!(!STANDING_INSTRUCTIONS.contains("brigadier ask"));
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
         // The session orchestrates and replies short (run2-D23, D27), with its own subagents
@@ -443,7 +447,7 @@ mod tests {
         // suites, builds and live runs go to workers (harness D8, amending run2-D24). The line
         // goes to sessions and Chats only ([`WORKERS_LINE`]).
         for words in [
-            "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help.",
+            "You orchestrate: ask in your CLI's question tool (never as text, whatever a skill shows), plan, look things up, make small edits (few lines), run git and CI, check workers' evidence; your subagents may help.",
             "After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers",
             "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
         ] {
@@ -551,7 +555,9 @@ mod tests {
         for text in [&chat, &side] {
             assert!(text.contains("Grill them as the brigade skill says"));
             assert!(text.contains("Every new job the user gives you (build, change, fix, design, research) opens with a grilling round"));
-            assert!(text.contains("ask all you can at once in one call of your CLI's own question tool (without one, on one `brigadier ask` card)"));
+            assert!(text.contains("ask all you can at once in one call of your CLI's own question tool (without one, or for more questions or options than one call takes, on one `brigadier ask` card)"));
+            // Another skill's text format for questions never wins over the card (harness D36).
+            assert!(text.contains("Questions go there, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown."));
             assert!(text.contains("labelled \"… (Recommended)\""));
             assert!(text.contains("Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction."));
             assert!(text.contains("never one call per question"));

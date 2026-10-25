@@ -491,8 +491,10 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
     }))
 }
 
-/// The most questions one `brigadier ask` card holds, as the daemon's round takes them.
-const ASK_MAX: usize = 6;
+/// The most questions one `brigadier ask` card holds, and the most options of one question, as
+/// the daemon's round takes them (harness D36).
+const ASK_MAX: usize = 10;
+const ASK_OPTIONS_MAX: usize = 8;
 
 /// `ask`'s questions: the words as one question with every `--option`, or each `--question`
 /// with the `--option`s that follow it.
@@ -539,14 +541,14 @@ fn ask_questions(args: &Parsed) -> Result<Vec<AskItem>, String> {
         ));
     }
     for question in &questions {
-        if question.options.len() == 1 || question.options.len() > 4 {
+        if question.options.len() == 1 || question.options.len() > ASK_OPTIONS_MAX {
             let what = if questions.len() == 1 {
                 String::new()
             } else {
                 format!("{:?}: ", question.question)
             };
             return Err(format!(
-                "{what}give 2 to 4 options, or none for a free answer"
+                "{what}give 2 to {ASK_OPTIONS_MAX} options, or none for a free answer"
             ));
         }
     }
@@ -1343,7 +1345,7 @@ mod tests {
         );
         assert!(fails(&["checkpoint", "set", " "]).contains("checkpoint's text"));
         assert!(fails(&["checkpoint", "show", "extra"]).contains("unexpected argument"));
-        assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 4 options"));
+        assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 8 options"));
     }
 
     /// A round of questions on one card: each `--question` takes the `--option`s after it.
@@ -1411,10 +1413,12 @@ mod tests {
                 "--option",
                 "only"
             ])
-            .contains("\"B?\": give 2 to 4 options")
+            .contains("\"B?\": give 2 to 8 options")
         );
-        let seven: Vec<&str> = (0..7).flat_map(|_| ["--question", "Q?"]).collect();
-        assert!(fails(&[&["ask"][..], &seven].concat()).contains("at most 6 questions"));
+        let eleven: Vec<&str> = (0..11).flat_map(|_| ["--question", "Q?"]).collect();
+        assert!(fails(&[&["ask"][..], &eleven].concat()).contains("at most 10 questions"));
+        let nine: Vec<&str> = (0..9).flat_map(|_| ["--option", "O"]).collect();
+        assert!(fails(&[&["ask", "Q?"][..], &nine].concat()).contains("give 2 to 8 options"));
     }
 
     /// STRIP-DOWN-PLAN S16c: the thread's, Chat's and side chat's last MCP tools, with the

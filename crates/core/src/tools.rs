@@ -106,7 +106,7 @@ impl Grants {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AskUser {
-    /// The round's questions, 1 to 6, each self-contained: the user may read them later,
+    /// The round's questions, 1 to 10, each self-contained: the user may read them later,
     /// out of context.
     pub questions: Vec<AskQuestion>,
     /// The task that waits for the answers, if any (other tasks continue).
@@ -123,7 +123,7 @@ pub struct AskUser {
 pub struct AskQuestion {
     /// The question, one short sentence.
     pub question: String,
-    /// 2 to 4 suggested answers; the user can always type their own instead.
+    /// 2 to 8 suggested answers; the user can always type their own instead.
     #[serde(default)]
     pub options: Vec<AskOption>,
     /// The option you recommend, by its 0-based index in `options` (shown as
