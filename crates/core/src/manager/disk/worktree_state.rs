@@ -4,7 +4,9 @@ use std::process::{Command, Stdio};
 
 use brigadier_git::Repo;
 
-/// Ancestry, cherry-picks, or a squash commit containing the branch's aggregate patch.
+/// Ancestry, cherry-picks, or a squash commit containing the branch's aggregate patch; in the
+/// base or in its upstream (a local main often lags the remote's, D61), the content of a
+/// rebased or squashed copy counting too (D62, [`Repo::landed_in`]).
 /// Errors are conservative: without evidence of a merge the worktree stays.
 pub(crate) fn merged_into(repo: &Repo, branch: &str, base: &str) -> bool {
     if repo.is_merged(branch, base).unwrap_or(false) {
@@ -13,6 +15,9 @@ pub(crate) fn merged_into(repo: &Repo, branch: &str, base: &str) -> bool {
     let Ok(Some(head)) = repo.branch_tip(branch) else {
         return false;
     };
+    if repo.landed_in(&head, base).unwrap_or(false) {
+        return true;
+    }
     let Ok(Some(target)) = repo.branch_tip(base) else {
         return false;
     };
