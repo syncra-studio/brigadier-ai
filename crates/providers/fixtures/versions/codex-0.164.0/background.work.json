@@ -8,7 +8,7 @@
         {
           "work": [
             {
-              "group": "step:3",
+              "group": "step:1",
               "summary": "Ran a command",
               "rows": [
                 "Ran sleep 2"
@@ -32,7 +32,7 @@
               "item": "text"
             },
             {
-              "group": "step:9",
+              "group": "step:8",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"
@@ -58,7 +58,7 @@
         {
           "work": [
             {
-              "group": "step:3",
+              "group": "step:1",
               "summary": "Ran a command",
               "rows": [
                 "Ran sleep 2"
@@ -82,7 +82,7 @@
               "item": "text"
             },
             {
-              "group": "step:9",
+              "group": "step:8",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"
