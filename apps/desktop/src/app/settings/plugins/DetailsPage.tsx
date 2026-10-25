@@ -4,7 +4,7 @@ import { Folder } from "@/components/icons";
 import { Banner, CopyButton, SettingsCard } from "@/components/shared";
 import type { AgentItemState, PluginItemView, PluginProjectView, PluginsView, ProviderKind } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
-import { agentsIn, isOn, KIND_LABEL, listNames, projectName, shownDetail, spreadOf, wontStartReason, type Tone } from "./model";
+import { agentsIn, has, isOn, KIND_LABEL, labelOf, listNames, projectName, shownDetail, spreadOf, wontStartReason, type Tone } from "./model";
 import { AgentRow, FoldCard, ItemMark, StateBadge, stateOf } from "./parts";
 
 /** What the details page can ask of the list page that holds it. */
@@ -37,9 +37,10 @@ export function DetailsPage({ view, item, focus, actions }: { view: PluginsView;
       back={{ label: "Plugins", onBack: actions.onBack }}
       sectionsClassName="gap-9 pt-4"
     >
-      {(item.attention || item.updateAvailable) && (
+      {(item.attention || lacking(item) || item.updateAvailable) && (
         <div className="flex flex-col gap-2">
           <AttentionBanner view={view} item={item} actions={actions} />
+          <SpreadBanner view={view} item={item} actions={actions} />
           {item.updateAvailable && (
             <Banner tone="info" text={`A newer version of ${item.name} is ready.`} className="rounded-control border-b-0">
               <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onUpdate}>Update</Button>
@@ -70,11 +71,11 @@ export function DetailsPage({ view, item, focus, actions }: { view: PluginsView;
       </SettingsSection>
       <SettingsSection
         title="Projects"
-        description={everywhere ? "Where it's on. Turn it off in a project to skip it there." : only ? `Where it's on. It's only in ${only} now; turn on Every project to use it everywhere.` : "Where it's on. It's off in every project now."}
+        description={everywhere ? "Where it's on. Turn it off in a project to skip it there." : only ? `Where it's on. It's only in ${only} now; turn on Global to use it everywhere.` : "Where it's on. It's off in every project now."}
         className="[&>div:first-child]:min-h-0"
       >
         <SettingsCard>
-          <ProjectSwitch name="Every project" line={everywhere ? "Also turns on in projects you add later." : "Turn on to use it in all your projects."} on={everywhere} busy={actions.busy} onChange={(on) => actions.onSwitch(null, on)} />
+          <ProjectSwitch name="Global" line={everywhere ? "Also turns on in projects you add later." : "Turn on to use it in all your projects."} on={everywhere} busy={actions.busy} onChange={(on) => actions.onSwitch(null, on)} />
           {view.projects.map((project) => (
             <ProjectSwitch key={project.id} name={project.name} line={shortPath(project.path)} on={isOn(item, project)} busy={actions.busy} onChange={(on) => actions.onSwitch(project.id, on)} />
           ))}
@@ -131,18 +132,22 @@ function AttentionBanner({ view, item, actions }: { view: PluginsView; item: Plu
       </Banner>
     );
   }
+  return null;
+}
+
+/** Whether an agent that could have the item lacks it. */
+const lacking = (item: PluginItemView) => item.agents.some((entry) => entry.state.type === "missing");
+
+/** Add to every agent, whenever an agent lacks the item, whatever else the item needs. */
+function SpreadBanner({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
+  if (!lacking(item)) return null;
+  const holders = item.agents.filter((entry) => has(entry.state)).map((entry) => labelOf(view, entry.agent));
+  const only = item.attention?.type === "notEverywhere" ? item.attention.message : `Only ${listNames(holders)} ${holders.length === 1 ? "has" : "have"} it.`;
   const spread = spreadOf(item);
-  if (!spread) return <Banner tone="info" text={`${attention.message} It came in that agent's own plugin, so the other agents can't add it.`} />;
-  if (spread === "addMissing") {
-    return (
-      <Banner tone="info" text={`${attention.message} Add it to every agent and they all get it.`}>
-        <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onAddMissing}>Add to every agent</Button>
-      </Banner>
-    );
-  }
+  if (!spread) return <Banner tone="info" text={`${only} It came in that agent's own plugin, so the other agents can't add it.`} />;
   return (
-    <Banner tone="info" text={`${attention.message} Use it everywhere and every agent gets it.`}>
-      <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onUseEverywhere}>Use everywhere</Button>
+    <Banner tone="info" text={`${only} Add it to every agent and they all get it.`}>
+      <Button variant="soft" size="sm" disabled={actions.busy} onClick={spread === "addMissing" ? actions.onAddMissing : actions.onUseEverywhere}>Add to every agent</Button>
     </Banner>
   );
 }

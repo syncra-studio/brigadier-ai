@@ -13,7 +13,7 @@ import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { ATTENTION_TONE, elsewhereLine, has, needsAttention, placesOf, projectSummary, sections, spreadOf, TAB_LABEL, type Row } from "./model";
+import { elsewhereLine, has, placesOf, projectSummary, sections, TAB_LABEL, type Row } from "./model";
 import { FoldCard, PluginRow } from "./parts";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use. Pick a project to choose what's on there.";
@@ -24,7 +24,6 @@ export function pluginSearchRows() {
   return [
     { label: "MCP servers", description: "Servers every agent can use, in every project or only some" },
     { label: "Skills", description: "Skills every agent can use, in every project or only some" },
-    { label: "Needs attention", target: "Needs attention" },
     { label: "Found in other apps", description: "Servers only another app has", target: "Found in other apps" },
     ...view.items.map((item) => ({ label: item.name, description: item.description || item.detail, target: `plugin:${item.key}`, section: TAB_LABEL[item.kind] })),
   ];
@@ -42,10 +41,8 @@ export function PluginsPage() {
   return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} onProject={setProject} />;
 }
 
-type PluginTab = PluginKind | "attention";
-const TABS: PluginTab[] = ["attention", "server", "skill"];
-const TAB_TITLES: Record<PluginTab, string> = { attention: "Needs attention", ...TAB_LABEL };
-const revealTab = (label: string | null): PluginTab => label === "Needs attention" ? "attention" : label === "Skills" ? "skill" : "server";
+const TABS: PluginKind[] = ["server", "skill"];
+const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
 function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: {
   view: PluginsView;
@@ -55,15 +52,13 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   refresh: () => void;
   onProject: (projectId: string | null) => void;
 }) {
-  const [tab, setTab] = useState<PluginTab>(() => revealTab(useReveal.getState().label));
-  const attentionCount = needsAttention(view).length;
-  if (tab === "attention" && attentionCount === 0) setTab("server");
+  const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
-    if (label === "Needs attention" || label === "Skills" || label === "MCP servers") {
+    if (label === "Skills" || label === "MCP servers") {
       setTab(revealTab(label));
       setSelected(null);
       setQuery("");
@@ -158,7 +153,6 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           onProject={onProject}
           onOpen={(item) => setSelected(item.key)}
           onFlip={(item, on) => flip(item, on)}
-          onAddMissing={addMissing}
           onDialog={setOpen}
         />
       </SettingsPage>
@@ -209,25 +203,23 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   );
 }
 
-function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onAddMissing, onDialog }: {
+function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onDialog }: {
   view: PluginsView;
   focus: PluginProjectView | null;
-  tab: PluginTab;
+  tab: PluginKind;
   query: string;
   busy: boolean;
   adapter: PluginsAdapter | null;
-  onTab: (tab: PluginTab) => void;
+  onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
   onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
-  onAddMissing: (item: PluginItemView) => void;
   onDialog: (open: Open) => void;
 }) {
-  const attention = needsAttention(view);
-  const count = (kind: PluginTab) => kind === "attention" ? attention.length : view.items.filter((item) => item.kind === kind).length;
+  const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
   const elsewhere = view.elsewhere.filter((item) => item.kind === tab);
-  const lists = tab === "attention" ? [] : sections(view, focus, tab, query);
+  const lists = sections(view, focus, tab, query);
   const empty = count(tab) === 0;
   const row = (entry: Row, dim: boolean) => (
     <PluginRow
@@ -238,40 +230,18 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
       dim={dim}
       chips={entry.chips}
       onOpen={() => onOpen(entry.item)}
-      end={<SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy} onCheckedChange={(on) => onFlip(entry.item, on)} />}
+      end={
+        <>
+          {entry.item.attention?.type === "signIn" && adapter?.signIn && <Button variant="soft" size="sm" onClick={() => onDialog({ type: "signIn", key: entry.item.key })}>Sign in</Button>}
+          <SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy} onCheckedChange={(on) => onFlip(entry.item, on)} />
+        </>
+      }
     />
   );
   return (
     <div className="flex flex-col gap-10">
       <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
-      {tab === "attention" ? (
-        <SettingsCard>
-          {attention.map((item) => {
-            const kind = item.attention!.type;
-            const spread = kind === "notEverywhere" ? spreadOf(item) : null;
-            return (
-              <PluginRow
-                key={item.key}
-                view={view}
-                item={item}
-                line={{ text: item.attention!.message, tone: ATTENTION_TONE[kind] }}
-                lit={(state) => state.type === "ready" || state.type === "working"}
-                onOpen={() => onOpen(item)}
-                end={
-                  (kind === "signIn" && !adapter?.signIn) || (kind === "notEverywhere" && !spread) ? undefined : <Button
-                    variant="soft"
-                    size="sm"
-                    disabled={kind === "notEverywhere" ? busy : !adapter}
-                    onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : spread === "addMissing" ? onAddMissing(item) : onDialog({ type: "useEverywhere", key: item.key }))}
-                  >
-                    {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : spread === "addMissing" ? "Add to every agent" : "Use everywhere"}
-                  </Button>
-                }
-              />
-            );
-          })}
-        </SettingsCard>
-      ) : empty && !focus ? (
+      {empty && !focus ? (
         <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
       ) : (
         lists.map((section) => {
@@ -301,7 +271,7 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
               item={item}
               line={{ text: item.description || item.detail, tone: "muted" }}
               lit={has}
-              end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Use everywhere</Button>}
+              end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Add to every agent</Button>}
             />
           ))}
         </FoldCard>
@@ -313,21 +283,20 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
 function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, onAddProject }: {
   view: PluginsView;
   focus: PluginProjectView | null;
-  tab: PluginTab;
+  tab: PluginKind;
   query: string;
-  count: (kind: PluginTab) => number;
-  onTab: (tab: PluginTab) => void;
+  count: (kind: PluginKind) => number;
+  onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
   onProject: (projectId: string | null) => void;
   onAddProject: () => void;
 }) {
-  const tabs = TABS.filter((kind) => kind !== "attention" || count(kind) > 0);
-  const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginTab) => {
+  const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginKind) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const at = tabs.indexOf(kind);
-    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (at + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
-    onTab(tabs[next]!);
+    const at = TABS.indexOf(kind);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : (at + (event.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length;
+    onTab(TABS[next]!);
     event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]")[next]?.focus();
   };
   return (
@@ -335,25 +304,25 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
       <ProjectFilter view={view} focus={focus} onProject={onProject} onAddProject={onAddProject} />
       <span aria-hidden className="bg-divider h-5 w-px shrink-0" />
       <div role="tablist" aria-label="Plugins" className="flex shrink-0 items-center gap-1">
-        {tabs.map((kind) => (
+        {TABS.map((kind) => (
           <button
             key={kind}
             type="button"
             role="tab"
             aria-selected={tab === kind}
             tabIndex={tab === kind ? 0 : -1}
-            data-setting={TAB_TITLES[kind]}
+            data-setting={TAB_LABEL[kind]}
             className={cn("rounded-capsule flex h-7 items-center gap-1.5 px-3 text-label", tab === kind ? "bg-foreground/10" : "text-foreground/65")}
             onClick={() => onTab(kind)}
             onKeyDown={(event) => keys(event, kind)}
           >
-            {TAB_TITLES[kind]}
+            {TAB_LABEL[kind]}
             <span className="text-foreground/50">{count(kind)}</span>
           </button>
         ))}
       </div>
       <span className="flex-1" />
-      {tab !== "attention" && <SettingsSearch className="max-w-60" label={tab === "server" ? "Search MCP servers" : "Search skills"} value={query} onChange={onQuery} />}
+      <SettingsSearch className="max-w-60" label={tab === "server" ? "Search MCP servers" : "Search skills"} value={query} onChange={onQuery} />
     </div>
   );
 }

@@ -79,7 +79,7 @@ export function useWatch(refresh: () => void, on: boolean) {
 const holders = (view: PluginsView, item: PluginItemView) =>
   item.foundIn ?? listNames(view.agents.filter((agent) => has(stateOf(item, agent.agent))).map((agent) => agent.label));
 
-/** G6: puts an item that one agent (or another app) has into the Library, for every agent. Undo follows as a toast. */
+/** G6: Add to every agent: puts an item that one agent (or another app) has into the Library, for every agent. Undo follows as a toast. */
 export function UseEverywhereDialog({ view, item, adapter, onClose, onDone }: {
   view: PluginsView;
   item: PluginItemView;
@@ -107,7 +107,7 @@ export function UseEverywhereDialog({ view, item, adapter, onClose, onDone }: {
     onDone?.();
   });
   return (
-    <PluginDialog slot="use-everywhere" onClose={onClose} title={`Use ${item.name} in every agent?`} description={`Right now only ${holder} has it. Brigadier gives it to every agent, the same way each agent adds its own ${kinds}. You can undo this.`}>
+    <PluginDialog slot="use-everywhere" onClose={onClose} title={`Add ${item.name} to every agent?`} description={`Right now only ${holder} has it. Brigadier gives it to every agent, the same way each agent adds its own ${kinds}. You can undo this.`}>
       <ol className="bg-foreground/5 rounded-control text-foreground/85 flex list-inside list-decimal flex-col gap-2 px-4 py-3 text-xs">
         <li>Keeps a copy in Brigadier's library</li>
         <li>Gives it to all {view.agents.length} agents</li>
@@ -116,7 +116,7 @@ export function UseEverywhereDialog({ view, item, adapter, onClose, onDone }: {
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button disabled={action.busy} onClick={confirm}>{action.busy ? "Working…" : "Use everywhere"}</Button>
+        <Button disabled={action.busy} onClick={confirm}>{action.busy ? "Working…" : "Add to every agent"}</Button>
       </div>
     </PluginDialog>
   );

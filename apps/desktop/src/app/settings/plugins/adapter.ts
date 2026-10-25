@@ -45,7 +45,7 @@ export type PluginsAdapter = {
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   add: (text: string, name: string | null, projectId: string | null, shared: boolean, more: PluginAddMore) => Promise<PluginAgentResult[]>;
-  /** Use everywhere: into the Library, for every agent. `key`: the Library's copy, what Undo takes. */
+  /** Add to every agent: into the Library, for every agent. `key`: the Library's copy, what Undo takes. */
   everyAgent: (key: string) => Promise<{ results: PluginAgentResult[]; key: string | null }>;
   undoEveryAgent: (key: string) => Promise<PluginAgentResult[]>;
   remove: (key: string) => Promise<PluginAgentResult[]>;

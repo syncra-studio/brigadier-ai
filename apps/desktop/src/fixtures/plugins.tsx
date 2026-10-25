@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
-import { revealSetting, useReveal } from "@/app/settings/reveal";
+import { revealSetting } from "@/app/settings/reveal";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
@@ -40,6 +40,8 @@ const HOME = "/Users/me/Code";
 const BRIGADIER = `${HOME}/brigadier-ai`;
 const STEADY = `${HOME}/steady-app`;
 const LANDING = `${HOME}/landing`;
+/** A folder an agent knows that isn't a Brigadier project. */
+const FOREIGN = `${HOME}/clients/freelogo-fos-2026`;
 const projects: PluginProjectView[] = [
   { id: "p-brigadier", name: "brigadier-ai", path: BRIGADIER, notes: [] },
   { id: "p-steady", name: "steady-app", path: STEADY, notes: [] },
@@ -292,6 +294,7 @@ function read() {
     agentRows: all('main [data-slot="agent-row"]').map((row) => text(row)),
     projectSwitches: all('main [data-slot="project-switch"]').map((row) => `${text(row)} ${row.querySelector("[role=switch]")?.getAttribute("aria-checked")}`),
     banner: text(document.querySelector('main [data-slot="banner"]')),
+    banners: all('main [data-slot="banner"]').map(text),
     empty: text(document.querySelector('main [data-slot="plugins-empty"]')),
     emptyRow: text(document.querySelector('main [data-slot="empty-row"]')),
     removeRow: text(document.querySelector('main [data-slot="remove-row"]')),
@@ -345,11 +348,7 @@ const OPENERS: Record<string, () => Promise<void>> = {
     usePlugins.getState().refresh();
   },
   D1: async () => click("Open linear"),
-  D2: async () => {
-    click("Needs attention3");
-    await pause();
-    click("Details");
-  },
+  D2: async () => click("Open figma-dev"),
   D3: async () => click("Open postgres"),
   G1: async () => {
     click("Add");
@@ -383,15 +382,13 @@ const OPENERS: Record<string, () => Promise<void>> = {
     await pause();
     all<HTMLButtonElement>("[data-dialog] button[aria-expanded]").find((button) => text(button).startsWith("Advanced"))!.click();
   },
-  G5: async () => {
-    click("Needs attention3");
-    await pause();
-    click("Sign in");
-  },
+  G5: async () => click("Sign in"),
   G6: async () => {
-    click("Needs attention3");
+    click("Skills6");
     await pause();
-    click("Use everywhere");
+    click("Open grill-me");
+    await pause();
+    click("Add to every agent");
   },
   G7: async () => {
     click("Open linear");
@@ -442,7 +439,7 @@ async function drive(setKey: (key: number) => void) {
   flip("grill-me");
   await pause(120);
   seen.notSwitchable = read();
-  click("Use everywhere", document.querySelector("[data-dialog]")!);
+  click("Add to every agent", document.querySelector("[data-dialog]")!);
   await pause(300);
   seen.afterUseEverywhere = read();
   seen.useEverywhereCalls = calls.slice(asked);
@@ -513,30 +510,60 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   seen.advancedCalls = calls.slice(advanced).filter((call) => call.startsWith("addPlugin"));
 
-  // Only some agents have it: a Library item goes to the rest where the others have it; another
-  // agent's plugin has no fix to offer.
+  // Only some agents have it: the rows keep their own line; on the details page a Library item
+  // goes to the rest where the others have it; another agent's plugin has no fix to offer.
   await reset(setKey);
   Object.assign(spec("lib:delegator")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
   Object.assign(spec("plugin:higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  Object.assign(spec("server:linear")!, { only: ["claude", "codex"] });
   usePlugins.getState().refresh();
+  click("Skills6");
   await pause(120);
-  click("Needs attention5");
-  await pause();
   seen.partial = read();
+  click("Open delegator");
+  await pause(120);
+  seen.delegatorBanner = read();
   const spread = calls.length;
   click("Add to every agent");
   await pause(120);
   seen.spreadCalls = calls.slice(spread);
+  click("Plugins", main());
+  await pause();
   click("Open higgsfield");
   await pause(120);
   seen.pluginBanner = read();
+  click("Plugins", main());
+  await pause();
+  click("MCP servers7");
+  await pause();
+  click("Open linear");
+  await pause(120);
+  seen.signInAndMissing = read();
+
+  // A real problem shows on a row that is off where the page looks too.
+  await reset(setKey);
+  Object.assign(spec("server:linear")!, { offIn: [STEADY] });
+  project("p-steady");
+  await pause(120);
+  seen.offProblem = read();
+
+  // An agent's own copy in a folder that isn't a Brigadier project: a plain tag with that folder,
+  // and in a project, where it's on.
+  await reset(setKey);
+  items.push({ key: "server:codescene", kind: "server", name: "codescene", description: "Code health checks.", detail: "codescene-mcp", everywhere: false, onIn: [FOREIGN], only: ["claude"], switchable: false });
+  usePlugins.getState().refresh();
+  await pause(120);
+  seen.foreign = read();
+  project("p-brigadier");
+  await pause(120);
+  seen.foreignInProject = read();
 
   // Details: the Projects card's switches, Remove, and a project note's fix.
   await open("D3");
   const detail = calls.length;
   click("brigadier-ai");
   await pause(120);
-  click("Every project");
+  click("Global");
   await pause(120);
   seen.detailCalls = calls.slice(detail);
   // Advanced: one agent's switch.
@@ -562,53 +589,19 @@ async function drive(setKey: (key: number) => void) {
   await pause();
   seen.trustCalls = calls.filter((call) => call.startsWith("trust"));
 
-  // Needs attention is its own tab; project filtering stays available and search stays hidden.
+  // The tabs follow the arrow keys, selecting and focusing; Settings search has no Needs attention.
   await reset(setKey);
-  click("Needs attention3");
-  await pause(120);
-  seen.attention = read();
-  project("p-steady");
-  await pause(120);
-  seen.attentionProject = read();
-
-  // Every navigation key follows the tabs that are actually visible, selecting and focusing.
   const navigate = async (key: string) => {
     document.querySelector<HTMLButtonElement>('main [role="tab"][aria-selected="true"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
     await pause();
     return read();
   };
-  const keys = ["ArrowLeft", "ArrowRight", "ArrowRight", "End", "Home"];
-  seen.attentionKeys = [];
-  for (const key of keys) (seen.attentionKeys as unknown[]).push(await navigate(key));
-
-  // A data refresh can resolve the last issue while this tab is selected.
-  usePlugins.setState((state) => ({ view: { ...state.view, items: state.view.items.map((item) => ({ ...item, attention: null })) } }));
+  seen.tabKeys = [];
+  for (const key of ["ArrowLeft", "ArrowRight", "ArrowRight", "End", "Home"]) (seen.tabKeys as unknown[]).push(await navigate(key));
+  seen.searchRows = pluginSearchRows().slice(0, 3).map((entry) => entry.label);
+  revealSetting("Skills");
   await pause(120);
-  seen.attentionResolved = read();
-  seen.regularKeys = [];
-  for (const key of keys) (seen.regularKeys as unknown[]).push(await navigate(key));
-
-  // Settings search reveals the attention tab, both on this page and before it mounts.
-  await reset(setKey);
-  type("Search MCP servers", "rail");
-  await pause();
-  const attentionSearch = pluginSearchRows().find((entry) => entry.label === "Needs attention")!;
-  seen.attentionSearch = attentionSearch;
-  revealSetting(attentionSearch.target!);
-  await pause(120);
-  seen.attentionReveal = read();
-  click("Skills6");
-  await pause();
-  seen.afterAttentionReveal = read();
-  click("Open higgsfield");
-  await pause();
-  revealSetting(attentionSearch.target!);
-  await pause(120);
-  seen.attentionRevealDetails = read();
-  useReveal.setState({ label: attentionSearch.target! });
-  await reset(setKey);
-  seen.attentionRevealMount = read();
-  useReveal.setState({ label: null });
+  seen.revealSkills = read();
 
   // Search keeps the rows that match.
   await reset(setKey);
