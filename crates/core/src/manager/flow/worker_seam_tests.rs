@@ -336,6 +336,35 @@ async fn the_third_compaction_hands_a_worker_to_a_fresh_session_in_its_worktree(
     flow.stop().await;
 }
 
+/// A message its session sends the moment it hears the third compaction's turn end waits for
+/// the successor: the note turn never cuts it off on the old CLI (phase review).
+#[tokio::test]
+async fn a_message_sent_as_the_handoff_turn_ends_goes_to_the_successor() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-race", seen.clone()).await;
+    let first = seen.worker.lock().unwrap()[0].0.clone();
+    for n in 1..=2 {
+        send(&flow, &task, "Grow.").await;
+        until(&flow, "the grow heard", || seen.heard("finished") == n + 1).await;
+    }
+    send(&flow, &task, "Grow.").await;
+    flow.until("the third grow's turn ended", |board| {
+        Flow::task(board, 1).state == crate::work::TaskState::Reported
+    })
+    .await;
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the successor's turn", || {
+        seen.given("Next.").iter().any(|(id, _)| id != &first)
+    })
+    .await;
+    flow.idle().await;
+    let next = seen.given("Next.");
+    assert_eq!(next.len(), 1, "{next:?}");
+    assert_ne!(next[0].0, first);
+    assert!(next[0].1.starts_with(HANDOFF_MARK), "{}", next[0].1);
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_failed_compaction_or_a_thrash_hands_off_at_once_unheard() {
     for (name, said) in [("fail", "Fail."), ("thrash", "Thrash.")] {

@@ -158,6 +158,9 @@ impl SessionManager {
         let (carry_on, death) = match seam {
             SeamLive::Owed { carry_on } => {
                 if !carry_on {
+                    // Its session's messages wait for the successor from before it hears the
+                    // turn end: one sent at once would start a turn the note's then cuts off.
+                    live.state.lock().await.seam = Some(SeamLive::Nudged { carry_on });
                     self.plain_turn_ended(live, task, status).await;
                 }
                 if self.worker_seam_nudge(live, task, carry_on).await {
