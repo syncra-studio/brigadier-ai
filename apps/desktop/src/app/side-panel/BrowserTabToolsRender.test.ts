@@ -63,5 +63,5 @@ test("browser tab tools: address suggestions, the page's question for the camera
   // Downloads: Open and Show in Finder for a finished file, a failed one says so.
   assert.deepEqual(seen.downloads, ["report.pdffiles.testOpenShow in Finder", "big.zipFailed · files.test"]);
   assert.deepEqual(seen.downloadsAsked, [{ openDownload: 11 }, { reveal: "/Users/me/Downloads/report.pdf" }]);
-  assert.deepEqual(seen.allDownloads, { type: "settings", page: "browser" });
+  assert.deepEqual(seen.allDownloads, { type: "settings", page: "browser", detail: { view: "downloads" } });
 });
