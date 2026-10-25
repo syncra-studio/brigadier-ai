@@ -8,7 +8,7 @@ import { stepLabel, summarize, toolStepWords, type ToolStep } from "@/app/conver
 import { answerIndex, answeringIndex, type Block, type BoardDigest, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { turnParts } from "@/app/conversation/workParts";
-import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
+import type { BackgroundTask, FileEntry, ProviderEvent, Question, ThreadView } from "@/ipc/generated";
 import { mergeEntries } from "@/state/cliThread";
 
 // D44: the turn's work as the thread draws it (groups, their summaries, each row's words, the
@@ -345,6 +345,26 @@ test("a brigadier send whose message has its own Messaged row is no row of its o
   assert.ok(shown.blocks.some((block) => block.orchestratorSteps.some((step) => step.kind.type === "messaged")));
   // A Messaged row from another time is another message: the send keeps its row.
   assert.ok(asBrigadier("interrupt", send, (atMs, requestId) => messaged(atMs + 60_000, requestId)).step);
+});
+
+/** The board with the card a `brigadier ask` made, just after the call, still open. */
+function askedCard(atMs: number, requestId: string): BoardDigest {
+  const question: Question = {
+    id: "card-1", conversationId: "recorded-thread", taskId: null, requestId, position: 0, kind: { type: "orchestrator" },
+    text: "Which colour?\nWhich size?", options: [], recommended: null,
+    items: [{ text: "Which colour?", options: [], recommended: null, multiSelect: false }, { text: "Which size?", options: [], recommended: null, multiSelect: false }],
+    answer: null, answers: [], createdAtMs: atMs + 300, answeredAtMs: null,
+  } as Question;
+  return { ...NO_BOARD, questions: { [question.id]: question } };
+}
+
+test("a brigadier ask whose card has its own Asking questions row is no row of its own (D58)", () => {
+  const ask = "brigadier ask --question 'Which colour?' --question 'Which size?'";
+  const shown = asBrigadier("interrupt", ask, askedCard);
+  assert.equal(shown.step, undefined);
+  assert.equal(shown.blocks.flatMap((block) => block.cards).filter((card) => card.type === "question").length, 1);
+  // A card from another time is another round: the ask keeps its row.
+  assert.ok(asBrigadier("interrupt", ask, (atMs, requestId) => askedCard(atMs + 60_000, requestId)).step);
 });
 
 /** The recorded ToolSearch call as another tool: the recording's event, only its name and input changed (D29). */

@@ -307,22 +307,29 @@ export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" |
   return { ...running, status: "failed", stopped: true, ...(turn?.endedAtMs != null && { endedAtMs: turn.endedAtMs }) };
 }
 
-/** How far a "Messaged …" row can be from the run of the `brigadier send` that made it. */
+/** How far a "Messaged …" row, or a card's row, can be from the run of the `brigadier` call that made it. */
 const SEND_SLACK_MS = 2000;
 
 /**
- * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's) is no
- * row of its own: the two said the same (D47).
+ * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's), and a
+ * `brigadier ask` whose card has its own "Asking questions" row, is no row of its own: the two
+ * said the same (D47, D58).
  */
-function dropShownSends(blocks: readonly Block[]): void {
+function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
   for (const block of blocks) {
     const sent = block.orchestratorSteps.flatMap((step) => ((step.kind.type === "messaged" || step.kind.type === "peerSent") && step.atMs !== undefined ? [step.atMs] : []));
-    if (sent.length === 0) continue;
+    const asked = block.cards.flatMap((card) => {
+      const question = card.type === "question" ? board.questions[card.id] : undefined;
+      return question?.kind.type === "orchestrator" ? [question.createdAtMs] : [];
+    });
+    if (sent.length === 0 && asked.length === 0) continue;
     block.orchestratorSteps = block.orchestratorSteps.filter((step) => {
       const { kind, atMs } = step;
-      if (kind.type !== "tool" || kind.item !== "command" || kind.detail === null || atMs === undefined || brigadierCalls(kind.detail)[0] !== "send") return true;
+      if (kind.type !== "tool" || kind.item !== "command" || kind.detail === null || atMs === undefined) return true;
+      const sub = brigadierCalls(kind.detail)[0];
+      const shown = sub === "send" ? sent : sub === "ask" ? asked : [];
       const [from, to] = [atMs - SEND_SLACK_MS, (kind.endedAtMs ?? atMs) + SEND_SLACK_MS];
-      return !sent.some((at) => at >= from && at <= to);
+      return !shown.some((at) => at >= from && at <= to);
     });
   }
 }
@@ -811,7 +818,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   if (block) close(block);
   if (board) {
     place(blocks, times, board);
-    dropShownSends(blocks);
+    dropShownCalls(blocks, board);
   }
   // Each seam's divider after the turn before its successor's first message, or after the last
   // turn while the successor is still to come.
