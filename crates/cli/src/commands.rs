@@ -168,7 +168,8 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "title",
                 "TEXT",
-                "A short name for it; from the prompt by default.",
+                "A short name for it: two to four plain words, like \"Login redirect\"; from the \
+                 prompt by default.",
             ),
             choice(
                 "agent",

@@ -798,7 +798,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     assert_eq!(answers["start a"]["worker"]["title"], "Count lines");
     assert_eq!(answers["start a"]["worker"]["agent"], "claude");
     assert_eq!(answers["start a"]["permission"], "accept-edits");
-    assert_eq!(answers["start b"]["worker"]["title"], "Ask first.");
+    assert_eq!(answers["start b"]["worker"]["title"], "Ask first");
     assert_eq!(answers["start b"]["worker"]["agent"], "codex");
     assert_eq!(a.route.choice.model, None);
     assert_eq!(b.route.choice.model.as_deref(), Some("gpt-test"));

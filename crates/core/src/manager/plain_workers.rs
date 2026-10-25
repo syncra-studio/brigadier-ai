@@ -41,14 +41,12 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, Environment, Mention, ModelChoice, PermissionLevel, Setup,
 };
+use crate::sessions::short_title;
 use crate::work::{
     Approval, ApprovalSubject, AttachmentRef, AttemptEnd, CardId, CardState, MockupPart,
     PlainWorker, Task, TaskId, TaskState,
 };
 use crate::{Error, Result, now_ms};
-
-/// How much of a prompt a worker's title takes when `--title` gives none.
-const TITLE_MAX: usize = 60;
 
 /// How long a message sent to a worker still starting waits for its CLI.
 const CLI_START: Duration = Duration::from_secs(60);
@@ -93,21 +91,14 @@ fn permission_word(level: PermissionLevel) -> cli::Permission {
     }
 }
 
-/// A title from the prompt's first line.
-fn title_of(prompt: &str) -> String {
-    let line = prompt
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Worker");
-    if line.chars().count() <= TITLE_MAX {
-        return line.to_owned();
-    }
-    let cut: String = line.chars().take(TITLE_MAX).collect();
-    match cut.rfind(' ') {
-        Some(at) if at > TITLE_MAX / 2 => format!("{}…", &cut[..at]),
-        _ => format!("{cut}…"),
-    }
+/// A worker's title: the one `--title` gives or, without one, the prompt's; either kept to a
+/// few plain words (`short_title`).
+fn title_of(given: Option<&str>, prompt: &str) -> String {
+    [given.unwrap_or_default(), prompt]
+        .into_iter()
+        .map(short_title)
+        .find(|title| !title.is_empty())
+        .unwrap_or_else(|| "Worker".to_owned())
 }
 
 fn refused(message: impl Into<String>) -> CliReply {
@@ -252,7 +243,7 @@ impl SessionManager {
                 Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
             },
         };
-        let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
+        let title = title_of(start.title.as_deref(), &start.prompt);
         let choice = ModelChoice {
             provider,
             model,
@@ -1111,17 +1102,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_title_comes_from_the_prompts_first_line() {
+    fn a_title_is_a_few_words_from_the_given_title_or_the_prompts_first_line() {
         assert_eq!(
-            title_of("\n  Fix the login page\nand more"),
+            title_of(None, "\n  Fix the login page\nand more"),
             "Fix the login page"
         );
-        let long = "Write a long report on every module of the code base and what each one does";
-        let title = title_of(long);
-        assert!(
-            title.ends_with('…') && title.chars().count() <= TITLE_MAX + 1,
-            "{title}"
+        assert_eq!(
+            title_of(
+                None,
+                "Please write a long report on every module of the code base and what each one does"
+            ),
+            "Write a long report"
         );
-        assert_eq!(title_of("   "), "Worker");
+        assert_eq!(
+            title_of(
+                Some("Implement direct worker messaging between the thread and its workers"),
+                "x"
+            ),
+            "Implement direct worker messaging"
+        );
+        assert_eq!(title_of(Some("  "), "Fix it"), "Fix it");
+        assert_eq!(title_of(None, "   "), "Worker");
     }
 }
