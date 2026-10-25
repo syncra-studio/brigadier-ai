@@ -2567,6 +2567,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         request_id: String,
     },
+    /// A request's turn that a restart cut off went on by itself (D9 a), stored once per
+    /// request (key `auto-resume:<request>`): cut off again, it waits for the user's Continue.
+    TurnAutoResumed {
+        conversation_id: ConversationId,
+        request_id: String,
+    },
     /// This session's answer to another session's message went back to it, as the reply
     /// Brigadier sent for it: the session finished what it was asked (its sidebar row's unread
     /// dot, SESSION-MESSAGING-PLAN.md §6.4).
@@ -2675,6 +2681,7 @@ impl DomainEvent {
             Self::PeerReplyHeld { .. } => "peer.held",
             Self::PeerAnswered { .. } => "peer.answered",
             Self::RequestFinished { .. } => "request.finished",
+            Self::TurnAutoResumed { .. } => "turn.auto_resumed",
             Self::Probe { .. } => "diag.probe",
             Self::Retired => "retired",
         }

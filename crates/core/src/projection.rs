@@ -189,6 +189,7 @@ impl Projection {
             | DomainEvent::PeerMessageState { .. }
             | DomainEvent::PeerWaitSettled { .. }
             | DomainEvent::PeerReplyHeld { .. }
+            | DomainEvent::TurnAutoResumed { .. }
             | DomainEvent::Probe { .. } => {}
         }
     }

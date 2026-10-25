@@ -601,6 +601,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "workspacePinned":
     case "workspaceArchived":
       return slice;
+    case "turnAutoResumed":
+      return slice;
     case "settingsChanged":
       return { ...slice, settings: confirmSettings(event.settings) };
     case "rawSessionCreated":

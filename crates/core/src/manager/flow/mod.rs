@@ -630,6 +630,10 @@ pub(crate) struct FakeBehavior {
     pub compactions: Mutex<Vec<Option<String>>>,
     /// Each thread turn's plan mode, as Brigadier set it on its CLI before the turn.
     pub plan_modes: Mutex<Vec<bool>>,
+    /// CLI starts fail while this is set.
+    pub fail_starts: std::sync::atomic::AtomicBool,
+    /// How many CLI starts failed so.
+    pub failed_starts: std::sync::atomic::AtomicU32,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -802,6 +806,18 @@ impl Provider for FakeCli {
                 return Err(brigadier_providers::Error::Spawn(format!(
                     "no session {native_id}"
                 )));
+            }
+            if self
+                .behavior
+                .fail_starts
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                self.behavior
+                    .failed_starts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(brigadier_providers::Error::Spawn(
+                    "the CLI would not start".into(),
+                ));
             }
             let held = self.behavior.hold_start.lock().unwrap().take();
             if let Some((reached, release)) = held {

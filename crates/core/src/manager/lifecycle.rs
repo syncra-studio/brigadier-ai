@@ -130,7 +130,17 @@ impl SessionManager {
             // cut-off request reads so, and before reviews are told again (so a review in it
             // already isn't told twice).
             crate::heap(|| self.recover_seam(&conversation.id)).await;
-            self.mark_cut_off_turn(&conversation.id).await;
+            let cut_off = match self.mark_cut_off_turn(&conversation.id).await {
+                Some(cut_off) => Some(cut_off),
+                // A quit that closed the CLI mid-turn wrote it interrupted itself.
+                None => self.quit_interrupted_request(&conversation.id).await,
+            };
+            // It goes on by itself, once, before what the stop left in its inbox goes back
+            // (D9 a); its turn starts once recovery is over.
+            if let Some((request, error)) = cut_off {
+                self.auto_resume_cut_off(&conversation.id, request, error)
+                    .await;
+            }
             self.recover_unheard_envelopes(&conversation.id).await;
             // What its workers did that it hadn't heard yet (S29).
             if conversation.lifecycle != Lifecycle::Archived {
@@ -171,6 +181,12 @@ impl SessionManager {
                         if task.state == TaskState::Paused {
                             continue;
                         }
+                        // A plain worker's cut-off turn goes on by itself, once (D9 a).
+                        if conversation.lifecycle == Lifecycle::Active
+                            && self.plain_auto_resume(&task).await
+                        {
+                            continue;
+                        }
                         // A plain worker's cut-off turn ends as an interrupted one does: it
                         // waits for its session's next message, and its parent hears it
                         // stopped (S29), once, with how it goes on (#559).
@@ -190,6 +206,14 @@ impl SessionManager {
                         if plain {
                             self.plain_cut_off(&task).await;
                         }
+                        continue;
+                    }
+                    // A plain worker cut off before its CLI session began starts again on its
+                    // prompt, once (D9 a).
+                    TaskState::Running | TaskState::Starting
+                        if conversation.lifecycle == Lifecycle::Active
+                            && self.plain_auto_resume(&task).await =>
+                    {
                         continue;
                     }
                     // A read task that reported is done.

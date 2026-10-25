@@ -1153,6 +1153,7 @@ mod tests {
             mcps: vec!["pencil".into()],
             computer_use: false,
             closed: false,
+            auto_resumed: false,
         };
         let grants = worker_grants(Some(&naked));
         assert_eq!(grants.mcps, Some(vec!["pencil".to_owned()]));

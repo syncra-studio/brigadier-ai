@@ -219,7 +219,7 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
         script(move |turn| {
             let held = held.clone();
             async move {
-                if turn.input.contains("Hold.") {
+                if turn.input.contains("Hold.") && !turn.input.contains("Brigadier quit") {
                     held.notify_one();
                     std::future::pending::<()>().await;
                 }
@@ -232,17 +232,27 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
     holding.notified().await;
     flow.crash().await;
     flow.settled().await;
+    // The cut-off turn goes on by itself (D9 a), then the next.
+    eventually("the cut-off turn goes on", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns[1].end.is_some()
+    })
+    .await;
     flow.say("Look again.").await;
     eventually("the next turn ends", || {
         let view = flow.manager.thread_view(&flow.conversation).unwrap();
-        view.turns.len() == 2 && view.turns[1].end.is_some()
+        view.turns.len() == 3 && view.turns[2].end.is_some()
     })
     .await;
     let view = flow.manager.thread_view(&flow.conversation).unwrap();
     let ends: Vec<_> = view.turns.iter().map(|turn| turn.end).collect();
     assert_eq!(
         ends,
-        [Some(TurnEnd::Interrupted), Some(TurnEnd::Done)],
+        [
+            Some(TurnEnd::Interrupted),
+            Some(TurnEnd::Done),
+            Some(TurnEnd::Done)
+        ],
         "{view:#?}"
     );
     flow.stop().await;

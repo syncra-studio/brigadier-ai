@@ -1024,6 +1024,10 @@ pub struct PlainWorker {
     /// `brigadier close` ended it: `brigadier workers` lists it no more.
     #[serde(default)]
     pub closed: bool,
+    /// Its turn a restart cut off went on by itself (D9 a), until that turn finishes or its
+    /// session sends it something new: cut off again meanwhile, it waits for a message.
+    #[serde(default)]
+    pub auto_resumed: bool,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector

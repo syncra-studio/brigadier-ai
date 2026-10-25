@@ -176,6 +176,8 @@ function summary(event: DomainEvent): string {
       return `answered ${event.messageId}`;
     case "requestFinished":
       return `finished ${event.requestId}`;
+    case "turnAutoResumed":
+      return `went on by itself ${event.requestId}`;
     case "peerWaitSettled":
       return event.messageId;
   }

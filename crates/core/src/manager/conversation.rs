@@ -142,6 +142,31 @@ pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
     matches!(state, RequestState::Failed { error }
         if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
+/// The interrupted state a cut-off turn going on by itself reads again when it ends before its
+/// CLI began it (D9 a), once: `None` for any other request.
+fn take_auto_resume(state: &mut ConvState, request: &str) -> Option<&'static str> {
+    match state.auto_resume.take() {
+        Some(auto) if auto.request == request => Some(auto.error),
+        other => {
+            state.auto_resume = other;
+            None
+        }
+    }
+}
+
+/// How `request` ended, unless it failed as a cut-off turn going on by itself that never
+/// began: then it reads interrupted again, with Continue (D9 a).
+fn auto_resume_ended(state: &mut ConvState, request: &str, ended: RequestState) -> RequestState {
+    if !matches!(ended, RequestState::Failed { .. }) {
+        return ended;
+    }
+    match take_auto_resume(state, request) {
+        Some(error) => RequestState::Failed {
+            error: error.into(),
+        },
+        None => ended,
+    }
+}
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -191,8 +216,19 @@ pub(crate) struct Cli {
     pub launch: Option<super::thread::ThreadLaunch>,
 }
 
+/// A turn a restart cut off, going on by itself (D9 a) until its CLI begins it.
+struct AutoResume {
+    request: String,
+    /// What the request read when it was cut off ([`INTERRUPTED_BY_QUIT`] or
+    /// [`INTERRUPTED_BEFORE_START`]), which it reads again if this turn never begins.
+    error: &'static str,
+}
+
 #[derive(Default)]
 struct ConvState {
+    /// The cut-off turn going on by itself, until its CLI begins it: should it fail before
+    /// then, its request reads interrupted again, with Continue (D9 a).
+    auto_resume: Option<AutoResume>,
     watchdog: watchdog::ThreadWatch,
     cli: Option<Arc<Cli>>,
     /// Why its CLI was closed to start again, for the next one's cache trace (BUILD-PLAN B0).
@@ -1726,10 +1762,12 @@ impl SessionManager {
 
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
     /// or a crash) ends interrupted, never as answered, and the thread's Continue picks it up.
-    pub(crate) async fn mark_cut_off_turn(&self, id: &ConversationId) {
-        let Some(cut_off) = self.core.take_cut_off_request(id).await else {
-            return;
-        };
+    /// Returns the request and what it reads, when it marked one.
+    pub(crate) async fn mark_cut_off_turn(
+        &self,
+        id: &ConversationId,
+    ) -> Option<(String, &'static str)> {
+        let cut_off = self.core.take_cut_off_request(id).await?;
         let request = cut_off.request;
         let error = if cut_off.began {
             INTERRUPTED_BY_QUIT
@@ -1744,7 +1782,7 @@ impl SessionManager {
             .and_then(|board| board.requests.get(&request).map(|r| r.state.clone()))
             .is_some_and(|state| matches!(state, RequestState::Working | RequestState::Waiting));
         if !live {
-            return;
+            return None;
         }
         let failed = RequestState::Failed {
             error: error.into(),
@@ -1756,7 +1794,7 @@ impl SessionManager {
             .await
         {
             tracing::warn!(conversation = %id, error = %err, "could not mark a cut-off turn");
-            return;
+            return None;
         }
         if let Ok(conv) = self.conv(id) {
             conv.state.lock().await.outcomes.insert(
@@ -1766,8 +1804,93 @@ impl SessionManager {
                 },
             );
         }
-        self.set_run_for(id, RunState::Failed, Some(error.into()), Some(request))
-            .await;
+        self.set_run_for(
+            id,
+            RunState::Failed,
+            Some(error.into()),
+            Some(request.clone()),
+        )
+        .await;
+        Some((request, error))
+    }
+
+    /// The request whose turn the last quit cut off and wrote interrupted as it closed its CLI
+    /// (the run still failed in its name), with what it reads.
+    pub(crate) async fn quit_interrupted_request(
+        &self,
+        id: &ConversationId,
+    ) -> Option<(String, &'static str)> {
+        let board = self.core.board(id).await.ok()?;
+        if board.run != RunState::Failed {
+            return None;
+        }
+        let request = board.run_request.clone()?;
+        let error = match &board.requests.get(&request)?.state {
+            RequestState::Failed { error } if error == INTERRUPTED_BY_QUIT => INTERRUPTED_BY_QUIT,
+            RequestState::Failed { error } if error == INTERRUPTED_BEFORE_START => {
+                INTERRUPTED_BEFORE_START
+            }
+            _ => return None,
+        };
+        Some((request, error))
+    }
+
+    /// The turn a restart cut off goes on by itself, once (D9 a): as the user's Continue would
+    /// send it, with its word to check git status and git log first. Not for a request the user
+    /// stopped (it isn't cut off), nor one resumed so before (cut off twice, it waits for the
+    /// user's Continue), nor in a conversation archived, asleep or waiting for quota. Should
+    /// its turn not begin, the request reads interrupted again, with Continue.
+    pub(crate) async fn auto_resume_cut_off(
+        &self,
+        id: &ConversationId,
+        request: String,
+        error: &'static str,
+    ) {
+        let Ok(conversation) = self.core.conversation(id) else {
+            return;
+        };
+        if conversation.lifecycle != Lifecycle::Active
+            || conversation.deleting
+            || conversation.quota_wait.is_some()
+        {
+            return;
+        }
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        // A seam the restart came in carries on by itself, or sends its messages again (S22).
+        {
+            let state = conv.state.lock().await;
+            if state.seam.carry_on || !state.pending.is_empty() {
+                return;
+            }
+        }
+        // Stored once per request: a restart that comes back here finds it done.
+        let event = DomainEvent::TurnAutoResumed {
+            conversation_id: id.clone(),
+            request_id: request.clone(),
+        };
+        let key = format!("auto-resume:{request}");
+        match self
+            .core
+            .record_once(crate::model::streams::conversation(id), event, &key)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not record a turn going on by itself");
+                return;
+            }
+        }
+        conv.state.lock().await.auto_resume = Some(AutoResume {
+            request: request.clone(),
+            error,
+        });
+        if let Err(err) = self.resume(id.clone()).await {
+            conv.state.lock().await.auto_resume = None;
+            tracing::info!(conversation = %id, error = %err, "a cut-off turn waits for Continue");
+        }
     }
 
     /// Continues the latest request after the user stopped it: a turn for that request, in its
@@ -2405,11 +2528,26 @@ impl SessionManager {
         envelopes: Vec<(Envelope, Option<String>)>,
         message: &str,
     ) {
+        let mut users = users;
+        let mut envelopes = envelopes;
+        let mut message = message;
         let failed = {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.compacting = false;
             let failed = state.request.take();
+            // A cut-off turn going on by itself that never began reads interrupted again, with
+            // Continue, which sends what this sent once more (D9 a).
+            if let Some(request) = &failed
+                && let Some(error) = take_auto_resume(&mut state, request)
+            {
+                message = error;
+                users.retain(|user| &user.id != request);
+                envelopes.retain(|(envelope, of)| {
+                    envelope.kind != InjectionKind::Resume || of.as_ref() != Some(request)
+                });
+                state.notes.retain(|note| note != RESENT_AFTER_QUIT);
+            }
             if let Some(request) = &failed {
                 state.outcomes.insert(
                     request.clone(),
@@ -3600,7 +3738,7 @@ impl SessionManager {
                 let error = if quit {
                     INTERRUPTED_BY_QUIT
                 } else {
-                    ENDED_UNEXPECTEDLY
+                    take_auto_resume(&mut state, &request).unwrap_or(ENDED_UNEXPECTEDLY)
                 };
                 state.outcomes.insert(
                     request.clone(),
@@ -4250,6 +4388,8 @@ impl SessionManager {
                 let (started, nets) = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
+                    // A cut-off turn going on by itself has begun: it ends as any turn does.
+                    state.auto_resume = None;
                     // The CLI took the turn: the net's messages (S29) and other sessions'
                     // messages (S30) in it were heard.
                     let nets: Vec<String> = state
@@ -4648,6 +4788,7 @@ impl SessionManager {
                 && let Some(ended) = ended.clone()
                 && limited.is_none()
             {
+                let ended = auto_resume_ended(&mut state, request, ended);
                 state.outcomes.insert(request.clone(), ended);
             }
             (
@@ -4736,6 +4877,7 @@ impl SessionManager {
                 let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
                 match (&served, ended) {
                     (Some(request), Some(ended)) if !stopped => {
+                        let ended = auto_resume_ended(&mut state, request, ended);
                         state.outcomes.insert(request.clone(), ended);
                         None
                     }

@@ -502,26 +502,45 @@ impl SessionManager {
                 });
             })
             .await?;
-        let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
-        // Its first message is its prompt, as `brigadier start` gave it; a mockup's says where
-        // its images go.
+        self.record_plain_workspace(&task).await;
+        self.launch_first(live, &task, &workspace.scratch).await
+    }
+
+    /// Starts the worker's CLI on its first message, its prompt as `brigadier start` gave it
+    /// (a mockup's says where its images go), in its prepared workspace.
+    async fn launch_first(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        scratch: &std::path::Path,
+    ) -> Result<()> {
+        let files = self.worker_files(task, scratch).await;
         let prompt = match &task.mockup {
-            Some(MockupPart::Builds) => format!(
-                "{}\n\n{}",
-                task.spec,
-                mockup_line(&outputs_dir(&workspace.scratch))
-            ),
+            Some(MockupPart::Builds) => {
+                format!("{}\n\n{}", task.spec, mockup_line(&outputs_dir(scratch)))
+            }
             _ => task.spec.clone(),
         };
-        self.record_plain_workspace(&task).await;
         self.launch_worker(
             live,
-            &task,
+            task,
             Origin::New,
             TurnInput::with_files(prompt, files),
         )
         .await
+    }
+
+    /// A worker a restart cut off before its CLI session began starts again on its prompt:
+    /// in the worktree it has, or from the start when it had none yet (D9 a).
+    pub(crate) async fn relaunch_worker(&self, live: &Arc<TaskLive>, task: &Task) -> Result<()> {
+        match &task.workspace {
+            Some(workspace) => {
+                let scratch = PathBuf::from(&workspace.scratch);
+                self.launch_first(live, task, &scratch).await
+            }
+            None => self.start_worker(live, task.clone()).await,
+        }
     }
 
     /// Starts (or resumes) the worker's CLI session in the task's prepared workspace and sends
@@ -1796,6 +1815,26 @@ impl SessionManager {
     /// `brigadier send`: `text` goes to the worker as written, into its running turn, or as a
     /// new turn of the session its CLI keeps.
     pub(crate) async fn message_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: String,
+    ) -> Result<()> {
+        // Something new from its session: a later cut-off may go on by itself again (D9 a).
+        if task.plain.as_ref().is_some_and(|plain| plain.auto_resumed) {
+            self.update_task(conversation_id, &task.id, |t| {
+                if let Some(plain) = &mut t.plain {
+                    plain.auto_resumed = false;
+                }
+            })
+            .await?;
+        }
+        self.send_to_worker(conversation_id, task, text).await
+    }
+
+    /// [`Self::message_worker`] without its being something new from the session: a turn
+    /// going on by itself after a restart (D9 a).
+    pub(crate) async fn send_to_worker(
         &self,
         conversation_id: &ConversationId,
         task: &Task,

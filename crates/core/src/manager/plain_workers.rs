@@ -54,6 +54,10 @@ const TITLE_MAX: usize = 60;
 
 /// How long a message sent to a worker still starting waits for its CLI.
 const CLI_START: Duration = Duration::from_secs(60);
+/// What a worker's turn a restart cut off is told as it goes on by itself (D9 a).
+const RESUMED_AFTER_RESTART: &str = "[Brigadier restarted while you were working on this, and \
+your turn goes on now. Your last steps may have finished after your record of them: check git \
+status and git log first, then carry on from where it stands.]";
 
 /// A new event of worker `task`'s (its own id given when it is kept).
 pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
@@ -365,6 +369,7 @@ impl SessionManager {
             mcps,
             computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
+            auto_resumed: false,
         };
         let mockup = start.mockup.then_some(MockupPart::Builds);
         let task = crate::heap(|| {
@@ -724,10 +729,16 @@ impl SessionManager {
             Some(_) => self.final_outputs(task).await,
             None => None,
         };
+        // The turn finished, one way or another: a later cut-off may go on by itself again. An
+        // interrupted one (a quit closing its CLI) is still the turn that was cut off (D9 a).
+        let finished = status != TurnStatus::Interrupted;
         let updated = self
             .update_task(&task.conversation_id, &task.id, |task| {
                 task.state = state;
                 task.blocked_reason = blocked.clone();
+                if finished && let Some(plain) = &mut task.plain {
+                    plain.auto_resumed = false;
+                }
                 if error.is_some() {
                     task.error = error.clone();
                 }
@@ -783,6 +794,68 @@ impl SessionManager {
             None,
             event(&live.id, EventKind::FreshContext),
         );
+    }
+
+    /// A plain worker's turn a restart cut off goes on by itself, once (D9 a): its CLI session
+    /// resumed with a word to check git status and git log first, or, cut off before its
+    /// session began, started again on its prompt in its own worktree. False when it went on
+    /// by itself before (that turn cut off twice): it waits for its session's message.
+    /// Should it not go on, its session hears so, as of any cut-off worker.
+    pub(super) async fn plain_auto_resume(&self, task: &Task) -> bool {
+        if task.plain.as_ref().is_none_or(|plain| plain.auto_resumed) {
+            return false;
+        }
+        let marked = self
+            .update_task(&task.conversation_id, &task.id, |task| {
+                if let Some(plain) = &mut task.plain {
+                    plain.auto_resumed = true;
+                }
+            })
+            .await;
+        let task = match marked {
+            Ok(task) => task,
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not mark a worker going on by itself");
+                return false;
+            }
+        };
+        let manager = self.arc();
+        self.spawn(async move {
+            let live = manager.task_live(&task);
+            let began = manager.last_worker_native_id(&task).await.is_some();
+            let went = if began {
+                manager
+                    .send_to_worker(&task.conversation_id, &task, RESUMED_AFTER_RESTART.into())
+                    .await
+            } else {
+                manager.relaunch_worker(&live, &task).await
+            };
+            let Err(err) = went else {
+                return;
+            };
+            tracing::info!(task = %task.id, error = %err, "a cut-off worker waits for a message");
+            if began {
+                let _ = manager
+                    .update_task(&task.conversation_id, &task.id, |t| {
+                        if !t.state.is_final() {
+                            t.state = TaskState::Reported;
+                            t.blocked_reason = None;
+                        }
+                    })
+                    .await;
+                manager.plain_cut_off(&task).await;
+            } else {
+                manager
+                    .plain_failed(
+                        &task,
+                        format!(
+                            "Brigadier quit as it started, and it could not start again: {err}."
+                        ),
+                    )
+                    .await;
+            }
+        });
+        true
     }
 
     /// A plain worker's CLI was working when Brigadier quit: its session hears it stopped,

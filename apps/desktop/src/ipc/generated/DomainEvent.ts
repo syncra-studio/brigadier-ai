@@ -147,4 +147,4 @@ answerId: string | null, } | { "type": "peerMessageState", messageId: string, st
 /**
  * Set when this change let it go (the user's Send).
  */
-sentAtMs: number | null, } | { "type": "peerWaitSettled", messageId: string, } | { "type": "requestFinished", conversationId: ConversationId, requestId: string, } | { "type": "peerAnswered", conversationId: ConversationId, messageId: string, } | { "type": "peerReplyHeld", messageId: string, hold: ReplyHold, } | { "type": "probe", burstId: string, index: number, count: number, };
+sentAtMs: number | null, } | { "type": "peerWaitSettled", messageId: string, } | { "type": "requestFinished", conversationId: ConversationId, requestId: string, } | { "type": "turnAutoResumed", conversationId: ConversationId, requestId: string, } | { "type": "peerAnswered", conversationId: ConversationId, messageId: string, } | { "type": "peerReplyHeld", messageId: string, hold: ReplyHold, } | { "type": "probe", burstId: string, index: number, count: number, };

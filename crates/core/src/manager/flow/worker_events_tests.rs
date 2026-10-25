@@ -30,6 +30,10 @@ struct Seen {
     waited: Mutex<Vec<Value>>,
     /// Lets the hanging workers end.
     release: AtomicBool,
+    /// A worker's turn that goes on after a restart hangs too.
+    hold_resumes: AtomicBool,
+    /// Every worker's input, in order.
+    worker_inputs: Mutex<Vec<String>>,
 }
 
 impl Seen {
@@ -112,6 +116,7 @@ fn script(seen: Arc<Seen>) -> Script {
 /// A worker does what its prompt names.
 async fn worker(turn: &Turn, seen: &Seen) -> Reply {
     let said = turn.input.clone();
+    seen.worker_inputs.lock().unwrap().push(said.clone());
     if said.contains("Ask-first.") {
         return match turn.ask_approval("curl https://example.com", "curl").await {
             Some(decision) => Reply::text(format!("Answered: {decision:?}.")),
@@ -145,7 +150,8 @@ async fn worker(turn: &Turn, seen: &Seen) -> Reply {
         .await;
         return Reply::text("Signed out of linear; finished the rest.");
     }
-    if said.contains("Hang-on.") {
+    let resumed = said.contains("Brigadier restarted while you were working");
+    if said.contains("Hang-on.") || (resumed && seen.hold_resumes.load(Ordering::SeqCst)) {
         turn.emit(ProviderEvent::Command {
             item_id: "hang".into(),
             command: "sleep 600".into(),
@@ -666,8 +672,8 @@ async fn an_event_after_the_parents_seam_reaches_its_successor_once() {
 
 /// O1's faults with no wait running: a permission prompt, a failed turn, a CLI killed, a
 /// usage limit, a compaction, a server wanting a sign-in and a silent command each reach the
-/// idle parent once; a restart cutting off the silent one and the one asking reads stopped,
-/// once each.
+/// idle parent once; a restart cutting off the silent one and the one asking goes on by itself
+/// (D9 a), each finishing once.
 #[tokio::test]
 async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
     let (mut flow, seen) = flow("events-faults", PermissionLevel::AcceptEdits).await;
@@ -712,11 +718,11 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
         "{nets:#?}"
     );
 
-    // The restart cuts off the silent worker and the one waiting on its prompt.
+    // The restart cuts off the silent worker and the one waiting on its prompt: they go on.
     flow.crash().await;
     let cut_off = [
-        ("Ask-first".to_owned(), "stopped".to_owned()),
-        ("Hang-on".to_owned(), "stopped".to_owned()),
+        ("Ask-first".to_owned(), "finished".to_owned()),
+        ("Hang-on".to_owned(), "finished".to_owned()),
     ];
     super::eventually("the cut-off workers told", || {
         let told = seen.told();
@@ -734,12 +740,18 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
     flow.stop().await;
 }
 
-/// A worker cut off by a restart waits for its session's next message, as an interrupted
-/// turn leaves it, never paused for good: its parent hears it stopped once, with how it goes
-/// on, and a message carries it on (#559).
-#[tokio::test]
-async fn a_worker_cut_off_by_a_restart_goes_on_when_its_session_sends_it_more() {
-    let (mut flow, seen) = flow("events-restart-cut", PermissionLevel::Full).await;
+/// How many of the workers' inputs said `what`.
+fn worker_inputs(seen: &Seen, what: &str) -> usize {
+    seen.worker_inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|input| input.contains(what))
+        .count()
+}
+
+/// Starts the `Hang-on` worker and waits until it works.
+async fn hanging_worker(flow: &Flow) {
     flow.say("Start Hang-on.").await;
     flow.until("the worker works", |board| {
         board
@@ -749,44 +761,146 @@ async fn a_worker_cut_off_by_a_restart_goes_on_when_its_session_sends_it_more() 
     })
     .await;
     flow.settled().await;
+}
 
+/// A worker cut off by a crash, or by a quit that closed its CLI, goes on by itself once, told
+/// to check git status and git log first (D9 a): its parent hears it finish, never that it
+/// stopped.
+#[tokio::test]
+async fn a_worker_cut_off_by_a_restart_goes_on_by_itself() {
+    for crash in [true, false] {
+        let (mut flow, seen) = flow("events-restart-resume", PermissionLevel::Full).await;
+        hanging_worker(&flow).await;
+        if crash {
+            flow.crash().await;
+        } else {
+            flow.restart().await;
+        }
+        let finished = ("Hang-on".to_owned(), "finished".to_owned());
+        super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+        let board = flow.settled().await;
+        settle_net().await;
+        let told = seen.told();
+        assert!(
+            !told.iter().any(|(_, word)| word == "stopped"),
+            "crash {crash}: {told:#?}"
+        );
+        assert_eq!(worker_inputs(&seen, "Hang-on."), 1, "crash {crash}");
+        assert_eq!(
+            worker_inputs(&seen, "check git status and git log first"),
+            1,
+            "crash {crash}"
+        );
+        let task = Flow::task(&board, 1);
+        assert_eq!(task.state, crate::work::TaskState::Reported);
+        assert!(
+            !task.plain.as_ref().unwrap().auto_resumed,
+            "its turn finished"
+        );
+        flow.stop().await;
+    }
+}
+
+/// Cut off again while it went on by itself (by a crash, or a quit closing its CLI): it waits
+/// for its session's next message, as an interrupted turn leaves it, never paused for good;
+/// its parent hears it stopped once, with how it goes on, and a message carries it on (#559).
+#[tokio::test]
+async fn a_worker_cut_off_twice_goes_on_when_its_session_sends_it_more() {
+    for crash in [true, false] {
+        let (mut flow, seen) = flow("events-restart-cut", PermissionLevel::Full).await;
+        seen.hold_resumes.store(true, Ordering::SeqCst);
+        hanging_worker(&flow).await;
+        flow.crash().await;
+        super::eventually("the worker going on", || {
+            worker_inputs(&seen, "Brigadier restarted while you were working") == 1
+        })
+        .await;
+        flow.settled().await;
+        if crash {
+            flow.crash().await;
+        } else {
+            flow.restart().await;
+        }
+        let stopped = ("Hang-on".to_owned(), "stopped".to_owned());
+        super::eventually("the parent told", || seen.told().contains(&stopped)).await;
+        let board = flow.settled().await;
+        let task = Flow::task(&board, 1).clone();
+        assert_eq!(
+            task.state,
+            crate::work::TaskState::Reported,
+            "crash {crash}"
+        );
+        assert_eq!(task.blocked_reason, None);
+        let nets = seen.nets();
+        assert!(
+            nets.iter()
+                .any(|(_, input)| input.contains("Send it a message to carry on.")),
+            "{nets:#?}"
+        );
+        assert_eq!(
+            worker_inputs(&seen, "Brigadier restarted while you were working"),
+            1,
+            "crash {crash}: went on by itself twice"
+        );
+        // What git and its CLI showed of the turn cut off, the one that went on (harness P1).
+        assert!(
+            nets.iter().any(|(_, input)| input.contains("in turn 2")
+                && input.contains("full facts: `brigadier show")),
+            "{nets:#?}"
+        );
+
+        seen.hold_resumes.store(false, Ordering::SeqCst);
+        flow.manager
+            .message_worker(&flow.conversation, &task, "Go on.".into())
+            .await
+            .unwrap();
+        let finished = ("Hang-on".to_owned(), "finished".to_owned());
+        super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+        flow.settled().await;
+        settle_net().await;
+        let told = seen.told();
+        assert_eq!(
+            told.iter().filter(|told| **told == stopped).count(),
+            1,
+            "{told:#?}"
+        );
+        flow.stop().await;
+    }
+}
+
+/// A worker cut off before its CLI session began starts again on its prompt, once, in the
+/// worktree it had (D9 a).
+#[tokio::test]
+async fn a_worker_cut_off_as_it_starts_starts_again_in_its_worktree() {
+    let (mut flow, seen) = flow("events-restart-starting", PermissionLevel::Full).await;
+    flow.say("Start Quick.").await;
+    // Its parent's turn, then its own CLI's start, which never goes on.
+    super::eventually("the parent's turn", || {
+        !seen.inputs.lock().unwrap().is_empty()
+    })
+    .await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_start.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    reached.notified().await;
+    let starting = flow.board().await;
+    let task = Flow::task(&starting, 1).clone();
+    assert!(task.native_session.is_none());
+    let worktree = task.workspace.clone().unwrap().worktree;
     flow.crash().await;
-    let stopped = ("Hang-on".to_owned(), "stopped".to_owned());
-    super::eventually("the parent told", || seen.told().contains(&stopped)).await;
-    let board = flow.settled().await;
-    let task = Flow::task(&board, 1).clone();
-    assert_eq!(task.state, crate::work::TaskState::Reported);
-    assert_eq!(task.blocked_reason, None);
-    let nets = seen.nets();
-    assert!(
-        nets.iter()
-            .any(|(_, input)| input.contains("Send it a message to carry on.")),
-        "{nets:#?}"
-    );
-    // The cut-off turn's command, as kept before the restart: never seen ending, at the commit
-    // it started at (harness P1).
-    let worktree = task.workspace.as_ref().unwrap().worktree.clone().unwrap();
-    let head = super::git(std::path::Path::new(&worktree), &["rev-parse", "HEAD"]);
-    let ran = format!("`sleep 600` no end seen (turn 1, at {})", &head.trim()[..8]);
-    assert!(
-        nets.iter().any(|(_, input)| input.contains(&ran)
-            && input.contains("full facts: `brigadier show")),
-        "{ran}: {nets:#?}"
-    );
-
-    flow.manager
-        .message_worker(&flow.conversation, &task, "Go on.".into())
-        .await
-        .unwrap();
-    let finished = ("Hang-on".to_owned(), "finished".to_owned());
+    let finished = ("Quick".to_owned(), "finished".to_owned());
     super::eventually("the worker finished", || seen.told().contains(&finished)).await;
-    flow.settled().await;
-    settle_net().await;
-    let told = seen.told();
-    assert_eq!(
-        told.iter().filter(|told| **told == stopped).count(),
-        1,
-        "{told:#?}"
+    let board = flow.settled().await;
+    assert_eq!(worker_inputs(&seen, "Quick."), 1);
+    let again = Flow::task(&board, 1);
+    assert_eq!(again.workspace.clone().unwrap().worktree, worktree);
+    let worktree = worktree.expect("a worktree");
+    let started_in: Vec<_> = flow.specs().into_iter().map(|(_, spec)| spec.cwd).collect();
+    assert!(
+        started_in
+            .iter()
+            .any(|cwd| cwd.to_string_lossy() == worktree.as_str()),
+        "{started_in:?} vs {worktree:?}"
     );
     flow.stop().await;
 }
