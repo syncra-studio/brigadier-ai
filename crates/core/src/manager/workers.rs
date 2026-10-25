@@ -43,8 +43,9 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
-    ArtifactKind, ArtifactRef, Attempt, AttemptEnd, OrchestratorStepKind, PlainWorker, RepoAccess,
-    Route, Task, TaskId, TaskKind, TaskState, TaskWorkspace, WorkerAccess,
+    ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, MockupPart,
+    OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind, TaskState,
+    TaskWorkspace, WorkerAccess,
 };
 use crate::{Error, Result, now_ms};
 
@@ -347,7 +348,8 @@ impl SessionManager {
 
     /// Makes a plain worker of `conversation_id` on `choice` (the CLI, model and effort
     /// `brigadier start` named; the CLI's own default model when it named none), and starts
-    /// it. Brigadier routes nothing for it (G18).
+    /// it; `mockup`: its part in the session's mockup (`--mockup`). Brigadier routes nothing
+    /// for it (G18).
     pub(crate) async fn create_plain_task(
         &self,
         conversation_id: &ConversationId,
@@ -355,6 +357,7 @@ impl SessionManager {
         spec: String,
         choice: ModelChoice,
         plain: PlainWorker,
+        mockup: Option<MockupPart>,
     ) -> Result<Task> {
         self.admit()?;
         let fence = self.enter(conversation_id)?;
@@ -413,7 +416,7 @@ impl SessionManager {
             subject: None,
             target: None,
             end_state: None,
-            mockup: None,
+            mockup,
             design: false,
             plan: None,
             attachments: Vec::new(),
@@ -496,13 +499,22 @@ impl SessionManager {
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
-        // Its first message is its prompt, as `brigadier start` gave it.
+        // Its first message is its prompt, as `brigadier start` gave it; a mockup's says where
+        // its images go.
+        let prompt = match &task.mockup {
+            Some(MockupPart::Builds) => format!(
+                "{}\n\n{}",
+                task.spec,
+                mockup_line(&outputs_dir(&workspace.scratch))
+            ),
+            _ => task.spec.clone(),
+        };
         self.record_plain_workspace(&task).await;
         self.launch_worker(
             live,
             &task,
             Origin::New,
-            TurnInput::with_files(task.spec.clone(), files),
+            TurnInput::with_files(prompt, files),
         )
         .await
     }
@@ -1288,8 +1300,17 @@ impl SessionManager {
 
     /// The user's attachments the task was given, written into its scratch folder.
     pub(crate) async fn worker_files(&self, task: &Task, scratch: &Path) -> Vec<InputFile> {
+        self.attachment_files(&task.attachments, scratch).await
+    }
+
+    /// `attachments` written in the `attachments` folder of a worker's `scratch`.
+    pub(crate) async fn attachment_files(
+        &self,
+        attachments: &[AttachmentRef],
+        scratch: &Path,
+    ) -> Vec<InputFile> {
         let mut files = Vec::new();
-        for attachment in &task.attachments {
+        for attachment in attachments {
             let Ok(hash) = attachment.id.parse::<brigadier_store::BlobHash>() else {
                 continue;
             };
@@ -2421,6 +2442,16 @@ pub(crate) fn repo_access_for(kind: TaskKind, permission: PermissionLevel) -> Wo
 /// other programs' by `TMPDIR`, zsh's here-documents by `TMPPREFIX` (zsh 5.9 makes them under
 /// `/tmp/zsh` by default, and a sandboxed `cat <<EOF` there fails with "can't create temp file
 /// for here document").
+/// What a mockup worker's first message adds to its prompt: where its images go, by name.
+fn mockup_line(outputs: &Path) -> String {
+    format!(
+        "[mockup] You build the session's mockup. Save each screen as an image named \
+         mockup-1.png, mockup-2.png… in {}; they show in the session's Mockup tab when your \
+         turn ends, and the user's notes on them come back to you.",
+        outputs.display()
+    )
+}
+
 pub(crate) fn worker_env(scratch: &Path) -> Vec<(String, String)> {
     vec![
         ("TMPDIR".into(), scratch.to_string_lossy().into_owned()),

@@ -550,6 +550,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         lean: false,
         skills: Vec::new(),
         with: Vec::new(),
+        mockup: false,
         prompt: prompt.into(),
     }
 }
@@ -1005,6 +1006,115 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         net.contains("[worker events wn-") && net.contains("finished · Hi."),
         "{net}"
     );
+    flow.stop().await;
+}
+
+/// `brigadier start --mockup`: its worker is told where its screens go by name; what it saved
+/// there is its outputs once its turn ends (the session's Mockup tab), and the user's notes
+/// reach it with the marked screenshots' paths, a new version of the mockup.
+#[tokio::test]
+async fn a_mockup_worker_shows_its_screens_as_each_turn_ends_and_hears_the_notes() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let keep = |name: &str, value: Value| {
+                    answers.lock().unwrap().insert(name.into(), value);
+                };
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    if turn.input.starts_with("Notes on the mockup") {
+                        keep("notes", json!(turn.input));
+                        return Reply::text("Revised.");
+                    }
+                    keep("first", json!(turn.input));
+                    let folder = turn
+                        .input
+                        .split_once("mockup-2.png… in ")
+                        .and_then(|(_, rest)| rest.split_once("; they show"))
+                        .map(|(folder, _)| std::path::PathBuf::from(folder))
+                        .expect("the folder is named");
+                    std::fs::write(folder.join("mockup-1.png"), b"png").unwrap();
+                    return Reply::text("Made it.");
+                }
+                let started = brigadier(
+                    &turn,
+                    CliRequest::Start(Box::new(StartRequest {
+                        mockup: true,
+                        ..start("Mock the density toggle.")
+                    })),
+                )
+                .await;
+                keep("start", started);
+                Reply::text("Started the mockup.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-mockup", Options::default(), script).await;
+    flow.say("Mock it.").await;
+    flow.until("the mockup's screen is kept", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported && !task.outputs.is_empty())
+    })
+    .await;
+    let board = flow.board().await;
+    let task = Flow::task(&board, 1).clone();
+    assert_eq!(task.mockup, Some(crate::work::MockupPart::Builds));
+    assert_eq!(task.spec, "Mock the density toggle.");
+    let names: Vec<_> = task
+        .outputs
+        .iter()
+        .map(|output| output.file_name.clone().unwrap())
+        .collect();
+    assert_eq!(names, ["mockup-1.png"]);
+    assert_eq!(task.outputs[0].mime, "image/png");
+
+    // The Mockup tab's Send: the notes and the marked screenshot reach the worker.
+    let hash = flow
+        .core
+        .store()
+        .blobs()
+        .put(b"marked".to_vec())
+        .await
+        .unwrap();
+    let marked = crate::work::AttachmentRef {
+        id: hash.to_string(),
+        name: "mockup-1-notes.png".into(),
+        mime: "image/png".into(),
+        bytes: 6,
+        pasted: false,
+        inline: None,
+    };
+    flow.manager
+        .send_mockup_notes(
+            task.id.clone(),
+            "Notes on the mockup (version 1): make it blue.".into(),
+            vec![marked],
+        )
+        .await
+        .unwrap();
+    super::eventually("the worker to hear the notes", || {
+        answers.lock().unwrap().contains_key("notes")
+    })
+    .await;
+    let notes = answers.lock().unwrap()["notes"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let path = notes
+        .split_once("The marked screenshots:\n- ")
+        .map(|(_, path)| path.trim())
+        .unwrap_or_else(|| panic!("no marked screenshot: {notes}"));
+    assert!(path.ends_with("attachments/mockup-1-notes.png"), "{path}");
+    assert_eq!(std::fs::read(path).unwrap(), b"marked");
+    let board = flow.board().await;
+    assert_eq!(Flow::task(&board, 1).rework_rounds, 1);
     flow.stop().await;
 }
 

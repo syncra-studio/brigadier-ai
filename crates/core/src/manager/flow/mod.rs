@@ -225,6 +225,7 @@ impl Turn {
             lean: false,
             skills: Vec::new(),
             with: Vec::new(),
+            mockup: false,
             prompt: prompt.into(),
         }));
         let call = CliCall {

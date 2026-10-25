@@ -233,6 +233,13 @@ pub const COMMANDS: &[Command] = &[
                 choices: &["computer-use"],
                 repeat: true,
             },
+            switch(
+                "mockup",
+                "The session's mockup, for a design the user wants to see before it is built: \
+                 it saves its screens as mockup-1.png, mockup-2.png… in the folder its first \
+                 message names, they show in the session's Mockup tab, and the user's notes on \
+                 them come back to it.",
+            ),
             rest("prompt", "Its task.", true),
         ],
         available: true,

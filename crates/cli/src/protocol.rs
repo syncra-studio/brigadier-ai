@@ -217,6 +217,10 @@ pub struct StartRequest {
     /// With `lean`, what it has beyond the goal and the repository (`--with`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub with: Vec<Capability>,
+    /// The session's mockup: the images it makes show in the session's Mockup tab, and the
+    /// user's notes on them come back to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mockup: bool,
     pub prompt: String,
 }
 

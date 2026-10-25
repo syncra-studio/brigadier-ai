@@ -918,6 +918,14 @@ pub enum Request {
     StopWorkers {
         conversation_id: ConversationId,
     },
+    /// The user's notes on a mockup (its Mockup tab's Send): the text and the marked
+    /// screenshots go to the mockup's worker, as `brigadier send` sends, and its mockup counts
+    /// a new version.
+    SendMockupNotes {
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+    },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
         task_id: TaskId,
@@ -1765,6 +1773,7 @@ pub enum Response {
         /// The tasks stopped, oldest first.
         task_ids: Vec<TaskId>,
     },
+    SendMockupNotes,
     PauseTask,
     ResumeTask,
     RestoreKeptWork {

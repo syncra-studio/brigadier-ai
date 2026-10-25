@@ -1204,6 +1204,11 @@ export async function stopWorkers(conversationId: string): Promise<string[]> {
   return stopped;
 }
 
+/** The user's notes on a mockup, with the marked screenshots, to the mockup's worker. */
+export async function sendMockupNotes(taskId: string, text: string, attachments: AttachmentRef[]): Promise<void> {
+  await request({ method: "sendMockupNotes", taskId, text, attachments });
+}
+
 export async function pauseTask(taskId: string): Promise<void> {
   await request({ method: "pauseTask", taskId });
 }

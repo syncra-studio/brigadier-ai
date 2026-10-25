@@ -2215,6 +2215,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::StopWorkers { conversation_id } => Response::StopWorkers {
             task_ids: heap(|| sessions.stop_workers(conversation_id)).await?,
         },
+        Request::SendMockupNotes {
+            task_id,
+            text,
+            attachments,
+        } => {
+            heap(|| sessions.send_mockup_notes(task_id, text, attachments)).await?;
+            Response::SendMockupNotes
+        }
         Request::PauseTask { task_id } => {
             heap(|| sessions.pause_task(task_id)).await?;
             Response::PauseTask
