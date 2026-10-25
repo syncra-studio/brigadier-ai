@@ -49,6 +49,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
+    sendBeforeItsTurnIsRead: { t: number; row: string | null; top: number | null; blank: boolean }[];
   };
   assert.equal(seen.error, undefined);
 
@@ -182,6 +183,16 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(seen.newChat.top, 0);
   assert.equal(seen.working.distance, 0);
   assert.ok(seen.working.rows >= 2);
+  // A send whose message its CLI says before the view reads its turns again: the bubble shows
+  // from the first frame, under one row all along (never mounted afresh under the CLI's id, the
+  // view thrown off the sent turn's place into room not drawn yet), and stays where it was placed.
+  const frames = seen.sendBeforeItsTurnIsRead;
+  assert.ok(frames.length > 60, `${frames.length} frames`);
+  assert.deepEqual(frames.filter((frame) => frame.row === null).map((frame) => frame.t), [], "a frame without the bubble");
+  assert.equal(new Set(frames.map((frame) => frame.row)).size, 1, "the bubble's row is mounted afresh");
+  assert.deepEqual(frames.filter((frame) => frame.blank).map((frame) => frame.t), [], "room not drawn in the view");
+  const placed = frames.filter((frame) => frame.t >= 800).map((frame) => frame.top!);
+  assert.ok(Math.max(...placed) - Math.min(...placed) <= 1, `the bubble moves after it is placed: ${Math.min(...placed)} to ${Math.max(...placed)}`);
 });
 
 // #500: a conversation opened before the replies' Markdown code is in, from a busy dev server.

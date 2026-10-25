@@ -17,9 +17,28 @@ export type Row = {
   /** Its switch: on where the page looks. */
   on: boolean;
   line: Line;
-  /** Project tags: where it's on, or off. */
-  chips: { text: string; off: boolean }[];
+  /** Project tags: where it's on, or off; `global` for every project. */
+  chips: { text: string; off: boolean; global?: boolean }[];
+  /** The place picker's tag, where the row has one: Global, or the projects (folders) it's on in. */
+  places?: Places;
+  /** Its switch can't do what it says: it is set up in a folder that isn't a project. */
+  locked?: boolean;
 };
+
+/** Where an item is on, as the place picker shows it: every project, or these projects' folders. */
+export type Places = "global" | string[];
+
+/** The place picker's tag: "Global", "freelogo", "2 projects". */
+export function placesLabel(view: PluginsView, places: Places): string {
+  if (places === "global") return "Global";
+  return places.length === 1 ? projectName(view, places[0]!) : `${places.length} projects`;
+}
+
+/** Where `projectIds` (null: every project) puts an item, in words: "on in every project". */
+export function placesWords(view: PluginsView, projectIds: string[] | null): string {
+  if (!projectIds) return "on in every project";
+  return `on only in ${listNames(projectIds.map((id) => view.projects.find((project) => project.id === id)?.name ?? id))}`;
+}
 
 type Section = {
   key: "every" | "some" | "own" | "fromEvery" | "fromOther";
@@ -51,16 +70,25 @@ export const has = (state: AgentItemState) => state.type !== "missing" && state.
 /** The row's line when nothing more pressing says otherwise: what it does, else how it runs. */
 const about = (item: PluginItemView): Line => ({ text: item.description || item.detail, tone: "muted" });
 
-/** A problem the row points to Needs attention for. */
+/** A real problem, which the row shows wherever it sits, on or off. */
 function problem(item: PluginItemView): Line | null {
   const attention = item.attention;
-  if (attention?.type === "wontStart") return { text: "Won't start. See Needs attention.", tone: "error" };
-  if (attention?.type === "notEverywhere") return { text: `${attention.message} See Needs attention.`, tone: "warning" };
+  if (attention?.type === "wontStart") return { text: "Won't start. Open it to see why.", tone: "error" };
+  if (attention?.type === "signIn") return { text: "Needs sign-in.", tone: "warning" };
   return null;
 }
 
+/** Another agent's plugin: it has no places of its own to pick. */
+const plugin = (item: PluginItemView) => item.key.startsWith("plugin:");
+
 /** Off in every project: on nowhere. */
 const nowhere = (item: PluginItemView) => !item.everywhere && item.onIn.length === 0;
+
+/** Whether `path` is one of the user's Brigadier projects (another folder can hold an agent's own copy). */
+export const isProject = (view: PluginsView, path: string) => view.projects.some((project) => project.path === path);
+
+/** On in none of the user's projects, though maybe in a folder that isn't one. */
+const inNoProject = (view: PluginsView, item: PluginItemView) => !item.everywhere && !item.onIn.some((path) => isProject(view, path));
 
 function matches(item: PluginItemView, query: string): boolean {
   const words = query.trim().toLowerCase();
@@ -80,23 +108,36 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
     return [
       {
         key: "every",
-        title: "Every project",
-        description: "On in all your projects. Turn one off to stop it everywhere.",
+        title: "Global",
+        description: "On in every project, and in new ones you add. Turn one off to stop it everywhere.",
         rows: items.filter((item) => item.everywhere || nowhere(item)).map((item) => {
           const on = isOn(item, null);
-          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips: on ? offChips(view, item) : [] };
+          // Another agent's plugin has no places to pick: a plain Global tag.
+          const chips = on && plugin(item) ? [...offChips(view, item), { text: "Global", off: false, global: true }] : on ? offChips(view, item) : [];
+          return { item, on, line: problem(item) ?? (on ? about(item) : { text: "Off in every project.", tone: "muted" }), chips, ...(on && !plugin(item) ? { places: "global" as const } : {}) };
         }),
       },
       {
         key: "some",
         title: "Only in some projects",
-        description: "Each one is on only in the projects shown.",
-        rows: items.filter((item) => !item.everywhere && item.onIn.length > 0).map((item) => ({
-          item,
-          on: true,
-          line: problem(item) ?? about(item),
-          chips: item.onIn.map((path) => ({ text: projectName(view, path), off: false })),
-        })),
+        description: "Each one is on only in the projects on its tag. Click the tag to change where.",
+        rows: items.filter((item) => !item.everywhere && item.onIn.length > 0).map((item) => {
+          // The projects it's on in go on the picker; a folder that isn't a project, or any folder of
+          // another agent's plugin, is a plain tag.
+          const projects = plugin(item) ? [] : item.onIn.filter((path) => isProject(view, path));
+          // An agent's own item set up in a folder that isn't a project stays on there whatever
+          // its switch does: the switch can't turn it off.
+          const foreign = item.onIn.filter((path) => !isProject(view, path));
+          const locked = !item.switchable && foreign.length > 0;
+          return {
+            item,
+            on: true,
+            line: problem(item) ?? (locked ? { text: `Set up in ${listNames(foreign.map((path) => projectName(view, path)))}. Turn it off there.`, tone: "muted" as const } : about(item)),
+            ...(locked ? { locked } : {}),
+            chips: item.onIn.filter((path) => !projects.includes(path)).map((path) => ({ text: projectName(view, path), off: false })),
+            ...(projects.length ? { places: projects } : {}),
+          };
+        }),
       },
     ];
   }
@@ -110,15 +151,17 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
     },
     {
       key: "fromEvery",
-      title: "From every project",
-      description: `Turn one off to skip it in ${here} only.`,
-      rows: items.filter((item) => item.everywhere || nowhere(item)).map((item) => {
+      title: "Global",
+      description: `On in all your projects. Turn one off to skip it in ${here} only.`,
+      rows: items.filter((item) => item.everywhere || inNoProject(view, item)).map((item) => {
         const on = isOn(item, project);
-        const line: Line = on
-          ? problem(item) ?? about(item)
+        const line: Line = problem(item) ?? (on
+          ? about(item)
           : item.everywhere
             ? { text: `Off in ${here}. Still on in your other projects.`, tone: "muted" }
-            : { text: "Off in every project. Turn it on to use it here.", tone: "muted" };
+            : nowhere(item)
+              ? { text: "Off in every project. Turn it on to use it here.", tone: "muted" }
+              : { text: `On in ${listNames(item.onIn.map((path) => projectName(view, path)))} only. Turn it on to use it here.`, tone: "muted" });
         return { item, on, line, chips: [] };
       }),
     },
@@ -126,24 +169,15 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
       key: "fromOther",
       title: "From other projects",
       description: "On in another project. Turn one on to use it here too.",
-      rows: items.filter((item) => !item.everywhere && item.onIn.length > 0 && !item.onIn.includes(project.path)).map((item) => ({
+      rows: items.filter((item) => !item.everywhere && !inNoProject(view, item) && !item.onIn.includes(project.path)).map((item) => ({
         item,
         on: false,
-        line: { text: `On in ${listNames(item.onIn.map((path) => projectName(view, path)))}.`, tone: "muted" },
+        line: problem(item) ?? { text: `On in ${listNames(item.onIn.map((path) => projectName(view, path)))}.`, tone: "muted" },
         chips: [],
       })),
     },
   ];
 }
-
-/** Needs attention: every item with something for the user, both tabs'. */
-export const needsAttention = (view: PluginsView) => view.items.filter((item) => item.attention !== null);
-
-export const ATTENTION_TONE: Record<NonNullable<PluginItemView["attention"]>["type"], Tone> = {
-  signIn: "warning",
-  wontStart: "error",
-  notEverywhere: "muted",
-};
 
 /**
  * What fixes an item only some agents have: a Library item is added to the agents missing it
@@ -156,11 +190,15 @@ export function spreadOf(item: PluginItemView): "addMissing" | "useEverywhere" |
   return "useEverywhere";
 }
 
-/** Where a Library item goes for the agents missing it: where the others have it, by project id (null: every project). */
-export function placesOf(view: PluginsView, item: PluginItemView): (string | null)[] {
-  if (item.everywhere) return [null];
-  const ids = item.onIn.flatMap((path) => view.projects.find((project) => project.path === path)?.id ?? []);
-  return ids.length ? ids : [null];
+/**
+ * Where a sign-in for `item` runs, looking at `project`: there when it's on there, else for every
+ * project when it's on in every project, else the first of its projects (by id); `undefined`
+ * when it's on only in folders that aren't projects.
+ */
+export function signInAt(view: PluginsView, item: PluginItemView, project: PluginProjectView | null): string | null | undefined {
+  if (project && isOn(item, project)) return project.id;
+  if (item.everywhere) return null;
+  return item.onIn.flatMap((path) => view.projects.find((entry) => entry.path === path)?.id ?? [])[0];
 }
 
 /** A project's summary in the filter: "2 of its own · 2 turned off". */

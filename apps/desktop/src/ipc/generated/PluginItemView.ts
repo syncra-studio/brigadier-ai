@@ -46,7 +46,7 @@ agents: Array<PluginAgentState>,
  */
 attention: PluginAttention | null, 
 /**
- * Its switch works as it is; else it goes into the Library first (Use everywhere): one
+ * Its switch works as it is; else it goes into the Library first (Add to every agent): one
  * of the agents that has it can't keep it to a project by itself.
  */
 switchable: boolean, 
@@ -55,7 +55,7 @@ switchable: boolean,
  */
 updateAvailable: boolean, 
 /**
- * It came into the Library by Use everywhere, which can be undone.
+ * It came into the Library by Add to every agent, which can be undone.
  */
 canUndo: boolean, 
 /**

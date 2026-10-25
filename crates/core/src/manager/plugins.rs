@@ -10,12 +10,12 @@ mod jobs;
 mod library_cli;
 pub mod ops;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
 use brigadier_registry::adapter::{AgentAdapter, Listed, adapters, owner};
 use brigadier_registry::library::{Entry, Library, MARKETPLACE};
-use brigadier_registry::{Agent, Catalog, Server, Session, Skill, SkillRoot, Source, Transport};
+use brigadier_registry::{Agent, Catalog, Server, Session, Skill, Source, Transport};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -93,12 +93,12 @@ pub struct PluginItemView {
     pub agents: Vec<PluginAgentState>,
     /// What needs the user, if anything.
     pub attention: Option<PluginAttention>,
-    /// Its switch works as it is; else it goes into the Library first (Use everywhere): one
+    /// Its switch works as it is; else it goes into the Library first (Add to every agent): one
     /// of the agents that has it can't keep it to a project by itself.
     pub switchable: bool,
     /// A newer version is waiting (a Library item from Git or skills.sh).
     pub update_available: bool,
-    /// It came into the Library by Use everywhere, which can be undone.
+    /// It came into the Library by Add to every agent, which can be undone.
     pub can_undo: bool,
     /// The server to sign in to (`Request::SignInMcpServer`'s id), for one that signs in.
     pub server_id: Option<String>,
@@ -298,16 +298,9 @@ fn server_key(server: &Server) -> Option<Key> {
     }
 }
 
-/// The item `skill` belongs to; `None` for one synced from a Claude account (never touched).
-fn skill_key(skill: &Skill) -> Option<Key> {
-    if skill
-        .roots
-        .iter()
-        .all(|root| matches!(root, SkillRoot::ClaudeSynced(_)))
-    {
-        return None;
-    }
-    Some(match skill.plugin() {
+/// The item `skill` belongs to, after its provider-supplied entries have been removed.
+fn skill_key(skill: &Skill) -> Key {
+    match skill.plugin() {
         Some(plugin) => match library_plugin(&plugin.id) {
             Some(name) => Key {
                 kind: KeyKind::Library,
@@ -323,7 +316,7 @@ fn skill_key(skill: &Skill) -> Option<Key> {
             kind: KeyKind::Skill,
             name: skill.name.clone(),
         },
-    })
+    }
 }
 
 /// Where an item is, for each agent.
@@ -346,6 +339,10 @@ struct Presence {
     server_id: Option<String>,
     /// Sources that hold it: whether every agent with it can switch it per project.
     switchable: bool,
+    /// A source of it whose agent can switch it per project ([`switchable_source`]), and one
+    /// whose agent can't.
+    switch_source: bool,
+    switchless_source: bool,
     /// The skills it holds, by name.
     skills: Vec<String>,
     problem: Option<String>,
@@ -395,6 +392,42 @@ fn switchable_source(source: Source) -> bool {
     )
 }
 
+/// Commands inside known provider app bundles are supplied by those apps. Match path
+/// components, not server names, and don't mistake a path escaping the bundle for one in it.
+fn provider_app_command(command: &str) -> bool {
+    let path = Path::new(command);
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return false;
+    }
+    let parts: Vec<_> = path.components().collect();
+    let apps = match parts.as_slice() {
+        [
+            Component::RootDir,
+            Component::Normal(applications),
+            rest @ ..,
+        ] if *applications == "Applications" => rest,
+        [
+            Component::RootDir,
+            Component::Normal(users),
+            Component::Normal(_),
+            Component::Normal(applications),
+            rest @ ..,
+        ] if *users == "Users" && *applications == "Applications" => rest,
+        _ => return false,
+    };
+    matches!(apps,
+        [Component::Normal(app), Component::Normal(contents), _, ..]
+            if (*app == "ChatGPT.app" || *app == "Claude.app") && *contents == "Contents")
+}
+
+fn provider_server(server: &Server) -> bool {
+    server
+        .plugin
+        .as_ref()
+        .is_some_and(|plugin| plugin.provider_supplied())
+        || matches!(&server.transport, Transport::Stdio { command, .. } if provider_app_command(command))
+}
+
 /// Reads `catalog` (for `project`, or the user's) into `items`.
 fn gather(
     items: &mut Vec<(Key, Presence)>,
@@ -404,14 +437,17 @@ fn gather(
     agents: &[&'static dyn AgentAdapter],
 ) {
     for server in &catalog.servers {
+        if provider_server(server) {
+            continue;
+        }
         let Some(key) = server_key(server) else {
             if project.is_none() {
                 let (text, remote) = detail(&server.transport);
-                if !catalog
-                    .servers
-                    .iter()
-                    .any(|other| other.name == server.name && server_key(other).is_some())
-                    && !elsewhere.iter().any(|known| known.name == server.name)
+                if !catalog.servers.iter().any(|other| {
+                    !provider_server(other)
+                        && other.name == server.name
+                        && server_key(other).is_some()
+                }) && !elsewhere.iter().any(|known| known.name == server.name)
                 {
                     elsewhere.push(PluginItemView {
                         key: format!("other:{}", server.id),
@@ -452,6 +488,11 @@ fn gather(
         presence.remote = remote;
         push(&mut presence.files, server.file.display().to_string());
         let owned_by_switchless = !switchable_source(server.source);
+        if owned_by_switchless {
+            presence.switchless_source = true;
+        } else {
+            presence.switch_source = true;
+        }
         for adapter in agents {
             let agent = adapter.agent();
             if catalog.server_native(server, &session(agent, project)) {
@@ -474,6 +515,19 @@ fn gather(
         }
     }
     for problem in &catalog.problems {
+        if problem.read.as_deref().is_some_and(provider_app_command)
+            || catalog
+                .plugins
+                .iter()
+                .chain(&catalog.off.plugins)
+                .any(|plugin| {
+                    plugin.provider_supplied()
+                        && problem.source == Source::CodexPlugin
+                        && problem.file.starts_with(&plugin.root)
+                })
+        {
+            continue;
+        }
         let key = Key {
             kind: KeyKind::Server,
             name: problem.name.clone(),
@@ -488,13 +542,14 @@ fn gather(
         }
     }
     for skill in &catalog.skills {
-        let Some(presence) = skill_row(items, skill) else {
+        let Some(skill) = skill.user_installed() else {
             continue;
         };
+        let presence = skill_row(items, &skill);
         let plugin_only = skill.plugin().is_some();
         for adapter in agents {
             let agent = adapter.agent();
-            if catalog.skill_native(skill, &session(agent, project)) {
+            if catalog.skill_native(&skill, &session(agent, project)) {
                 presence.note(agent, project);
                 if !plugin_only {
                     presence.switchable = false;
@@ -508,6 +563,9 @@ fn gather(
     // What an agent has but switches off for every project: an off row it can be switched on
     // from again.
     for server in &catalog.off.servers {
+        if provider_server(server) {
+            continue;
+        }
         let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
             continue;
         };
@@ -519,11 +577,15 @@ fn gather(
         }
         push(&mut presence.files, server.file.display().to_string());
         push(&mut presence.anywhere, agent);
+        presence.switch_source |= switchable_source(server.source);
+        presence.switchless_source |= !switchable_source(server.source);
     }
     for skill in &catalog.off.skills {
-        if let Some(plugin) = skill.plugin()
-            && let Some(presence) = skill_row(items, skill)
-        {
+        let Some(skill) = skill.user_installed() else {
+            continue;
+        };
+        if let Some(plugin) = skill.plugin() {
+            let presence = skill_row(items, &skill);
             push(&mut presence.anywhere, plugin.agent);
         }
     }
@@ -546,9 +608,9 @@ fn entry(key: Key, items: &mut Vec<(Key, Presence)>) -> usize {
     }
 }
 
-/// The row `skill` is part of, with what the skill tells of it; `None` for one never shown.
-fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> Option<&'a mut Presence> {
-    let key = skill_key(skill)?;
+/// The row `skill` is part of, with what the skill tells of it.
+fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> &'a mut Presence {
+    let key = skill_key(skill);
     let library = key.kind == KeyKind::Library;
     let plugin = (key.kind == KeyKind::Plugin)
         .then(|| skill.plugin())
@@ -571,7 +633,7 @@ fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> Option<&
             .to_string();
     }
     push(&mut presence.files, skill.skill_md().display().to_string());
-    Some(presence)
+    presence
 }
 
 /// The page, from the user's catalog and each trusted project's; `focus` is the project the
@@ -595,6 +657,30 @@ pub(crate) fn build(
             Some(&project.path),
             &agents,
         );
+    }
+    // An agent's own server kept to a folder that isn't one of the user's projects (Claude's
+    // local scope): on there, so the page says so, though no project's sessions get it.
+    for server in &user.servers {
+        let Some(folder) = &server.project else {
+            continue;
+        };
+        if server.plugin.is_some()
+            || provider_server(server)
+            || projects.iter().any(|project| project.path == *folder)
+        {
+            continue;
+        }
+        let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
+            continue;
+        };
+        let at = entry(key, &mut items);
+        let presence = &mut items[at].1;
+        presence.note(agent, Some(folder));
+        push(&mut presence.native, (agent, server.name.clone(), None));
+        // Its agent can't keep it to a project, whatever other agents' copies can.
+        if !switchable_source(server.source) {
+            presence.switchable = false;
+        }
     }
     // A Library item none of the agents has yet.
     for entry in library {
@@ -647,11 +733,19 @@ pub(crate) fn build(
             let on_in: Vec<String> = if everywhere {
                 Vec::new()
             } else {
-                projects
+                let mut on_in: Vec<String> = projects
                     .iter()
                     .filter(|project| !in_project(&project.path).is_empty())
                     .map(|project| project.path.display().to_string())
-                    .collect()
+                    .collect();
+                // Then the folders that aren't projects.
+                for (path, _) in &presence.here {
+                    let path = path.display().to_string();
+                    if !on_in.contains(&path) {
+                        on_in.push(path);
+                    }
+                }
+                on_in
             };
             let off_in: Vec<String> = if everywhere {
                 projects
@@ -693,11 +787,37 @@ pub(crate) fn build(
                     (agent, state)
                 })
                 .collect();
-            let needs: Vec<Agent> = states
+            // How it stands wherever else each agent has it on: a row shows a sign-in or a
+            // failed start in every section, not only where the page looks.
+            let elsewhere: Vec<(Agent, AgentItemState)> = presence
+                .native
                 .iter()
-                .filter(|(_, state)| *state == AgentItemState::NeedsSignIn)
-                .map(|(agent, _)| *agent)
+                .flat_map(|(agent, name, plugin)| {
+                    let places = presence
+                        .everywhere
+                        .contains(agent)
+                        .then_some(None)
+                        .into_iter()
+                        .chain(
+                            presence
+                                .here
+                                .iter()
+                                .filter(|(_, a)| a == agent)
+                                .map(|(path, _)| Some(path.as_path())),
+                        )
+                        .filter(|place| *place != focus);
+                    places
+                        .filter_map(|place| health.state(*agent, name, plugin.as_deref(), place))
+                        .map(|state| (*agent, state))
+                        .collect::<Vec<_>>()
+                })
                 .collect();
+            let mut needs: Vec<Agent> = Vec::new();
+            for (agent, state) in states.iter().chain(&elsewhere) {
+                if *state == AgentItemState::NeedsSignIn {
+                    push(&mut needs, *agent);
+                }
+            }
             let missing: Vec<Agent> = agents
                 .iter()
                 .map(|adapter| adapter.agent())
@@ -707,10 +827,15 @@ pub(crate) fn build(
                 Some(PluginAttention::WontStart {
                     message: format!("Won't start: {problem}"),
                 })
-            } else if let Some(reason) = states.iter().find_map(|(_, state)| match state {
-                AgentItemState::WontStart { reason } => Some(reason),
-                _ => None,
-            }) {
+            } else if let Some(reason) =
+                states
+                    .iter()
+                    .chain(&elsewhere)
+                    .find_map(|(_, state)| match state {
+                        AgentItemState::WontStart { reason } => Some(reason),
+                        _ => None,
+                    })
+            {
                 Some(PluginAttention::WontStart {
                     message: format!("Won't start: {reason}"),
                 })
@@ -745,7 +870,11 @@ pub(crate) fn build(
                     })
                     .collect(),
                 attention,
-                switchable: library || presence.switchable,
+                // A server only Claude Code's own setup holds can't be kept to a project, even
+                // where it is on nowhere yet.
+                switchable: library
+                    || (presence.switchable
+                        && !(presence.switchless_source && !presence.switch_source)),
                 update_available: false,
                 can_undo: false,
                 server_id: presence.server_id,
@@ -916,6 +1045,38 @@ impl super::SessionManager {
         }))
     }
 
+    /// Puts Library item `key` on in every project (`project_ids` `None`, Global), or in
+    /// exactly the user's projects `project_ids`, for every agent. Its job's id.
+    pub fn set_plugin_places(
+        &self,
+        key: String,
+        project_ids: Option<Vec<String>>,
+    ) -> crate::Result<String> {
+        let places = match project_ids {
+            None => None,
+            Some(ids) if ids.is_empty() => {
+                return Err(crate::Error::Invalid("no projects picked".to_owned()));
+            }
+            Some(ids) => Some(
+                ids.into_iter()
+                    .map(|id| self.plugin_project(Some(id)).map(Option::unwrap_or_default))
+                    .collect::<crate::Result<Vec<PathBuf>>>()?,
+            ),
+        };
+        Ok(self.plugin_job(jobs::Action::SetPlaces { key, places }))
+    }
+
+    /// Undoes place picker job `job`: each agent back exactly where it had the item. Its job's id.
+    pub fn undo_plugin_places(&self, job: String) -> String {
+        self.plugin_job(jobs::Action::UndoPlaces { job })
+    }
+
+    /// Gives Library item `key` to the agents that lack it, where the others have it (installed
+    /// and off when no agent has it on anywhere). Its job's id.
+    pub fn add_missing_plugin(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::AddMissing { key })
+    }
+
     /// What pasted `text` would add, before anything is added.
     pub async fn check_plugin_add(
         &self,
@@ -984,9 +1145,19 @@ impl super::SessionManager {
     ) -> std::sync::Arc<dyn Health + Send + Sync> {
         let clis = self.clis();
         let mut lists = Vec::new();
+        // Every project's too: a row shows how it stands wherever it is on.
+        let projects: Vec<PathBuf> = self
+            .plugin_projects()
+            .into_iter()
+            .map(|(_, _, path)| path)
+            .filter(|path| Some(path.as_path()) != focus)
+            .collect();
         for adapter in adapters() {
             let agent = adapter.agent();
-            for project in [None, focus] {
+            for project in [None, focus]
+                .into_iter()
+                .chain(projects.iter().map(|path| Some(path.as_path())))
+            {
                 if let Some(listed) = self.mcp_logins.listed(&clis, agent, project) {
                     lists.push((agent, project.map(Path::to_owned), listed));
                 }

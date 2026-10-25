@@ -337,8 +337,8 @@ fn has_server(catalog: &Catalog, adapter: &dyn AgentAdapter, name: &str) -> bool
         .any(|server| server.name == name && server.plugin.is_none() && adapter.owns(server.source))
 }
 
-const USE_EVERYWHERE_FIRST: &str =
-    "Use everywhere first: then every agent can turn it on or off per project.";
+const ADD_TO_EVERY_AGENT_FIRST: &str =
+    "Add to every agent first: then every agent can turn it on or off per project.";
 
 /// Turns the item `key` on or off: in `project`, else in every project; for one agent only
 /// when `only`.
@@ -375,11 +375,561 @@ pub(crate) fn switch(
                 adapter
                     .set_server(&name, &place, on)
                     .map(Some)
-                    .map_err(|_| USE_EVERYWHERE_FIRST.to_owned())
+                    .map_err(|err| err.0)
             })
         }
-        Target::Skill(_) | Target::Other(_) => return Err(USE_EVERYWHERE_FIRST.to_owned()),
+        Target::Skill(_) | Target::Other(_) => return Err(ADD_TO_EVERY_AGENT_FIRST.to_owned()),
     })
+}
+
+/// Where one agent has a Library item: what Settings › Plugins' place picker sets, what its
+/// Undo and a failed move put back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Placed {
+    /// It has it at all: installed, for every project or one, or on somewhere.
+    has: bool,
+    /// On in the user's scope: every project, but where a project turns it off.
+    global: bool,
+    /// The user's projects it is on in.
+    on_in: Vec<PathBuf>,
+}
+
+impl Placed {
+    /// The same places, whatever order the projects come in.
+    fn same(&self, other: &Self) -> bool {
+        let sorted = |paths: &[PathBuf]| {
+            let mut paths = paths.to_vec();
+            paths.sort();
+            paths
+        };
+        self.has == other.has
+            && (!self.has
+                || (self.global == other.global && sorted(&self.on_in) == sorted(&other.on_in)))
+    }
+}
+
+/// Every agent's places before a change: what its Undo puts back.
+pub(crate) type Before = Vec<(Agent, Placed)>;
+
+fn placed(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
+    let agent = adapter.agent();
+    let global = plugin_on(&ctx.read(None), agent, id, false);
+    let on_in: Vec<PathBuf> = ctx
+        .projects
+        .iter()
+        .filter(|path| plugin_on(&ctx.read(Some(path)), agent, id, false))
+        .cloned()
+        .collect();
+    let has = global
+        || !on_in.is_empty()
+        || adapter.installed(ctx.roots, id)
+        || !adapter.installed_in_projects(ctx.roots, id).is_empty();
+    Placed { has, global, on_in }
+}
+
+/// What an agent's own settings hold of a Library plugin beyond where it is on: its installs
+/// and the projects that switch it on by themselves. A failed change that puts every agent
+/// back where it was can still leave these changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
+    placed: Placed,
+    installed: bool,
+    /// The projects with an install of their own.
+    installed_in: Vec<PathBuf>,
+    /// The projects whose own settings switch it on.
+    switched_on: Vec<PathBuf>,
+}
+
+fn held(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Held {
+    Held {
+        placed: placed(ctx, adapter, id),
+        installed: adapter.installed(ctx.roots, id),
+        installed_in: adapter
+            .installed_in_projects(ctx.roots, id)
+            .into_iter()
+            .filter_map(|place| match place {
+                Place::Project { path, .. } => Some(path),
+                Place::Everywhere => None,
+            })
+            .collect(),
+        switched_on: ctx
+            .projects
+            .iter()
+            .filter(|path| adapter.switched_on_in(path, id))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// One move of a Library plugin for one agent, planned against the agent's setup as it is when
+/// it runs: installing stays apart from switching it on for every project or for one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Move {
+    /// `project`'s own settings switch it on, so it stays on there whatever every project
+    /// gets (an install of the project's own can follow the user's switch otherwise).
+    Keep(PathBuf),
+    /// Installed for the agent, switched off for every project.
+    Install,
+    /// On or off in `project`, over what every project gets.
+    Set(PathBuf, bool),
+    /// On or off in the user's scope (installed first when on).
+    Global(bool),
+    /// Taken away from the agent: it had none before.
+    Remove,
+}
+
+impl Move {
+    /// It puts the item on somewhere (or installs it): a put-back runs these first.
+    fn enables(&self) -> bool {
+        matches!(
+            self,
+            Self::Keep(_) | Self::Install | Self::Global(true) | Self::Set(_, true)
+        )
+    }
+}
+
+fn move_steps(
+    ctx: &Ctx<'_>,
+    adapter: &dyn AgentAdapter,
+    id: &str,
+    step: &Move,
+) -> Result<Vec<Step>, String> {
+    let agent = adapter.agent();
+    let installed = adapter.installed(ctx.roots, id);
+    let installed_in = |path: &Path| {
+        adapter
+            .installed_in_projects(ctx.roots, id)
+            .iter()
+            .any(|place| matches!(place, Place::Project { path: p, .. } if p == path))
+    };
+    let unsupported = |err: brigadier_registry::adapter::Unsupported| err.0;
+    let mut steps = Vec::new();
+    match step {
+        Move::Keep(path) if adapter.switched_on_in(path, id) => {}
+        Move::Keep(path) if installed || installed_in(path) => steps.extend(
+            adapter
+                .set_plugin(id, &just_me(path), true)
+                .map_err(unsupported)?,
+        ),
+        Move::Keep(path) => {
+            steps.extend(ctx.library.market_steps(adapter));
+            steps.extend(
+                adapter
+                    .install_plugin(id, &just_me(path))
+                    .map_err(unsupported)?,
+            );
+        }
+        Move::Install if installed || !adapter.installed_in_projects(ctx.roots, id).is_empty() => {}
+        Move::Install => {
+            steps.extend(ctx.library.market_steps(adapter));
+            steps.extend(
+                adapter
+                    .install_plugin(id, &Place::Everywhere)
+                    .map_err(unsupported)?,
+            );
+            steps.extend(
+                adapter
+                    .set_plugin(id, &Place::Everywhere, false)
+                    .map_err(unsupported)?,
+            );
+        }
+        Move::Set(path, on) => {
+            if plugin_on(&ctx.read(Some(path)), agent, id, false) != *on {
+                steps.extend(
+                    adapter
+                        .set_plugin(id, &just_me(path), *on)
+                        .map_err(unsupported)?,
+                );
+            }
+        }
+        Move::Global(on) => {
+            let now = plugin_on(&ctx.read(None), agent, id, false);
+            if *on && !installed {
+                steps.extend(ctx.library.market_steps(adapter));
+                steps.extend(
+                    adapter
+                        .install_plugin(id, &Place::Everywhere)
+                        .map_err(unsupported)?,
+                );
+            }
+            if (*on && (!installed || !now)) || (!*on && installed && now) {
+                steps.extend(
+                    adapter
+                        .set_plugin(id, &Place::Everywhere, *on)
+                        .map_err(unsupported)?,
+                );
+            }
+        }
+        Move::Remove => steps.extend(removal(ctx, adapter, id)),
+    }
+    Ok(steps)
+}
+
+/// The moves that bring an agent to `want`, in three rounds every agent takes together: on
+/// where it goes first, then every project's, then off where it leaves, so it is never off
+/// where it stays on.
+fn moves_to(want: &Placed, projects: &[PathBuf]) -> [Vec<Move>; 3] {
+    if !want.has {
+        return [vec![Move::Remove], Vec::new(), Vec::new()];
+    }
+    if want.global {
+        return [
+            vec![Move::Global(true)],
+            projects
+                .iter()
+                .map(|path| Move::Set(path.clone(), want.on_in.contains(path)))
+                .collect(),
+            Vec::new(),
+        ];
+    }
+    let mut first: Vec<Move> = want.on_in.iter().cloned().map(Move::Keep).collect();
+    if first.is_empty() {
+        first.push(Move::Install);
+    }
+    [
+        first,
+        vec![Move::Global(false)],
+        projects
+            .iter()
+            .filter(|path| !want.on_in.contains(path))
+            .map(|path| Move::Set(path.clone(), false))
+            .collect(),
+    ]
+}
+
+/// A folder's name, as the page shows a project.
+fn folder_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// "a", "a and b", "a, b and c", of folders.
+fn folder_names<'a>(paths: impl IntoIterator<Item = &'a PathBuf>) -> String {
+    let names: Vec<String> = paths.into_iter().map(|path| folder_name(path)).collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Where `placed` has it, in words: "has it on in every project", "has it on only in a and b".
+fn where_on(placed: &Placed, projects: &[PathBuf]) -> String {
+    if !placed.has {
+        return "doesn't have it".to_owned();
+    }
+    if placed.global {
+        let off: Vec<&PathBuf> = projects
+            .iter()
+            .filter(|path| !placed.on_in.contains(path))
+            .collect();
+        return if off.is_empty() {
+            "has it on in every project".to_owned()
+        } else {
+            format!("has it on in every project but {}", folder_names(off))
+        };
+    }
+    if placed.on_in.is_empty() {
+        "has it off in every project".to_owned()
+    } else {
+        format!("has it on only in {}", folder_names(&placed.on_in))
+    }
+}
+
+/// What a change that failed left changed, agent by agent: "Codex has it on only in a, where it
+/// had it on in every project." `None` when every agent has it where it had it.
+fn left_changed(
+    before: &[(Agent, Held)],
+    after: &[(Agent, Held)],
+    projects: &[PathBuf],
+) -> Option<String> {
+    let changed: Vec<String> = before
+        .iter()
+        .zip(after)
+        .filter(|((_, was), (_, is))| !was.placed.same(&is.placed))
+        .map(|((agent, was), (_, is))| {
+            format!(
+                "{} {}, where it {}",
+                adapter(*agent).label(),
+                where_on(&is.placed, projects),
+                where_on(&was.placed, projects).replacen("has it", "had it", 1)
+            )
+        })
+        .collect();
+    (!changed.is_empty()).then(|| format!("{}.", changed.join("; ")))
+}
+
+/// What a change that failed left in the agents' own settings although each has it where it
+/// had it: "Claude Code now switches it on by itself in a". Empty when nothing is.
+fn settings_left(before: &[(Agent, Held)], after: &[(Agent, Held)]) -> Vec<String> {
+    let mut left = Vec::new();
+    for ((agent, was), (_, is)) in before.iter().zip(after) {
+        let label = adapter(*agent).label();
+        let gained = |now: &[PathBuf], then: &[PathBuf]| -> Vec<PathBuf> {
+            now.iter()
+                .filter(|path| !then.contains(path))
+                .cloned()
+                .collect()
+        };
+        if is.installed != was.installed {
+            left.push(if is.installed {
+                format!("{label} has it installed now")
+            } else {
+                format!("{label} no longer has it installed")
+            });
+        }
+        for (now, then, more, less) in [
+            (
+                &is.installed_in,
+                &was.installed_in,
+                "has an install of its own in",
+                "no longer has an install of its own in",
+            ),
+            (
+                &is.switched_on,
+                &was.switched_on,
+                "now switches it on by itself in",
+                "no longer switches it on by itself in",
+            ),
+        ] {
+            let added = gained(now, then);
+            if !added.is_empty() {
+                left.push(format!("{label} {more} {}", folder_names(&added)));
+            }
+            let dropped = gained(then, now);
+            if !dropped.is_empty() {
+                left.push(format!("{label} {less} {}", folder_names(&dropped)));
+            }
+        }
+    }
+    left
+}
+
+/// Carries out one agent's steps.
+type Runner<'a> = &'a dyn Fn(&dyn AgentAdapter, &[Step]) -> Result<(), String>;
+
+/// Brings each agent of `wants` to its places, every agent taking each round before the next
+/// starts, then reads each again: an agent that isn't where it should be failed.
+fn drive(
+    ctx: &Ctx<'_>,
+    id: &str,
+    wants: &[(Agent, Placed)],
+    run: Runner<'_>,
+) -> Result<(), (Agent, String)> {
+    for round in 0..3 {
+        for (agent, want) in wants {
+            let adapter = adapter(*agent);
+            for step in &moves_to(want, ctx.projects)[round] {
+                move_steps(ctx, adapter, id, step)
+                    .and_then(|steps| run(adapter, &steps))
+                    .map_err(|reason| (*agent, reason))?;
+            }
+        }
+    }
+    for (agent, want) in wants {
+        let is = placed(ctx, adapter(*agent), id);
+        if !is.same(want) {
+            return Err((
+                *agent,
+                format!(
+                    "it {} after the change",
+                    where_on(&is, ctx.projects).replacen("has it ", "is ", 1)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Puts each agent of `before` back where it had it: every move that puts it on somewhere
+/// first, then, only if all of those went, the moves that take it off. Whether every move went.
+fn put_back_with(ctx: &Ctx<'_>, id: &str, before: &[(Agent, Placed)], run: Runner<'_>) -> bool {
+    let mut all = true;
+    for enabling in [true, false] {
+        if !all {
+            break;
+        }
+        for round in 0..3 {
+            for (agent, was) in before {
+                let adapter = adapter(*agent);
+                for step in moves_to(was, ctx.projects)[round]
+                    .iter()
+                    .filter(|step| step.enables() == enabling)
+                {
+                    all &= move_steps(ctx, adapter, id, step)
+                        .and_then(|steps| run(adapter, &steps))
+                        .is_ok();
+                }
+            }
+        }
+    }
+    all
+}
+
+/// Brings each agent of `wants` to its places for Library plugin `id`. If a move fails, those
+/// agents go back where they had it, as far as they can, and the error says what was left
+/// changed: "Nothing was changed" only when the agents' settings read the same as before.
+fn change(
+    ctx: &Ctx<'_>,
+    id: &str,
+    wants: &[(Agent, Placed)],
+    run: Runner<'_>,
+) -> Result<(), String> {
+    let read = || -> Vec<(Agent, Held)> {
+        adapters()
+            .into_iter()
+            .map(|adapter| (adapter.agent(), held(ctx, adapter, id)))
+            .collect()
+    };
+    let before = read();
+    for (agent, _) in wants {
+        (ctx.report)(*agent, PluginStep::Working);
+    }
+    let Err((agent, reason)) = drive(ctx, id, wants, run) else {
+        for (agent, _) in wants {
+            (ctx.report)(*agent, PluginStep::Done);
+        }
+        return Ok(());
+    };
+    (ctx.report)(
+        agent,
+        PluginStep::Failed {
+            reason: reason.clone(),
+        },
+    );
+    let back: Vec<(Agent, Placed)> = before
+        .iter()
+        .filter(|(agent, _)| wants.iter().any(|(wanted, _)| wanted == agent))
+        .map(|(agent, held)| (*agent, held.placed.clone()))
+        .collect();
+    put_back_with(ctx, id, &back, run);
+    let after = read();
+    let label = adapter(agent).label();
+    let stop = if reason.ends_with(['.', '!', '?']) {
+        ""
+    } else {
+        "."
+    };
+    Err(match left_changed(&before, &after, ctx.projects) {
+        Some(left) => format!("{label}: {reason}{stop} It couldn't all be put back: {left}"),
+        None if before == after => format!("Nothing was changed: {label}: {reason}{stop}"),
+        None => format!(
+            "{label}: {reason}{stop} Each agent has it where it had it again, but {}.",
+            settings_left(&before, &after).join("; ")
+        ),
+    })
+}
+
+/// The Library plugin id of page key `key`, which must be a Library item's.
+fn library_id(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
+    let Target::Library(name) = target(key)? else {
+        return Err(ADD_TO_EVERY_AGENT_FIRST.to_owned());
+    };
+    if ctx.library.entry(&name).is_none() {
+        return Err(format!("{name} isn't in your Library any more."));
+    }
+    Ok(plugin_id(&name))
+}
+
+fn every_placed(ctx: &Ctx<'_>, id: &str) -> Before {
+    adapters()
+        .into_iter()
+        .map(|adapter| (adapter.agent(), placed(ctx, adapter, id)))
+        .collect()
+}
+
+/// Puts Library item `key` on in every project (`places` `None`) or in exactly the user's
+/// projects `places`, for every agent. Each agent's places before, for its Undo.
+pub(crate) fn set_places(
+    ctx: &Ctx<'_>,
+    key: &str,
+    places: Option<&[PathBuf]>,
+) -> Result<Before, String> {
+    set_places_with(ctx, key, places, &|adapter, steps| ctx.run(adapter, steps))
+}
+
+/// [`set_places`], carrying out each agent's steps with `run`.
+fn set_places_with(
+    ctx: &Ctx<'_>,
+    key: &str,
+    places: Option<&[PathBuf]>,
+    run: Runner<'_>,
+) -> Result<Before, String> {
+    let id = library_id(ctx, key)?;
+    if places.is_some_and(<[PathBuf]>::is_empty) {
+        return Err("Pick a project, or Global.".to_owned());
+    }
+    let want = Placed {
+        has: true,
+        global: places.is_none(),
+        on_in: places.map_or_else(|| ctx.projects.to_vec(), <[PathBuf]>::to_vec),
+    };
+    let before = every_placed(ctx, &id);
+    let wants: Vec<(Agent, Placed)> = before
+        .iter()
+        .map(|(agent, _)| (*agent, want.clone()))
+        .collect();
+    change(ctx, &id, &wants, run)?;
+    Ok(before)
+}
+
+/// The place picker's Undo: each agent back exactly where `before` had it, missing agents too.
+pub(crate) fn put_back(ctx: &Ctx<'_>, key: &str, before: &Before) -> Result<(), String> {
+    put_back_places_with(ctx, key, before, &|adapter, steps| ctx.run(adapter, steps))
+}
+
+fn put_back_places_with(
+    ctx: &Ctx<'_>,
+    key: &str,
+    before: &Before,
+    run: Runner<'_>,
+) -> Result<(), String> {
+    let id = library_id(ctx, key)?;
+    change(ctx, &id, before, run)
+}
+
+/// Add to every agent, for a Library item some agents lack: each of them gets it where the
+/// others have it, every project's switch included (a project the others leave it off in stays
+/// off); when no agent has it anywhere, installed and off.
+pub(crate) fn add_missing(ctx: &Ctx<'_>, key: &str) -> Result<(), String> {
+    add_missing_with(ctx, key, &|adapter, steps| ctx.run(adapter, steps))
+}
+
+fn add_missing_with(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), String> {
+    let id = library_id(ctx, key)?;
+    let now = every_placed(ctx, &id);
+    let others: Vec<&Placed> = now
+        .iter()
+        .map(|(_, placed)| placed)
+        .filter(|placed| placed.has)
+        .collect();
+    let global = others.iter().any(|placed| placed.global);
+    let on_in: Vec<PathBuf> = ctx
+        .projects
+        .iter()
+        .filter(|path| {
+            others
+                .iter()
+                .any(|placed| (!global || placed.global) && placed.on_in.contains(path))
+        })
+        .cloned()
+        .collect();
+    let want = Placed {
+        has: true,
+        global,
+        on_in,
+    };
+    let wants: Vec<(Agent, Placed)> = now
+        .iter()
+        .filter(|(_, placed)| !placed.has)
+        .map(|(agent, _)| (*agent, want.clone()))
+        .collect();
+    if wants.is_empty() {
+        return Ok(());
+    }
+    change(ctx, &id, &wants, run)
 }
 
 /// How an item reads in the Add dialog.
@@ -923,6 +1473,19 @@ fn find(ctx: &Ctx<'_>, target: &Target) -> Result<Found, String> {
     Ok(found)
 }
 
+/// Leaves out of `found` what sits in a folder that isn't one of `projects`: an agent's own copy
+/// there stays as it is, and the Library's copy isn't turned on there, so it never reaches
+/// further than it was (kept only to such folders, it is off in every project).
+fn within_projects(found: &mut Found, projects: &[PathBuf]) {
+    let project = |path: &PathBuf| projects.contains(path);
+    found
+        .servers
+        .retain(|(_, folder, _)| folder.as_ref().is_none_or(project));
+    if let Some(kept_to) = &mut found.projects {
+        kept_to.retain(project);
+    }
+}
+
 fn skill_found(name: &str, skill: &Skill) -> Found {
     Found {
         name: name.to_owned(),
@@ -971,7 +1534,8 @@ fn lists(ctx: &Ctx<'_>, agent: Agent, id: &str, projects: Option<&[PathBuf]>) ->
 /// has the copy staged, and comes back if any agent doesn't end up with it (D5). Its key.
 pub(crate) fn use_everywhere(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
     let target = target(key)?;
-    let found = find(ctx, &target)?;
+    let mut found = find(ctx, &target)?;
+    within_projects(&mut found, ctx.projects);
     let name = found.name.clone();
     if ctx.library.entry(&name).is_some() {
         return Err(LibraryError::NameTaken(name).to_string());

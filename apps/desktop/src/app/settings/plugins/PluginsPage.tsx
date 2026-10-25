@@ -11,12 +11,14 @@ import type { PluginItemView, PluginKind, PluginProjectView, PluginsView } from 
 import { cn } from "@/lib/utils";
 import { openSettings, select } from "@/state/actions";
 import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { ATTENTION_TONE, elsewhereLine, has, needsAttention, placesOf, projectSummary, sections, spreadOf, TAB_LABEL, type Row } from "./model";
+import { elsewhereLine, has, placesWords, projectSummary, sections, signInAt, TAB_LABEL, type Row } from "./model";
 import { FoldCard, PluginRow } from "./parts";
+import { PlacesPicker } from "./PlacesPicker";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use. Pick a project to choose what's on there.";
 
@@ -26,7 +28,6 @@ export function pluginSearchRows() {
   return [
     { label: "MCP servers", description: "Servers every agent can use, in every project or only some" },
     { label: "Skills", description: "Skills every agent can use, in every project or only some" },
-    { label: "Needs attention", target: "Needs attention" },
     { label: "Found in other apps", description: "Servers only another app has", target: "Found in other apps" },
     ...view.items.map((item) => ({ label: item.name, description: item.description || item.detail, target: `plugin:${item.key}`, section: TAB_LABEL[item.kind] })),
   ];
@@ -35,26 +36,29 @@ export function pluginSearchRows() {
 /** A dialog open over the page. */
 type Open =
   | { type: "add"; projectId: string | null }
-  | { type: "signIn"; key: string }
+  /** `projectId`: where the sign-in runs, a place it's on (null: every project). */
+  | { type: "signIn"; key: string; projectId: string | null }
   | { type: "useEverywhere"; key: string; after?: { projectId: string | null; on: boolean } }
   | { type: "remove"; key: string };
 
 export function PluginsPage() {
-  const { view, project, adapter, error, refresh, setProject } = usePlugins();
-  return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} onProject={setProject} />;
+  const { view, project, adapter, error, refresh, reload, setProject } = usePlugins();
+  return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} reload={reload} onProject={setProject} />;
 }
 
-const KINDS: PluginKind[] = ["server", "skill"];
+const TABS: PluginKind[] = ["server", "skill"];
+const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
-function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: {
+function PluginsScreen({ view, projectId, adapter, error, refresh, reload, onProject }: {
   view: PluginsView;
   projectId: string | null;
   adapter: PluginsAdapter | null;
   error: string | null;
   refresh: () => void;
+  reload: () => Promise<void>;
   onProject: (projectId: string | null) => void;
 }) {
-  const [tab, setTab] = useState<PluginKind>(() => (useReveal.getState().label === "Skills" ? "skill" : "server"));
+  const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
   const [query, setQuery] = useState("");
   const selection = useApp((s) => s.selection);
   const selected = selection.type === "settings" && selection.page === "plugins" ? selection.detail?.plugin : undefined;
@@ -77,7 +81,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
     if (label === "Skills" || label === "MCP servers") {
-      setTab(label === "Skills" ? "skill" : "server");
+      setTab(revealTab(label));
       setQuery("");
     } else if (label?.startsWith("plugin:")) {
       const item = usePlugins.getState().view.items.find((entry) => `plugin:${entry.key}` === label);
@@ -104,13 +108,32 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     });
   };
 
+  /**
+   * The place picker: applies at once, with an Undo that puts each agent back exactly where it
+   * had it. The page is read again before the picker takes the next pick, so each starts from
+   * the last one.
+   */
+  const place = (item: PluginItemView, projectIds: string[] | null) => {
+    if (!adapter) return;
+    action.run(async () => {
+      let undo: string | null = null;
+      await checked(view, async () => {
+        const done = await adapter.setPlaces(item.key, projectIds);
+        undo = done.undo;
+        return done.results;
+      });
+      await reload();
+      const token = undo;
+      const back = (from: string) => checked(view, () => adapter.undoPlaces(from)).then(reload, (cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }));
+      toast(`${item.name} is ${placesWords(view, projectIds)} now`, { actions: token ? [{ label: "Undo", run: () => void back(token) }] : [] });
+    });
+  };
+
   /** A Library item some agents are missing: each of them gets it where the others have it. */
   const addMissing = (item: PluginItemView) => {
     if (!adapter) return;
     action.run(async () => {
-      for (const { agent } of item.agents.filter((entry) => entry.state.type === "missing")) {
-        for (const where of placesOf(view, item)) await checked(view, () => adapter.switchPlugin(item.key, where, true, agent));
-      }
+      await checked(view, () => adapter.addMissing(item.key));
       refresh();
     });
   };
@@ -131,7 +154,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
             await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
             refresh();
           }),
-          onSignIn: adapter.signIn ? () => setDialog({ type: "signIn", key: current.key }) : undefined,
+          onSignIn: adapter.signIn ? () => setDialog({ type: "signIn", key: current.key, projectId: signInAt(view, current, focus) ?? focus?.id ?? null }) : undefined,
           onUseEverywhere: () => setDialog({ type: "useEverywhere", key: current.key }),
           onAddMissing: () => addMissing(current),
           onRemove: () => setDialog({ type: "remove", key: current.key }),
@@ -169,7 +192,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           onProject={onProject}
           onOpen={(item) => select({ type: "settings", page: "plugins", detail: { plugin: item.key } })}
           onFlip={(item, on) => flip(item, on)}
-          onAddMissing={addMissing}
+          onPlaces={place}
           onDialog={setDialog}
         />
       </SettingsPage>
@@ -182,7 +205,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
       {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} projectId={open.projectId} refresh={refresh} onClose={close} />}
-      {adapter && open?.type === "signIn" && target && <SignInDialog view={view} item={target} projectId={focus?.id ?? null} adapter={adapter} refresh={refresh} onClose={close} />}
+      {adapter && open?.type === "signIn" && target && <SignInDialog view={view} item={target} projectId={open.projectId} adapter={adapter} refresh={refresh} onClose={close} />}
       {adapter && open?.type === "useEverywhere" && target && (
         <UseEverywhereDialog
           view={view}
@@ -224,7 +247,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   );
 }
 
-function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onAddMissing, onDialog }: {
+function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onPlaces, onDialog }: {
   view: PluginsView;
   focus: PluginProjectView | null;
   tab: PluginKind;
@@ -236,97 +259,82 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
   onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
-  onAddMissing: (item: PluginItemView) => void;
+  onPlaces: (item: PluginItemView, projectIds: string[] | null) => void;
   onDialog: (open: Open) => void;
 }) {
-  const attention = needsAttention(view);
   const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
   const elsewhere = view.elsewhere.filter((item) => item.kind === tab);
   const lists = sections(view, focus, tab, query);
   const empty = count(tab) === 0;
-  const row = (entry: Row, dim: boolean) => (
-    <PluginRow
-      key={entry.item.key}
-      view={view}
-      item={entry.item}
-      line={entry.line}
-      dim={dim}
-      chips={entry.chips}
-      onOpen={() => onOpen(entry.item)}
-      end={<SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy} onCheckedChange={(on) => onFlip(entry.item, on)} />}
-    />
-  );
+  const row = (entry: Row, dim: boolean) => {
+    const signIn = entry.item.attention?.type === "signIn" && adapter?.signIn ? signInAt(view, entry.item, focus) : undefined;
+    return (
+      <PluginRow
+        key={entry.item.key}
+        view={view}
+        item={entry.item}
+        line={entry.line}
+        dim={dim}
+        chips={entry.chips}
+        picker={entry.places && (
+          <PlacesPicker
+            view={view}
+            item={entry.item}
+            places={entry.places}
+            busy={busy}
+            onPlaces={(projectIds) => onPlaces(entry.item, projectIds)}
+            onEveryAgent={() => onDialog({ type: "useEverywhere", key: entry.item.key })}
+          />
+        )}
+        onOpen={() => onOpen(entry.item)}
+        end={
+          <>
+            {signIn !== undefined && <Button variant="soft" size="sm" onClick={() => onDialog({ type: "signIn", key: entry.item.key, projectId: signIn })}>Sign in</Button>}
+            <SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy || !!entry.locked} onCheckedChange={(on) => onFlip(entry.item, on)} />
+          </>
+        }
+      />
+    );
+  };
   return (
-    <>
-      {attention.length > 0 && (
-        <SettingsSection title="Needs attention" aside={attention.length} setting="Needs attention">
-          <SettingsCard>
-            {attention.map((item) => {
-              const kind = item.attention!.type;
-              const spread = kind === "notEverywhere" ? spreadOf(item) : null;
-              return (
-                <PluginRow
-                  key={item.key}
-                  view={view}
-                  item={item}
-                  line={{ text: item.attention!.message, tone: ATTENTION_TONE[kind] }}
-                  lit={(state) => state.type === "ready" || state.type === "working"}
-                  onOpen={() => onOpen(item)}
-                  end={
-                    (kind === "signIn" && !adapter?.signIn) || (kind === "notEverywhere" && !spread) ? undefined : <Button
-                      variant="soft"
-                      size="sm"
-                      disabled={kind === "notEverywhere" ? busy : !adapter}
-                      onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : spread === "addMissing" ? onAddMissing(item) : onDialog({ type: "useEverywhere", key: item.key }))}
-                    >
-                      {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : spread === "addMissing" ? "Add to every agent" : "Use everywhere"}
-                    </Button>
-                  }
-                />
-              );
-            })}
-          </SettingsCard>
-        </SettingsSection>
+    <div className="flex flex-col gap-10">
+      <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
+      {empty && !focus ? (
+        <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
+      ) : (
+        lists.map((section) => {
+          if (!section.rows.length && section.key !== "own") return null;
+          return (
+            <SettingsSection key={section.key} title={section.title} description={section.description} aside={section.rows.length || undefined} setting={section.title}>
+              <SettingsCard>
+                {section.rows.length ? (
+                  section.rows.map((entry) => row(entry, !entry.on))
+                ) : (
+                  <div data-slot="empty-row" className="flex items-center gap-4 px-4 py-4">
+                    <span className="text-foreground/65 min-w-0 flex-1 text-label">Nothing only for {focus?.name} yet. Add one here, or turn one on below.</span>
+                    <Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "add", projectId: focus?.id ?? null })}>Add to {focus?.name}</Button>
+                  </div>
+                )}
+              </SettingsCard>
+            </SettingsSection>
+          );
+        })
       )}
-      <div className={cn("flex flex-col gap-10", attention.length > 0 && "pt-5")}>
-        <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
-        {empty && !focus ? (
-          <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
-        ) : (
-          lists.map((section) => {
-            if (!section.rows.length && section.key !== "own") return null;
-            return (
-              <SettingsSection key={section.key} title={section.title} description={section.description} aside={section.rows.length || undefined} setting={section.title}>
-                <SettingsCard>
-                  {section.rows.length ? (
-                    section.rows.map((entry) => row(entry, !entry.on))
-                  ) : (
-                    <div data-slot="empty-row" className="flex items-center gap-4 px-4 py-4">
-                      <span className="text-foreground/65 min-w-0 flex-1 text-label">Nothing only for {focus?.name} yet. Add one here, or turn one on below.</span>
-                      <Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "add", projectId: focus?.id ?? null })}>Add to {focus?.name}</Button>
-                    </div>
-                  )}
-                </SettingsCard>
-              </SettingsSection>
-            );
-          })
-        )}
-        {!focus && elsewhere.length > 0 && (
-          <FoldCard title="Found in other apps" line={elsewhereLine(elsewhere)} setting="Found in other apps">
-            {elsewhere.map((item) => (
-              <PluginRow
-                key={item.key}
-                view={view}
-                item={item}
-                line={{ text: item.description || item.detail, tone: "muted" }}
-                lit={has}
-                end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Use everywhere</Button>}
-              />
-            ))}
-          </FoldCard>
-        )}
-      </div>
-    </>
+      {!focus && elsewhere.length > 0 && (
+        <FoldCard title="Found in other apps" line={elsewhereLine(elsewhere)} setting="Found in other apps">
+          {elsewhere.map((item) => (
+            <PluginRow
+              key={item.key}
+              view={view}
+              item={item}
+              line={{ text: item.description || item.detail, tone: "muted" }}
+              lit={has}
+              end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Add to every agent</Button>}
+            />
+          ))}
+        </FoldCard>
+      )}
+    </div>
   );
 }
 
@@ -344,9 +352,9 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
   const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginKind) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const at = KINDS.indexOf(kind);
-    const next = event.key === "Home" ? 0 : event.key === "End" ? KINDS.length - 1 : (at + (event.key === "ArrowRight" ? 1 : KINDS.length - 1)) % KINDS.length;
-    onTab(KINDS[next]!);
+    const at = TABS.indexOf(kind);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : (at + (event.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length;
+    onTab(TABS[next]!);
     event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]")[next]?.focus();
   };
   return (
@@ -354,7 +362,7 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
       <ProjectFilter view={view} focus={focus} onProject={onProject} onAddProject={onAddProject} />
       <span aria-hidden className="bg-divider h-5 w-px shrink-0" />
       <div role="tablist" aria-label="Plugins" className="flex shrink-0 items-center gap-1">
-        {KINDS.map((kind) => (
+        {TABS.map((kind) => (
           <button
             key={kind}
             type="button"

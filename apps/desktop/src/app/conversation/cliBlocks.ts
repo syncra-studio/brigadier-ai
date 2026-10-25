@@ -736,9 +736,29 @@ export function cliThreadTree(
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
   }
+  const named = new Set(view.turns.flatMap((turn) => turn.requests));
+  // A turn whose message the stream said before the turns were read again names no request yet:
+  // its message is the CLI's, under the CLI's id. It is the one Brigadier kept since the turn
+  // before began that no turn carries, so its bubble stays the one shown while it was on its way,
+  // not mounted afresh under another id (the view thrown off the sent turn's place) and again
+  // once the turns are read.
+  const read = new Set(view.turns.map((turn) => turn.userMessage));
+  blocks.forEach((block, index) => {
+    const said = block.user;
+    if (said?.kind !== "message" || said.message.id !== block.key || read.has(block.key)) return;
+    const after = blocks[index - 1]?.startedAtMs ?? Number.NEGATIVE_INFINITY;
+    const sent = stored.find((message) => {
+      const request = message.requestId ?? message.id;
+      return message.role === "user" && message.createdAtMs > after && message.createdAtMs <= block.startedAtMs && !named.has(request) && !drawn.has(request);
+    });
+    if (!sent) return;
+    block.user = { kind: "message", message: sent, text: fullText[sent.id] ?? sent.text };
+    block.requestIds = [sent.requestId ?? sent.id];
+    drawn.add(sent.requestId ?? sent.id);
+  });
   // A queued message joins the turn that read it after the CLI had it (the turn names it only
   // once it ends): it is drawn there, not on its way too.
-  const carried = new Set([...view.turns.flatMap((turn) => turn.requests), ...drawn]);
+  const carried = new Set([...named, ...drawn]);
   const heard = Math.max(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),

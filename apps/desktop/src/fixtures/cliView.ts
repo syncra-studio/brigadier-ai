@@ -57,12 +57,25 @@ function endOf(request: UserRequest | undefined): Pick<ThreadTurn, "end" | "erro
   return { end, error: state.type === "failed" ? state.error : null, endedAtMs: end === null ? null : (request.endedAtMs ?? request.startedAtMs ?? null) };
 }
 
+/**
+ * How far the CLI's thread lags behind the fixture's stores, as over a busy connection: the
+ * messages its CLI hasn't said yet (`unsaid`), and those it said whose turn the view hasn't read
+ * again (`unread`). With `ownIds`, a message sent in the fixture (`sent-…`) is the CLI's item
+ * under an id of its own, as a real CLI's is. See `cliSays` and `cliTurnsRead`.
+ */
+export const cliLag = { unsaid: new Set<string>(), unread: new Set<string>(), ownIds: false };
+
+/** The CLI's id for stored message `id`. */
+function cliIdOf(id: string): string {
+  return cliLag.ownIds && id.startsWith("sent-") ? `cli-${id}` : id;
+}
+
 /** A conversation's view from its fixture's stores. */
 export function fixtureView(messages: readonly Message[], board: Board | null): ThreadView {
   const requests = board?.requests ?? {};
   const placed: { position: number; atMs: number; entry: FileEntry }[] = [];
   for (const message of messages) {
-    if (message.role !== "user" && message.role !== "assistant") continue;
+    if ((message.role !== "user" && message.role !== "assistant") || cliLag.unsaid.has(message.id)) continue;
     const request = message.requestId ? requests[message.requestId] : undefined;
     const steer = message.role === "user" && !!request?.steeredInto;
     // A final answer stored: the CLI's item began when the answer started, and is the answer.
@@ -72,7 +85,7 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
       position: message.seq,
       atMs,
       entry: {
-        event: { type: "message", itemId: message.id, role: message.role, text: message.text },
+        event: { type: "message", itemId: cliIdOf(message.id), role: message.role, text: message.text },
         atMs,
         ...(steer && { steer: true }),
         ...(answer && { phase: "answer" as const }),
@@ -114,13 +127,14 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
       if (lastAt.length > 0) lastAt[lastAt.length - 1] = atMs;
       continue;
     }
-    const message = messages.find((each) => each.id === event.itemId);
+    const message = messages.find((each) => cliIdOf(each.id) === event.itemId);
     const id = message?.requestId ?? event.itemId;
     if (entry.steer) {
       turns.at(-1)?.requests.push(id);
       continue;
     }
     const request = requests[id];
+    if (message && cliLag.unread.has(message.id)) continue;
     turns.push({ userMessage: event.itemId, startedAtMs: request?.startedAtMs ?? entry.atMs ?? null, ...endOf(request), requests: [id] });
     lastAt.push(entry.atMs ?? null);
   }
@@ -177,6 +191,21 @@ function sync(): void {
     if (now === "open") applyActivityNews({ conversationId: id, entries: [], opened: true });
     else if (now !== "none") applyActivityNews({ conversationId: id, entries: [], ended: now });
   }
+}
+
+/** The CLI says stored message `id` (its turn not read yet): the views show it. */
+export function cliSays(id: string): void {
+  cliLag.unsaid.delete(id);
+  cliLag.unread.add(id);
+  made.clear();
+  sync();
+}
+
+/** The views read their turns again: every turn said shows. */
+export function cliTurnsRead(): void {
+  cliLag.unread.clear();
+  made.clear();
+  sync();
 }
 
 sync();

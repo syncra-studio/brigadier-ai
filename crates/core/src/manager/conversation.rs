@@ -569,6 +569,12 @@ impl ConvLive {
         self.state.lock().await.carried_requests()
     }
 
+    /// Tests: the request the rest of the turn answers, as a queued message joining it sets it.
+    #[cfg(test)]
+    pub(super) async fn answer_request(&self, request: &str) {
+        self.state.lock().await.request = Some(request.to_owned());
+    }
+
     pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
         Self {
             private_logs,

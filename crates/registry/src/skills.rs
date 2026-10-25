@@ -26,6 +26,37 @@ impl Skill {
         self.dir.join("SKILL.md")
     }
 
+    /// A display-only copy with provider plugins removed and synced-only Claude skills hidden.
+    /// The catalog keeps all entries so this never changes what an agent loads. A local user
+    /// copy of the same skill stays; its id still identifies the original catalog entry.
+    pub fn user_installed(&self) -> Option<Self> {
+        let entries: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(root, _)| match root {
+                SkillRoot::Plugin(plugin) => !plugin.provider_supplied(),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        let (_, first_path) = entries.first()?;
+        if entries
+            .iter()
+            .all(|(root, _)| matches!(root, SkillRoot::ClaudeSynced(_)))
+        {
+            return None;
+        }
+        let mut skill = self.clone();
+        skill
+            .roots
+            .retain(|root| entries.iter().any(|(kept, _)| kept == root));
+        if self.entries.first() != entries.first() {
+            skill.dir = std::fs::canonicalize(first_path).unwrap_or_else(|_| first_path.clone());
+        }
+        skill.entries = entries;
+        Some(skill)
+    }
+
     /// The plugin it comes with when it is found in plugins only (its first), whose agent
     /// shows it as `<plugin>:<name>`.
     pub fn plugin(&self) -> Option<&Plugin> {

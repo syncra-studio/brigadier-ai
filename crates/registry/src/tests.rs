@@ -930,6 +930,53 @@ fn copied_skills_merge_and_synced_skills_are_claudes() {
 }
 
 #[test]
+fn skills_for_display_hide_synced_only_entries_but_keep_local_copies() {
+    let home = fixture("skill-provenance");
+    let synced = home.join(".claude/skills/synced");
+    skill(&synced.join("org_a/builtin"), "renamed", "Provider skill.");
+    skill(&synced.join("org_a/personal"), "personal", "User skill.");
+    skill(&synced.join("org_a/unknown"), "unknown", "No provenance.");
+    for account in ["org_a", "org_b"] {
+        skill(
+            &synced.join(account).join("shared"),
+            "shared",
+            "Same bytes.",
+        );
+    }
+    for root in [home.join(".claude/skills"), synced.join("org_a")] {
+        skill(&root.join("local-copy"), "local-copy", "Same local bytes.");
+    }
+    let catalog = Catalog::read(&roots(&home, &[]), None);
+    let builtin = catalog.skill("claude:synced:org_a:builtin").unwrap();
+    assert!(builtin.user_installed().is_none());
+    // Classification is display-only: Claude still finds synced skills natively.
+    assert!(catalog.skill_native(
+        builtin,
+        &Session {
+            agent: Agent::Claude,
+            cwd: &home,
+            project: None,
+            in_checkout: false,
+        }
+    ));
+    for name in ["personal", "unknown"] {
+        assert!(
+            catalog
+                .skill(&format!("claude:synced:org_a:{name}"))
+                .unwrap()
+                .user_installed()
+                .is_none()
+        );
+    }
+    let shared = catalog.skill("claude:synced:org_a:shared").unwrap();
+    assert_eq!(shared.entries.len(), 2);
+    assert!(shared.user_installed().is_none());
+    let local = catalog.skill("claude:user:local-copy").unwrap();
+    assert_eq!(local.entries.len(), 2);
+    assert_eq!(local.user_installed().as_ref(), Some(local));
+}
+
+#[test]
 fn frontmatter_with_crlf_quotes_and_multiline() {
     let home = fixture("frontmatter");
     write(

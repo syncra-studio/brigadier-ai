@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; switch: string | null; button: string | null };
+type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; picker: string | null; switch: string | null; locked: boolean; button: string | null };
 type SectionSeen = { title: string; description: string; count: string; rows: RowSeen[] };
 type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[]; values: string[]; picks: string[]; count: string };
 type Seen = {
@@ -12,15 +12,20 @@ type Seen = {
   description: string;
   sections: SectionSeen[];
   tabs: string[];
+  rows: RowSeen[];
+  search: string | null;
+  focusedTab: string | null;
   filter: string;
   folds: { text: string; open: boolean; rows: RowSeen[] }[];
   agentRows: string[];
   projectSwitches: string[];
   banner: string;
+  banners: string[];
   empty: string;
   emptyRow: string;
   removeRow: string;
   menu: { rows: string[]; current: string } | null;
+  places: string[] | null;
   dialog: DialogSeen | null;
   toasts: string[];
   overflow: boolean;
@@ -37,7 +42,7 @@ const row = (rows: RowSeen[], name: string) => rows.find((entry) => entry.name =
 
 // The page in Chromium over a faked daemon, through every state the Plugins board draws.
 test("plugins: every drawn list, details and dialog state, and what the switches and dialogs ask for", { timeout: 120000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "plugins.html?drive=1", "plugins-result", 40000)) as Record<string, unknown> & Record<string, Seen>;
+  const seen = JSON.parse(await renderFixturePage(t, "plugins.html?drive=1", "plugins-result", 40000)) as Record<string, unknown> & Record<string, Seen> & { tabKeys: Seen[] };
   assert.equal(seen.error, undefined);
   for (const state of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "D1", "D2", "D3"]) {
     assert.equal(seen[state]!.settingsColumn, true, `${state}: the column every Settings page uses`);
@@ -48,61 +53,67 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   const l1 = seen.L1!;
   assert.equal(l1.title, "Plugins");
   assert.equal(l1.description, "Skills and MCP servers your agents can use. Pick a project to choose what's on there.");
+  // No Needs attention tab: just the two kinds.
   assert.deepEqual(l1.tabs, ["MCP servers7 *", "Skills6"]);
   assert.equal(l1.filter, "All projects");
-  assert.deepEqual(l1.sections.map((entry) => `${entry.title} ${entry.count}`), ["Needs attention 3", "Every project 6", "Only in some projects 1"]);
-  const attention = section(l1, "Needs attention").rows;
-  assert.deepEqual(attention.map((entry) => [entry.name, entry.line, entry.tone, entry.button]), [
-    ["linear", "Codex needs you to sign in.", "warning", "Sign in"],
-    ["figma-dev", 'Won\'t start: unknown type "websocket".', "error", "Details"],
-    ["grill-me", "Only Claude Code has it.", "muted", "Use everywhere"],
-  ]);
-  // The strip is built from the view's agents: a mark per agent, the ones with the problem dimmed.
-  assert.deepEqual(row(attention, "linear").lit, ["claude", "gemini", "cursor", "opencode"]);
-  assert.deepEqual(row(attention, "figma-dev").lit, []);
-  assert.deepEqual(row(attention, "grill-me").lit, ["claude"]);
-  const every = section(l1, "Every project");
-  assert.equal(every.description, "On in all your projects. Turn one off to stop it everywhere.");
+  assert.deepEqual(l1.sections.map((entry) => `${entry.title} ${entry.count}`), ["Global 6", "Only in some projects 1"]);
+  const every = section(l1, "Global");
+  assert.equal(every.description, "On in every project, and in new ones you add. Turn one off to stop it everywhere.");
   assert.deepEqual(names(every.rows), ["pencil", "railway", "node_repl", "linear", "figma-dev", "playwright"]);
   assert.deepEqual(row(every.rows, "pencil").lit, AGENTS);
   assert.deepEqual(row(every.rows, "railway").chips, ["Off in steady-app"]);
   assert.deepEqual(row(every.rows, "node_repl").chips, ["Off in brigadier-ai"]);
-  assert.deepEqual([row(every.rows, "figma-dev").line, row(every.rows, "figma-dev").tone], ["Won't start. See Needs attention.", "error"]);
+  // Real problems stay on the row: Won't start in red, Needs sign-in with its Sign in button.
+  assert.deepEqual([row(every.rows, "figma-dev").line, row(every.rows, "figma-dev").tone, row(every.rows, "figma-dev").button], ["Won't start. Open it to see why.", "error", null]);
+  assert.deepEqual([row(every.rows, "linear").line, row(every.rows, "linear").tone, row(every.rows, "linear").button], ["Needs sign-in.", "warning", "Sign in"]);
   assert.deepEqual(row(every.rows, "playwright"), { ...row(every.rows, "playwright"), line: "Off in every project.", off: true, switch: "false", lit: [] });
   const some = section(l1, "Only in some projects");
-  assert.equal(some.description, "Each one is on only in the projects shown.");
-  assert.deepEqual([some.rows[0]!.name, some.rows[0]!.chips, some.rows[0]!.switch], ["postgres", ["brigadier-ai"], "true"]);
+  assert.equal(some.description, "Each one is on only in the projects on its tag. Click the tag to change where.");
+  assert.deepEqual([some.rows[0]!.name, some.rows[0]!.chips, some.rows[0]!.picker, some.rows[0]!.switch], ["postgres", [], "brigadier-ai", "true"]);
   // D4: Found in other apps, folded until opened.
   assert.deepEqual(l1.folds, [{ text: "Found in other apps3 in Claude Desktop and Cursor. Your agents can't use them until you bring them in.", open: false, rows: [] }]);
+  // A dimmed row keeps its problem.
+  const offLinear = row(section(seen.offProblem!, "Global").rows, "linear");
+  assert.deepEqual([offLinear.line, offLinear.tone, offLinear.off, offLinear.button], ["Needs sign-in.", "warning", true, "Sign in"]);
+
+  // The arrow keys move between the two tabs; Settings search finds no Needs attention.
+  assert.deepEqual(seen.tabKeys.map((state) => state.focusedTab), ["Skills", "MCP servers", "Skills", "Skills", "MCP servers"]);
+  assert.deepEqual(seen.tabKeys.map((state) => state.tabs.find((tab) => tab.endsWith(" *"))?.replace(/\d+ \*$/, "")), ["Skills", "MCP servers", "Skills", "Skills", "MCP servers"]);
+  assert.deepEqual(seen.searchRows, ["MCP servers", "Skills", "Found in other apps"]);
+  assert.deepEqual(seen.revealSkills!.tabs, ["MCP servers7", "Skills6 *"]);
 
   // L2: All projects, Skills.
   const l2 = seen.L2!;
   assert.deepEqual(l2.tabs, ["MCP servers7", "Skills6 *"]);
-  assert.equal(section(l2, "Needs attention").rows.length, 3, "Needs attention shows both tabs' items");
-  const skills = section(l2, "Every project").rows;
+  const skills = section(l2, "Global").rows;
   assert.deepEqual(names(skills), ["higgsfield", "impeccable", "hallmark", "use-railway", "grill-me"]);
   assert.match(l2.sections.flatMap((entry) => entry.rows).find((entry) => entry.name === "higgsfield")!.line, /Images, video/);
   // A plugin's skills are one row, with their count.
   assert.deepEqual([row(skills, "higgsfield").kind, row(skills, "impeccable").kind], ["Plugin · 9 skills", "Skill"]);
-  assert.deepEqual([row(skills, "grill-me").line, row(skills, "grill-me").tone], ["Only Claude Code has it. See Needs attention.", "warning"]);
+  // Another agent's plugin has no places to pick: a plain Global tag, no picker.
+  assert.deepEqual([row(skills, "higgsfield").chips, row(skills, "higgsfield").picker], [["Global"], null]);
+  assert.deepEqual([row(skills, "impeccable").chips, row(skills, "impeccable").picker], [[], "Global"]);
+  // Only one agent has it: the row keeps its own line, no yellow one.
+  assert.deepEqual([row(skills, "grill-me").line, row(skills, "grill-me").tone], ["Asks hard questions about a plan.", "muted"]);
   assert.deepEqual(names(section(l2, "Only in some projects").rows), ["delegator"]);
 
   // L3: one project.
   const l3 = seen.L3!;
   assert.equal(l3.filter, "brigadier-ai");
-  assert.deepEqual(l3.sections.map((entry) => entry.title), ["Needs attention", "Only in brigadier-ai", "From every project"]);
+  assert.deepEqual(l3.sections.map((entry) => entry.title), ["Only in brigadier-ai", "Global"]);
   assert.equal(section(l3, "Only in brigadier-ai").description, "Sessions in your other projects don't see these.");
   assert.deepEqual(names(section(l3, "Only in brigadier-ai").rows), ["postgres"]);
-  const fromEvery = section(l3, "From every project");
-  assert.equal(fromEvery.description, "Turn one off to skip it in brigadier-ai only.");
+  const fromEvery = section(l3, "Global");
+  assert.equal(fromEvery.description, "On in all your projects. Turn one off to skip it in brigadier-ai only.");
   assert.deepEqual(fromEvery.rows.map((entry) => entry.switch), ["true", "true", "false", "true", "true", "false"]);
   assert.equal(row(fromEvery.rows, "node_repl").line, "Off in brigadier-ai. Still on in your other projects.");
   assert.equal(row(fromEvery.rows, "playwright").line, "Off in every project. Turn it on to use it here.");
+  assert.equal(row(fromEvery.rows, "figma-dev").line, "Won't start. Open it to see why.");
 
   // L4: a project with nothing of its own.
   const l4 = seen.L4!;
   assert.equal(l4.emptyRow, "Nothing only for steady-app yet. Add one here, or turn one on below.Add to steady-app");
-  assert.equal(row(section(l4, "From every project").rows, "railway").line, "Off in steady-app. Still on in your other projects.");
+  assert.equal(row(section(l4, "Global").rows, "railway").line, "Off in steady-app. Still on in your other projects.");
   const other = section(l4, "From other projects");
   assert.equal(other.description, "On in another project. Turn one on to use it here too.");
   assert.deepEqual([other.rows[0]!.name, other.rows[0]!.line, other.rows[0]!.switch, other.rows[0]!.off], ["postgres", "On in brigadier-ai.", "false", true]);
@@ -119,9 +130,9 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   const fold = seen.L6!.folds[0]!;
   assert.equal(fold.open, true);
   assert.deepEqual(fold.rows.map((entry) => [entry.name, entry.button, entry.lit.length]), [
-    ["filesystem", "Use everywhere", 0],
-    ["brave-search", "Use everywhere", 0],
-    ["context7", "Use everywhere", 0],
+    ["filesystem", "Add to every agent", 0],
+    ["brave-search", "Add to every agent", 0],
+    ["context7", "Add to every agent", 0],
   ]);
 
   // L7: nothing added yet.
@@ -144,7 +155,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
     "AAmpAmp can't sign in to servers on the web yet.Not supported",
   ]);
   assert.deepEqual(d1.projectSwitches, [
-    "Every projectAlso turns on in projects you add later. true",
+    "GlobalAlso turns on in projects you add later. true",
     "brigadier-ai~/Code/brigadier-ai true",
     "steady-app~/Code/steady-app true",
     "landing~/Code/landing true",
@@ -161,9 +172,9 @@ test("plugins: every drawn list, details and dialog state, and what the switches
 
   // D3: only in one project, the Projects card's switches.
   const d3 = seen.D3!;
-  assert.equal(section(d3, "Projects").description, "Where it's on. It's only in brigadier-ai now; turn on Every project to use it everywhere.");
+  assert.equal(section(d3, "Projects").description, "Where it's on. It's only in brigadier-ai now; turn on Global to use it everywhere.");
   assert.deepEqual(d3.projectSwitches, [
-    "Every projectTurn on to use it in all your projects. false",
+    "GlobalTurn on to use it in all your projects. false",
     "brigadier-ai~/Code/brigadier-ai true",
     "steady-app~/Code/steady-app false",
     "landing~/Code/landing false",
@@ -249,17 +260,17 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   ]);
   assert.deepEqual(g5.buttons, ["Close", "Open browser again", "Cancel"]);
 
-  // G6: Use everywhere, then Undo from the toast.
+  // G6: Add to every agent, from the details page, then Undo from the toast.
   const g6 = seen.G6!.dialog!;
-  assert.equal(g6.title, "Use grill-me in every agent?");
+  assert.equal(g6.title, "Add grill-me to every agent?");
   assert.equal(g6.description, "Right now only Claude Code has it. Brigadier gives it to every agent, the same way each agent adds its own skills. You can undo this.");
   assert.match(g6.text, /Keeps a copy in Brigadier's libraryGives it to all 6 agentsRemoves Claude Code's old copy, only after every agent has the new one\./);
-  assert.deepEqual(g6.buttons, ["Close", "Cancel", "Use everywhere"]);
+  assert.deepEqual(g6.buttons, ["Close", "Cancel", "Add to every agent"]);
   // A switch that can't be kept to a project asks first, then flips the Library's copy.
-  assert.equal(seen.notSwitchable!.dialog!.title, "Use grill-me in every agent?");
+  assert.equal(seen.notSwitchable!.dialog!.title, "Add grill-me to every agent?");
   assert.deepEqual(seen.useEverywhereCalls, ["useEverywhere skill:grill-me", "switchPlugin lib:grill-me p-brigadier off"]);
   assert.deepEqual(seen.afterUseEverywhere!.toasts, ["grill-me is in every agent nowUndo"]);
-  // Undo takes the Library's copy Use everywhere made.
+  // Undo takes the Library's copy Add to every agent made.
   assert.equal((seen.undoCalls as unknown as string[]).at(-1), "undoUseEverywhere lib:grill-me");
 
   // A paste with no name asks for one in place; the add sends it; a good add's warning shows.
@@ -269,11 +280,28 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.match(seen.addedWithWarning!.dialog!.text, /docs is added, but it didn't start: docs: command not found\./);
   assert.deepEqual(seen.addedWithWarning!.dialog!.buttons, ["Close", "Done"]);
 
-  // Only some agents have it: a Library item is added to the rest; another agent's plugin offers nothing.
-  const partial = section(seen.partial!, "Needs attention").rows;
-  assert.deepEqual([row(partial, "delegator").button, row(partial, "higgsfield").button, row(partial, "grill-me").button], ["Add to every agent", null, "Use everywhere"]);
-  assert.deepEqual(seen.spreadCalls, AGENTS.slice(1).map((agent) => `switchPlugin lib:delegator p-brigadier on ${agent}`));
+  // Only some agents have it: the rows keep their own lines; the details page adds a Library item
+  // to the rest, offers nothing for another agent's plugin, and shows beside a sign-in.
+  const partial = seen.partial!.rows;
+  assert.deepEqual([row(partial, "delegator").line, row(partial, "higgsfield").line], ["Runs your plan with workers while you're away.", "Images, video, brand kits and websites."]);
+  assert.equal(seen.delegatorBanner!.banner, "Only Claude Code has it. Add it to every agent and they all get it.Add to every agent");
+  // The daemon gives it to the agents missing it where the others have it, a project they leave
+  // it off in included; an item on nowhere is still sent (installed, off).
+  assert.deepEqual(seen.spreadCalls, ["addMissing lib:delegator"]);
+  assert.deepEqual(seen.nowhereCalls, ["addMissing lib:delegator"]);
   assert.equal(seen.pluginBanner!.banner, "Only Claude Code has it. It came in that agent's own plugin, so the other agents can't add it.");
+  assert.deepEqual(seen.signInAndMissing!.banners, [
+    "Codex needs you to sign in to linear. Until then, Codex sessions can't use it.Sign in",
+    "Only Claude Code and Codex have it. Add it to every agent and they all get it.Add to every agent",
+  ]);
+
+  // An agent's own copy in a folder that isn't a Brigadier project: a plain tag, and where it's on.
+  // Its switch can't turn off what that folder sets up: it's locked, and the row says where.
+  const foreign = row(section(seen.foreign!, "Only in some projects").rows, "codescene");
+  assert.deepEqual([foreign.line, foreign.chips, foreign.switch, foreign.locked], ["Set up in freelogo-fos-2026. Turn it off there.", ["freelogo-fos-2026"], "true", true]);
+  assert.equal(row(section(seen.foreign!, "Only in some projects").rows, "postgres").locked, false);
+  const foreignHere = row(section(seen.foreignInProject!, "Global").rows, "codescene");
+  assert.deepEqual([foreignHere.line, foreignHere.off, foreignHere.switch], ["On in freelogo-fos-2026 only. Turn it on to use it here.", true, "false"]);
 
   // G7: Remove, from the details page; confirming goes back to the list.
   const g7 = seen.G7!.dialog!;
@@ -285,13 +313,49 @@ test("plugins: every drawn list, details and dialog state, and what the switches
 
   // The switch means what the filter says: everywhere, or only this project.
   assert.deepEqual(seen.switchCalls, ["switchPlugin server:railway everywhere off", "switchPlugin server:pencil p-brigadier off", "switchPlugin server:playwright p-brigadier on"]);
-  assert.equal(row(section(seen.offEverywhere!, "Every project").rows, "railway").line, "Off in every project.");
+  assert.equal(row(section(seen.offEverywhere!, "Global").rows, "railway").line, "Off in every project.");
   assert.deepEqual(names(section(seen.inProject!, "Only in brigadier-ai").rows), ["playwright", "postgres"]);
 
   // A project's note shows on its agent's line, with its one fix.
   assert.match(seen.noted!.agentRows[1]!, /^CodexCodex only reads this project's settings once you trust the project\.Trust landing/);
   assert.deepEqual(seen.trustCalls, ["trustProject p-landing"]);
 
+  // The place picker. Each row's tag: Global on Global rows, its project on the others; none
+  // where it's off, and a folder that isn't a project stays a plain tag.
+  assert.deepEqual([row(every.rows, "pencil").picker, row(every.rows, "playwright").picker, some.rows[0]!.picker], ["Global", null, "brigadier-ai"]);
+  assert.deepEqual([foreign.picker, foreign.chips], [null, ["freelogo-fos-2026"]]);
+  assert.ok(seen.L3!.sections.every((entry) => entry.rows.every((seenRow) => seenRow.picker === null)), "a project's view has no tags");
+  // Global at the top, then the projects; the last one checked can't be unchecked.
+  assert.deepEqual(seen.placesOpen!.places, ["GlobalOn in every project", "brigadier-ai~/Code/brigadier-ai * locked", "steady-app~/Code/steady-app", "landing~/Code/landing"]);
+  const twoPlaces = row(section(seen.placesTwo!, "Only in some projects").rows, "postgres");
+  assert.equal(twoPlaces.picker, "2 projects");
+  assert.deepEqual(seen.placesTwo!.places, ["GlobalOn in every project", "brigadier-ai~/Code/brigadier-ai *", "steady-app~/Code/steady-app *", "landing~/Code/landing"]);
+  assert.ok(seen.placesTwo!.toasts.includes("postgres is on only in brigadier-ai and steady-app nowUndo"), seen.placesTwo!.toasts.join(" | "));
+  assert.equal(row(section(seen.placesUndone!, "Only in some projects").rows, "postgres").picker, "brigadier-ai");
+  // Global moves it to the Global section; checking a project there makes it that project's only.
+  assert.equal(row(section(seen.placesGlobal!, "Global").rows, "postgres").picker, "Global");
+  assert.deepEqual(seen.placesGlobalOpen!.places, ["GlobalOn in every project *", "brigadier-ai~/Code/brigadier-ai", "steady-app~/Code/steady-app", "landing~/Code/landing"]);
+  assert.equal(row(section(seen.placesLanding!, "Only in some projects").rows, "postgres").picker, "landing");
+  assert.deepEqual(seen.placesCalls, [
+    "setPlaces lib:postgres p-brigadier,p-steady",
+    "undoPlaces undo-1",
+    "setPlaces lib:postgres global",
+    "setPlaces lib:postgres p-landing",
+  ]);
+  // Undo puts each agent back exactly: the project it was off in stays off.
+  const undoCalls = seen.placesUndoCalls as unknown as string[];
+  assert.deepEqual([undoCalls.length, undoCalls[0], undoCalls[1]?.startsWith("undoPlaces undo-")], [2, "setPlaces lib:postgres p-landing", true]);
+  assert.deepEqual(row(section(seen.placesUndoExact!, "Global").rows, "postgres").chips, ["Off in steady-app"]);
+  // Quick picks: the second waits for the first's read, so neither is lost.
+  assert.deepEqual((seen.quickCalls as unknown as string[]).filter((call) => call.startsWith("setPlaces")).at(-1), "setPlaces lib:postgres p-brigadier,p-steady,p-landing");
+  // A sign-in on a row kept to a project runs in that project, with its agents.
+  assert.deepEqual(seen.signInElsewhereCalls, ["signInPlugin lib:postgres p-brigadier"]);
+  assert.ok(seen.signInElsewhere!.dialog!.agents.some((agent) => agent.startsWith("CodexWaiting for your browser")), seen.signInElsewhere!.dialog!.agents.join(" | "));
+
+  // Not a Library item: one line, which adds it to every agent first.
+  assert.deepEqual(seen.placesOther!.places, ["Add to every agent first"]);
+  assert.equal(seen.placesOtherDialog!.dialog!.title, "Add pencil to every agent?");
+
   // Search keeps the rows that match; an empty section goes.
-  assert.deepEqual(seen.searched!.sections.map((entry) => [entry.title, names(entry.rows)]), [["Needs attention", ["linear", "figma-dev", "grill-me"]], ["Every project", ["railway"]]]);
+  assert.deepEqual(seen.searched!.sections.map((entry) => [entry.title, names(entry.rows)]), [["Global", ["railway"]]]);
 });

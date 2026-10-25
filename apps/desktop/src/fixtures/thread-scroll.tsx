@@ -6,12 +6,14 @@
  * - `long`: a session of 36 turns (only those near the view mounted), each answer a report
  *   with its Details folded, one long user message clipped behind "Show more".
  * - `other`: a Chat of 8 turns. `working`: a Chat whose one turn still runs, never opened.
+ * A message sent here is answered at once, or (`sentWorking`) its turn goes on working; with
+ * `sentUnsaid` its CLI hasn't said it yet (see `cliLag`).
  *
  * `?drive=1` runs the checks the scroll tests read and writes them to
  * `<pre id="thread-scroll-result">` (`&only=<step>` runs one of them); `window.threadScroll`
  * holds the steps for a browser probe.
  */
-import "@/fixtures/cliView";
+import { cliLag, cliSays, cliTurnsRead } from "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -118,11 +120,18 @@ function requests(id: string): UserRequest[] {
   }) as UserRequest);
 }
 
-/** The request of a message sent in the fixture, answered at once. */
+/** A sent message's turn goes on working, rather than being answered at once. */
+let sentWorking = false;
+/** A sent message's CLI hasn't said it yet: the fixture says when (`cliSays`). */
+let sentUnsaid = false;
+/** The id of the message sent last. */
+let lastSent: string | null = null;
+
+/** The request of a message sent in the fixture, answered at once unless `sentWorking`. */
 function sentRequest(message: Message): UserRequest {
   return {
-    id: message.requestId!, conversationId: message.conversationId, preview: "", state: { type: "done" },
-    startedAtMs: message.createdAtMs, endedAtMs: message.createdAtMs, steeredInto: null, steeredAfter: null,
+    id: message.requestId!, conversationId: message.conversationId, preview: "", state: { type: sentWorking ? "working" : "done" },
+    startedAtMs: message.createdAtMs, endedAtMs: sentWorking ? null : message.createdAtMs, steeredInto: null, steeredAfter: null,
     undo: null, worked: [], quotaWait: false,
   } as unknown as UserRequest;
 }
@@ -205,6 +214,8 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
         requestId: `sent-request-${sequence}`, parentId: list.at(-1)?.id ?? null,
       };
       list.push(message);
+      lastSent = message.id;
+      if (sentUnsaid) cliLag.unsaid.add(message.id);
       appended(message);
       return { method: req.method, outcome: { type: "sent", message } };
     }
@@ -751,6 +762,52 @@ const steps = {
   async working() {
     await open("working");
     return { distance: distance(), rows: rows().length };
+  },
+  /**
+   * A send whose message its CLI says before the view reads its turns again, as over a busy
+   * connection: said 400ms in, its turn read at 2s, the turn working all along. Frame by frame:
+   * the row holding the sent bubble, the bubble's top in the view, and whether blank room (a
+   * spacer of rows not drawn) shows between the top bar and the footer.
+   */
+  async sendBeforeItsTurnIsRead() {
+    await open("long");
+    await userScroll(max());
+    await settle(300);
+    sentWorking = true;
+    sentUnsaid = true;
+    cliLag.ownIds = true;
+    const text = "A question its CLI says before its turn is read.";
+    const frames: { t: number; row: string | null; top: number | null; blank: boolean }[] = [];
+    let on = true;
+    const sentAt = performance.now();
+    const sample = () => {
+      const top = viewTop();
+      const bottom = stackTop();
+      const bubble = [...document.querySelectorAll<HTMLElement>('[data-role="user"]')].find((each) => each.textContent?.includes(text));
+      const blank = [...document.querySelectorAll<HTMLElement>('[data-slot="aui_thread-gap"]')].some((gap) => {
+        const box = gap.getBoundingClientRect();
+        return box.height > 0 && box.bottom > top && box.top < bottom;
+      });
+      frames.push({
+        t: Math.round(performance.now() - sentAt),
+        row: bubble?.closest<HTMLElement>("[data-thread-row]")?.dataset["threadRow"] ?? null,
+        top: bubble ? round(bubble.getBoundingClientRect().top - top) : null,
+        blank,
+      });
+      if (on) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    void send({ text, attachments: [], mentions: [] });
+    await wait(400);
+    cliSays(lastSent!);
+    await wait(1600);
+    cliTurnsRead();
+    await wait(600);
+    on = false;
+    sentWorking = false;
+    sentUnsaid = false;
+    cliLag.ownIds = false;
+    return frames;
   },
 };
 

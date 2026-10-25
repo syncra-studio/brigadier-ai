@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
-import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
+import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
+import { revealSetting, useReveal } from "@/app/settings/reveal";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
@@ -15,7 +16,7 @@ import { openSettings, stepHistory } from "@/state/actions";
 import { useHistory } from "@/state/history";
 
 /*
- * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, and G2A: G2's Advanced open) for shots; ?agents=2 keeps to the
+ * ?state=<name> opens one drawn state (L1–L7, D1–D3, G1–G7, G2A: G2's Advanced open, and P1: the place picker open) for shots; ?agents=2 keeps to the
  * two agents Brigadier drives today (the board draws six); ?drive=1 walks every state, flips
  * switches and confirms the dialogs, then writes what it saw to #plugins-result
  * (PluginsRender.test.ts reads it).
@@ -45,6 +46,8 @@ const HOME = "/Users/me/Code";
 const BRIGADIER = `${HOME}/brigadier-ai`;
 const STEADY = `${HOME}/steady-app`;
 const LANDING = `${HOME}/landing`;
+/** A folder an agent knows that isn't a Brigadier project. */
+const FOREIGN = `${HOME}/clients/freelogo-fos-2026`;
 const projects: PluginProjectView[] = [
   { id: "p-brigadier", name: "brigadier-ai", path: BRIGADIER, notes: [] },
   { id: "p-steady", name: "steady-app", path: STEADY, notes: [] },
@@ -113,6 +116,10 @@ const elsewhere: Spec[] = [
 ];
 
 let items: Spec[] = startingItems(1);
+/** How long a read of the page takes, to show what a slow daemon does. */
+let readDelay = 0;
+/** What each place picker change found before it, by its Undo. */
+const placesBefore = new Map<string, { key: string; spec: Pick<Spec, "everywhere" | "onIn" | "offIn"> }>();
 let empty = false;
 const calls: string[] = [];
 let adding: { resolve: (results: PluginAgentResult[]) => void } | null = null;
@@ -144,6 +151,7 @@ const toggle = (list: string[] = [], path: string, add: boolean) => (add ? [...n
 const adapter: PluginsAdapter = {
   read: async (projectId) => {
     reads++;
+    if (readDelay) await new Promise((resolve) => setTimeout(resolve, readDelay));
     return view(projectId);
   },
   subscribe: (onChange) => {
@@ -165,6 +173,29 @@ const adapter: PluginsAdapter = {
     if (!path) Object.assign(item, on ? { everywhere: true, offIn: [], onIn: [] } : { everywhere: false, onIn: [], offIn: [] });
     else if (item.everywhere) item.offIn = toggle(item.offIn, path, !on);
     else item.onIn = toggle(item.onIn, path, on);
+    changed();
+    return ok();
+  },
+  setPlaces: async (key, projectIds) => {
+    calls.push(`setPlaces ${key} ${projectIds?.join(",") ?? "global"}`);
+    const item = spec(key)!;
+    const undo = `undo-${placesBefore.size + 1}`;
+    placesBefore.set(undo, { key, spec: { everywhere: item.everywhere, onIn: [...(item.onIn ?? [])], offIn: [...(item.offIn ?? [])] } });
+    if (!projectIds) Object.assign(item, { everywhere: true, offIn: [], onIn: [] });
+    else Object.assign(item, { everywhere: false, offIn: [], onIn: projectIds.map((id) => projects.find((project) => project.id === id)!.path) });
+    changed();
+    return { results: ok(), undo };
+  },
+  undoPlaces: async (undo) => {
+    calls.push(`undoPlaces ${undo}`);
+    const before = placesBefore.get(undo)!;
+    Object.assign(spec(before.key)!, before.spec);
+    changed();
+    return ok();
+  },
+  addMissing: async (key) => {
+    calls.push(`addMissing ${key}`);
+    Object.assign(spec(key)!, { only: undefined, attention: undefined });
     changed();
     return ok();
   },
@@ -270,7 +301,9 @@ function rowsOf(root: ParentNode) {
       off: row.hasAttribute("data-off"),
       lit: all('[data-slot="agent-mark"]', row).filter((mark) => !mark.hasAttribute("data-dim")).map((mark) => mark.getAttribute("data-agent")),
       chips: all('[data-slot="scope-chip"]', row).map(text),
+      picker: text(row.querySelector('[data-slot="places-picker"]')) || null,
       switch: row.querySelector("[role=switch]")?.getAttribute("aria-checked") ?? null,
+      locked: row.querySelector("[role=switch]")?.hasAttribute("disabled") ?? false,
       button: text(row.querySelector("button[data-slot=button]")) || null,
     };
   });
@@ -283,6 +316,7 @@ function read() {
   probe.remove();
   const dialog = document.querySelector<HTMLElement>("[data-dialog]");
   const menu = document.querySelector('[data-slot="project-filter"]');
+  const places = document.querySelector('[data-slot="places-picker-menu"]');
   return {
     settingsColumn,
     title: text(document.querySelector("main h1")),
@@ -293,16 +327,23 @@ function read() {
       count: text(section.querySelector("h2")?.parentElement?.nextElementSibling),
       rows: rowsOf(section),
     })),
+    rows: rowsOf(main()),
+    search: document.querySelector<HTMLInputElement>('[data-slot="plugins-toolbar"] input')?.value ?? null,
+    focusedTab: document.activeElement?.getAttribute("data-setting") ?? null,
     tabs: all('main [role="tab"]').map((tab) => `${text(tab)}${tab.getAttribute("aria-selected") === "true" ? " *" : ""}`),
     filter: text(document.querySelector('main [data-slot="plugins-toolbar"] button')),
     folds: all('main [data-slot="fold"]').map((fold) => ({ text: text(fold.querySelector("button")), open: fold.querySelector("button")?.getAttribute("aria-expanded") === "true", rows: rowsOf(fold) })),
     agentRows: all('main [data-slot="agent-row"]').map((row) => text(row)),
     projectSwitches: all('main [data-slot="project-switch"]').map((row) => `${text(row)} ${row.querySelector("[role=switch]")?.getAttribute("aria-checked")}`),
     banner: text(document.querySelector('main [data-slot="banner"]')),
+    banners: all('main [data-slot="banner"]').map(text),
     empty: text(document.querySelector('main [data-slot="plugins-empty"]')),
     emptyRow: text(document.querySelector('main [data-slot="empty-row"]')),
     removeRow: text(document.querySelector('main [data-slot="remove-row"]')),
     menu: menu ? { rows: all("button", menu).map(text), current: text(menu.querySelector("[aria-current]")) } : null,
+    places: places
+      ? all("button", places).map((button) => `${text(button)}${button.hasAttribute("aria-current") || button.getAttribute("aria-checked") === "true" ? " *" : ""}${button.hasAttribute("aria-disabled") ? " locked" : ""}`)
+      : null,
     dialog: dialog
       ? {
           slot: dialog.getAttribute("data-dialog"),
@@ -330,6 +371,7 @@ function read() {
 const project = (id: string | null) => usePlugins.getState().setProject(id);
 async function reset(setKey: (key: number) => void, signIns = 1) {
   items = startingItems(signIns);
+  readDelay = 0;
   empty = false;
   adding = null;
   document.querySelectorAll('[data-dialog] button[aria-label="Close"]').forEach((button) => (button as HTMLButtonElement).click());
@@ -353,9 +395,7 @@ const OPENERS: Record<string, () => Promise<void>> = {
     usePlugins.getState().refresh();
   },
   D1: async () => click("Open linear"),
-  D2: async () => {
-    click("Details");
-  },
+  D2: async () => click("Open figma-dev"),
   D3: async () => click("Open postgres"),
   G1: async () => {
     click("Add");
@@ -390,7 +430,15 @@ const OPENERS: Record<string, () => Promise<void>> = {
     all<HTMLButtonElement>("[data-dialog] button[aria-expanded]").find((button) => text(button).startsWith("Advanced"))!.click();
   },
   G5: async () => click("Sign in"),
-  G6: async () => click("Use everywhere"),
+  G6: async () => {
+    click("Skills6");
+    await pause();
+    click("Open grill-me");
+    await pause();
+    click("Add to every agent");
+  },
+  /** The place picker open on postgres's project tag. */
+  P1: async () => all<HTMLButtonElement>('main [data-slot="places-picker"]').find((button) => text(button) === "brigadier-ai")!.click(),
   G7: async () => {
     click("Open linear");
     await pause();
@@ -440,7 +488,7 @@ async function drive(setKey: (key: number) => void) {
   flip("grill-me");
   await pause(120);
   seen.notSwitchable = read();
-  click("Use everywhere", document.querySelector("[data-dialog]")!);
+  click("Add to every agent", document.querySelector("[data-dialog]")!);
   await pause(300);
   seen.afterUseEverywhere = read();
   seen.useEverywhereCalls = calls.slice(asked);
@@ -511,28 +559,71 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   seen.advancedCalls = calls.slice(advanced).filter((call) => call.startsWith("addPlugin"));
 
-  // Only some agents have it: a Library item goes to the rest where the others have it; another
-  // agent's plugin has no fix to offer.
+  // Only some agents have it: the rows keep their own line; on the details page a Library item
+  // goes to the rest where the others have it; another agent's plugin has no fix to offer.
   await reset(setKey);
   Object.assign(spec("lib:delegator")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
   Object.assign(spec("plugin:higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  Object.assign(spec("server:linear")!, { only: ["claude", "codex"] });
   usePlugins.getState().refresh();
+  click("Skills6");
   await pause(120);
   seen.partial = read();
+  click("Open delegator");
+  await pause(120);
+  seen.delegatorBanner = read();
   const spread = calls.length;
   click("Add to every agent");
   await pause(120);
   seen.spreadCalls = calls.slice(spread);
+  click("Plugins", main());
+  await pause();
+  Object.assign(spec("lib:delegator")!, { only: ["claude"], onIn: [], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  usePlugins.getState().refresh();
+  await pause(120);
+  click("Open delegator");
+  await pause(120);
+  const nowhere = calls.length;
+  click("Add to every agent");
+  await pause(120);
+  seen.nowhereCalls = calls.slice(nowhere);
+  click("Plugins", main());
+  await pause();
   click("Open higgsfield");
   await pause(120);
   seen.pluginBanner = read();
+  click("Plugins", main());
+  await pause();
+  click("MCP servers7");
+  await pause();
+  click("Open linear");
+  await pause(120);
+  seen.signInAndMissing = read();
+
+  // A real problem shows on a row that is off where the page looks too.
+  await reset(setKey);
+  Object.assign(spec("server:linear")!, { offIn: [STEADY] });
+  project("p-steady");
+  await pause(120);
+  seen.offProblem = read();
+
+  // An agent's own copy in a folder that isn't a Brigadier project: a plain tag with that folder,
+  // and in a project, where it's on.
+  await reset(setKey);
+  items.push({ key: "server:codescene", kind: "server", name: "codescene", description: "Code health checks.", detail: "codescene-mcp", everywhere: false, onIn: [FOREIGN], only: ["claude"], switchable: false });
+  usePlugins.getState().refresh();
+  await pause(120);
+  seen.foreign = read();
+  project("p-brigadier");
+  await pause(120);
+  seen.foreignInProject = read();
 
   // Details: the Projects card's switches, Remove, and a project note's fix.
   await open("D3");
   const detail = calls.length;
   click("brigadier-ai");
   await pause(120);
-  click("Every project");
+  click("Global");
   await pause(120);
   seen.detailCalls = calls.slice(detail);
   // Advanced: one agent's switch.
@@ -557,6 +648,112 @@ async function drive(setKey: (key: number) => void) {
   click("Trust landing");
   await pause();
   seen.trustCalls = calls.filter((call) => call.startsWith("trust"));
+
+  // The tabs follow the arrow keys, selecting and focusing; Settings search has no Needs attention.
+  await reset(setKey);
+  const navigate = async (key: string) => {
+    document.querySelector<HTMLButtonElement>('main [role="tab"][aria-selected="true"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    await pause();
+    return read();
+  };
+  seen.tabKeys = [];
+  for (const key of ["ArrowLeft", "ArrowRight", "ArrowRight", "End", "Home"]) (seen.tabKeys as unknown[]).push(await navigate(key));
+  seen.searchRows = pluginSearchRows().slice(0, 3).map((entry) => entry.label);
+  revealSetting("Skills");
+  await pause(120);
+  seen.revealSkills = read();
+  useReveal.setState({ label: null });
+
+  // The place picker: a project tag and a Global tag open one menu; each pick applies at once,
+  // with Undo; the last project can't be unchecked; another agent's item is added to every
+  // agent first.
+  await reset(setKey);
+  const picker = (name: string) => {
+    const tag = all('[data-slot="plugin-row"]', main()).find((row) => text(row.querySelector(".font-medium")) === name)?.querySelector<HTMLButtonElement>('[data-slot="places-picker"]');
+    if (!tag) throw new Error(`No place picker on ${name}: ${JSON.stringify(read().sections.map((entry) => [entry.title, entry.rows.map((seenRow) => seenRow.name)]))}`);
+    return tag;
+  };
+  /** Opens `name`'s picker, closing one still open (a click elsewhere would). */
+  const openPicker = async (name: string) => {
+    document.querySelector('[data-slot="places-picker-menu"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await pause();
+    picker(name).click();
+    await pause(120);
+  };
+  const pick = (label: string) => {
+    const button = all<HTMLButtonElement>('[data-slot="places-picker-menu"] button').find((entry) => text(entry).startsWith(label));
+    if (!button) throw new Error(`No ${label} in the place picker: ${JSON.stringify(read().places)}`);
+    button.click();
+  };
+  const placed = calls.length;
+  await openPicker("postgres");
+  seen.placesOpen = read();
+  pick("brigadier-ai");
+  await pause(120);
+  pick("steady-app");
+  await pause(300);
+  seen.placesTwo = read();
+  const undoPlaces = all<HTMLButtonElement>('[data-slot="toast"] button').find((button) => text(button) === "Undo");
+  if (!undoPlaces) throw new Error(`No Undo: ${JSON.stringify(read().toasts)} ${read().alert}`);
+  undoPlaces.click();
+  await pause(300);
+  seen.placesUndone = read();
+  await openPicker("postgres");
+  pick("Global");
+  await pause(300);
+  seen.placesGlobal = read();
+  await openPicker("postgres");
+  seen.placesGlobalOpen = read();
+  pick("landing");
+  await pause(300);
+  seen.placesLanding = read();
+  await openPicker("pencil");
+  seen.placesOther = read();
+  pick("Add to every agent first");
+  await pause(120);
+  seen.placesOtherDialog = read();
+  seen.placesCalls = calls.slice(placed);
+
+  // Undo puts back exactly where it was: a project it was off in stays off.
+  await reset(setKey);
+  Object.assign(spec("lib:postgres")!, { everywhere: true, onIn: [], offIn: [STEADY] });
+  usePlugins.getState().refresh();
+  await pause(120);
+  const undone = calls.length;
+  await openPicker("postgres");
+  pick("landing");
+  await pause(300);
+  all<HTMLButtonElement>('[data-slot="toast"] button').filter((button) => text(button) === "Undo").at(-1)!.click();
+  await pause(300);
+  seen.placesUndoExact = read();
+  seen.placesUndoCalls = calls.slice(undone);
+
+  // A slow read: the next pick waits for it, so it starts from the last pick.
+  await reset(setKey);
+  readDelay = 300;
+  usePlugins.getState().refresh();
+  await pause(400);
+  const quick = calls.length;
+  await openPicker("postgres");
+  pick("steady-app");
+  await pause(60);
+  pick("landing");
+  await pause(700);
+  if (!read().places?.some((entry) => entry.startsWith("landing") && entry.includes("*"))) pick("landing");
+  await pause(700);
+  seen.quickCalls = calls.slice(quick);
+  readDelay = 0;
+
+  // A sign-in on a row kept to a project runs there, and the dialog shows that project's agents.
+  await reset(setKey);
+  Object.assign(spec("lib:postgres")!, { remote: true, special: { codex: { type: "needsSignIn" } }, attention: { type: "signIn", message: "Codex needs you to sign in." } });
+  usePlugins.getState().refresh();
+  await pause(120);
+  const signedAt = calls.length;
+  all<HTMLButtonElement>("button", all('[data-slot="plugin-row"]', main()).find((entry) => text(entry.querySelector(".font-medium")) === "postgres")!).find((button) => text(button) === "Sign in")!.click();
+  await pause(300);
+  seen.signInElsewhere = read();
+  seen.signInElsewhereCalls = calls.slice(signedAt);
 
   // Search keeps the rows that match.
   await reset(setKey);
