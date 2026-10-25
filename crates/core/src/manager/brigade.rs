@@ -138,8 +138,9 @@ mod tests {
         // about 3.1k tokens written once, then read again on each call). The short-job path
         // added 0.7 KB to save a whole call (w155); keeping a watcher on what ends after the
         // turn, 0.27 KB (D21); grilling every new job with the CLI's own question tool,
-        // 0.09 KB (harness D7, D28).
-        assert!(SKILL.len() <= 9_950, "{} bytes", SKILL.len());
+        // 0.09 KB (harness D7, D28); the session's own subagents and quick checks, naked workers
+        // and the review flow, 0.61 KB after tightening (harness D3, D8, D13, D22; proposed).
+        assert!(SKILL.len() <= 10_560, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
@@ -190,30 +191,42 @@ mod tests {
         // Deciding (run2-D40): the session judges a message queued while it works.
         assert!(SKILL.contains("judge it soon with `brigadier queue <id>`"));
         // Reviews in proportion (the w123 bench: a two-file job tripled in time under them),
-        // adversarial, on a routed reviewer (run2-D33, D35, D36).
+        // adversarial, on a routed reviewer (run2-D33, D35, D36): the big job's own plan before
+        // workers (run2-D33), a worker's plan optionally (proposed), and one end verification
+        // copied from the Delegator, on another ready provider than the author's (harness D4,
+        // D22).
         for line in [
             "A big job (several parts, risky, or the user asked) gets two reviews; a small change with its tests passing lands without a review or a critique.",
-            "**Plan review** before the big job's first plan goes to workers; **code review** once at its end",
-            "`--lean` worker with `--work \"Independent review\"`",
+            "**Plan review** of the big job's plan (`--reviewing session`) before it goes to workers",
+            "**End verification**, once, on the integrated tree, never mid-run: a fresh reviewer code-reviews the job's base..head adversarially, checks every \"done when\" for real, fixes what it can, and reports pass or fail per item with evidence.",
+            "`brigadier start --reviewing <id>|session`: it runs on another ready provider than the author's, else a fresh session of theirs, and reads `brigadier show <id>` and `brigadier context`.",
             "Its brief: break it",
             "note each rejected one with its reason",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
-        // The session orchestrates (run2-D23): it does the talking, look-ups, small edits, git
-        // and checking (run2-D24, D43), without subagents of its own (run2-D43); workers do
-        // builds, tests and research, on the routing's rows (run2-D36).
+        assert!(!SKILL.contains("another vendor or model"));
+        // The session orchestrates (run2-D23, harness D2): it does the talking, look-ups, small
+        // edits, git and checking, with its own subagents (harness D3, superseding run2-D43) and
+        // a quick check after a small edit (harness D8, amending run2-D24); workers do builds,
+        // full suites and research, on the routing's rows (run2-D36), naked (D13, D17, D18).
         for line in [
             "You are an orchestrator.",
             "small edits (a few lines in a file or two); git, merges, pushes and CI; checking workers' evidence",
-            "You never build or test, and have no subagents.",
-            "anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a `--lean` worker on the routing's search row",
+            "Your subagents may do look-ups, cross-file reads and small edits (the routing's models, effort at most high); after such an edit, one quick check (a test file, a type check). Full suites, app builds and live runs go to workers or CI.",
+            "anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a worker on the routing's search row",
+            "[--mcp NAME]…",
+            "MCP servers only by `--mcp` (`brigadier context mcps` lists them)",
+            "it pulls decisions, skills and the rest with `brigadier context`",
             "The user's routing decides each worker's agent, model and effort.",
             "the same Work's next row the rules allow; never a model or effort the rows don't name",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
         assert!(!SKILL.contains("- Default: do it yourself."));
+        assert!(!SKILL.contains("--lean"));
+        assert!(!SKILL.contains("never build or test"));
+        assert!(!SKILL.contains("have no subagents"));
         assert!(
             !SKILL.contains("codex review"),
             "reviews go through routing"
@@ -286,7 +299,8 @@ mod tests {
         for line in [
             "/fusion <question>",
             "`fusion-claude`, `fusion-codex`",
-            "brigadier start \"<brief>\" --lean --work fusion-claude",
+            // Every worker is naked (D13): no `--lean`.
+            "brigadier start \"<brief>\" --work fusion-claude",
             "with nothing piped after it",
             "Answer only; change no file.",
             "One cross round.",
@@ -300,5 +314,6 @@ mod tests {
             assert!(FUSION.contains(line), "{line}");
         }
         assert!(!FUSION.contains("with `--model`"));
+        assert!(!FUSION.contains("lean"));
     }
 }

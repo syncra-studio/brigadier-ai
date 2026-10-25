@@ -1,6 +1,6 @@
 ---
 name: fusion
-description: When the user is unsure which way to take, or types /fusion <question>, consult one model per installed CLI as lean workers, run one cross round, then answer with one merged recommendation.
+description: When the user is unsure which way to take, or types /fusion <question>, consult one model per installed CLI as workers, run one cross round, then answer with one merged recommendation.
 ---
 
 # Fusion
@@ -11,8 +11,8 @@ Use it when the user types `/fusion <question>`, or when they are uncertain: the
 
 1. Gather the context yourself first: the files that bear on the question (file:line), and the ledger's rules and decisions that touch it (`brigadier ledger show --rules`, `brigadier ledger show --open`).
 2. Run `brigadier models`. Start one consult per installed CLI with quota left, each through its own row: `fusion-claude`, `fusion-codex` (another CLI: `fusion-<agent>`). The row (the user's routing, else the shipped one) picks agent, model and effort. If its account is out of quota, take the same Work's next row the rules allow; with none, skip that CLI and say so.
-3. Start them lean, with the same brief, together while "Workers at once" (in `brigadier models`) allows, else one after another:
-   `brigadier start "<brief>" --lean --work fusion-claude --title "Fusion · <model>"`
+3. Start them with the same brief, together while "Workers at once" (in `brigadier models`) allows, else one after another:
+   `brigadier start "<brief>" --work fusion-claude --title "Fusion · <model>"`
    Run each `brigadier` command as it is, with nothing piped after it (`| tail`): at Accept edits Claude Code asks before such a command.
    The brief has:
    - the question;

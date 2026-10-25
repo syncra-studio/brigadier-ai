@@ -35,11 +35,12 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     text
 }
 
-/// The standing instructions' line on orchestrating (run2-D23, D24, D27, D43): what the session
-/// does itself, what goes to its workers, and how it replies. A worker goes without it:
+/// The standing instructions' line on orchestrating (run2-D23, D27; harness D2, D3 superseding
+/// run2-D43, D8 amending run2-D24): what the session and its own subagents do, the quick check
+/// after its own small edit, what goes to its workers, and how it replies. A worker goes without it:
 /// `brigadier start` refuses a worker's own workers, it has no brigade skill, and it keeps
 /// full reports (run2-D27).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -411,12 +412,14 @@ mod tests {
     use super::*;
 
     /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
-    /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The lines a
-    /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
+    /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The orchestrator's
+    /// own subagents and quick checks (harness D3, D8) took 75 more after tightening: 2,125
+    /// (proposed). The lines a bench or a parser pins (the ledger's kinds, one entry per thing
+    /// settled) stay whole.
     #[test]
-    fn the_standing_instructions_stay_under_2050_bytes_and_fifteen_lines() {
+    fn the_standing_instructions_stay_under_2125_bytes_and_fifteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 2_050,
+            STANDING_INSTRUCTIONS.len() < 2_125,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
@@ -439,16 +442,21 @@ mod tests {
         assert!(WORKERS_LINE.contains("ask with your CLI's question tool"));
         assert!(!STANDING_INSTRUCTIONS.contains("brigadier ask"));
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
-        // The session orchestrates and replies short; no subagent split (run2-D23, D24, D27,
-        // D43). The line goes to sessions and Chats only ([`WORKERS_LINE`]).
+        // The session orchestrates and replies short (run2-D23, D27), with its own subagents
+        // (harness D3, superseding run2-D43) and a quick check after its own small edit; full
+        // suites, builds and live runs go to workers (harness D8, amending run2-D24). The line
+        // goes to sessions and Chats only ([`WORKERS_LINE`]).
         for words in [
-            "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test.",
-            "Bigger work, builds, tests and research go to workers",
+            "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help.",
+            "After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers",
             "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
         ] {
             assert!(WORKERS_LINE.contains(words), "{words}");
         }
-        assert!(!STANDING_INSTRUCTIONS.contains("subagents"));
+        assert!(!STANDING_INSTRUCTIONS.contains("never build or test"));
+        assert!(
+            !worker_instructions(&Settings::default(), ProviderKind::Claude).contains("subagents")
+        );
         assert!(!STANDING_INSTRUCTIONS.contains("when the job calls for them"));
         // One entry per thing settled, never a progress log (the w123 bench: Codex logged 3.6
         // entries per small task under "the moment something is settled").
