@@ -926,6 +926,18 @@ pub enum Request {
         text: String,
         attachments: Vec<AttachmentRef>,
     },
+    /// The user's one message to one of the session's own workers (the composer's To:): it
+    /// goes to the worker, with its attachments and mentions, as `brigadier send` sends; the
+    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. An error
+    /// means the worker did not take it.
+    SendToWorker {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        #[serde(default)]
+        mentions: Vec<Mention>,
+    },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
         task_id: TaskId,
@@ -1791,6 +1803,10 @@ pub enum Response {
         task_ids: Vec<TaskId>,
     },
     SendMockupNotes,
+    /// `queued`: it went into the worker's running turn.
+    SendToWorker {
+        queued: bool,
+    },
     PauseTask,
     ResumeTask,
     RestoreKeptWork {

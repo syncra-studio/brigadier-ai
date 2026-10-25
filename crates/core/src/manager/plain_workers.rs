@@ -39,7 +39,7 @@ use super::worker_events::HeldEvents;
 use super::workers::{TaskLive, Workspace, task_branch};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
-    Conversation, ConversationId, Environment, ModelChoice, PermissionLevel, Setup,
+    Conversation, ConversationId, Environment, Mention, ModelChoice, PermissionLevel, Setup,
 };
 use crate::work::{
     Approval, ApprovalSubject, AttachmentRef, AttemptEnd, CardId, CardState, MockupPart,
@@ -52,6 +52,17 @@ const TITLE_MAX: usize = 60;
 
 /// How long a message sent to a worker still starting waits for its CLI.
 const CLI_START: Duration = Duration::from_secs(60);
+
+/// What a session's next turn hears of a message the user sent one of its workers directly.
+fn user_messaged_note(task: &Task, text: &str) -> String {
+    format!(
+        "[The user messaged worker {} (task-{}, \"{}\") directly, not through you: \"{text}\". \
+         It answers them in its own thread; act on this only if they ask you to.]",
+        short(&task.id.0),
+        task.number,
+        task.title
+    )
+}
 
 /// A new event of worker `task`'s (its own id given when it is kept).
 pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
@@ -711,6 +722,117 @@ impl SessionManager {
         Ok(())
     }
 
+    /// The user's message to one of session `conversation_id`'s workers, from its composer's
+    /// To: (one message, then the worker's thread). It goes as `brigadier send` sends, with
+    /// the user's pastes, attachments and mentions as a turn takes them; the session's thread
+    /// shows "You messaged ‹worker›" and its next turn hears it, without starting one. An
+    /// error means the worker did not take it; once it did, nothing after fails the send.
+    /// True when it went into a running turn.
+    pub async fn send_to_worker(
+        &self,
+        conversation_id: ConversationId,
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+    ) -> Result<bool> {
+        self.admit()?;
+        // Held to the end: the session does not close under a message on its way.
+        let _working = self.enter(&conversation_id)?;
+        if text.trim().is_empty() && attachments.is_empty() {
+            return Err(Error::Invalid("write a message first".into()));
+        }
+        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        // Attachments uploaded a while ago must survive blob collection from now on.
+        for attachment in &attachments {
+            let Ok(hash) = attachment.id.parse::<brigadier_store::BlobHash>() else {
+                return Err(Error::Invalid(format!(
+                    "attachment {} is unknown",
+                    attachment.name
+                )));
+            };
+            if !self.core.store().blobs().touch(hash).await? {
+                return Err(Error::Invalid(format!(
+                    "{} is no longer stored; attach it again",
+                    attachment.name
+                )));
+            }
+        }
+        let live = self.task_live(&task);
+        if task.state == TaskState::Starting {
+            let up = tokio::time::Instant::now() + CLI_START;
+            while live.cli().await.is_none() && tokio::time::Instant::now() < up {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        // Under its settle lock, looked at again: a stop meanwhile wins, never a revival.
+        let settled = live.settle.lock().await;
+        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        if self.is_stopping(&task.id) {
+            return Err(Error::Invalid(format!(
+                "worker {} is stopping",
+                task.number
+            )));
+        }
+        let scratch = match &task.workspace {
+            Some(workspace) => PathBuf::from(&workspace.scratch),
+            None if attachments.is_empty() => PathBuf::new(),
+            None => {
+                return Err(Error::Invalid(format!(
+                    "worker {} hasn't started yet; send files once it has",
+                    task.number
+                )));
+            }
+        };
+        let input = self
+            .direct_input(&conversation_id, scratch, &text, &attachments, &mentions)
+            .await;
+        let queued = live.busy().await;
+        self.deliver_to_worker(&conversation_id, &task, input)
+            .await?;
+        drop(settled);
+        // It reached the worker: the record and the note only log their failures.
+        let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
+        self.orchestrator_step(
+            &conversation_id,
+            crate::work::OrchestratorStepKind::Messaged {
+                task_id: task.id.clone(),
+                text: Some(shown.clone()),
+                by_user: true,
+            },
+        )
+        .await;
+        self.note_next_turn(&conversation_id, user_messaged_note(&task, &shown))
+            .await;
+        Ok(queued)
+    }
+
+    /// Session `conversation_id`'s own plain worker `task_id`, while it can take a message
+    /// from the user.
+    async fn direct_recipient(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: &TaskId,
+    ) -> Result<Task> {
+        let task = self
+            .task_by_id(conversation_id, task_id)
+            .await
+            .map_err(|_| Error::Invalid("that worker isn't this session's".into()))?;
+        let Some(plain) = &task.plain else {
+            return Err(Error::Invalid(format!(
+                "worker {} takes messages only from its session",
+                task.number
+            )));
+        };
+        if plain.closed {
+            return Err(Error::Invalid(format!("worker {} was closed", task.number)));
+        }
+        if task.state.is_final() {
+            return Err(Error::Invalid(format!("worker {} has ended", task.number)));
+        }
+        Ok(task)
+    }
+
     /// One of the caller's own workers, by an id `brigadier workers` showed; another
     /// session's worker, or a session, is refused.
     pub(super) async fn own_worker(
@@ -807,6 +929,7 @@ impl SessionManager {
             crate::work::OrchestratorStepKind::Messaged {
                 task_id: task.id.clone(),
                 text: Some(step),
+                by_user: false,
             },
         )
         .await;

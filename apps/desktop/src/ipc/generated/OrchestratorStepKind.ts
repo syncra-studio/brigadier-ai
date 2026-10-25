@@ -66,7 +66,7 @@ turn?: number, } | { "type": "messaged", taskId: TaskId,
  * What it sent (`message_worker`), cut to 2000 bytes; none in
  * steps from before it was kept.
  */
-text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "type": "reviewed", taskIds: Array<TaskId>, findings: number, } | { "type": "readReport", taskId: TaskId, } | { "type": "readArtifact", name: string, } | { "type": "accepted", taskId: TaskId, } | { "type": "searchedWeb", query: string, } | { "type": "readPage", url: string, } | { "type": "created", taskId: TaskId, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "proof", id: string, 
+text?: string, byUser?: boolean, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "type": "reviewed", taskIds: Array<TaskId>, findings: number, } | { "type": "readReport", taskId: TaskId, } | { "type": "readArtifact", name: string, } | { "type": "accepted", taskId: TaskId, } | { "type": "searchedWeb", query: string, } | { "type": "readPage", url: string, } | { "type": "created", taskId: TaskId, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "proof", id: string, 
 /**
  * Its file name as the thread gave it.
  */

@@ -874,15 +874,20 @@ impl SessionManager {
     }
 
     /// Starts a worker whose CLI session stopped (the conversation hibernated, or Brigadier
-    /// restarted) again, resuming its CLI session with `text`.
-    async fn revive_worker(&self, live: &Arc<TaskLive>, task: &Task, text: String) -> Result<()> {
+    /// restarted) again, resuming its CLI session with `input`.
+    async fn revive_worker(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        input: TurnInput,
+    ) -> Result<()> {
         // One start at a time: a worker resumed meanwhile takes the message in the turn it
         // runs.
         let _handing = live.reroute.lock().await;
         if let Some(cli) = live.cli().await {
             return cli
                 .session
-                .steer(TurnInput::text(text))
+                .steer(input)
                 .await
                 .map_err(|err| Error::Provider(err.to_string()));
         }
@@ -892,13 +897,8 @@ impl SessionManager {
                 task.number
             )));
         };
-        self.launch_worker(
-            live,
-            task,
-            Origin::Resume { native_id },
-            TurnInput::text(text),
-        )
-        .await
+        self.launch_worker(live, task, Origin::Resume { native_id }, input)
+            .await
     }
 
     /// The worker's CLI session to resume: the one recorded on the task, else (a task recorded
@@ -1792,6 +1792,20 @@ impl SessionManager {
         text: String,
     ) -> Result<()> {
         drop(self.enter(conversation_id)?);
+        self.deliver_to_worker(conversation_id, task, TurnInput::text(text))
+            .await
+    }
+
+    /// `input` to a worker's CLI: into its running turn, or as a new turn of the session its
+    /// CLI keeps (started again when it had stopped). An error means its CLI did not take it;
+    /// once it did, failing to record the worker running is only logged, so nobody sends it
+    /// twice.
+    pub(crate) async fn deliver_to_worker(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        input: TurnInput,
+    ) -> Result<()> {
         if task.state.is_final() {
             return Err(Error::Invalid(format!("worker {} has ended", task.number)));
         }
@@ -1799,24 +1813,29 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         let Some(cli) = state.cli.clone() else {
             drop(state);
-            return self.revive_worker(&live, task, text).await;
+            return self.revive_worker(&live, task, input).await;
         };
-        let input = TurnInput::text(text);
         if state.busy {
             cli.session.steer(input).await
         } else {
-            state.busy = true;
-            cli.session.send(input).await
+            // Busy only once a turn really started: a refused send leaves it idle.
+            let sent = cli.session.send(input).await;
+            state.busy = sent.is_ok();
+            sent
         }
         .map_err(|err| Error::Provider(err.to_string()))?;
         drop(state);
-        self.update_task(conversation_id, &task.id, |task| {
-            if !task.state.is_final() {
-                task.state = TaskState::Running;
-                task.blocked_reason = None;
-            }
-        })
-        .await?;
+        let running = self
+            .update_task(conversation_id, &task.id, |task| {
+                if !task.state.is_final() {
+                    task.state = TaskState::Running;
+                    task.blocked_reason = None;
+                }
+            })
+            .await;
+        if let Err(err) = running {
+            tracing::warn!(task = %task.id, error = %err, "could not record a messaged worker running");
+        }
         Ok(())
     }
 
