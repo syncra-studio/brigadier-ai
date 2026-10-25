@@ -932,6 +932,9 @@ impl SessionManager {
                     let n = file.generation;
                     complete(&mut file, &record, n, successor, provider, end, messages);
                     let _ = self.write_seam_of(id, file).await;
+                    // Its turn began in the successor, with its messages: the turn the restart
+                    // cut off goes on with a word to check (D9 a), never sending them again.
+                    self.core.cut_off_request_began(id).await;
                     return;
                 }
                 file.phase = Phase::Closed { end };

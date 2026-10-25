@@ -2131,6 +2131,22 @@ impl Core {
         boards.get_mut(id)?.cut_off_request.take()
     }
 
+    /// The CLI is known to have taken the turn a restart cut off (a seam's successor took its
+    /// hand-off, S22), though the turn was never seen starting: it began, and its message is
+    /// never sent again (see [`Board::cut_off_request`]).
+    pub(crate) async fn cut_off_request_began(&self, id: &ConversationId) {
+        if self.board(id).await.is_err() {
+            return;
+        }
+        let mut boards = self.boards.lock().await;
+        if let Some(cut_off) = boards
+            .get_mut(id)
+            .and_then(|board| board.cut_off_request.as_mut())
+        {
+            cut_off.began = true;
+        }
+    }
+
     pub(crate) async fn board(&self, id: &ConversationId) -> Result<Board> {
         let mut boards = self.boards.lock().await;
         if let Some(board) = boards.get(id) {

@@ -697,8 +697,18 @@ async fn a_crash_after_the_successor_took_its_handoff_sends_nothing_again() {
     flow.crash().await;
     let file = until_seam(&flow, "the seam to complete", |file| file.generation == 2).await;
     assert_eq!(file.seams[0].successor, successor);
-    flow.settled().await;
-    // Its turn was cut off by the crash: nothing went again, and nothing carried on.
+    // Its turn the crash cut off goes on by itself in that successor, once, with a word to
+    // check (D9 a): the message it took never goes again, and nothing carried on.
+    flow.until("the cut-off turn gone on", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    flow.idle().await;
+    let on = given(&inputs, "your turn goes on by itself");
+    assert_eq!(on.len(), 1, "{on:?}");
+    assert_eq!(on[0].0, successor);
     let after = given(&inputs, "After.");
     assert!(after.is_empty(), "{after:?}");
     assert!(given(&inputs, CARRY_ON).is_empty());
