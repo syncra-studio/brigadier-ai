@@ -199,6 +199,9 @@ async fn hears(watch: &mut crate::manager::workspace::WorkspaceWatch, wait: Dura
 /// folder.
 #[tokio::test]
 async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
+    // A change is said once the watch has read git again after the one before, which takes a
+    // while on a busy machine: the watch is waited for, not timed.
+    let said = *super::PATIENCE;
     let (flow, target) = flow("workspace-watch").await;
     let repo = flow.repo.clone();
     std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
@@ -213,17 +216,11 @@ async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
         "an ignored folder counts"
     );
     std::fs::write(repo.join("README.md"), "# Edited\n").unwrap();
-    assert!(hears(&mut watch, Duration::from_secs(3)).await, "an edit");
+    assert!(hears(&mut watch, said).await, "an edit");
     std::fs::write(repo.join("fresh.txt"), "new\n").unwrap();
-    assert!(
-        hears(&mut watch, Duration::from_secs(3)).await,
-        "a new file"
-    );
+    assert!(hears(&mut watch, said).await, "a new file");
     std::fs::remove_file(repo.join("fresh.txt")).unwrap();
-    assert!(
-        hears(&mut watch, Duration::from_secs(3)).await,
-        "a deletion"
-    );
+    assert!(hears(&mut watch, said).await, "a deletion");
     drop(watch);
 
     // A session's own worktree: staging only touches its index, kept in the main repository.
@@ -246,23 +243,20 @@ async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
     let mut watch = flow.manager.watch_workspace(&session).await.unwrap();
     while hears(&mut watch, Duration::from_millis(800)).await {}
     git(&checkout, &["add", "notes.txt"]);
-    assert!(hears(&mut watch, Duration::from_secs(3)).await, "staging");
+    assert!(hears(&mut watch, said).await, "staging");
     // Undoing a commit moves only the branch, kept in the main repository too.
     git(&checkout, &["commit", "-q", "-m", "Notes"]);
     while hears(&mut watch, Duration::from_millis(800)).await {}
     git(&checkout, &["reset", "-q", "--soft", "HEAD~1"]);
-    assert!(
-        hears(&mut watch, Duration::from_secs(3)).await,
-        "a branch moved"
-    );
+    assert!(hears(&mut watch, said).await, "a branch moved");
     // A branch switched to is watched from then on, also in a folder new to git.
     git(&checkout, &["checkout", "-q", "-b", "topic/switched"]);
-    assert!(hears(&mut watch, Duration::from_secs(3)).await, "a switch");
+    assert!(hears(&mut watch, said).await, "a switch");
     git(&checkout, &["commit", "-q", "-m", "Notes"]);
     while hears(&mut watch, Duration::from_millis(800)).await {}
     git(&checkout, &["reset", "-q", "--soft", "HEAD~1"]);
     assert!(
-        hears(&mut watch, Duration::from_secs(3)).await,
+        hears(&mut watch, said).await,
         "the switched-to branch moved"
     );
     drop(watch);
