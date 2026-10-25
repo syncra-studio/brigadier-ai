@@ -2228,6 +2228,12 @@ impl Core {
         Ok(board)
     }
 
+    /// The tasks a conversation the catalog no longer has left in its stream, read without
+    /// keeping its board.
+    pub(crate) async fn deleted_tasks(&self, id: &ConversationId) -> Result<Vec<Task>> {
+        Ok(self.load_board(id).await?.sorted_tasks())
+    }
+
     /// Folds a conversation's stream into its board, newest page first.
     async fn load_board(&self, id: &ConversationId) -> Result<Board> {
         let mut events = Vec::new();

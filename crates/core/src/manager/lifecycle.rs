@@ -1779,7 +1779,7 @@ impl SessionManager {
 
 impl SessionManager {
     /// The routing store lets go of a deleted conversation: its turns and its tasks' outcomes.
-    async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
+    pub(super) async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
         let Some(store) = self.runtime.routing_store().cloned() else {
             return;
         };

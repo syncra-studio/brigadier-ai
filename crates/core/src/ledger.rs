@@ -820,6 +820,15 @@ impl CleanupLedger {
         .await
     }
 
+    /// The branches Brigadier made, by name (in any repository).
+    pub(crate) fn made_branches(&self) -> Vec<String> {
+        self.state()
+            .made
+            .iter()
+            .map(|(_, branch)| branch.clone())
+            .collect()
+    }
+
     /// The branches Brigadier's records prove its own, as they are now.
     pub fn branch_ownership(&self) -> BranchOwnership {
         BranchOwnership {
@@ -1203,11 +1212,14 @@ impl CleanupLedger {
                 continue;
             };
             let named = match &decoded {
-                DomainEvent::CleanupRecorded { owner, .. }
-                | DomainEvent::CleanupRemoved { owner, .. }
-                | DomainEvent::CleanupRequested { owner, .. }
-                | DomainEvent::CleanupFinished { owner }
-                | DomainEvent::CleanupCompleted { owner, .. } => names_one(owner),
+                DomainEvent::CleanupRecorded { owner: held, .. }
+                | DomainEvent::CleanupRemoved { owner: held, .. }
+                | DomainEvent::CleanupRequested { owner: held, .. }
+                | DomainEvent::CleanupFinished { owner: held }
+                | DomainEvent::CleanupCompleted { owner: held, .. } => {
+                    // Its own record names them all.
+                    held == owner || names_one(held)
+                }
                 DomainEvent::BranchMade { branch, .. } => in_space(branch),
                 DomainEvent::BranchesKept { branches, .. } => {
                     !branches.is_empty() && branches.iter().all(|kept| in_space(&kept.name))

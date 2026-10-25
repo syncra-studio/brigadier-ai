@@ -17,7 +17,10 @@ use brigadier_providers::Artifact;
 
 use super::branch_names::branch_namespace;
 use super::{SessionManager, blocking};
-use crate::model::{ConversationId, DomainEvent, Environment, KeptBranch, Setup, streams};
+use crate::Result;
+use crate::model::{
+    ConversationId, DomainEvent, Environment, KeptBranch, ProjectId, Setup, streams,
+};
 
 /// A deleted session whose leftovers the sweep looks for.
 #[derive(Debug, Default)]
@@ -29,6 +32,7 @@ struct Deleted {
     repos: BTreeSet<PathBuf>,
     /// The branch its work landed on.
     target: Option<String>,
+    project: Option<ProjectId>,
 }
 
 /// What the sweep did.
@@ -59,12 +63,14 @@ impl SessionManager {
                     let Ok(decoded) = crate::sessions::decode(&event) else {
                         continue;
                     };
-                    let (id, setup) = match decoded {
-                        DomainEvent::ConversationCreated { conversation } => {
-                            (conversation.id.clone(), conversation.setup.clone())
-                        }
-                        DomainEvent::ConversationSetUp { id, setup } => (id, Some(setup)),
-                        DomainEvent::ConversationDeleted { id } => (id, None),
+                    let (id, setup, project) = match decoded {
+                        DomainEvent::ConversationCreated { conversation } => (
+                            conversation.id.clone(),
+                            conversation.setup.clone(),
+                            conversation.project_id.clone(),
+                        ),
+                        DomainEvent::ConversationSetUp { id, setup } => (id, Some(setup), None),
+                        DomainEvent::ConversationDeleted { id } => (id, None, None),
                         _ => continue,
                     };
                     if catalog.conversations.iter().any(|c| c.id == id) {
@@ -73,6 +79,7 @@ impl SessionManager {
                     let entry = deleted.entry(id.short().to_owned()).or_default();
                     entry.short = id.short().to_owned();
                     entry.id = Some(id);
+                    entry.project = entry.project.take().or(project);
                     if let Some(Setup::Session {
                         repo, environment, ..
                     }) = setup
@@ -189,6 +196,7 @@ impl SessionManager {
             })
             .map(|entry| entry.path())
             .collect();
+        let made = ledger.made_branches();
         let mut gone = Vec::new();
         let mut needles = Vec::new();
         for (short, found) in &deleted {
@@ -286,10 +294,22 @@ impl SessionManager {
                     clean = false;
                 }
             }
+            // Its own records: what the delete of an older Brigadier left in the database.
             if clean && let Some(id) = &found.id {
-                gone.push(id.0.clone());
-                needles.push(folder.display().to_string());
-                needles.extend(spaces.get(short).into_iter().flatten().cloned());
+                match self.forget_deleted(id, found.project.clone()).await {
+                    Ok(tasks) => {
+                        gone.push(id.0.clone());
+                        gone.extend(tasks);
+                        needles.push(folder.display().to_string());
+                        needles.extend(spaces.get(short).into_iter().flatten().cloned());
+                        // The namespaces it made branches in, gone before this sweep too.
+                        needles.extend(
+                            made.iter()
+                                .filter_map(|branch| branch_namespace(id, branch)),
+                        );
+                    }
+                    Err(err) => sweep.failures.push(format!("{short}: {err}")),
+                }
             }
         }
         // Nothing of them left: their records go too, all at once.
@@ -306,9 +326,13 @@ impl SessionManager {
                 )
                 .await;
             match recorded {
-                Ok(()) => sweep
-                    .failures
-                    .extend(ledger.dispose(&traces).await.failures),
+                Ok(()) => {
+                    let left = ledger.dispose(&traces).await;
+                    if left.is_clean() {
+                        self.scrub_databases().await;
+                    }
+                    sweep.failures.extend(left.failures);
+                }
                 Err(err) => sweep.failures.push(err.to_string()),
             }
         }
@@ -325,6 +349,39 @@ impl SessionManager {
             );
         }
         sweep
+    }
+
+    /// Removes what a deleted conversation left in Brigadier's database, as Delete does: its
+    /// and its tasks' streams, Brain entries, routing rows, snapshots and images. Returns its
+    /// tasks' ids.
+    async fn forget_deleted(
+        &self,
+        id: &ConversationId,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<String>> {
+        let tasks = self.core.deleted_tasks(id).await?;
+        self.forget_routing(id, &tasks).await;
+        let mut purge = vec![
+            streams::conversation(id),
+            streams::orchestrator(id),
+            streams::inbox(id),
+            streams::draft(&id.to_string()),
+        ];
+        purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
+        self.forget_brain_conversation(id, project.clone()).await;
+        for task in &tasks {
+            let task = ConversationId(task.id.0.clone());
+            self.forget_brain_conversation(&task, project.clone()).await;
+            self.delete_turn_snapshots(&task).await?;
+        }
+        self.delete_turn_snapshots(id).await?;
+        self.delete_thread_images(id).await?;
+        let store = self.core.store().clone();
+        store
+            .delete_stream_prefixes(vec![format!("background-output:{id}:")])
+            .await?;
+        store.delete_streams_and_blobs(purge).await?;
+        Ok(tasks.into_iter().map(|task| task.id.0).collect())
     }
 }
 

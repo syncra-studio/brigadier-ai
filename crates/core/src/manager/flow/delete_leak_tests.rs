@@ -502,7 +502,10 @@ async fn a_deleted_local_checkout_session_takes_its_litter_and_leaves_its_work()
         )
         .await;
     homes.install(&flow);
-    let files = flow.manager.preview_delete_files(&[id.clone()]).await;
+    let files = flow
+        .manager
+        .preview_delete_files(std::slice::from_ref(&id))
+        .await;
     assert_eq!(
         files.iter().collect::<BTreeSet<_>>(),
         ["scratch/notes.md", "shot.png"]
@@ -678,7 +681,6 @@ async fn an_interrupted_local_checkout_delete_keeps_a_file_changed_since() {
 /// their config, its refs and folder), records its unmerged branch for Storage's ask, and
 /// leaves an archived session and a branch Brigadier didn't make alone (D3).
 #[tokio::test]
-#[ignore = "w02 handoff: its last leak scan still finds the legacy session's ids in brigadier.db and routing.sqlite-wal"]
 async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
     let mut flow = Flow::start(
         "20261025-1221-cleanup-on-delete-w02-orphans",
@@ -735,7 +737,7 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
     flow.crash().await;
     super::eventually("the sweep to take its leftovers", || !folder.exists()).await;
     super::eventually("its branches to go", || {
-        git(&flow.repo, &["branch", "--list", &format!("{space}*")]).trim() == format!("{unmerged}")
+        git(&flow.repo, &["branch", "--list", &format!("{space}*")]).trim() == unmerged
     })
     .await;
     assert!(!git(&flow.repo, &["for-each-ref", "refs/brigadier/s/"]).contains(&old.0));
