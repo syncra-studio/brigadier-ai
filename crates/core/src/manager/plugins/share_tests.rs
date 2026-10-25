@@ -1385,6 +1385,7 @@ fn review_import_clash_requires_name_and_rejects_agent_entries() {
 }
 
 // Jobs share their serialization queue; these tests wait for their own background work to end.
+#[cfg(unix)]
 static BACKGROUND: Mutex<()> = Mutex::new(());
 
 #[cfg(unix)]
@@ -1403,6 +1404,7 @@ fn stub_job_setup(home: &Home, script: &str) -> super::super::jobs::Setup {
     }
 }
 
+#[cfg(unix)]
 fn until(mut done: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
