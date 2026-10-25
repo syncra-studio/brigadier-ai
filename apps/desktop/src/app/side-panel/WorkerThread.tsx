@@ -1,3 +1,4 @@
+import { releasedText } from "@/app/conversation/streamRelease";
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import {
   useEffect,
@@ -41,7 +42,9 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
   const last = entries.at(-1);
   // A running action says so on its own row.
   if (last?.kind === "actions" && last.items.at(-1)?.status === "inProgress") return null;
-  if (last?.kind === "item" && (last.item.kind === "message" || last.item.kind === "reasoning") && last.item.streaming && last.item.text.trim()) return null;
+  // A reply shows once its first line is finished (D9 b): until then it still thinks.
+  if (last?.kind === "item" && last.item.kind === "message" && last.item.streaming && releasedText(last.item.text).trim()) return null;
+  if (last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming && last.item.text.trim()) return null;
   return "Thinking";
 }
 

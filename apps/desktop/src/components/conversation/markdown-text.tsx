@@ -16,8 +16,9 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
+import { TextMessagePartProvider, type TextMessagePartProps, useMessagePartText } from "@assistant-ui/react";
 
+import { releasedText } from "@/app/conversation/streamRelease";
 import { CodeBlock, CodeHeader } from "@/components/conversation/code-block";
 import {
   InlineImageContext,
@@ -247,6 +248,14 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
   }, [stableComponents]);
   // One per streaming text: it remembers which of its words already faded in.
   const rehypePlugins = useMemo(() => (streaming ? [createWordFade()] : undefined), [streaming]);
+  // The pace reveals a streaming text a character at a time: what it revealed shows in finished
+  // lines only, until it caught up with what came (D9 b).
+  const { text: arrived } = useMessagePartText();
+  const paces = streaming === true && paced;
+  const preprocess = useMemo(
+    () => (paces ? (revealed: string) => (revealed.length >= arrived.length ? revealed : releasedText(revealed)) : undefined),
+    [paces, arrived],
+  );
 
   return (
     <MarkdownTextPrimitive
@@ -262,7 +271,8 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
       // block folding): revealed from nothing, it would shrink the thread for a moment and
       // pull it off the newest message. The end of a stream shows the rest at once.
-      smooth={streaming === true && paced && STREAM_PACE}
+      smooth={paces && STREAM_PACE}
+      {...(preprocess && { preprocess })}
       className="aui-md font-prose"
       urlTransform={keepLinks}
       components={markdownComponents}

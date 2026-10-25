@@ -325,11 +325,11 @@ async function driveTurn(): Promise<object> {
   out.justEnded = seen();
   await settle();
   out.ended = seen();
-  // A line between steps streams as prose, each piece shown as it arrives: never paced.
-  const line = "I’ll fix the rounding next.";
+  // A line between steps streams as prose, each finished line shown as it arrives: never paced.
+  const line = "I’ll fix the rounding next.\n";
   change(() => ({ streaming: { messageId: "line", text: line, requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
   await settle();
-  const more = `${line}\n\nThen run the tests again.`;
+  const more = `${line}\nThen run the tests again.\n`;
   change(() => ({ streaming: { messageId: "line", text: more, requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
   await frame();
   await frame();
@@ -342,7 +342,8 @@ async function driveTurn(): Promise<object> {
   // is counted in frames, which a loaded machine draws farther apart (#20).
   const answerAtMs = Date.now() - 1000;
   const answerText = "Fixed the rounding: `round` now rounds half-up, and the tests pass.";
-  change(() => ({ streaming: { messageId: "a1", text: answerText.slice(0, 20), requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  // Its first line finished, the next under way (D9 b: a reply shows a finished line at a time).
+  change(() => ({ streaming: { messageId: "a1", text: `${answerText}\n\nThe te`, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
   await frame();
   const folding = Number(document.timeline.currentTime);
   out.foldFirst = one("[data-slot=request-fold]", turn() ?? document)?.getAttribute("data-fold") ?? "gone";
@@ -364,7 +365,7 @@ async function driveTurn(): Promise<object> {
   out.announcedAnswering = text(one("[data-slot=answer-announcer]", turn() ?? document));
   // Ticks later it still says the same time.
   await wait(2200);
-  change(() => ({ streaming: { messageId: "a1", text: answerText, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  change(() => ({ streaming: { messageId: "a1", text: `${answerText}\n\nThe tests pass.\n`, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
   await settle();
   out.answeringLater = seen();
   // A question for the user while it streams: its line shows under the answer.
@@ -477,7 +478,7 @@ async function driveHidden(): Promise<object> {
   await settle(600);
   const shown = !!one("[data-slot=request-fold]", turn() ?? document);
   Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
-  change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.", requestId: "r1", phase: "answer", startedAtMs: Date.now() } }));
+  change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.\n", requestId: "r1", phase: "answer", startedAtMs: Date.now() } }));
   await frame();
   return { shown, gone: !one("[data-slot=request-fold]", turn() ?? document) };
 }
@@ -681,7 +682,7 @@ async function driveFileLink(): Promise<object> {
     touch();
     await wait(120);
   }
-  change(() => ({ streaming: { messageId: "line2", text: "Now the test.", requestId: "r2", phase: "commentary", startedAtMs: Date.now() } }));
+  change(() => ({ streaming: { messageId: "line2", text: "Now the test.\n", requestId: "r2", phase: "commentary", startedAtMs: Date.now() } }));
   await settle(300);
   observer.disconnect();
   const after = one("[data-slot=file-chip]");

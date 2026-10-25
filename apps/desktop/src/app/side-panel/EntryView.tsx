@@ -1,3 +1,4 @@
+import { shownText } from "@/app/conversation/streamRelease";
 import { receivedMessage } from "@/app/conversation/workerPresentation";
 import { ActionRow } from "@/app/side-panel/ActionRow";
 import { WorkerMarkdown } from "@/app/side-panel/WorkerMarkdown";
@@ -34,16 +35,20 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
     case "reasoning":
       // A settled thought sits in its work group; the live one is the live line.
       return null;
-    case "message":
+    case "message": {
+      // A reply still streaming shows its finished lines only, none until its first (D9 b).
+      const shown = shownText(item.text, item.streaming);
+      if (item.streaming && !shown) return null;
       return item.role === "user" ? (
         <div data-slot="worker-received" className="bg-secondary rounded-thread min-w-0 max-w-full self-end px-3 py-2 text-sm whitespace-pre-wrap">
           {receivedMessage(item.text, sent) ?? item.text}
         </div>
       ) : (
         <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
-          <WorkerMarkdown text={item.text} streaming={item.streaming} />
+          <WorkerMarkdown text={shown} streaming={item.streaming} />
         </div>
       );
+    }
     case "approval": {
       // Answered, it leaves no trace: the command's own row tells what came of it.
       if (item.resolution) return null;

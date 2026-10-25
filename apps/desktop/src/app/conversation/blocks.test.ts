@@ -344,7 +344,7 @@ test("a working request shows a reply written after its work in place: only a do
     return found;
   };
   // The thread writes a line after the landing, its worker over, while the merge it holds waits for a review.
-  const streaming = requestBlock([], turn({ type: "working" }, "Diff looks right."));
+  const streaming = requestBlock([], turn({ type: "working" }, "Diff looks right.\n"));
   assert.deepEqual(streaming.texts.map((text) => text.messageId), ["live"]);
   assert.equal(blockFinished(streaming.state), false);
   assert.equal(answerIndex(streaming.texts, blockFinished(streaming.state)), null);

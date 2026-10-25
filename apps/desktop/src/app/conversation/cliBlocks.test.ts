@@ -55,7 +55,7 @@ const view: ThreadView = {
 
     user("u5", "What next?", 9000),
     at({ type: "reasoningDelta", itemId: "r5", text: "Weighing it" }, 9100, { updatedAtMs: 9150 }),
-    at({ type: "messageDelta", itemId: "m5", text: "Checking the plan", phase: "commentary" }, 9200),
+    at({ type: "messageDelta", itemId: "m5", text: "Checking the plan\nand th", phase: "commentary" }, 9200),
   ],
   turns: [
     turn("u1", 1000, 4000, "done"),
@@ -156,7 +156,7 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
   // The running turn works on, its time open, its reasoning still coming and its line between steps streaming.
   assert.deepEqual([running.endedAtMs, running.worked], [null, [{ fromMs: 9000, toMs: null }]]);
   assert.deepEqual(running.thinking.map((segment) => [segment.text, segment.complete, segment.updatedAtMs]), [["Weighing it", false, 9150]]);
-  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan", model: null, update: false, commentary: true, atMs: 9200 }]);
+  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan\n", model: null, update: false, commentary: true, atMs: 9200 }]);
 });
 
 test("a turn the stream started, not read again yet, works", () => {

@@ -9,6 +9,7 @@ import {
   type ThreadNode,
   type ThreadTree,
 } from "@/app/conversation/blocks";
+import { shownText } from "@/app/conversation/streamRelease";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import type {
   FileChange,
@@ -651,14 +652,18 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
+        // A reply still streaming shows its finished lines only, none until its first (D9 b).
+        const streaming = event.type === "messageDelta";
+        const text = shownText(event.text, streaming);
+        if (streaming && !text) return;
         // What the reply is, as the stream said it, else as the file keeps it (Codex's `phase`).
         const phase = (event.type === "messageDelta" ? event.phase : undefined) ?? entry.phase;
         current.texts.push({
           messageId: event.itemId,
           position,
-          text: event.text,
+          text,
           model: null,
-          update: isUpdate(event.text),
+          update: isUpdate(text),
           ...(phase === "answer" && entry.atMs !== undefined && { answerAtMs: entry.atMs }),
           ...(phase === "commentary" && { commentary: true }),
           ...(entry.atMs !== undefined && { atMs: entry.atMs }),

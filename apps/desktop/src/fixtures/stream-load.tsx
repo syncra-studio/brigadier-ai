@@ -184,7 +184,9 @@ async function stream(ms: number) {
   while (performance.now() < until) {
     deltas += 1;
     const item = `live-${Math.floor(deltas / 200)}`;
-    applyThreadNews({ conversationId: ID, entries: [{ event: { type: "messageDelta", itemId: item, text: `${sentence(deltas, 3)} ` }, atMs: Date.now() }] });
+    // A paragraph ends every dozen deltas: a reply shows a finished line at a time (D9 b).
+    const end = deltas % 12 === 0 ? "\n\n" : " ";
+    applyThreadNews({ conversationId: ID, entries: [{ event: { type: "messageDelta", itemId: item, text: `${sentence(deltas, 3)}${end}` }, atMs: Date.now() }] });
     // The other sessions stream too: news the app has no view of.
     applyThreadNews({ conversationId: `other-${deltas % OTHERS}`, entries: [{ event: { type: "messageDelta", itemId: `o${deltas}`, text: "more " }, atMs: Date.now() }] });
     if (deltas % 10 === 0) {
