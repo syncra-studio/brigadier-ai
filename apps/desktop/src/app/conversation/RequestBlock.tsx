@@ -18,6 +18,7 @@ import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
+import { OpensWork } from "@/app/conversation/activity/groupContext";
 import { turnParts } from "@/app/conversation/workParts";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
@@ -38,6 +39,7 @@ import {
   blockFinished,
   blockSequence,
   foldsAway,
+  foldsWork,
   isFinal,
   isLive,
   reopenedSince,
@@ -200,7 +202,7 @@ export const RequestBlock: FC = () => {
   const leading = allParts.findIndex((part) => part.type !== "between");
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
-  const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
+  const foldable = foldsWork(done, answer, parts.some((part) => part.type === "work" && part.items.length > 0));
   const open = fold.open ?? false;
   const header =
     foldable ||
@@ -235,6 +237,8 @@ export const RequestBlock: FC = () => {
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       {/* A feedback offer waits for the turn that made it to end: never mid-turn (#486). */}
       <TurnEnded.Provider value={!live || !turnRuns}>
+      {/* A row or group the user opens while the turn works keeps its work open past the answer (D44, D50). */}
+      <OpensWork.Provider value={done ? null : show}>
       <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
@@ -269,7 +273,7 @@ export const RequestBlock: FC = () => {
             </div>
           ) : (
             <Fragment key={`work:${index}`}>
-            <WorkFold open={!done || open} searched={searched}>
+            <WorkFold open={!foldable || open} searched={searched}>
               <div
                 data-slot="request-work"
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
@@ -334,6 +338,7 @@ export const RequestBlock: FC = () => {
           </>
         )}
       </div>
+      </OpensWork.Provider>
       </TurnEnded.Provider>
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}

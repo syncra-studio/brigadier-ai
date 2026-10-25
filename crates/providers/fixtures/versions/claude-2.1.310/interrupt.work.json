@@ -56,7 +56,7 @@
     {
       "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ],
@@ -117,7 +117,7 @@
     {
       "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ]

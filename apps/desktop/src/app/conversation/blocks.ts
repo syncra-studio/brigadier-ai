@@ -713,6 +713,14 @@ export function answerIndex(texts: readonly { update?: boolean }[], done: boolea
 }
 
 /**
+ * Whether a turn's work folds under "Worked for": once it is done, with an answer to stand
+ * under. A turn that ended with no reply keeps its work in view (D44, D50).
+ */
+export function foldsWork(done: boolean, answer: number | null, hasWork: boolean): boolean {
+  return done && answer !== null && hasWork;
+}
+
+/**
  * The reply a block still at work answers with: the one its CLI said is the turn's final answer,
  * while it is the newest thing in the work. Its work folds the moment it starts and the answer
  * goes under "Worked for …", though the request may still wait (for another session's reply,

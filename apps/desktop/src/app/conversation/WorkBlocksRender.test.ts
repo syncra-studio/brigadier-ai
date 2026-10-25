@@ -92,6 +92,20 @@ test("a turn's denied calls are counted in its header, which opens the work to t
   assert.match(seen.row ?? "", /git push origin main/);
 });
 
+test("a turn that ends with no reply keeps its work in view, also read again (D44, D50)", { timeout: 120000 }, async (t) => {
+  const seen = await drive<Record<"done" | "reloaded", { fold: string; header: string | null; rows: string | null }>>(t, "drive=noanswer");
+  for (const state of [seen.done, seen.reloaded]) {
+    // No "Worked for" to open: the work is just there.
+    assert.deepEqual([state.fold, state.header], ["open", null]);
+    assert.equal(state.rows, "Read files, ran a command");
+  }
+});
+
+test("work the user opened while the turn ran stays open when the answer comes (D44, D50)", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ opened: string | null; answering: string; done: string; expanded: string | null; answer: string | null }>(t, "drive=opened");
+  assert.deepEqual(seen, { opened: "open", answering: "open", done: "open", expanded: "true", answer: "Fixed the rounding." });
+});
+
 test("a long message is clipped at the end of a code block crossing its 20-line cut, Show more with a chevron", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ clipEnd: number | null; blockEnd: number | null; clipLines: number | null; more: boolean; chevron: boolean; sides: string[] | null }>(t, "drive=clip");
   // The block crossing line 20 shows whole: the clip ends where it does, past 20 lines.

@@ -45,7 +45,7 @@
     {
       "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ],
@@ -95,7 +95,7 @@
     {
       "key": "01a172ec-a073-70e0-acef-4bb677b216fc",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ]

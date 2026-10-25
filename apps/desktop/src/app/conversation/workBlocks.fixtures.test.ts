@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { turnActivity } from "@/app/conversation/activity/group";
 import { stepLabel, summarize, toolStepWords, type ToolStep } from "@/app/conversation/activity/words";
-import { answerIndex, answeringIndex, type Block, type BoardDigest, blockFinished, blockSequence, isLive } from "@/app/conversation/blocks";
+import { answerIndex, answeringIndex, type Block, type BoardDigest, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { turnParts } from "@/app/conversation/workParts";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
@@ -52,7 +52,7 @@ function work(view: ThreadView) {
     return {
       key: block.key,
       state: block.state,
-      folded: done,
+      folded: foldsWork(done, answer, parts.some((part) => part.type === "work" && part.items.length > 0)),
       parts: parts.map((part) =>
         part.type === "between"
           ? { between: part.entry.kind }
@@ -160,6 +160,23 @@ for (const folder of folders) {
     });
   }
 }
+
+test("a turn that ended with no reply keeps its work in view, live and reread, on every CLI (D44, D50)", () => {
+  for (const folder of folders) {
+    const fixture = load(folder.name, "tools");
+    for (const source of ["live", "persisted"] as const) {
+      const view = fixture[source];
+      const worked = (blocks: ReturnType<typeof work>) => blocks.filter((block) => block.state === "done" && block.parts.some((part) => "work" in part));
+      const answered = worked(work(view));
+      assert.ok(answered.length > 0 && answered.every((block) => block.folded), `${folder.name} ${source}: an answered turn folds`);
+      // The same recorded turns with their replies taken out: nothing for the work to fold under.
+      const entries = view.entries.filter((entry) => !(entry.event.type === "message" && entry.event.role === "assistant"));
+      const silent = worked(work({ ...view, entries }));
+      assert.ok(silent.length > 0, `${folder.name} ${source}: a turn with work`);
+      for (const block of silent) assert.equal(block.folded, false, `${folder.name} ${source}: ${block.key} folded with no reply`);
+    }
+  }
+});
 
 /** The recorded `sleep 30` call, as the CLI's file keeps it when the turn ends before its result. */
 function cutOff(end: "interrupted" | "failed"): { view: ThreadView; itemId: string } {

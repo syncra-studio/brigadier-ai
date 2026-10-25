@@ -18,6 +18,9 @@
  * - `drive=answerfile` (`kind=session` for a session): a finished answer names its worker's file once,
  *   inline (Q84): nothing lists files under it, no Save sits by the link, and the link opens the file
  *   in the reader, with its Save. `stop=answer|reader` holds the page for a screenshot.
+ * - `drive=noanswer`: the turn ends with no reply: its work stays in view, then after a reload.
+ * - `drive=opened`: the user opens the work's group while the turn runs; the answer comes and the
+ *   work stays open.
  * - `drive=update` (`kind=session` for a session): an ending that opens with "Update:" and has a
  *   `### Details` section is the answer, its Details folded; the opening line folds into the work.
  *
@@ -483,6 +486,50 @@ async function driveHidden(): Promise<object> {
   return { shown, gone: !one("[data-slot=request-fold]", turn() ?? document) };
 }
 
+/** Whether the newest turn's work shows, under what header, and its rows. */
+const workShown = () => ({ fold: seen().fold, header: seen().header, rows: text(one("[data-slot=request-work]", turn() ?? document)) });
+
+/** The turn ends with no reply: nothing for its work to fold under, so it stays in view, also read again (D44, D50). */
+async function driveNoAnswer(): Promise<object> {
+  await settle(600);
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  await settle();
+  const done = workShown();
+  await loadConversation(ID);
+  await settle(300);
+  return { done, reloaded: workShown() };
+}
+
+/** The user opens the work's group while the turn runs: the answer comes and the work stays open (D44, D50). */
+async function driveOpened(): Promise<object> {
+  await settle(600);
+  steps([...daemon.steps, tool("sleep", 1.4, "shell", "sleep 4", "inProgress")]);
+  await settle();
+  const group = one<HTMLButtonElement>("[data-slot=work-group] button", turn() ?? document);
+  if (group) await fixtureClick(group);
+  await settle();
+  const opened = one("[data-slot=work-group]", turn() ?? document)?.getAttribute("data-state") ?? null;
+  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "sleep" ? tool("sleep", 1.4, "shell", "sleep 4", "completed") : step)));
+  const answerAtMs = Date.now();
+  change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.\n", requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  await settle();
+  const answering = seen().fold;
+  const stored: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", text: "Fixed the rounding.", blob: null, createdAtMs: Date.now(), attachments: [],
+    mentions: [], model: null, requestId: "r1", parentId: "r1", answerAtMs,
+  };
+  daemon.messages = [...daemon.messages, stored];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ streaming: null, head: "a1", run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
+  await settle();
+  const header = one("[data-slot=request-work-header]", turn() ?? document);
+  return { opened, answering, done: seen().fold, expanded: header?.getAttribute("aria-expanded") ?? null, answer: seen().answer };
+}
+
 /** A finished turn with a call the user denied: "1 denied action" in its header shows it. */
 async function driveDenied(): Promise<object> {
   await settle(600);
@@ -880,7 +927,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
+void (drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "denied" ? driveDenied() : drive === "noanswer" ? driveNoAnswer() : drive === "opened" ? driveOpened() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

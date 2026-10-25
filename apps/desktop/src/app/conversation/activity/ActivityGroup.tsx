@@ -4,7 +4,7 @@ import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { GroupStepList } from "@/app/conversation/activity/GroupStepList";
-import { InFold, InGroup } from "@/app/conversation/activity/groupContext";
+import { InFold, InGroup, OpensWork } from "@/app/conversation/activity/groupContext";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
@@ -73,7 +73,12 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   /** After the words, in and out of a group: an edit's "+7 −2". */
   trail?: ReactNode;
 }) {
-  const [open, setOpen] = useKeptState("open", false);
+  const [open, setKept] = useKeptState("open", false);
+  const opensWork = useContext(OpensWork);
+  const setOpen = (next: boolean) => {
+    setKept(next);
+    if (next) opensWork?.();
+  };
   // In a fold of its repeats, a call names what it was given: the fold's row already says the tool.
   const given = useContext(InFold) ? said.given : undefined;
   const words = given ? { ...said, doing: `${said.doing} ${given}`, done: `${said.done} ${given}`, object: given } : said;
@@ -157,7 +162,12 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   /** The step a jump asks to show, if it is one of these: the group opens to it. */
   reveal?: ((step: S) => boolean) | undefined;
 }) {
-  const [open, setOpen] = useKeptState("open", false);
+  const [open, setKept] = useKeptState("open", false);
+  const opensWork = useContext(OpensWork);
+  const setOpen = (next: boolean) => {
+    setKept(next);
+    if (next) opensWork?.();
+  };
   // While Find searches, closed it keeps its rows, hidden, to be found.
   const searched = useFindSearching();
   // A lone step's row the user opened: swapping it for the live line would close it.
@@ -167,7 +177,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   const [revealed, setRevealed] = useState(false);
   if (holds !== revealed) {
     setRevealed(holds);
-    if (holds) setOpen(true);
+    if (holds) setKept(true);
   }
   const described = items.map((item) => describe(item.step));
   // A follow-up that joined is read once the command ends (#437): a step still running keeps its words (#445).

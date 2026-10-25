@@ -40,7 +40,7 @@
     {
       "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ],
@@ -85,7 +85,7 @@
     {
       "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
       "state": "done",
-      "folded": true,
+      "folded": false,
       "parts": []
     }
   ]
