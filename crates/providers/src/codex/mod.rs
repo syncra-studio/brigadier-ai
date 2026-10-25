@@ -4201,7 +4201,6 @@ for line in sys.stdin:
         let mut session = CodexSession {
             context_window: None,
             thread_id: "t".into(),
-            rollout: None,
             ephemeral: true,
             compacts: false,
             rpc: rpc.clone(),
