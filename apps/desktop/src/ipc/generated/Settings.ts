@@ -53,6 +53,13 @@ showFullAccessNotice: boolean,
  */
 workersAtOnce: number, 
 /**
+ * "Plan before building" (Settings › Configuration › Workers). Experiment (harness D42),
+ * off by default, so a report can compare on and off: each new request to a session's
+ * thread runs in its CLI's own plan mode, so it asks its questions and shows a plan the
+ * user approves with Build it before anything changes or any worker starts.
+ */
+planFirst: boolean, 
+/**
  * Co-authored-by trailers that name an AI are left out of commit messages: the user's
  * own commits, what the agents write, and the commits Brigadier lands or keeps.
  */

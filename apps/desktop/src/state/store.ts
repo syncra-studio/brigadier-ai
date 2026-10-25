@@ -204,6 +204,7 @@ export const useApp = create<AppState>()(() => ({
     plainTextComposer: false,
     showFullAccessNotice: true,
     workersAtOnce: 3,
+    planFirst: false,
     onboarded: false,
     introSeen: false,
     userName: "",

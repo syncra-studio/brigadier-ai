@@ -61,6 +61,11 @@ export const CONFIGURATION_ROWS = {
     label: "Workers at once",
     description: "How many workers one session may run at the same time",
   },
+  // An experiment (harness D42): a report compares sessions with it on and off.
+  planFirst: {
+    label: "Plan before building",
+    description: "A session asks its questions and shows you a plan to approve before it changes anything",
+  },
   brigadeSkill: {
     label: "How sessions run workers",
     description: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
@@ -107,6 +112,7 @@ export function ConfigurationPage() {
       <SettingsSection title="Workers">
         <SettingsCard>
           <WorkersAtOnceRow />
+          <SwitchSetting setting="planFirst" row={CONFIGURATION_ROWS.planFirst} />
           <BrigadeSkillRow />
         </SettingsCard>
       </SettingsSection>

@@ -51,6 +51,8 @@ use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
+/// Why `brigadier start` refuses a worker while its session is in plan mode (harness D42).
+pub(crate) const PLAN_MODE_NO_WORKERS: &str = "Plan mode is on: no worker starts until the user presses Build it on your plan. Finish the plan and show it.";
 
 /// What a task's workspace is made of, once prepared.
 #[derive(Debug, Clone)]
@@ -409,6 +411,12 @@ impl SessionManager {
             return Err(Error::Invalid(
                 "workers belong to a session or a Chat".into(),
             ));
+        }
+        // The CLIs' plan mode lets a shell command run (Claude 2.1.310 ran one under an allow
+        // rule and without; Codex's is a collaboration mode), so no worker starts before the
+        // user's Build it (harness D42).
+        if self.plan_mode(conversation_id) {
+            return Err(Error::Invalid(PLAN_MODE_NO_WORKERS.into()));
         }
         let now = now_ms();
         let route = Route {

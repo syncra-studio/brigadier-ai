@@ -153,6 +153,14 @@ function Fixture() {
       },
       () => {
         seen.workersPicked = { choice: text(trigger("Workers at once")), saved: useApp.getState().settings.workersAtOnce };
+        // "Plan before building" (harness D42): off until switched on.
+        const plan = document.querySelector('[data-setting="Plan before building"]');
+        const planSwitch = plan?.querySelector<HTMLElement>("[role=switch]");
+        seen.planFirst = { helper: text(plan?.querySelector(".text-xs")), checked: planSwitch?.getAttribute("aria-checked") };
+        planSwitch?.click();
+      },
+      () => {
+        seen.planFirstSaved = useApp.getState().settings.planFirst;
         trigger(MENUS.sessions!)?.click();
       },
       () => {

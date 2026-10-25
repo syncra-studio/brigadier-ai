@@ -64,6 +64,12 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.deepEqual(seen.workers, { helper: "How many workers one session may run at the same time", choice: "3" });
   assert.deepEqual(seen.workersMenu, ["1", "2", "3", "4", "5", "6", "7", "8"]);
   assert.deepEqual(seen.workersPicked, { choice: "5", saved: 5 });
+  // "Plan before building" (harness D42): an opt-in, off by default, saved when switched.
+  assert.deepEqual(seen.planFirst, {
+    helper: "A session asks its questions and shows you a plan to approve before it changes anything",
+    checked: "false",
+  });
+  assert.equal(seen.planFirstSaved, true);
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);

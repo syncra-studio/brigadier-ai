@@ -356,3 +356,141 @@ async fn a_newer_plan_or_a_reply_closes_the_open_plan_card() {
     );
     flow.stop().await;
 }
+
+/// Plan before building (harness D42): with the setting on, each new request starts in the
+/// CLI's plan mode; "Build it" leaves it, and the next request starts in it again. Off, a
+/// request starts as it is.
+#[tokio::test]
+async fn plan_first_starts_each_new_request_in_plan_mode() {
+    let options = Options::default();
+    let behavior = options.behavior.clone();
+    let flow = Flow::start(
+        "plan-first",
+        options,
+        script(|turn| async move {
+            if turn.input.contains("Plan a.txt.") {
+                turn.emit(ProviderEvent::PlanProposed {
+                    item_id: "toolu-plan".into(),
+                    plan: "# Add a.txt".into(),
+                })
+                .await;
+                return Reply::default();
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    flow.say("What is a.txt?").await;
+    flow.settled().await;
+    assert_eq!(*behavior.plan_modes.lock().unwrap(), [false]);
+
+    let mut settings = flow.core.settings();
+    settings.plan_first = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Plan a.txt.").await;
+    let board = flow
+        .until("the plan card", |board| !plans(board).is_empty())
+        .await;
+    flow.settled().await;
+    assert_eq!(*behavior.plan_modes.lock().unwrap(), [false, true]);
+    flow.manager
+        .answer_card(
+            flow.conversation.clone(),
+            plans(&board)[0].id.clone(),
+            ApprovalDecision::Allow,
+        )
+        .await
+        .unwrap();
+    flow.until("the go-ahead's turn", |_| {
+        behavior.plan_modes.lock().unwrap().len() == 3
+    })
+    .await;
+    flow.settled().await;
+    assert_eq!(*behavior.plan_modes.lock().unwrap(), [false, true, false]);
+
+    flow.say("Now b.txt.").await;
+    flow.settled().await;
+    assert_eq!(
+        *behavior.plan_modes.lock().unwrap(),
+        [false, true, false, true]
+    );
+    flow.stop().await;
+}
+
+/// A message while the session's workers still work is no new request: it doesn't put the
+/// session in plan mode, which would leave the thread mid-build with no plan to approve (D42).
+#[tokio::test]
+async fn plan_first_leaves_a_message_mid_build_as_it_is() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let options = Options::default();
+    let behavior = options.behavior.clone();
+    let flow = Flow::start(
+        "plan-first-mid-build",
+        options,
+        script(move |turn| {
+            let held = held.clone();
+            async move {
+                if turn.worker().is_some() {
+                    held.notified().await;
+                    return Reply::text("Worker done.");
+                }
+                if turn.input.contains("Start one.") {
+                    turn.start_worker("one", "Wait.").await;
+                }
+                Reply::text("Going.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start one.").await;
+    flow.settled().await;
+    let mut settings = flow.core.settings();
+    settings.plan_first = true;
+    flow.core.update_settings(settings).await.unwrap();
+    assert!(flow.manager.has_running_workers(&flow.conversation).await);
+    flow.say("How is it going?").await;
+    flow.settled().await;
+    assert_eq!(*behavior.plan_modes.lock().unwrap(), [false, false]);
+    release.notify_waiters();
+    flow.stop().await;
+}
+
+/// The CLIs' plan mode lets a shell command run, so `brigadier start` refuses a worker
+/// while the session is in plan mode, with a plain reason (harness D42).
+#[tokio::test]
+async fn no_worker_starts_in_plan_mode() {
+    let answers = super::cli_tests::Answers::default();
+    let seen = answers.clone();
+    let options = Options {
+        plan_mode: true,
+        ..Options::default()
+    };
+    let flow = Flow::start(
+        "plan-mode-no-workers",
+        options,
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                let request = brigadier_cli::protocol::CliRequest::Start(Box::new(
+                    super::cli_tests::start("Write a.txt."),
+                ));
+                let started = super::cli_tests::brigadier(&turn, request).await;
+                seen.lock().unwrap().insert("start".into(), started);
+                Reply::text("Planned.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build a.txt.").await;
+    flow.settled().await;
+    let started = answers.lock().unwrap()["start"].clone();
+    assert!(
+        started["error"]["message"]
+            .as_str()
+            .is_some_and(|error| error.contains("Plan mode is on")),
+        "{started}"
+    );
+    assert!(flow.board().await.tasks.is_empty());
+    flow.stop().await;
+}

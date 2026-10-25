@@ -886,6 +886,11 @@ pub struct Settings {
     /// Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
     /// refuses no further worker (G18).
     pub workers_at_once: u32,
+    /// "Plan before building" (Settings › Configuration › Workers). Experiment (harness D42),
+    /// off by default, so a report can compare on and off: each new request to a session's
+    /// thread runs in its CLI's own plan mode, so it asks its questions and shows a plan the
+    /// user approves with Build it before anything changes or any worker starts.
+    pub plan_first: bool,
     /// Co-authored-by trailers that name an AI are left out of commit messages: the user's
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
@@ -1170,6 +1175,7 @@ impl Default for Settings {
             plain_text_composer: false,
             show_full_access_notice: true,
             workers_at_once: DEFAULT_WORKERS_AT_ONCE,
+            plan_first: false,
             omit_ai_coauthors: true,
             git_writer: None,
             commit_style: GitStyle::default(),

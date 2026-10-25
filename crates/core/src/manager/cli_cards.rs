@@ -16,7 +16,7 @@ use super::SessionManager;
 use super::cards::CardAnswer;
 use super::conversation::{Cli, ConvLive};
 use crate::Result;
-use crate::model::{ConversationId, Setup};
+use crate::model::{ConversationId, Message, Setup};
 use crate::work::{ApprovalSubject, CardId, CardState, QuestionItem, QuestionKind, QuestionOption};
 
 /// What "Build it" says to the thread, as the user's own message.
@@ -234,6 +234,36 @@ impl SessionManager {
                 },
             )
             .await;
+        }
+    }
+
+    /// "Plan before building" (harness D42, an experiment the user opted into): with the
+    /// setting on, the user's new request to a session starts in its CLI's plan mode, so the
+    /// thread asks its round and shows a plan before it changes anything. Not for "Build it",
+    /// nor while the session's workers still work (the thread would have no plan card to leave
+    /// plan mode by, mid-build).
+    pub(super) async fn plan_first(&self, id: &ConversationId, users: &[Message]) {
+        if !self.core.settings().plan_first
+            || users.iter().any(|message| message.text.trim() == BUILD_IT)
+            || self.plan_mode(id)
+            || self.has_running_workers(id).await
+        {
+            return;
+        }
+        let Ok(Some(mut setup)) = self.core.conversation(id).map(|c| c.setup) else {
+            return;
+        };
+        let Setup::Session { plan_mode, .. } = &mut setup else {
+            return;
+        };
+        *plan_mode = true;
+        match self.set_setup(id.clone(), setup).await {
+            Ok(_) => {
+                tracing::info!(experiment = "D42 plan-first", conversation = %id, "a new request starts in plan mode")
+            }
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not start the request in plan mode")
+            }
         }
     }
 

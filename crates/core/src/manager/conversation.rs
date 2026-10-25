@@ -2397,6 +2397,8 @@ impl SessionManager {
             }
             // A note the workspace left (a fresh branch) reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
+            // Plan before building (harness D42): set before the CLI's plan mode is, below.
+            self.plan_first(&conv.id, &users).await;
         }
         // Past a closed seam the turn goes to a successor (S22).
         let mut successor = if session {
