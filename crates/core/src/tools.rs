@@ -106,13 +106,13 @@ impl Grants {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AskUser {
-    /// The round's questions, 1 to 10, each self-contained: the user may read them later,
+    /// The round's questions, one or more, each self-contained: the user may read them later,
     /// out of context.
     pub questions: Vec<AskQuestion>,
     /// The task that waits for the answers, if any (other tasks continue).
     #[serde(default)]
     pub task: Option<String>,
-    /// Optional: a few words over the card, for a round of a series ("Round 2 · Budget").
+    /// Optional: a few words over the card, after the round number Brigadier counts ("Budget").
     #[serde(default)]
     pub title: Option<String>,
 }

@@ -35,12 +35,15 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     text
 }
 
-/// The standing instructions' line on orchestrating (run2-D23, D27; harness D2, D3 superseding
+/// The standing instructions' lines on orchestrating (run2-D23, D27; harness D2, D3 superseding
 /// run2-D43, D8 amending run2-D24): what the session and its own subagents do, the quick check
-/// after its own small edit, what goes to its workers, and how it replies. A worker goes without it:
-/// `brigadier start` refuses a worker's own workers, it has no brigade skill, and it keeps
-/// full reports (run2-D27).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: ask in your CLI's question tool (never as text, whatever a skill shows), plan, look things up, make small edits (few lines), run git and CI, check workers' evidence; your subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
+/// after its own small edit, what goes to its workers, and how it replies; and that its
+/// questions go in its CLI's question tool, whatever text format a skill shows (harness D36: a
+/// Haiku session with the user's grilling skill put 0 of 6 rounds on the card with one clause
+/// on it, 17 of 19 with this line and its close variants). A worker goes without them:
+/// `brigadier start` refuses a worker's own workers, it has no brigade skill, it never asks the
+/// user (G19.Q6), and it keeps full reports (run2-D27).
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -410,16 +413,18 @@ mod tests {
     /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
     /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The orchestrator's
     /// own subagents and quick checks (harness D3, D8) took 75 more after tightening: 2,125
-    /// (proposed). The lines a bench or a parser pins (the ledger's kinds, one entry per thing
-    /// settled) stay whole.
+    /// (proposed). The line that puts every question in the CLI's question tool over a skill's
+    /// text format (harness D36) took 375 more, a line of its own: shorter or folded into the
+    /// line above, it lost to the skill on 3 of 5 Haiku rounds: 2,500 (proposed). The lines a
+    /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
     #[test]
-    fn the_standing_instructions_stay_under_2125_bytes_and_fifteen_lines() {
+    fn the_standing_instructions_stay_under_2500_bytes_and_sixteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 2_125,
+            STANDING_INSTRUCTIONS.len() < 2_500,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
-        assert!(STANDING_INSTRUCTIONS.lines().count() < 15);
+        assert!(STANDING_INSTRUCTIONS.lines().count() < 16);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
             "$BRIGADIER_SESSION_DIR",
@@ -433,21 +438,27 @@ mod tests {
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }
-        // A session or Chat asks with its CLI's own question tool (harness D7); a worker never
-        // asks the user (G19.Q6), so its instructions say nothing of asking.
-        assert!(
-            WORKERS_LINE.contains(
-                "ask in your CLI's question tool (never as text, whatever a skill shows)"
-            )
-        );
-        assert!(!STANDING_INSTRUCTIONS.contains("brigadier ask"));
+        // A session or Chat asks with its CLI's own question tool (harness D7), never as text,
+        // whatever format a skill shows; a round too big for one call goes whole on one
+        // `brigadier ask` card (D36). A worker never asks the user (G19.Q6), so its
+        // instructions say nothing of asking.
+        for words in [
+            "ask in your CLI's question tool, plan",
+            "Every question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown.",
+            "A round bigger than one call takes goes whole on one `brigadier ask` card.",
+        ] {
+            assert!(WORKERS_LINE.contains(words), "{words}");
+        }
+        let worker = worker_instructions(&Settings::default(), ProviderKind::Claude);
+        assert!(!worker.contains("question tool"));
+        assert!(!worker.contains("brigadier ask"));
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
         // The session orchestrates and replies short (run2-D23, D27), with its own subagents
         // (harness D3, superseding run2-D43) and a quick check after its own small edit; full
         // suites, builds and live runs go to workers (harness D8, amending run2-D24). The line
         // goes to sessions and Chats only ([`WORKERS_LINE`]).
         for words in [
-            "You orchestrate: ask in your CLI's question tool (never as text, whatever a skill shows), plan, look things up, make small edits (few lines), run git and CI, check workers' evidence; your subagents may help.",
+            "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help.",
             "After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers",
             "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
         ] {

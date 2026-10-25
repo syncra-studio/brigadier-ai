@@ -350,18 +350,18 @@ impl SessionManager {
     }
 }
 
-/// The most questions one card asks, and the most options one question offers: a grilling
-/// round bigger than the CLI's own question tool takes in one call goes on one card (harness
-/// D36), whose options keep digit keys 1 to 8, the free answer the ninth.
-const ROUND_MAX: usize = 10;
+/// The most options one question offers: the card's digit keys pick 1 to 8, the free answer
+/// the ninth. A round takes any number of questions, the card pages them "1 of N" (harness
+/// D36, D41): a grilling round bigger than the CLI's own question tool takes in one call goes
+/// whole on one card.
 const OPTIONS_MAX: usize = 8;
 
 /// An `ask_user` round as the card's questions, or why it can't be asked as it is.
 pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
-    if questions.is_empty() || questions.len() > ROUND_MAX {
-        return Err(Error::Invalid(format!(
-            "ask_user takes 1 to {ROUND_MAX} questions in one round; ask the rest in the next round."
-        )));
+    if questions.is_empty() {
+        return Err(Error::Invalid(
+            "ask_user takes at least one question.".into(),
+        ));
     }
     questions
         .into_iter()
@@ -438,10 +438,10 @@ mod tests {
         assert!(blank.contains("recommend"), "{blank}");
     }
 
-    /// A grilling round bigger than one call of the CLI's own question tool fits one card:
-    /// 10 questions of 8 options; one more of either is refused (harness D36).
+    /// A grilling round bigger than one call of the CLI's own question tool goes whole on one
+    /// card: any number of questions (D41), up to 8 options each, a ninth refused (harness D36).
     #[test]
-    fn one_card_holds_ten_questions_of_eight_options() {
+    fn one_card_holds_any_number_of_questions_of_up_to_eight_options() {
         let round = |questions: usize, options: usize| {
             ask_round(
                 (0..questions)
@@ -458,10 +458,10 @@ mod tests {
                     .collect(),
             )
         };
-        let items = round(10, 8).unwrap();
-        assert_eq!(items.len(), 10);
+        let items = round(25, 8).unwrap();
+        assert_eq!(items.len(), 25);
         assert!(items.iter().all(|item| item.options.len() == 8));
-        assert!(round(11, 2).unwrap_err().to_string().contains("1 to 10"));
+        assert!(round(0, 2).is_err());
         assert!(round(1, 9).unwrap_err().to_string().contains("2 to 8"));
     }
 

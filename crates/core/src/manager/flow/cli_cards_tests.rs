@@ -84,6 +84,12 @@ async fn a_cli_s_own_questions_are_the_thread_s_card_and_the_answer_the_tool_s_r
                     )
                     .await;
                 *answers.lock().unwrap() = answer;
+                // A next round in the same turn: the request's second card.
+                turn.ask_questions(
+                    "toolu-2",
+                    vec![question("Size", "Which size?", &["S", "M"], false)],
+                )
+                .await;
                 Reply::text("Wrote it.")
             }
         }),
@@ -97,7 +103,8 @@ async fn a_cli_s_own_questions_are_the_thread_s_card_and_the_answer_the_tool_s_r
     // The thread's own card in the running request: its "Waiting for your answer" row.
     assert!(card.request_id.is_some());
     assert_eq!(card.request_id, board.run_request);
-    assert_eq!(card.title, None);
+    // Numbered as the card's design shows it (harness D36); two questions, no heading of theirs.
+    assert_eq!(card.title.as_deref(), Some("Round 1"));
     assert_eq!(card.items.len(), 2);
     assert!(card.items[0].multi_select);
     assert_eq!(card.items[0].recommended, Some(0));
@@ -110,6 +117,24 @@ async fn a_cli_s_own_questions_are_the_thread_s_card_and_the_answer_the_tool_s_r
             flow.conversation.clone(),
             card.id.clone(),
             vec!["red, blue".into(), "c.txt".into()],
+            None,
+        )
+        .await
+        .unwrap();
+    // The request's second card is its round 2, with its one question's heading.
+    let board = flow
+        .until("the second card", |board| {
+            open_question(board).is_some_and(|next| next.id != card.id)
+        })
+        .await;
+    let next = open_question(&board).unwrap();
+    assert_eq!(next.request_id, card.request_id);
+    assert_eq!(next.title.as_deref(), Some("Round 2 · Size"));
+    flow.manager
+        .answer_question(
+            flow.conversation.clone(),
+            next.id.clone(),
+            vec!["M".into()],
             None,
         )
         .await
@@ -169,8 +194,8 @@ async fn a_withdrawn_question_s_late_answer_reaches_the_thread() {
     flow.settled().await;
     let board = flow.board().await;
     let card = open_question(&board).expect("the card stays");
-    // One question: its heading is the card's title.
-    assert_eq!(card.title.as_deref(), Some("Ship"));
+    // One question: its heading is the card's title, after its round number (harness D36).
+    assert_eq!(card.title.as_deref(), Some("Round 1 · Ship"));
     flow.manager
         .answer_question(
             flow.conversation.clone(),

@@ -549,7 +549,7 @@ pub const COMMANDS: &[Command] = &[
                   takes (harness D7, D36). Ask everything you can at once: one card per round, \
                   never one card per question; only questions that depend on its answers wait \
                   for the next round. One question: `brigadier ask \"<question>\" --option A \
-                  --option B`. Several (up to 10): `--question \"<q>\"` for each, each followed \
+                  --option B`. Several: `--question \"<q>\"` for each, each followed \
                   by its own `--option`s. Each question takes 2 to 8 options or none, the recommended \
                   one first, so \"yes\" takes it; the card always takes a free-text answer \
                   too. Prints every question with its answer, once the user answers them \
@@ -572,7 +572,7 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "title",
                 "TEXT",
-                "A few words over the card (\"Round 2 · Budget\").",
+                "A few words over the card, after the round number Brigadier counts (\"Budget\").",
             ),
             rest(
                 "question",

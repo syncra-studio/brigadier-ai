@@ -491,9 +491,8 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
     }))
 }
 
-/// The most questions one `brigadier ask` card holds, and the most options of one question, as
-/// the daemon's round takes them (harness D36).
-const ASK_MAX: usize = 10;
+/// The most options of one `brigadier ask` question, as the daemon's round takes them: the
+/// card's digit keys. A card takes any number of questions (harness D36, D41).
 const ASK_OPTIONS_MAX: usize = 8;
 
 /// `ask`'s questions: the words as one question with every `--option`, or each `--question`
@@ -534,11 +533,6 @@ fn ask_questions(args: &Parsed) -> Result<Vec<AskItem>, String> {
     }
     if questions.is_empty() {
         return Err("missing <question>".into());
-    }
-    if questions.len() > ASK_MAX {
-        return Err(format!(
-            "one card holds at most {ASK_MAX} questions; ask the rest in the next round"
-        ));
     }
     for question in &questions {
         if question.options.len() == 1 || question.options.len() > ASK_OPTIONS_MAX {
@@ -1415,8 +1409,12 @@ mod tests {
             ])
             .contains("\"B?\": give 2 to 8 options")
         );
-        let eleven: Vec<&str> = (0..11).flat_map(|_| ["--question", "Q?"]).collect();
-        assert!(fails(&[&["ask"][..], &eleven].concat()).contains("at most 10 questions"));
+        // Any number of questions on one card (harness D41).
+        let many: Vec<&str> = (0..25).flat_map(|_| ["--question", "Q?"]).collect();
+        let (CliRequest::Ask { questions, .. }, _) = run(&[&["ask"][..], &many].concat()) else {
+            panic!("an ask")
+        };
+        assert_eq!(questions.len(), 25);
         let nine: Vec<&str> = (0..9).flat_map(|_| ["--option", "O"]).collect();
         assert!(fails(&[&["ask", "Q?"][..], &nine].concat()).contains("give 2 to 8 options"));
     }

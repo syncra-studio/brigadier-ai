@@ -344,6 +344,14 @@ impl SessionManager {
             .map(|item| item.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
+        // The thread's own round, from its CLI's question tool or `brigadier ask`, says which
+        // round of its request it is, as the card's design does ("Round 2 · Budget", harness
+        // D36): counted here, the asker's own words after it.
+        let title = if matches!(kind, QuestionKind::Orchestrator) && task_id.is_none() {
+            Some(self.round_title(conversation_id, title).await)
+        } else {
+            title
+        };
         self.open_card(
             id,
             conversation_id,
@@ -356,6 +364,25 @@ impl SessionManager {
             title,
         )
         .await
+    }
+
+    /// "Round N" over the thread's Nth question card of the request it serves, then the
+    /// asker's own words.
+    async fn round_title(&self, conversation_id: &ConversationId, asked: Option<String>) -> String {
+        let request = self.request_for(conversation_id).await;
+        let before = match (&request, self.core.board(conversation_id).await) {
+            (Some(request), Ok(board)) => board
+                .questions
+                .values()
+                .filter(|question| {
+                    matches!(question.kind, QuestionKind::Orchestrator)
+                        && question.task_id.is_none()
+                        && question.request_id.as_ref() == Some(request)
+                })
+                .count(),
+            _ => 0,
+        };
+        round_title(before + 1, asked.as_deref())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -736,4 +763,39 @@ fn round_answer(round: &[QuestionItem], answers: &[String]) -> String {
         .map(|(index, (item, answer))| format!("{}. {}\n   → {answer}", index + 1, item.text))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A round's title: "Round {n}", then the asker's words without a "Round …" of their own
+/// ("Round 2 · Budget", "Round 2: Budget" and "Budget" all give "Round {n} · Budget").
+pub(crate) fn round_title(n: usize, asked: Option<&str>) -> String {
+    let words = asked.map(str::trim).unwrap_or_default();
+    let words = match words.strip_prefix("Round ") {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start_matches([' ', '·', ':', '-', '–', '—']),
+        _ => words,
+    };
+    if words.is_empty() {
+        format!("Round {n}")
+    } else {
+        format!("Round {n} · {words}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_title;
+
+    #[test]
+    fn a_round_is_numbered_by_count_whatever_number_the_asker_wrote() {
+        assert_eq!(round_title(1, None), "Round 1");
+        assert_eq!(round_title(1, Some(" ")), "Round 1");
+        assert_eq!(round_title(3, Some("Budget")), "Round 3 · Budget");
+        assert_eq!(round_title(3, Some("Round 2 · Budget")), "Round 3 · Budget");
+        assert_eq!(round_title(3, Some("Round 2: Budget")), "Round 3 · Budget");
+        assert_eq!(round_title(2, Some("Round 7")), "Round 2");
+        // Words that only start like one stay whole.
+        assert_eq!(round_title(2, Some("Roundtrip")), "Round 2 · Roundtrip");
+        assert_eq!(round_title(2, Some("Round trip")), "Round 2 · Round trip");
+    }
 }
