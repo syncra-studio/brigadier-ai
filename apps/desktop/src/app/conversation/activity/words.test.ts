@@ -102,7 +102,7 @@ test("the main thread and a worker's thread say the same step the same way", () 
   const mainRun = pairs.map(([main]) => toolStepWords(main));
   const workerRun = pairs.map(([, other]) => stepWords(itemCall(other)));
   assert.equal(summarize(mainRun), summarize(workerRun));
-  assert.equal(summarize(mainRun), "Edited a file, read files, ran a command, searched the web");
+  assert.equal(summarize(mainRun), "Edited a file, read files, searched files, ran a command, searched the web");
 });
 
 const words = (name: string, detail: string | null = null) => toolStepWords(call(name, "completed", detail));
@@ -110,8 +110,10 @@ const words = (name: string, detail: string | null = null) => toolStepWords(call
 test("a run sums up its kinds comma-joined, edits, reading, commands and the web first, one plural each", () => {
   assert.equal(summarize([words("Read", "a.ts"), words("Read", "b.ts"), words("Bash", "pnpm test")]), "Read files, ran a command");
   assert.equal(summarize([words("Bash", "git status"), words("Read", "a.ts"), words("Bash", "pnpm test")]), "Read files, ran commands");
-  // Searching and listing are reading too.
-  assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, ran a command");
+  // Reading, listing and searching sum up together, each in its rows' own verb (D58).
+  assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, listed files, searched files, ran a command");
+  assert.equal(summarize([words("Bash", "echo alpha"), words("Bash", "ls"), words("Agent", JSON.stringify({ description: "Read README first line" }))]), "Listed files, ran a command, ran an agent");
+  assert.equal(summarize([words("Grep", "add"), words("Grep", "sub")]), "Searched files");
   assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
   assert.equal(summarize([words("imagegen"), words("Read", "a.ts")]), "Read files, created an image");
 });

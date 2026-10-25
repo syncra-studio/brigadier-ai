@@ -555,9 +555,11 @@ export function toolStepWords(kind: ToolStep, tasks: Readonly<Record<string, Tas
   return kind.background && kind.status === "inProgress" ? { ...words, doing: `${words.doing} in the background` } : words;
 }
 
-/** How a kind leads a summary, for one step and for several. Reading, searching and listing all read as "Read files". */
-const LEADING: Record<Exclude<WorkKind, "other" | "code">, [one: string, many: string]> = {
+/** How a kind leads a summary, for one step and for several, in its rows' own verb: reading, listing, searching (D58). */
+const LEADING: Record<Exclude<WorkKind, "other" | "code"> | "list" | "search", [one: string, many: string]> = {
   read: ["Read files", "Read files"],
+  list: ["Listed files", "Listed files"],
+  search: ["Searched files", "Searched files"],
   edit: ["Edited a file", "Edited files"],
   run: ["Ran a command", "Ran commands"],
   web: ["Searched the web", "Searched the web"],
@@ -571,7 +573,7 @@ export function joinWords(parts: readonly string[]): string {
 }
 
 /** The kinds a summary names first, in this order; the rest follow in the order they first came. */
-const SUMMARY_ORDER: readonly string[] = ["edit", "read", "run", "web"];
+const SUMMARY_ORDER: readonly string[] = ["edit", "read", "list", "search", "run", "web"];
 
 function summaryRank(key: string): number {
   const at = SUMMARY_ORDER.indexOf(key);
@@ -604,7 +606,8 @@ function segments(steps: readonly StepWords[]): [string, { words: StepWords; cou
   const counts = new Map<string, { words: StepWords; count: number }>();
   const paths = new Map<string, Set<string>>();
   for (const words of steps) {
-    const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind === "code" ? "read" : words.kind;
+    // Reading, listing and searching sum up together, each in its rows' own verb (D58).
+    const key = words.kind === "other" ? `other:${words.phrase ?? words.done}` : words.kind === "code" ? (words.list ? "list" : "search") : words.kind;
     const known = counts.get(key);
     let count = (known?.count ?? 0) + 1;
     if (words.paths?.length) {
