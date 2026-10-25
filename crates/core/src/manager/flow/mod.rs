@@ -580,6 +580,8 @@ pub(crate) struct FakeBehavior {
     /// An extra account's CLI also lists a model of its own (`<account>-model`), so a list
     /// tells whose it is.
     pub account_models: bool,
+    /// The next this many model lists fail, whichever CLI reads them.
+    pub models_failing: Mutex<u32>,
     pub refuse_steers: bool,
     /// A message steered into a turn that its script never read is taken in once the script
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
@@ -759,6 +761,13 @@ impl Provider for FakeCli {
 
     fn models(&self) -> BoxFuture<'_, brigadier_providers::Result<ModelCatalog>> {
         Box::pin(async move {
+            {
+                let mut failing = self.behavior.models_failing.lock().unwrap();
+                if *failing > 0 {
+                    *failing -= 1;
+                    return Err(brigadier_providers::Error::Spawn("no models".into()));
+                }
+            }
             Ok(ModelCatalog {
                 provider: self.kind,
                 models: FakeCli::models(self),

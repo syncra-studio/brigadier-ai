@@ -942,6 +942,16 @@ impl Runtime {
             checked_at_ms: Some(now_ms()),
         };
         if !status.logged_in {
+            // Another account in use still lists its own models.
+            let lead = self.monitor.lead(kind);
+            if lead != AccountRef::own(kind)
+                && self.signed_in(&lead)
+                && let Ok(listing) = self.provider_for(&lead)
+                && let Ok(catalog) = listing.models().await
+                && self.adopt_models(&lead, catalog.clone()).await
+            {
+                overview.models = Some(catalog);
+            }
             return overview;
         }
         // Just signed in or installed: say so now; models and quota can take a while.
@@ -965,19 +975,19 @@ impl Runtime {
             match &models {
                 Ok(catalog) => {
                     self.adopt_models(&lead, catalog.clone()).await;
-                    with_models.models = self.overview(kind).and_then(|now| now.models);
                 }
                 Err(err) => with_models.error = Some(format!("models: {err}")),
             }
+            // The lead may have moved meanwhile: its list is the one shown now.
+            with_models.models = self.overview(kind).and_then(|now| now.models);
             self.record_overview(with_models).await;
             models
         };
         let (models, quota) = tokio::join!(models, provider.quota());
         let mut errors = Vec::new();
-        match models {
-            // The lead may have moved meanwhile: its list is the one shown now.
-            Ok(_) => overview.models = self.overview(kind).and_then(|now| now.models),
-            Err(err) => errors.push(format!("models: {err}")),
+        overview.models = self.overview(kind).and_then(|now| now.models);
+        if let Err(err) = models {
+            errors.push(format!("models: {err}"));
         }
         match quota {
             Ok(quota) => {

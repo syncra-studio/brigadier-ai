@@ -2626,3 +2626,39 @@ async fn the_models_listed_are_the_account_in_uses() {
     until_models(&flow, &["claude-opus-5-5", "acct-c-model"]).await;
     flow.stop().await;
 }
+
+/// With the computer's own login signed out, a check of the provider still lists the models of
+/// the account in use: one its first read missed comes on the next check.
+#[tokio::test]
+async fn a_check_lists_the_models_of_the_account_in_use_while_the_own_login_is_signed_out() {
+    let behavior = Arc::new(super::FakeBehavior {
+        account_models: true,
+        ..Default::default()
+    });
+    let flow = Flow::start(
+        "accounts-models-signed-out-own",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        logging(&Log::default(), |_| Reply::text("Done.")),
+    )
+    .await;
+    let provider = ProviderKind::Claude;
+    flow.behavior.signed_out.lock().unwrap().push(provider);
+    flow.manager.runtime.refresh_providers(Some(provider));
+    flow.until("the own login is checked as signed out", |_| {
+        !flow.manager.runtime.provider_signed_in(provider)
+    })
+    .await;
+    *flow.behavior.models_failing.lock().unwrap() = 1;
+    flow.add_accounts(&[(provider, "acct-b")], true).await;
+    assert_eq!(in_use(&flow).await.0, vec![Some("acct-b".into())]);
+    flow.until("its first read of models fails", |_| {
+        *flow.behavior.models_failing.lock().unwrap() == 0
+    })
+    .await;
+    flow.manager.runtime.refresh_providers(Some(provider));
+    until_models(&flow, &["claude-opus-5-5", "acct-b-model"]).await;
+    flow.stop().await;
+}
