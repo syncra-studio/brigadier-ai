@@ -36,6 +36,190 @@ fn states(item: &PluginItemView) -> Vec<AgentItemState> {
 }
 
 #[test]
+fn synced_skills_hide_anthropic_but_keep_the_users_own() {
+    let home = home("synced-provenance");
+    let account = home.join(".claude/skills/synced/org_account");
+    for name in ["builtin", "personal"] {
+        write(
+            &account.join(format!("{name}/SKILL.md")),
+            &format!("---\nname: {name}\n---\n"),
+        );
+    }
+    write(
+        &account.join("manifest.json"),
+        r#"{"skills":[
+        {"name":"builtin","creatorType":"anthropic"},
+        {"name":"personal","creatorType":"user"}]}"#,
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let catalog = Catalog::read(&roots, None);
+    assert_eq!(catalog.skills.len(), 2);
+    let view = build(&catalog, &[], &[], &Unknown, None);
+    assert_eq!(view.items.len(), 1);
+    assert_eq!(item(&view, "skill:personal").skills, 1);
+    assert_eq!(
+        states(item(&view, "skill:personal")),
+        [AgentItemState::Ready, AgentItemState::Missing]
+    );
+    assert!(view.elsewhere.is_empty());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn codex_provider_plugins_hide_skills_servers_and_problems_even_when_off() {
+    let home = home("provider-plugins");
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut config = format!(
+        "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+        project.display()
+    );
+    for (marketplace, name, enabled) in [
+        ("openai-bundled", "builtin", true),
+        ("openai-primary-runtime", "runtime", true),
+        ("openai-bundled", "builtin-off", false),
+        ("openai-primary-runtime", "runtime-off", false),
+        ("openai-curated", "curated", true),
+        ("openai-curated-remote", "curated-remote", true),
+        ("openai-curated", "curated-off", false),
+    ] {
+        let plugin = home.join(format!(".codex/plugins/cache/{marketplace}/{name}/1.0.0"));
+        write(
+            &plugin.join(".codex-plugin/plugin.json"),
+            &format!(r#"{{"name":"{name}"}}"#),
+        );
+        write(
+            &plugin.join(format!("skills/{name}/SKILL.md")),
+            &format!("---\nname: {name}\n---\n"),
+        );
+        write(
+            &plugin.join(".mcp.json"),
+            &serde_json::json!({
+                format!("{name}-server"): {"command":"user-mcp"},
+                format!("{name}-broken"): {"unexpected": true}
+            })
+            .to_string(),
+        );
+        config.push_str(&format!(
+            "\n[plugins.\"{name}@{marketplace}\"]\nenabled = {enabled}\n"
+        ));
+    }
+    write(&home.join(".codex/config.toml"), &config);
+    // Claude's official marketplace is user-installed, unlike Codex's bundled ones.
+    let official = home.join(".claude/plugins/cache/claude-plugins-official/official/1.0.0");
+    write(
+        &official.join(".claude-plugin/plugin.json"),
+        r#"{"name":"official"}"#,
+    );
+    write(
+        &official.join("skills/official/SKILL.md"),
+        "---\nname: official\n---\n",
+    );
+    write(&home.join(".claude/plugins/installed_plugins.json"), &serde_json::json!({
+        "plugins": {"official@claude-plugins-official":[{"scope":"user","installPath":official}]}
+    }).to_string());
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let catalog = Catalog::read(&roots, None);
+    assert!(catalog.skills.iter().any(|skill| skill.name == "builtin"));
+    assert!(
+        catalog
+            .off
+            .skills
+            .iter()
+            .any(|skill| skill.name == "builtin-off")
+    );
+    let projects = [ProjectCatalog {
+        id: "p".into(),
+        name: "Project".into(),
+        path: project.clone(),
+        catalog: Catalog::read(&roots, Some(&project)),
+    }];
+    for focus in [None, Some(project.as_path())] {
+        let view = build(&catalog, &projects, &[], &Unknown, focus);
+        let keys: Vec<_> = view.items.iter().map(|item| item.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "plugin:curated",
+                "server:curated-broken",
+                "plugin:curated-off",
+                "plugin:curated-off/curated-off-server",
+                "plugin:curated-remote",
+                "server:curated-remote-broken",
+                "plugin:curated-remote/curated-remote-server",
+                "plugin:curated/curated-server",
+                "plugin:official",
+            ]
+        );
+        assert_eq!(item(&view, "plugin:curated").skills, 1);
+        assert!(view.elsewhere.is_empty());
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn provider_app_servers_are_hidden_including_off_elsewhere_and_attention() {
+    let home = home("provider-app-servers");
+    write(
+        &home.join(".codex/config.toml"),
+        r#"
+        [mcp_servers.node_repl]
+        command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+        [mcp_servers.provider_off]
+        command = "/Users/example/Applications/Claude.app/Contents/Resources/mcp"
+        enabled = false
+        [mcp_servers.user_server]
+        command = "/usr/local/bin/node_repl"
+    "#,
+    );
+    write(
+        &home.join(".cursor/mcp.json"),
+        r#"{"mcpServers": {
+        "provider_elsewhere": {"command":"/Applications/Claude.app/Contents/Resources/mcp"},
+        "provider_broken": {"command":"/Applications/ChatGPT.app/Contents/Resources/mcp", "type":"unknown"},
+        "user_elsewhere": {"command":"user-mcp"}
+    }}"#,
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let catalog = Catalog::read(&roots, None);
+    assert!(
+        catalog
+            .servers
+            .iter()
+            .any(|server| server.name == "node_repl")
+    );
+    assert!(
+        catalog
+            .off
+            .servers
+            .iter()
+            .any(|server| server.name == "provider_off")
+    );
+    assert!(
+        catalog
+            .problems
+            .iter()
+            .any(|problem| problem.name == "provider_broken")
+    );
+    let view = build(&catalog, &[], &[], &Unknown, None);
+    assert_eq!(view.items.len(), 1);
+    assert_eq!(view.items[0].key, "server:user_server");
+    assert_eq!(view.elsewhere.len(), 1);
+    assert_eq!(view.elsewhere[0].name, "user_elsewhere");
+    for command in [
+        "/Applications/ChatGPT.app.backup/Contents/mcp",
+        "/Applications/ChatGPT.app/ContentsElsewhere/mcp",
+        "/Applications/ChatGPT.app/Contents/../../../user-mcp",
+        "/tmp/ChatGPT.app/Contents/mcp",
+        "ChatGPT.app/Contents/mcp",
+        "node_repl",
+    ] {
+        assert!(!provider_app_command(command), "{command}");
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn the_page_shows_where_each_item_is_on_for_each_agent() {
     let home = home("view");
     let a = home.join("a");

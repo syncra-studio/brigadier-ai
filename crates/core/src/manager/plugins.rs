@@ -10,12 +10,12 @@ mod jobs;
 mod library_cli;
 pub mod ops;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
 use brigadier_registry::adapter::{AgentAdapter, Listed, adapters, owner};
 use brigadier_registry::library::{Entry, Library, MARKETPLACE};
-use brigadier_registry::{Agent, Catalog, Server, Session, Skill, SkillRoot, Source, Transport};
+use brigadier_registry::{Agent, Catalog, Server, Session, Skill, Source, Transport};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -298,16 +298,9 @@ fn server_key(server: &Server) -> Option<Key> {
     }
 }
 
-/// The item `skill` belongs to; `None` for one synced from a Claude account (never touched).
-fn skill_key(skill: &Skill) -> Option<Key> {
-    if skill
-        .roots
-        .iter()
-        .all(|root| matches!(root, SkillRoot::ClaudeSynced(_)))
-    {
-        return None;
-    }
-    Some(match skill.plugin() {
+/// The item `skill` belongs to, after its provider-supplied entries have been removed.
+fn skill_key(skill: &Skill) -> Key {
+    match skill.plugin() {
         Some(plugin) => match library_plugin(&plugin.id) {
             Some(name) => Key {
                 kind: KeyKind::Library,
@@ -323,7 +316,7 @@ fn skill_key(skill: &Skill) -> Option<Key> {
             kind: KeyKind::Skill,
             name: skill.name.clone(),
         },
-    })
+    }
 }
 
 /// Where an item is, for each agent.
@@ -395,6 +388,42 @@ fn switchable_source(source: Source) -> bool {
     )
 }
 
+/// Commands inside known provider app bundles are supplied by those apps. Match path
+/// components, not server names, and don't mistake a path escaping the bundle for one in it.
+fn provider_app_command(command: &str) -> bool {
+    let path = Path::new(command);
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return false;
+    }
+    let parts: Vec<_> = path.components().collect();
+    let apps = match parts.as_slice() {
+        [
+            Component::RootDir,
+            Component::Normal(applications),
+            rest @ ..,
+        ] if *applications == "Applications" => rest,
+        [
+            Component::RootDir,
+            Component::Normal(users),
+            Component::Normal(_),
+            Component::Normal(applications),
+            rest @ ..,
+        ] if *users == "Users" && *applications == "Applications" => rest,
+        _ => return false,
+    };
+    matches!(apps,
+        [Component::Normal(app), Component::Normal(contents), _, ..]
+            if (*app == "ChatGPT.app" || *app == "Claude.app") && *contents == "Contents")
+}
+
+fn provider_server(server: &Server) -> bool {
+    server
+        .plugin
+        .as_ref()
+        .is_some_and(|plugin| plugin.provider_supplied())
+        || matches!(&server.transport, Transport::Stdio { command, .. } if provider_app_command(command))
+}
+
 /// Reads `catalog` (for `project`, or the user's) into `items`.
 fn gather(
     items: &mut Vec<(Key, Presence)>,
@@ -404,14 +433,17 @@ fn gather(
     agents: &[&'static dyn AgentAdapter],
 ) {
     for server in &catalog.servers {
+        if provider_server(server) {
+            continue;
+        }
         let Some(key) = server_key(server) else {
             if project.is_none() {
                 let (text, remote) = detail(&server.transport);
-                if !catalog
-                    .servers
-                    .iter()
-                    .any(|other| other.name == server.name && server_key(other).is_some())
-                    && !elsewhere.iter().any(|known| known.name == server.name)
+                if !catalog.servers.iter().any(|other| {
+                    !provider_server(other)
+                        && other.name == server.name
+                        && server_key(other).is_some()
+                }) && !elsewhere.iter().any(|known| known.name == server.name)
                 {
                     elsewhere.push(PluginItemView {
                         key: format!("other:{}", server.id),
@@ -474,6 +506,19 @@ fn gather(
         }
     }
     for problem in &catalog.problems {
+        if problem.read.as_deref().is_some_and(provider_app_command)
+            || catalog
+                .plugins
+                .iter()
+                .chain(&catalog.off.plugins)
+                .any(|plugin| {
+                    plugin.provider_supplied()
+                        && problem.source == Source::CodexPlugin
+                        && problem.file.starts_with(&plugin.root)
+                })
+        {
+            continue;
+        }
         let key = Key {
             kind: KeyKind::Server,
             name: problem.name.clone(),
@@ -488,13 +533,14 @@ fn gather(
         }
     }
     for skill in &catalog.skills {
-        let Some(presence) = skill_row(items, skill) else {
+        let Some(skill) = skill.user_installed() else {
             continue;
         };
+        let presence = skill_row(items, &skill);
         let plugin_only = skill.plugin().is_some();
         for adapter in agents {
             let agent = adapter.agent();
-            if catalog.skill_native(skill, &session(agent, project)) {
+            if catalog.skill_native(&skill, &session(agent, project)) {
                 presence.note(agent, project);
                 if !plugin_only {
                     presence.switchable = false;
@@ -508,6 +554,9 @@ fn gather(
     // What an agent has but switches off for every project: an off row it can be switched on
     // from again.
     for server in &catalog.off.servers {
+        if provider_server(server) {
+            continue;
+        }
         let (Some(key), Some(agent)) = (server_key(server), owner(server.source)) else {
             continue;
         };
@@ -521,9 +570,11 @@ fn gather(
         push(&mut presence.anywhere, agent);
     }
     for skill in &catalog.off.skills {
-        if let Some(plugin) = skill.plugin()
-            && let Some(presence) = skill_row(items, skill)
-        {
+        let Some(skill) = skill.user_installed() else {
+            continue;
+        };
+        if let Some(plugin) = skill.plugin() {
+            let presence = skill_row(items, &skill);
             push(&mut presence.anywhere, plugin.agent);
         }
     }
@@ -546,9 +597,9 @@ fn entry(key: Key, items: &mut Vec<(Key, Presence)>) -> usize {
     }
 }
 
-/// The row `skill` is part of, with what the skill tells of it; `None` for one never shown.
-fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> Option<&'a mut Presence> {
-    let key = skill_key(skill)?;
+/// The row `skill` is part of, with what the skill tells of it.
+fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> &'a mut Presence {
+    let key = skill_key(skill);
     let library = key.kind == KeyKind::Library;
     let plugin = (key.kind == KeyKind::Plugin)
         .then(|| skill.plugin())
@@ -571,7 +622,7 @@ fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> Option<&
             .to_string();
     }
     push(&mut presence.files, skill.skill_md().display().to_string());
-    Some(presence)
+    presence
 }
 
 /// The page, from the user's catalog and each trusted project's; `focus` is the project the

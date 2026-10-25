@@ -45,6 +45,15 @@ pub struct Plugin {
 }
 
 impl Plugin {
+    /// Supplied by Codex itself, rather than installed from a user-chosen marketplace.
+    /// This is provenance for display; it does not change whether an agent loads it.
+    pub fn provider_supplied(&self) -> bool {
+        self.agent == Agent::Codex
+            && self.id.rsplit_once('@').is_some_and(|(_, marketplace)| {
+                matches!(marketplace, "openai-bundled" | "openai-primary-runtime")
+            })
+    }
+
     /// Whether a session loading `project`'s setup loads it.
     pub fn counts_in(&self, project: Option<&Path>) -> bool {
         self.project.is_none() || self.project.as_deref() == project
