@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { keepChanges, undoChanges } from "@/state/pendingChanges";
 import { openFileTab, openReviewTab } from "@/state/sessionTabs";
-import { useSettledTabs } from "@/state/tabStates";
+import { nothingToMerge, useSettledTabs } from "@/state/tabStates";
 import { toast } from "@/state/toasts";
 import { useKeptState } from "@/components/conversation";
 
@@ -51,6 +51,8 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const open = fold?.reverted === reverted ? fold.open : !reverted;
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
   const ahead = useSettledTabs((s) => conversationId ? s.byTab[conversationId]?.ahead : undefined);
+  // Its work is on the base already (D61): no count and no Merge.
+  const landed = useSettledTabs((s) => conversationId ? nothingToMerge(s.byTab[conversationId]) : false);
   const merged = merge?.merge ?? null;
   const mergeText = environment?.type === "newWorktree" ? `Merge ${environment.branch} into ${environment.base}` : null;
   const mergeAsk = useAskRequest(conversationId ?? "", mergeText);
@@ -63,7 +65,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const title = reverted ? `Reverted ${named}` : waits ? `${files.length} ${files.length === 1 ? "File" : "Files"}` : files.length > 0 ? `Edited ${named}` : "Merged changes";
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
   const reviewed = [tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ");
-  const status = reverted ? "Restored to the start of this turn" : waits ? `${waiting.length} to review` : [reviewed || null, merged ? mergeWords(merged, true) : environment ? [`On ${environment.branch}`, ahead ? `${ahead} ${ahead === 1 ? "commit" : "commits"} ahead` : null].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · ");
+  const status = reverted ? "Restored to the start of this turn" : waits ? `${waiting.length} to review` : [reviewed || null, merged ? mergeWords(merged, true) : environment ? [`On ${environment.branch}`, landed ? null : ahead ? `${ahead} ${ahead === 1 ? "commit" : "commits"} ahead` : null].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · ");
   const shown = all ? files : files.slice(0, FIRST_FILES);
   const more = files.length - FIRST_FILES;
   const requestFor = (path?: string) => snapshots.findLast((record) => path === undefined || record?.changes?.stat.files.some((file) => file.path === path))?.id ?? null;
@@ -109,7 +111,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
             <Button variant="soft" size="sm" onClick={() => openFileTab(conversationId, waiting[0]!)}>Review Changes</Button>
           </> : <>
             {!reverted && !preview && <Button variant="ghost" size="sm" className={QUIET} data-slot="turn-diff-undo" disabled={busy || working} onClick={beginRevert}><ArrowRotateCcw aria-hidden className="size-icon-sm" />Revert</Button>}
-            {mergeText && !merged && !reverted && <Button size="sm" className={PRIMARY} data-slot="turn-diff-merge" title={mergeText} disabled={mergeAsk.asked || working} onClick={mergeAsk.ask}>Merge into {environment?.type === "newWorktree" ? environment.base : "main"}</Button>}
+            {mergeText && !merged && !reverted && !landed && <Button size="sm" className={PRIMARY} data-slot="turn-diff-merge" title={mergeText} disabled={mergeAsk.asked || working} onClick={mergeAsk.ask}>Merge into {environment?.type === "newWorktree" ? environment.base : "main"}</Button>}
             {merged && <Button variant="soft" size="sm" data-slot="merge-view-changes" onClick={() => openDiff()}>View changes</Button>}
           </>}
           {foldable && <button type="button" data-slot="turn-diff-fold" aria-expanded={open} aria-label={open ? "Fold the files" : "Show the files"} onClick={() => setFold({ reverted, open: !open })} className="text-muted-foreground hover:text-foreground flex size-7.5 items-center justify-center">{open ? <ChevronUp aria-hidden className="size-3.75" /> : <ChevronDown aria-hidden className="size-3.75" />}</button>}

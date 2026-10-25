@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
 import { fromSnapshot, rowActivity } from "@/state/activity";
-import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, sessionStatus, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
+import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, nothingToMerge, sessionStatus, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, workers: 0 } as const;
 
@@ -40,6 +40,21 @@ test("git marks still refresh the context card but never choose a row word", () 
   assert.deepEqual(useSettledTabs.getState().byTab.s, { state: "ready" });
   assert.equal(sessionStatus(quiet, null), null);
   assert.deepEqual(sessionStatus(quiet, null, false, true), { state: "done", reason: null });
+});
+
+test("D61: a ready session's turn end looks at git again, and merged leaves nothing to merge", () => {
+  // The thread pushed its work to the remote's main itself: no merge is recorded, so only a
+  // fresh look tells the card it is no longer ahead.
+  useSettledTabs.setState({ byTab: { s: { state: "ready", ahead: 9 } } });
+  const idle = { stream: "conversation:s", event: { type: "runStateChanged", conversationId: "s", state: "idle", error: null, requestId: null } } as EventEnvelope;
+  assert.equal(applySettledTabEvents([idle]), true, "looked at again");
+  useSettledTabs.setState({ byTab: {} });
+  assert.equal(applySettledTabEvents([idle]), false, "a session never ready or merged isn't");
+  assert.equal(nothingToMerge({ state: "ready", ahead: 9 }), false);
+  assert.equal(nothingToMerge({ state: "merged", ahead: 0 }), true);
+  assert.equal(nothingToMerge({ state: "merged" }), true, "just merged, before the fresh count");
+  assert.equal(nothingToMerge({ state: "reverted", ahead: 0 }), false);
+  assert.equal(nothingToMerge(undefined), false);
 });
 
 test("a failed turn needs the user until the next one runs", () => {

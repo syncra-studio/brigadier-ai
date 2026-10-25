@@ -22,7 +22,20 @@ export function refreshSettledTabsSoon(): void {
   refreshing = setTimeout(() => { refreshing = null; void loadSettledTabs().catch(() => {}); }, 3000);
 }
 
-export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
+/**
+ * Whether a session's work is on its base with nothing left to merge: it reads merged (its own
+ * merge, or work the thread put on the base, or its remote's, by itself; D61).
+ */
+export function nothingToMerge(settled: Settled | undefined): boolean {
+  return settled?.state === "merged";
+}
+
+/**
+ * Keeps the git marks current with the events: a ready request or a merge marks its tab, and a
+ * marked tab's turn end looks at git again (its thread may have merged or pushed its work
+ * itself, D61). Whether it will look again.
+ */
+export function applySettledTabEvents(batch: readonly EventEnvelope[]): boolean {
   let changed: Record<string, Settled> | null = null;
   let refresh = false;
   for (const { stream, event } of batch) {
@@ -34,10 +47,11 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
         changed = { ...all, [id]: state === "merged" ? { state } : { ...all[id], state } };
       }
       refresh = true;
-    } else if (id && event.type === "runStateChanged" && event.state === "idle" && ["merged", "reverted"].includes(all[id]?.state ?? "")) refresh = true;
+    } else if (id && event.type === "runStateChanged" && event.state === "idle" && all[id]?.state !== undefined) refresh = true;
   }
   if (changed) useSettledTabs.setState({ byTab: changed });
   if (refresh) refreshSettledTabsSoon();
+  return refresh;
 }
 
 /** The row and tab name activity only; git marks belong to the context card. */
