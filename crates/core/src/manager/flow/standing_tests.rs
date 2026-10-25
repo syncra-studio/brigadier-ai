@@ -62,6 +62,14 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         assert!(flow.core.settings().omit_ai_coauthors, "the default");
         flow.say("Please add a greeting").await;
         flow.settled().await;
+        // The worker's CLI starts after `brigadier start` answered, so maybe after the request
+        // ended.
+        flow.until("the worker's CLI started", |_| {
+            flow.specs()
+                .iter()
+                .any(|(_, spec)| spec.tools == ToolSet::Lean)
+        })
+        .await;
         let chat = new_chat(&flow).await;
         flow.say_to(&chat, "Which nozzle?").await;
         flow.settled_in(&chat).await;
