@@ -27,6 +27,9 @@ export type PluginAgentResult = {
   message: string | null;
 };
 
+/** How a SKILL.md save went: written, or refused because the file changed since it was opened. */
+export type SkillSave = { type: "saved" } | { type: "changed"; current: string };
+
 /** The page's boundary to the daemon; fixtures supply the same data and actions. */
 export type PluginsAdapter = {
   read: () => Promise<PluginsView>;
@@ -49,9 +52,10 @@ export type PluginsAdapter = {
   details: (key: string) => Promise<PluginItemDetails>;
   /**
    * Writes one of a skill's SKILL.md files, if it still holds `expected` (the text as opened);
-   * the copies follow it. "changed" when the file changed since: nothing is written.
+   * the copies follow it. "changed" when the file changed since: nothing is written, and
+   * `current` is what it holds now.
    */
-  saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<"saved" | "changed">;
+  saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<SkillSave>;
   /**
    * Signs each agent in to a server in turn, opening the browser for the next: `serverId` and
    * `projectId` from its problem. Absent while the daemon can't: the page offers no Sign in then.

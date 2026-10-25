@@ -1,6 +1,5 @@
 import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { failures } from "@/app/settings/plugins/dialogs";
-import type { NextRequest, PluginItemDetails, PluginsView } from "@/app/settings/plugins/types";
 import { pickFolder, request } from "@/ipc/client";
 import type { McpSignInProgress, PluginJobView } from "@/ipc/generated";
 import { useApp } from "@/state/store";
@@ -54,22 +53,11 @@ function signInResults(progress: McpSignInProgress): PluginAgentResult[] {
   }));
 }
 
-/**
- * The shared-plugins requests, until the generated `Request` and `Response` have them: each
- * answers as the protocol says (`{ plugins }`, `{ item }`, else `{ job }`). Goes when ts-rs
- * generates them; the calls below then go through `request` as they are.
- */
-const next = request as unknown as {
-  (call: Extract<NextRequest, { method: "getPlugins" }>): Promise<{ plugins: PluginsView | null }>;
-  (call: Extract<NextRequest, { method: "getPluginItem" }>): Promise<{ item: PluginItemDetails }>;
-  (call: Exclude<NextRequest, { method: "getPlugins" | "getPluginItem" }>): Promise<{ job: string }>;
-};
-
 /** The Plugins page over the daemon. */
 export function livePlugins(): PluginsAdapter {
   return {
     read: async () => {
-      const { plugins } = await next({ method: "getPlugins" });
+      const { plugins } = await request({ method: "getPlugins" });
       // An answer without the page (an older daemon, a test's stand-in) keeps the last one.
       if (!plugins) throw new Error("Brigadier didn't send the plugins.");
       return plugins;
@@ -84,9 +72,9 @@ export function livePlugins(): PluginsAdapter {
         unsubscribe();
       };
     },
-    switchPlugin: async (key, on) => finished((await next({ method: "switchPlugin", key, on })).job),
-    setScope: async (key, projectIds) => finished((await next({ method: "setPluginScope", key, projectIds })).job),
-    share: async (key) => finished((await next({ method: "sharePlugin", key })).job),
+    switchPlugin: async (key, on) => finished((await request({ method: "switchPlugin", key, on })).job),
+    setScope: async (key, projectIds) => finished((await request({ method: "setPluginScope", key, projectIds })).job),
+    share: async (key) => finished((await request({ method: "sharePlugin", key })).job),
     checkAdd: async (text, name) => {
       const { check } = await request({ method: "checkPluginAdd", text, name });
       if (check.needsName && !name?.trim()) return { drafts: [], needsName: true };
@@ -103,17 +91,17 @@ export function livePlugins(): PluginsAdapter {
       return { drafts, needsName: false };
     },
     add: async (text, name, projectIds, values) =>
-      finished((await next({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}) })).job),
-    remove: async (key) => finished((await next({ method: "removePlugin", key })).job),
-    update: async (key) => finished((await next({ method: "updatePlugin", key })).job),
-    details: async (key) => (await next({ method: "getPluginItem", key })).item,
+      finished((await request({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}) })).job),
+    remove: async (key) => finished((await request({ method: "removePlugin", key })).job),
+    update: async (key) => finished((await request({ method: "updatePlugin", key })).job),
+    details: async (key) => (await request({ method: "getPluginItem", key })).item,
     saveSkill: async (key, path, contents, expected) => {
-      const job = await settled((await next({ method: "savePluginSkill", key, path, contents, expected })).job);
-      // A refusal because the file changed since it was opened: its own answer, not a failure.
-      if (job.error && /changed since/i.test(job.error)) return "changed";
-      const problem = failures(results(job));
+      const { outcome } = await request({ method: "savePluginSkill", key, path, contents, expected });
+      // Refused: the file changed since it was opened. Nothing was written; here is what it holds now.
+      if (outcome.type === "changedSinceOpened") return { type: "changed", current: outcome.current };
+      const problem = failures(await finished(outcome.job));
       if (problem) throw new Error(problem);
-      return "saved";
+      return { type: "saved" };
     },
     signIn: async (key, serverId, projectId) => {
       const { id } = await request({ method: "signInMcpServer", serverId, projectId });

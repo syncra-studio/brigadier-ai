@@ -8,6 +8,7 @@ import { Banner, CodeEditor, CodeFileHeader } from "@/components/shared";
 import { formatBytes, shortPath } from "@/lib/format";
 import { languageOf } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
+import type { SkillSave } from "./adapter";
 import type { PluginItemDetails, PluginItemView, PluginServerSettings } from "./types";
 
 /** What a value Brigadier keeps in the Keychain shows as: never the value itself. */
@@ -50,8 +51,8 @@ export function FileDialog({ item, details, save, onClose }: {
   item: PluginItemView;
   /** Reads the item's files afresh at each opening. */
   details: () => Promise<PluginItemDetails>;
-  /** Writes one SKILL.md, by its path, if it still holds `expected`: "changed" when it doesn't. */
-  save: (path: string, contents: string, expected: string) => Promise<"saved" | "changed">;
+  /** Writes one SKILL.md, by its path, if it still holds `expected`: "changed", with what it holds now, when it doesn't. */
+  save: (path: string, contents: string, expected: string) => Promise<SkillSave>;
   onClose: () => void;
 }) {
   const [files, setFiles] = useState<Shown[] | null>(null);
@@ -60,8 +61,8 @@ export function FileDialog({ item, details, save, onClose }: {
   /** Each file's text as edited, by its path. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
-  /** The files Save found changed since they were opened, by path: nothing was written to them. */
-  const [stale, setStale] = useState<string[]>([]);
+  /** The files Save found changed since they were opened, by path, with what each holds now: nothing was written to them. */
+  const [stale, setStale] = useState<Record<string, string>>({});
   const action = useAction();
   useEffect(() => {
     let live = true;
@@ -75,13 +76,13 @@ export function FileDialog({ item, details, save, onClose }: {
     // Read once, as it opens: the page's later reads of the item don't reload what's being edited.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [details]);
-  /** Reads the stale files again: their text as it is now, the edits made here to them dropped. */
-  const reload = () => action.run(async () => {
-    const fresh = shownFiles(item, await details());
-    setFiles((now) => now && now.map((entry) => (stale.includes(entry.path) ? fresh.find((next) => next.path === entry.path) ?? entry : entry)));
-    setDrafts((now) => Object.fromEntries(Object.entries(now).filter(([path]) => !stale.includes(path))));
-    setStale([]);
-  });
+  /** Shows the stale files as they are now; the edits made here to them are dropped. */
+  const reload = () => {
+    setFiles((now) => now && now.map((entry) => (entry.path in stale ? { ...entry, text: stale[entry.path]! } : entry)));
+    setDrafts((now) => Object.fromEntries(Object.entries(now).filter(([path]) => !(path in stale))));
+    setStale({});
+  };
+  const staleCount = Object.keys(stale).length;
   const file = files?.[at] ?? null;
   const editable = !!file && file.readOnly === null;
   const draft = file ? drafts[file.path] ?? file.text : "";
@@ -89,18 +90,19 @@ export function FileDialog({ item, details, save, onClose }: {
   const dirty = changed.length > 0;
   const anyEditable = (files ?? []).some((entry) => entry.readOnly === null);
   const store = (then?: () => void) => {
-    if (!dirty || action.busy || stale.length) return;
+    if (!dirty || action.busy || staleCount) return;
     const writes = changed.map((entry) => ({ path: entry.path, text: drafts[entry.path]!, expected: entry.text }));
     action.run(async () => {
-      const refused: string[] = [];
+      const refused: Record<string, string> = {};
       for (const write of writes) {
-        if ((await save(write.path, write.text, write.expected)) === "changed") refused.push(write.path);
+        const outcome = await save(write.path, write.text, write.expected);
+        if (outcome.type === "changed") refused[write.path] = outcome.current;
       }
-      const written = writes.filter((write) => !refused.includes(write.path));
+      const written = writes.filter((write) => !(write.path in refused));
       setFiles((now) => now && now.map((entry) => ({ ...entry, text: written.find((write) => write.path === entry.path)?.text ?? entry.text })));
       setStale(refused);
       setSaved(written.length > 0);
-      if (!refused.length) then?.();
+      if (!Object.keys(refused).length) then?.();
     });
   };
   const status = action.error ?? (dirty ? "Unsaved changes" : saved ? "Saved" : null);
@@ -147,12 +149,12 @@ export function FileDialog({ item, details, save, onClose }: {
             ))}
           </div>
         )}
-        {stale.length > 0 && (
+        {staleCount > 0 && (
           <Banner
             tone="warning"
-            text={`${stale.length === 1 && files?.length === 1 ? "SKILL.md" : "A SKILL.md"} changed on disk after you opened it, so Save didn't write over it. Reload to see it as it is now; your edits here are dropped.`}
+            text={`${staleCount === 1 && files?.length === 1 ? "SKILL.md" : "A SKILL.md"} changed on disk after you opened it, so Save didn't write over it. Reload to see it as it is now; your edits here are dropped.`}
           >
-            <Button variant="soft" size="sm" disabled={action.busy} onClick={reload}>Reload</Button>
+            <Button variant="soft" size="sm" onClick={reload}>Reload</Button>
           </Banner>
         )}
         {file && file.readOnly && item.kind === "skill" && (
@@ -184,7 +186,7 @@ export function FileDialog({ item, details, save, onClose }: {
           <footer className="border-border flex shrink-0 items-center gap-3 border-t px-4 py-3">
             <span role={action.error ? "alert" : "status"} className={cn("min-w-0 flex-1 truncate text-xs", action.error ? "text-destructive" : "text-muted-foreground")}>{status}</span>
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button size="sm" disabled={!dirty || action.busy || stale.length > 0} onClick={() => store(onClose)}>{action.busy ? "Saving…" : "Save"}</Button>
+            <Button size="sm" disabled={!dirty || action.busy || staleCount > 0} onClick={() => store(onClose)}>{action.busy ? "Saving…" : "Save"}</Button>
           </footer>
         )}
       </DialogContent>

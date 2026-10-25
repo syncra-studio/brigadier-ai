@@ -209,9 +209,10 @@ const adapter: PluginsAdapter = {
   saveSkill: async (key, path, contents, expected) => {
     calls.push(`savePluginSkill ${key} ${path}`);
     // Refused when the file changed since it was opened.
-    if ((saved.get(path) ?? skillText(find(key).name)) !== expected) return "changed";
+    const current = saved.get(path) ?? skillText(find(key).name);
+    if (current !== expected) return { type: "changed", current };
     saved.set(path, contents);
-    return "saved";
+    return { type: "saved" };
   },
   signIn: async (key, serverId, projectId) => {
     calls.push(`signInMcpServer ${key} ${serverId} ${projectId ?? "all"}`);
