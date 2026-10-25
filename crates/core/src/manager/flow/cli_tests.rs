@@ -1550,7 +1550,7 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
             .find(|question| question.is_open())
             .unwrap()
             .clone();
-        // Options as given, the recommended (first) one marked.
+        // Options as given.
         assert_eq!(
             card.items[0].options[0].label,
             if given[0] == "Blue, please" {
@@ -1559,13 +1559,13 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                 "Yes"
             }
         );
-        // The one labelled "… (Recommended)", its mark left off, else the first (harness
-        // D28).
+        // The one labelled "… (Recommended)", its mark left off (harness D28); none marked,
+        // none recommended (D58).
         if given[0] == "Blue, please" {
             assert_eq!(card.items[0].options[1].label, "Green");
             assert_eq!(card.items[0].recommended, Some(1));
         } else {
-            assert_eq!(card.items[0].recommended, Some(0));
+            assert_eq!(card.items[0].recommended, None);
         }
         // A round's questions on one card, each with its own options.
         assert_eq!(card.items.len(), given.len());

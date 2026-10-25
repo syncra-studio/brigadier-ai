@@ -550,8 +550,8 @@ pub const COMMANDS: &[Command] = &[
                   never one card per question; only questions that depend on its answers wait \
                   for the next round. One question: `brigadier ask \"<question>\" --option A \
                   --option B`. Several: `--question \"<q>\"` for each, each followed \
-                  by its own `--option`s. Each question takes 2 to 8 options or none, the recommended \
-                  one first, so \"yes\" takes it; the card always takes a free-text answer \
+                  by its own `--option`s. Each question takes 2 to 8 options or none; label the one you \
+                  recommend \"… (Recommended)\", first, so \"yes\" takes it; the card always takes a free-text answer \
                   too. Prints every question with its answer, once the user answers them \
                   all; run it in the background for a long wait.",
         args: &[
@@ -565,7 +565,7 @@ pub const COMMANDS: &[Command] = &[
             Arg::Flag {
                 long: "option",
                 value: Some("TEXT"),
-                help: "An option for the question before it, recommended first.",
+                help: "An option for the question before it; the one you recommend first, labelled \"… (Recommended)\".",
                 choices: &[],
                 repeat: true,
             },

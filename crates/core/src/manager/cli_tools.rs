@@ -291,9 +291,9 @@ impl SessionManager {
             questions: questions
                 .iter()
                 .map(|item| {
-                    // The recommended option is first, or the one labelled "… (Recommended)",
-                    // the mark left off its label, as the CLI's own question tool is read
-                    // (harness D28).
+                    // The recommended option is the one labelled "… (Recommended)", the mark
+                    // left off its label, as the CLI's own question tool is read (harness D28);
+                    // none marked, none is recommended (D58).
                     let marked = brigadier_providers::CliQuestion::new(
                         None,
                         item.question.clone(),
@@ -302,8 +302,7 @@ impl SessionManager {
                     );
                     AskQuestion {
                         question: item.question.clone(),
-                        recommended: (!item.options.is_empty())
-                            .then(|| marked.recommended.unwrap_or(0)),
+                        recommended: marked.recommended,
                         options: marked
                             .options
                             .into_iter()

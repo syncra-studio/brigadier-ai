@@ -383,11 +383,6 @@ pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec
                     "\"{text}\": give 2 to {OPTIONS_MAX} options (or none, for a free answer)."
                 )));
             }
-            if !options.is_empty() && recommended.is_none() {
-                return Err(Error::Invalid(format!(
-                    "\"{text}\": say which option you recommend in `recommended` (its 0-based index)."
-                )));
-            }
             Ok(QuestionItem {
                 text,
                 options,
@@ -422,9 +417,8 @@ mod tests {
         assert_eq!(item.options.len(), 2);
         assert_eq!(item.recommended, Some(0));
         assert_eq!(item.options[0].label, "CSV");
-        // Recommending the blank one recommends nothing: the thread is asked to say which.
-        let blank = round(options, 0).unwrap_err().to_string();
-        assert!(blank.contains("recommend"), "{blank}");
+        // Recommending the blank one recommends nothing, and no option says "Recommended" (D58).
+        assert_eq!(round(options, 0).unwrap()[0].recommended, None);
     }
 
     /// A grilling round bigger than one call of the CLI's own question tool goes whole on one

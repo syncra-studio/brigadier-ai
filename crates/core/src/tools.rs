@@ -127,7 +127,7 @@ pub struct AskQuestion {
     #[serde(default)]
     pub options: Vec<AskOption>,
     /// The option you recommend, by its 0-based index in `options` (shown as
-    /// "Recommended" and picked at first). Required when there are options.
+    /// "Recommended" and picked at first). None given, no option says so (harness D58).
     #[serde(default)]
     pub recommended: Option<u32>,
 }
