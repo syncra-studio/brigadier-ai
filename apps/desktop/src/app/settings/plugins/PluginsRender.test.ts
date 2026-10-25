@@ -47,15 +47,16 @@ test("plugins: the grid, details and Open, and the requests they make", { timeou
   const l1 = seen.L1!;
   assert.equal(l1.title, "Plugins");
   assert.equal(l1.description, "Skills and MCP servers your agents can use.");
-  assert.deepEqual(l1.tabs, ["MCP servers7 *", "Skills8"]);
+  assert.deepEqual(l1.tabs, ["MCP servers8 *", "Skills8"]);
   assert.deepEqual(l1.toolbar, ["Add"]);
   assert.deepEqual(l1.search && { placeholder: l1.search.placeholder, label: l1.search.label }, { placeholder: "Search", label: "Search MCP servers" });
   // Two columns in a wide window; the problem first, then A–Z.
   assert.equal(l1.columns, 2);
-  assert.deepEqual(names(l1), ["Linear", "Context7", "Figma", "GitHub", "Playwright", "postgres", "team-db"]);
+  assert.deepEqual(names(l1), ["Linear", "Context7", "error-feed", "Figma", "GitHub", "Playwright", "postgres", "team-db"]);
   assert.deepEqual(card(l1, "Linear"), { name: "Linear", line: "Needs sign-in", tone: "warning", chip: "3 projects", mark: "linear", on: true, locked: false, dim: false });
-  // Its site's icon doesn't load: the server illustration instead.
-  assert.deepEqual(card(l1, "Context7"), { name: "Context7", line: "Up-to-date docs and code examples for the libraries you use.", tone: "muted", chip: "Global", mark: "server", on: true, locked: false, dim: false });
+  // Its site's icon, as the daemon sends it; one that doesn't load falls back to the illustration.
+  assert.deepEqual(card(l1, "Context7"), { name: "Context7", line: "Up-to-date docs and code examples for the libraries you use.", tone: "muted", chip: "Global", mark: "icon", on: true, locked: false, dim: false });
+  assert.equal(card(l1, "error-feed").mark, "server");
   assert.equal(card(l1, "GitHub").mark, "github");
   // No icon of its own: the server illustration.
   assert.equal(card(l1, "Playwright").mark, "server");
@@ -67,7 +68,7 @@ test("plugins: the grid, details and Open, and the requests they make", { timeou
 
   // L2: Skills. The items only one agent has come first, their line in warning colour.
   const l2 = seen.L2!;
-  assert.deepEqual(l2.tabs, ["MCP servers7", "Skills8 *"]);
+  assert.deepEqual(l2.tabs, ["MCP servers8", "Skills8 *"]);
   assert.deepEqual(names(l2), ["frontend-design", "pr-review", "commit-messages", "pdf-forms", "release-notes", "rust-style", "tailwind-tokens", "webapp-testing"]);
   assert.deepEqual(card(l2, "frontend-design"), { name: "frontend-design", line: "Only in Claude Code: came in Claude Code's own plugin.", tone: "warning", chip: "Global", mark: "skill", on: true, locked: false, dim: false });
   assert.equal(card(l2, "pr-review").line, "Only in Claude Code");

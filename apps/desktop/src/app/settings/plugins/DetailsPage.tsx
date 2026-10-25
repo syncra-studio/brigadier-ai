@@ -24,7 +24,7 @@ type DetailsActions = {
 };
 
 /** One item: what needs the user, where it's on, Advanced (how it runs, where it's saved, Open), and Remove. */
-export function DetailsPage({ view, item, favicon, actions }: { view: PluginsView; item: PluginItemView; favicon?: string | null | undefined; actions: DetailsActions }) {
+export function DetailsPage({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
   const some = item.scope.type === "someProjects" ? item.scope : null;
   const on = some?.projectIds ?? [];
   const locked = !!item.locked;
@@ -34,7 +34,7 @@ export function DetailsPage({ view, item, favicon, actions }: { view: PluginsVie
     <SettingsPage
       title={item.name}
       description={`${KIND_LABEL[item.kind]} · ${item.description || shownDetail(item.detail)}`}
-      mark={<PluginMark item={item} favicon={favicon} large />}
+      mark={<PluginMark item={item} large />}
       back={{ label: "Plugins", onBack: actions.onBack }}
       sectionsClassName="gap-9 pt-4"
     >

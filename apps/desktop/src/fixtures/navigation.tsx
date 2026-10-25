@@ -24,7 +24,7 @@ const plugins: PluginsView = {
   projects: [], elsewhere: [],
   items: [{
     key: "server:example", kind: "server", name: "Example server", description: "Fixture server", detail: "example-mcp",
-    url: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false, skillCount: 0, files: [],
+    url: null, icon: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false, skillCount: 0, files: [],
   }],
 };
 const native: string[] = [];

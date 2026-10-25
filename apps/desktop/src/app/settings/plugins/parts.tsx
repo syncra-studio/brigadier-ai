@@ -34,22 +34,20 @@ function AgentTile({ agent, dim = false }: { agent: PluginAgent; dim?: boolean }
 }
 
 /**
- * An item's mark: its maker's mark for a well-known server, else its site's icon (a remote
- * server's favicon), else the illustration for its kind.
+ * An item's mark: its maker's mark for a well-known server, else its site's icon (the daemon
+ * fetches it), else the illustration for its kind.
  */
-export function PluginMark({ item, favicon = null, large = false }: {
-  item: { kind: PluginKind; name: string; detail: string };
-  /** A remote server's site icon. */
-  favicon?: string | null | undefined;
+export function PluginMark({ item, large = false }: {
+  item: { kind: PluginKind; name: string; detail: string; icon?: string | null };
   large?: boolean;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
   const brand = brandOf(item);
-  const site = !brand && favicon && favicon !== failed ? favicon : null;
+  const site = !brand && item.icon && item.icon !== failed ? item.icon : null;
   const size = large ? "size-11" : "size-9";
   if (brand || site) {
     return (
-      <span data-slot="plugin-mark" data-mark={brand ?? "favicon"} className={cn("bg-foreground/5 flex shrink-0 items-center justify-center", size, large ? "rounded-xl" : "rounded-toolbar-button")}>
+      <span data-slot="plugin-mark" data-mark={brand ?? "icon"} className={cn("bg-foreground/5 flex shrink-0 items-center justify-center", size, large ? "rounded-xl" : "rounded-toolbar-button")}>
         {brand
           ? <ServerBrand brand={brand} className={cn("text-foreground/85", large ? "size-5.5" : "size-4.5")} />
           : site && <img src={site} alt="" onError={() => setFailed(site)} className={cn("rounded-xs", large ? "size-6" : "size-4.5")} />}
@@ -72,11 +70,10 @@ function ScopeChip({ text }: { text: string }) {
 }
 
 /** One item in the list's grid: its mark, name, line and where it's on; its switch at the corner. */
-export function PluginCard({ item, line, chip, favicon, busy, onOpen, onSwitch }: {
+export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
   item: PluginItemView;
   line: Line;
   chip: string | null;
-  favicon?: string | null | undefined;
   busy: boolean;
   onOpen: () => void;
   onSwitch: (on: boolean) => void;
@@ -87,7 +84,7 @@ export function PluginCard({ item, line, chip, favicon, busy, onOpen, onSwitch }
   return (
     <SettingsCard data-slot="plugin-row" data-key={item.key} data-off={!on || undefined} data-locked={item.locked ? true : undefined} data-setting={`plugin:${item.key}`} split={false} className="flex-row items-start gap-3 px-4 py-3.5">
       <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex min-w-0 flex-1 items-start gap-3 text-start", !on && "opacity-50")}>
-        <PluginMark item={item} favicon={favicon} />
+        <PluginMark item={item} />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span data-slot="row-name" className="truncate text-label font-medium">{item.name}</span>
           <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>

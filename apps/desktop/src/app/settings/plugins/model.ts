@@ -58,19 +58,3 @@ export const shownDetail = (detail: string) => detail.replace(/^https:\/\//, "")
 
 /** What a won't-start message says is wrong: "unknown type "websocket"". */
 export const wontStartReason = (message: string) => message.replace(/^Won't start:\s*/i, "").replace(/\.$/, "");
-
-/**
- * Where a remote server's site icon is: its site's own favicon, at the address without the
- * server's part of the host ("mcp.linear.app" → linear.app). Null for anything else.
- */
-export function faviconOf(item: PluginItemView): string | null {
-  if (item.kind !== "server" || !item.url) return null;
-  try {
-    const url = new URL(item.url);
-    if (url.protocol !== "https:" || url.hostname === "localhost" || /^[\d.]+$/.test(url.hostname)) return null;
-    const host = url.hostname.replace(/^(mcp|api|server|sse)\./, "");
-    return `https://${host}/favicon.ico`;
-  } catch {
-    return null;
-  }
-}

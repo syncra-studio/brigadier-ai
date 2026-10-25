@@ -15,7 +15,7 @@ import { usePlugins, type PluginAgentResult, type PluginsAdapter } from "./adapt
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog } from "./dialogs";
 import { FileDialog } from "./FileDialog";
-import { chipOf, faviconOf, lineOf, listed, TAB_LABEL } from "./model";
+import { chipOf, lineOf, listed, TAB_LABEL } from "./model";
 import { PluginCard } from "./parts";
 import type { PluginItemView, PluginKind, PluginsView } from "./types";
 
@@ -108,7 +108,6 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
       <DetailsPage
         view={view}
         item={current}
-        favicon={faviconOf(current)}
         actions={{
           busy,
           onBack: () => openSettings("plugins"),
@@ -213,7 +212,6 @@ function ListBody({ view, tab, query, busy, adapter, onTab, onQuery, onOpen, onF
               item={item}
               line={lineOf(item)}
               chip={chipOf(view, item)}
-              favicon={faviconOf(item)}
               busy={busy}
               onOpen={() => onOpen(item)}
               onSwitch={(on) => onFlip(item, on)}

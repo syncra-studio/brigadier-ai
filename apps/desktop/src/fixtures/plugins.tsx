@@ -44,11 +44,13 @@ const projects: PluginProjectView[] = [
   { id: "p-docs", name: "docs-site", path: `${HOME}/Code/docs-site`, notes: [] },
 ];
 
+/** A small green square, as the daemon sends a site's favicon. */
+const CONTEXT7_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGPg7or+TwlmGDVg1IBRA4aLAQBgZO8Q38/aUAAAAABJRU5ErkJggg==";
 const some = (...projectIds: string[]) => ({ type: "someProjects" as const, projectIds, folders: [] });
 /** One item as the daemon sends it, from what sets it apart. */
 function item(spec: Pick<PluginItemView, "key" | "kind" | "name" | "detail"> & Partial<PluginItemView>): PluginItemView {
   return {
-    description: "", url: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false,
+    description: "", url: null, icon: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false,
     skillCount: spec.kind === "skill" ? 1 : 0, files: [spec.kind === "skill" ? `${LIB}/${spec.name}/skills/${spec.name}/SKILL.md` : `${LIB}/${spec.name}/.mcp.json`],
     ...spec,
   };
@@ -56,8 +58,10 @@ function item(spec: Pick<PluginItemView, "key" | "kind" | "name" | "detail"> & P
 
 function startingItems(): PluginItemView[] {
   return [
-    // Its site never answers (tests make no outside requests): its card falls back to the illustration.
-    item({ key: "lib:context7", kind: "server", name: "Context7", description: "Up-to-date docs and code examples for the libraries you use.", detail: "https://mcp.context7.invalid/mcp", url: "https://mcp.context7.invalid/mcp" }),
+    // Its site's icon, as the daemon sends it.
+    item({ key: "lib:context7", kind: "server", name: "Context7", description: "Up-to-date docs and code examples for the libraries you use.", detail: "https://mcp.context7.com/mcp", url: "https://mcp.context7.com/mcp", icon: CONTEXT7_ICON }),
+    // An icon that doesn't load: its card falls back to the illustration.
+    item({ key: "lib:error-feed", kind: "server", name: "error-feed", description: "Errors and slow pages from your apps.", detail: "https://errors.example.com/mcp", url: "https://errors.example.com/mcp", icon: "data:image/png;base64,broken" }),
     item({ key: "lib:figma", kind: "server", name: "Figma", description: "Frames, components and variables from your Figma files.", detail: "http://127.0.0.1:3845/mcp", url: "http://127.0.0.1:3845/mcp" }),
     item({
       key: "server:github", kind: "server", name: "GitHub", description: "Issues, pull requests and code search across your repos.", detail: "npx -y @modelcontextprotocol/server-github",

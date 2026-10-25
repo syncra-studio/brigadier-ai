@@ -42,6 +42,8 @@ export type PluginItemView = {
   detail: string;
   /** A remote server's address. */
   url: string | null;
+  /** Its site's icon, fetched by the daemon, as a data: URL. */
+  icon: string | null;
   on: boolean;
   scope: PluginScope;
   problem: PluginProblem | null;
