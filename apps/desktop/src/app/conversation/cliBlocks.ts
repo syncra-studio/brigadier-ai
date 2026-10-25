@@ -1,4 +1,4 @@
-import { brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import {
   type Block,
   type BoardDigest,
@@ -200,7 +200,7 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
   switch (event.type) {
     case "toolCall": {
       const name = bare(event.name);
-      if (isPlumbing(name)) return null;
+      if (isPlumbing(event.name)) return null;
       const endedAtMs = endedAt(entry, event.status);
       const exit = SHELL_TOOLS.has(name) && endedAtMs !== undefined && event.output !== null ? exitOf(event.output) : undefined;
       return {
@@ -208,7 +208,7 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
         itemId: event.itemId,
         // As the CLI named it: an MCP call's server is part of its words ("Used Linear").
         name: event.name,
-        detail: stepDetail(event.input),
+        detail: agentDetail(event.name, event.input) ?? stepDetail(event.input),
         status: event.status,
         ...(stopped && event.status === "failed" && { stopped: true }),
         ...base,

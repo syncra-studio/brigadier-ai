@@ -25,6 +25,8 @@ export type StepWords = {
   object?: string;
   /** For `other`: the summary's words for it ("Asked for a review"). */
   phrase?: string;
+  /** For `other`: the summary's words for several of it ("Ran agents"), where they differ. */
+  many?: string;
   /** It reads the web (a search, a page, a plain GET of a public page): drawn with a globe. */
   web?: boolean;
   /** It waits for other sessions to reply. */
@@ -56,14 +58,31 @@ export function toolName(name: string): string {
 
 /**
  * Calls of the CLIs' own plumbing, never a row: what came of them shows elsewhere (the tools a
- * search loaded, the worker an agent became, the question card and plan card of the CLI's own
- * question tool and plan, harness D7).
+ * search loaded, the question card and plan card of the CLI's own question tool and plan,
+ * harness D7), and Codex's wait for its own agents, whose rows say when each finished (D44).
  */
-const PLUMBING = new Set(["ToolSearch", "tool_search", "spawn_agent", "AskUserQuestion", "request_user_input", "ExitPlanMode"]);
+const PLUMBING = new Set(["ToolSearch", "tool_search", "AskUserQuestion", "request_user_input", "ExitPlanMode"]);
 
 /** Whether a call is plumbing, shown by what came of it rather than as a row. */
 export function isPlumbing(name: string): boolean {
-  return PLUMBING.has(toolName(name));
+  return PLUMBING.has(toolName(name)) || name === "agents/wait";
+}
+
+/** A subagent's start: Claude's `Agent` (once `Task`), Codex's `spawnAgent`. */
+const AGENTS = new Set(["Agent", "Task", "spawnAgent", "spawn_agent"]);
+
+/**
+ * What a subagent or skill call is given on its row (B1): a Claude agent's description, a Codex
+ * agent's prompt's first line, a skill's name; `undefined` for any other call.
+ */
+export function agentDetail(name: string, input: string | null): string | null | undefined {
+  const short = toolName(name);
+  if (!AGENTS.has(short) && short !== "Skill") return undefined;
+  const args = parsedInput(input);
+  const given = args ? (short === "Skill" ? args["skill"] : (args["description"] ?? args["prompt"])) : input;
+  if (typeof given !== "string") return null;
+  const line = given.trim().split("\n")[0]?.trim() ?? "";
+  return line ? [...line].slice(0, 240).join("") : null;
 }
 
 /** What `other` calls Brigadier knows are called; anything else is "Used {name}". */
@@ -312,6 +331,17 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
   if (WEB_SEARCH.has(short)) return webSearchWords(detail);
+  // "Ran agent: Find the parser", "Used skill brigade" (B1).
+  if (AGENTS.has(short)) {
+    return detail
+      ? { kind: "other", doing: `Running agent: ${detail}`, done: `Ran agent: ${detail}`, object: detail, phrase: "Ran an agent", many: "Ran agents" }
+      : { kind: "other", doing: "Running an agent", done: "Ran an agent", phrase: "Ran an agent", many: "Ran agents" };
+  }
+  if (short === "Skill") {
+    return detail
+      ? { kind: "other", doing: `Using skill ${detail}`, done: `Used skill ${detail}`, object: detail, phrase: "Used a skill", many: "Used skills" }
+      : { kind: "other", doing: "Using a skill", done: "Used a skill", phrase: "Used a skill", many: "Used skills" };
+  }
   if (WEB_FETCH.has(short)) {
     if (!detail) return { kind: "web", doing: "Reading a web page", done: "Read a web page", web: true };
     const page = hostOf(detail);
@@ -552,7 +582,9 @@ function summaryRank(key: string): number {
 export function summarize(steps: readonly StepWords[]): string {
   const parts = segments(steps).map(([key, { words, count }]) =>
       words.kind === "other"
-        ? `${words.phrase ?? words.done}${words.unnamed && count > 1 ? ` ${timesWord(count)}` : ""}`
+        ? count > 1 && words.many
+          ? words.many
+          : `${words.phrase ?? words.done}${words.unnamed && count > 1 ? ` ${timesWord(count)}` : ""}`
         : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
     );
   return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
@@ -620,7 +652,7 @@ export function itemCall(item: ActionItem): StepCall {
     case "command":
       return { name: "shell", detail: item.command, status: item.status };
     case "tool":
-      return { name: item.name, detail: detailOf(item.input), status: item.status };
+      return { name: item.name, detail: agentDetail(item.name, item.input) ?? detailOf(item.input), status: item.status };
     case "files":
       return { name: "apply_patch", detail: changesDetail(item.changes.map((change) => change.path)), status: item.status };
     case "image":
@@ -632,5 +664,5 @@ export function itemCall(item: ActionItem): StepCall {
 export function liveActivity(call: { command: string } | { name: string; input: string | null }): string {
   return stepWords("command" in call
     ? { name: "shell", detail: call.command, status: "inProgress" }
-    : { name: call.name, detail: detailOf(call.input), status: "inProgress" }).doing;
+    : { name: call.name, detail: agentDetail(call.name, call.input) ?? detailOf(call.input), status: "inProgress" }).doing;
 }

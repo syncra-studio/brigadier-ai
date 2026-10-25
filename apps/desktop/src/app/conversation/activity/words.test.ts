@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   type ActionItem,
+  agentDetail,
   allowedAt,
   deniedCall,
   editHunks,
@@ -56,7 +57,10 @@ test("a tool keeps its words across provider namespaces and never shows them", (
 });
 
 test("the CLIs' plumbing is never a row", () => {
-  for (const name of ["ToolSearch", "tool_search", "spawn_agent", "functions.spawn_agent"]) assert.ok(isPlumbing(name), name);
+  for (const name of ["ToolSearch", "tool_search"]) assert.ok(isPlumbing(name), name);
+  // Codex's wait for its own agents: their rows say when each finished (D44); a tool of another's named wait is a row.
+  assert.ok(isPlumbing("agents/wait"));
+  for (const name of ["mcp__timer__wait", "spawn_agent", "agents/spawnAgent", "Agent"]) assert.ok(!isPlumbing(name), name);
   // The CLI's own question tool and plan: their cards say them (harness D7).
   for (const name of ["AskUserQuestion", "request_user_input", "ExitPlanMode"]) assert.ok(isPlumbing(name), name);
   for (const name of ["Read", "Bash", "WebSearch", "imagegen"]) assert.ok(!isPlumbing(name), name);
@@ -291,4 +295,24 @@ test("three or more back-to-back calls of a tool with no words of its own fold; 
   const created = said("imagegen");
   assert.deepEqual(foldRepeats([created, created, created]), [[0], [1], [2]]);
   assert.equal(summarize([created, created]), "Created an image");
+});
+
+/** A finished call's words. */
+const done = (name: string, detail: string) => toolStepWords(call(name, "completed", detail));
+
+test("a subagent's row names its task, a skill's its name, and several sum up as agents (B1)", () => {
+  // Claude's Agent call by its description, Codex's by its prompt's first line.
+  const claude = agentDetail("Agent", JSON.stringify({ description: "Find the parser", prompt: "Look in src for…", subagent_type: "Explore" }));
+  assert.equal(claude, "Find the parser");
+  assert.equal(agentDetail("agents/spawnAgent", "Review the diff\nFocus on the reader."), "Review the diff");
+  assert.equal(agentDetail("Skill", JSON.stringify({ skill: "brigade", args: "" })), "brigade");
+  assert.equal(agentDetail("Bash", JSON.stringify({ command: "ls", description: "List" })), undefined);
+  assert.equal(lead("Agent", "inProgress", claude), "Running agent: Find the parser");
+  assert.equal(lead("Agent", "completed", claude), "Ran agent: Find the parser");
+  assert.equal(lead("agents/spawnAgent", "completed", "Review the diff"), "Ran agent: Review the diff");
+  assert.equal(lead("Task", "completed"), "Ran an agent");
+  assert.equal(lead("Skill", "completed", "brigade"), "Used skill brigade");
+  assert.equal(summarize([done("Agent", "Find the parser")]), "Ran an agent");
+  assert.equal(summarize([done("Agent", "Find the parser"), done("agents/spawnAgent", "Review the diff"), done("Read", "a.ts")]), "Read files, ran agents");
+  assert.equal(summarize([done("Skill", "brigade"), done("Skill", "grilling")]), "Used skills");
 });

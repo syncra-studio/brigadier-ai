@@ -246,3 +246,26 @@ test("a brigadier send whose message has its own Messaged row is no row of its o
   // A Messaged row from another time is another message: the send keeps its row.
   assert.ok(asBrigadier("interrupt", send, (atMs, requestId) => messaged(atMs + 60_000, requestId)).step);
 });
+
+/** The recorded ToolSearch call as another tool: the recording's event, only its name and input changed (D29). */
+function recordedCallAs(name: string, input: string): ToolStep | undefined {
+  const view = load("claude-2.1.310", "tools").persisted;
+  const call = view.entries.find((entry) => entry.event.type === "toolCall" && entry.event.name === "ToolSearch");
+  assert.ok(call?.event.type === "toolCall");
+  const { itemId } = call.event;
+  const entries = view.entries.map((entry) => (entry === call && entry.event.type === "toolCall" ? { ...entry, event: { ...entry.event, name, input } } : entry));
+  return cliBlocks({ ...view, entries }, "recorded-thread").flatMap(toolSteps).find((kind) => kind.itemId === itemId);
+}
+
+test("a subagent's row names its task and a skill's its name; Codex's wait for its agents is no row (D44, B1)", () => {
+  const agent = recordedCallAs("Agent", JSON.stringify({ description: "Find the parser", prompt: "Look in src.", subagent_type: "Explore" }));
+  assert.ok(agent);
+  assert.equal(rowWords(agent), "Ran agent: Find the parser");
+  const codex = recordedCallAs("agents/spawnAgent", "Review the diff\nFocus on the reader.");
+  assert.ok(codex);
+  assert.equal(rowWords(codex), "Ran agent: Review the diff");
+  const skill = recordedCallAs("Skill", JSON.stringify({ skill: "brigade" }));
+  assert.ok(skill);
+  assert.equal(rowWords(skill), "Used skill brigade");
+  assert.equal(recordedCallAs("agents/wait", ""), undefined);
+});

@@ -117,7 +117,7 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
       requestId: "u1",
     },
     {
-      kind: { type: "tool", itemId: "agent", name: "Agent", detail: null, status: "completed", throughPosition: 0, endedAtMs: 1400, item: "tool" },
+      kind: { type: "tool", itemId: "agent", name: "Agent", detail: "Look around", status: "completed", throughPosition: 0, endedAtMs: 1400, item: "tool" },
       position: 5,
       atMs: 1400,
       requestId: "u1",
