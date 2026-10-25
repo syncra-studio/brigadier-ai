@@ -90,9 +90,12 @@ export const menuSurface =
 export const itemVariants =
   "data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground data-[variant=destructive]:*:[svg]:text-destructive! data-[inset]:ps-8";
 
-/** A menu row; the context menu shares it. */
+/**
+ * A menu row; the context menu shares it. Its highlight follows the menu's corners: the menu's
+ * radius less its padding, so a one-line row stays a pill and a two-line one isn't a blob.
+ */
 export const itemBase =
-  "focus:bg-foreground/8 h-control-sm rounded-capsule relative flex cursor-default items-center gap-2 px-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md";
+  "focus:bg-foreground/8 h-control-sm rounded-2xl relative flex cursor-default items-center gap-2 px-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-icon-md";
 
 function DropdownMenuItem({
   className,
