@@ -2729,6 +2729,7 @@ impl SessionManager {
         let mut cli_env = Vec::new();
         let mut launch = None;
         let mut output_hook = None;
+        let mut stop_hook = None;
         let (mut choice, prompt) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = orchestrator.clone();
@@ -2757,6 +2758,7 @@ impl SessionManager {
                     );
                     grant_values.push(hook_grant.clone());
                     output_hook = Some(self.output_hook(hook_grant));
+                    stop_hook = Some(self.stop_hook());
                 }
                 (choice, prompt)
             }
@@ -2931,7 +2933,7 @@ impl SessionManager {
             allowed_models: self.rules_models(choice.provider)?,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
-            stop_hook: None,
+            stop_hook,
             naked_worker: false,
             native_compaction: self.native_compaction(conv, choice.provider),
         };
@@ -3089,6 +3091,18 @@ impl SessionManager {
             command: self.config.daemon_exe.clone(),
             args,
             env: vec![(super::tool_output::HOOK_GRANT_ENV.into(), grant)],
+            timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
+        }
+    }
+
+    /// A Claude thread's Stop hook (`brigadierd hook stop`): it sends a turn that ends with a
+    /// round of questions written as text back once, to ask them on the card (harness D43,
+    /// D45). Always on; workers have none, they don't talk to the user.
+    fn stop_hook(&self) -> OutputHook {
+        OutputHook {
+            command: self.config.daemon_exe.clone(),
+            args: vec!["hook".into(), "stop".into()],
+            env: Vec::new(),
             timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
         }
     }

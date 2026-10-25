@@ -1111,7 +1111,7 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     }))
 }
 
-/// A worker's `Stop` hook ([`SessionSpec::stop_hook`]) as settings `hooks.Stop`: its command
+/// A thread's `Stop` hook ([`SessionSpec::stop_hook`]) as settings `hooks.Stop`: its command
 /// reads the stop's event (`stop_hook_active` among it) and answers `decision: "block"` with a
 /// reason when the turn may not end yet, which the CLI gives the model to continue with
 /// (code.claude.com/docs/en/hooks, "Stop decision control"; the CLI stops continuing after 8).
@@ -3278,22 +3278,32 @@ for line in sys.stdin:
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
     }
 
-    /// A worker's `Stop` hook is a `hooks.Stop` command with no matcher, beside nothing else,
-    /// and its grant reaches the CLI's environment (BUILD-PLAN E2).
+    /// A thread's `Stop` hook (harness D43) is a `hooks.Stop` command with no matcher, beside
+    /// its output hook, in the settings layer Claude merges with the user's own hooks.
     #[test]
-    fn a_worker_gets_its_stop_hook() {
+    fn a_thread_gets_its_stop_hook_beside_its_output_hook() {
         let cwd = Temp::new();
-        let worker = SessionSpec {
+        let daemon = PathBuf::from("/Applications/Brigadier.app/Contents/MacOS/brigadierd");
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            output_hook: Some(OutputHook {
+                command: daemon.clone(),
+                args: vec!["hook".into(), "post-tool-use".into()],
+                env: vec![("BRIGADIER_HOOK_GRANT".into(), "brg_secret".into())],
+                timeout_secs: 60,
+            }),
             stop_hook: Some(OutputHook {
-                command: PathBuf::from("/Applications/Brigadier.app/Contents/MacOS/brigadierd"),
+                command: daemon,
                 args: vec!["hook".into(), "stop".into()],
-                env: vec![("BRIGADIER_STOP_GRANT".into(), "brg_stop".into())],
+                env: Vec::new(),
                 timeout_secs: 60,
             }),
             ..spec(cwd.path(), &[])
         };
-        let hooks = &settings(&worker, &SubAgents::Any, false)["hooks"];
-        assert_eq!(hooks.as_object().map(Map::len), Some(1), "{hooks}");
+        let hooks = &settings(&thread, &SubAgents::Any, false)["hooks"];
+        assert_eq!(hooks.as_object().map(Map::len), Some(3), "{hooks}");
+        assert!(hooks.get("PostToolUse").is_some());
         assert_eq!(
             hooks["Stop"],
             json!([{"hooks": [{
@@ -3301,11 +3311,6 @@ for line in sys.stdin:
                 "command": "/Applications/Brigadier.app/Contents/MacOS/brigadierd hook stop",
                 "timeout": 60,
             }]}])
-        );
-        assert!(
-            session_env(&worker, true, None)
-                .iter()
-                .any(|(name, value)| name == "BRIGADIER_STOP_GRANT" && value == "brg_stop")
         );
         // Without one, no hooks at all.
         let plain = spec(cwd.path(), &[]);

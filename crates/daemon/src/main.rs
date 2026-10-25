@@ -14,7 +14,8 @@
 //!
 //! The same binary has more jobs, chosen before any of the above runs:
 //!
-//! - `brigadierd hook post-tool-use`: a Claude thread's output hook ([`hook`]);
+//! - `brigadierd hook post-tool-use`: a Claude thread's output hook, and `brigadierd hook
+//!   stop` its Stop hook ([`hook`]);
 //! - `brigadierd quit`: asks a data directory's daemon to quit ([`quit`]).
 
 mod awake;
@@ -32,6 +33,7 @@ mod site_icons;
 mod storage;
 mod supervisor;
 mod terminals;
+mod text_round;
 mod uninstall;
 mod updates;
 mod upgrade;
@@ -104,7 +106,7 @@ fn main() -> ExitCode {
         return exit;
     }
     // `brigadierd hook post-tool-use [--data-dir PATH]`: a Claude thread's output hook; `hook
-    // stop`: a Claude worker's Stop hook.
+    // stop`: its Stop hook.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "hook") {
         return hook::run(std::env::args_os().skip(2));
     }

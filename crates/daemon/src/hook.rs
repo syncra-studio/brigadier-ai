@@ -17,6 +17,12 @@
 //! The grant (in [`HOOK_GRANT_ENV`], from the CLI's environment) can only store this thread's
 //! output. Whatever goes wrong, the hook prints nothing and exits 0: the tool call never
 //! breaks. No async runtime and no logging, so it starts at once.
+//!
+//! `brigadierd hook stop` is the same thread's `Stop` hook (harness D43, D45): when the turn's
+//! last reply ends with a round of questions written as text ([`crate::text_round`]), it sends
+//! the turn back once with [`STOP_REASON`], and the model asks the round on the question card
+//! itself; Brigadier rewrites nothing. A stop that is already such a send-back
+//! (`stop_hook_active`) always ends, so never twice in one turn. No daemon, no grant.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -28,6 +34,10 @@ use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES};
 use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply};
 use brigadier_sandbox::PlatformOptions;
 use serde_json::{Map, Value, json};
+
+/// What the thread is told when its turn ends with a round of questions written as text.
+const STOP_REASON: &str =
+    "Put these questions in your question tool (or brigadier ask) instead of the reply.";
 
 /// What the hook does with one event.
 #[derive(Debug, PartialEq)]
@@ -48,6 +58,17 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     // Every path ends here with nothing printed: never break the tool call.
     match args.next() {
         Some(event) if event == "post-tool-use" => {}
+        Some(event) if event == "stop" => {
+            let mut stdin = String::new();
+            if std::io::stdin().read_to_string(&mut stdin).is_ok()
+                && let Some(printed) = stop(&stdin)
+            {
+                let mut stdout = std::io::stdout().lock();
+                let _ = stdout.write_all(printed.as_bytes());
+                let _ = stdout.flush();
+            }
+            return ExitCode::SUCCESS;
+        }
         _ => return ExitCode::SUCCESS,
     }
     let mut data_dir: Option<PathBuf> = None;
@@ -115,6 +136,18 @@ fn handle(
             None
         }
     }
+}
+
+/// What the `Stop` hook prints for the event `stdin`: a send-back when the reply ends with a
+/// round of questions written as text; `None`: the turn ends.
+fn stop(stdin: &str) -> Option<String> {
+    let event: Value = serde_json::from_str(stdin).ok()?;
+    if event.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let reply = event.get("last_assistant_message")?.as_str()?;
+    crate::text_round::is_text_round(reply)
+        .then(|| json!({ "decision": "block", "reason": STOP_REASON }).to_string())
 }
 
 fn plan(event: &Value) -> Option<Plan> {
@@ -386,6 +419,35 @@ mod tests {
         assert!(header.excerpt);
         assert_eq!(header.status, "exit 3");
         assert_eq!(bytes, error.as_bytes());
+    }
+
+    /// A round written as text is sent back once; the send-back's own stop, and an ordinary
+    /// reply, end the turn (harness D43, D45).
+    #[test]
+    fn a_text_round_is_sent_back_once_per_turn() {
+        let event = |reply: &str, active: bool| {
+            json!({
+                "session_id": "s",
+                "hook_event_name": "Stop",
+                "stop_hook_active": active,
+                "last_assistant_message": reply,
+            })
+            .to_string()
+        };
+        let round = "1. Which branch should this land on?\n2. Keep the old flag?\n";
+        let printed: Value =
+            serde_json::from_str(&stop(&event(round, false)).expect("sent back")).unwrap();
+        assert_eq!(
+            printed,
+            json!({ "decision": "block", "reason": STOP_REASON })
+        );
+        assert_eq!(stop(&event(round, true)), None, "never twice in one turn");
+        assert_eq!(stop(&event("Done. Want me to push it?", false)), None);
+        assert_eq!(
+            stop(r#"{"hook_event_name":"Stop","stop_hook_active":false}"#),
+            None
+        );
+        assert_eq!(stop("not json"), None);
     }
 
     #[test]

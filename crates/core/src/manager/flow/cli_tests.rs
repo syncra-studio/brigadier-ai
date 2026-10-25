@@ -898,6 +898,17 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     );
     let (_, lean) = spec_of(&c);
     assert!(lean.naked_worker);
+    // A Claude thread sends a turn that ends with a round of questions written as text back
+    // once (harness D43); workers don't talk to the user and have no Stop hook.
+    let (_, thread) = flow
+        .thread_specs()
+        .into_iter()
+        .find(|(kind, _)| *kind == ProviderKind::Claude)
+        .expect("a Claude thread");
+    let stop = thread.stop_hook.as_ref().expect("a thread's Stop hook");
+    assert_eq!(stop.args, ["hook", "stop"]);
+    assert!(stop.env.is_empty(), "no grant");
+    assert!(lean.stop_hook.is_none());
     assert_eq!(lean.access, crate::model::PermissionLevel::Full.access());
     assert_eq!(plain(&c).mcps, ["pencil"]);
     let given: Vec<_> = lean.mcp_servers.iter().map(|s| s.name.as_str()).collect();
