@@ -524,6 +524,15 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   // A background job's notice the CLI starts a turn with in it keeps the hand-off's turn hidden.
   const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
   assert.deepEqual(noticed.map((block) => block.key), ["u1"]);
+  // The user's next turn after it reads its own turn, not the one before: running, its request shown.
+  const next = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), user("u5", "Next", 1500)], turns: [...own.turns, turn("tn", 1350, 1400, "done"), { ...turn("u5", 1500, null, null), requests: ["r5"] }] }, "conv");
+  assert.deepEqual(
+    next.map((block) => [block.key, block.user?.kind === "message" ? block.user.message.id : null, block.state]),
+    [
+      ["u1", "u1", "done"],
+      ["u5", "r5", "working"],
+    ],
+  );
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
     [

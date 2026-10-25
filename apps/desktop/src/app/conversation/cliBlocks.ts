@@ -460,6 +460,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
   let block: Block | null = null;
+  // The turn the entries are in, by its place in `view.turns`, and each block's turn: a turn the
+  // CLI begins with a notice inside Brigadier's own turn goes on that turn's block, not a block of its own.
+  let turn = -1;
+  const turnOf = new Map<Block, ThreadTurn | undefined>();
   const internal = new Set<Block>();
   let maintenance: "turn" | "steered" | "upkeep" | null = null;
   const seams = view.seams ?? [];
@@ -478,6 +482,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   const framed = (request: string) => lastTaken.has(request.slice(-8));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
+    if (startsTurn(entry)) turn += 1;
     let { event } = entry;
     // A successor's first message: the hand-off, then the user's words, if any.
     const handoff = event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
@@ -487,7 +492,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     }
     const asked = event.type === "message" && event.role === "user" ? event : null;
     // Brigadier's own turn carries no request of the user's: what the user sent shows as ever.
-    const brigadiers = startsTurn(entry) && view.turns[blocks.length]?.requests.length === 0;
+    const brigadiers = startsTurn(entry) && view.turns[turn]?.requests.length === 0;
     // The hand-off is under the hood (run2-D44): Brigadier's word to write the note, the turn
     // it starts, and from the ledger's upkeep on, the rest of a turn it was steered into; the
     // work the CLI finishes first still shows. A notice the CLI starts a turn with goes on it.
@@ -498,16 +503,20 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       if (nudge) {
         if (startsTurn(entry)) {
           maintenance = "turn";
-          if (block) settle(block, view.turns[blocks.length - 1]);
+          if (block) settle(block, turnOf.get(block));
           block = emptyBlock(asked.itemId, entry.atMs ?? 0, []);
           blocks.push(block);
+          turnOf.set(block, view.turns[turn]);
           internal.add(block);
           times.push([[position, entry.atMs ?? 0]]);
         } else maintenance = "steered";
         return;
       }
     } else if (maintenance === "steered" && upkeep(event)) maintenance = "upkeep";
-    if (maintenance === "turn" || (maintenance === "upkeep" && !asked)) return;
+    if (maintenance === "turn" || (maintenance === "upkeep" && !asked)) {
+      if (block && startsTurn(entry)) turnOf.set(block, view.turns[turn]);
+      return;
+    }
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && workerNotices(asked.text);
     const queued = asked && queuedId(asked.text);
@@ -520,7 +529,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       !!asked && session && brigadiers && (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK));
     // Brigadier's word to a session's CLI is no bubble (run2-D44): its own turn's, or a turn
     // of a request already shown (a background command's end), or steered in.
-    const carries = view.turns[blocks.length]?.requests ?? [];
+    const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
     const says = !!asked && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore);
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
@@ -528,9 +537,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const own = !!asked && (carried.has(asked.itemId) || (brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
     if (asked && (own || compacting || news || unshown || says)) {
       if (startsTurn(entry)) {
-        if (block) settle(block, view.turns[blocks.length - 1]);
-        block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
+        if (block) settle(block, turnOf.get(block));
+        block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[turn]?.requests ?? []);
         blocks.push(block);
+        turnOf.set(block, view.turns[turn]);
         times.push([[position, entry.atMs ?? 0]]);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
@@ -538,8 +548,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      if (block) settle(block, view.turns[blocks.length - 1]);
-      const requests = view.turns[blocks.length]?.requests ?? [];
+      if (block) settle(block, turnOf.get(block));
+      const requests = view.turns[turn]?.requests ?? [];
       const atMs = entry.atMs ?? 0;
       block = emptyBlock(event.itemId, atMs, requests);
       // A turn of a request an earlier turn carried (a background command's end, told after its
@@ -549,6 +559,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
       block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
       blocks.push(block);
+      turnOf.set(block, view.turns[turn]);
       times.push([[position, atMs]]);
       return;
     }
@@ -556,7 +567,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (!block) return;
     const current: Block = block;
     if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
-    const ended = view.turns[blocks.length - 1]?.end ?? null;
+    const ended = turnOf.get(current)?.end ?? null;
     switch (event.type) {
       case "message":
       case "messageDelta": {
@@ -625,7 +636,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
     }
   });
-  if (block) settle(block, view.turns[blocks.length - 1]);
+  if (block) settle(block, turnOf.get(block));
   if (board) place(blocks, times, board);
   // Each seam's divider after the turn before its successor's first message, or after the last
   // turn while the successor is still to come.
