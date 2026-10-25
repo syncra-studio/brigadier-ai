@@ -1340,7 +1340,8 @@ pub enum ToolSet {
     /// image generation, as a Chat does, and both have a Chat's shell for `brigadier`.
     TabChat,
     /// A session's or Chat's thread, the orchestrator: the CLI's usual tools, its background
-    /// tasks too, less its sub-agents, which its workers keep (run2-D43).
+    /// tasks and sub-agents too (harness D3, superseding run2-D43), less Claude's `Workflow`
+    /// (harness D31).
     Thread,
 }
 

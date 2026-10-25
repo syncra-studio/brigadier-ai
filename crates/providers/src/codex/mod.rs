@@ -439,7 +439,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     // The built-ins switched off, and whether the restricted overrides come with them.
     let (role_features, restricted): (&[&str], bool) = match tools {
         // A thread keeps Codex's goals and sleep tool, as in a plain CLI (STRIP-DOWN-PLAN S3);
-        // its sub-agents go below (run2-D43).
+        // its sub-agents too (harness D3), unless a model list rules them out below.
         ToolSet::Default | ToolSet::Lean | ToolSet::Thread => (&[], false),
         ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
         ToolSet::SideChat | ToolSet::TabChat => (CHAT_FEATURES, true),
@@ -484,13 +484,11 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
             args.push("-c".into());
             args.push((*value).into());
         }
-    } else if tools == ToolSet::Thread
-        || session.is_some_and(|session| session.allowed_models.is_some())
-    {
-        // A session's or Chat's thread, the orchestrator, has no sub-agents of its own; its
-        // workers keep theirs (run2-D43). `spawn_agent` takes any model Codex offers, one
-        // Brigadier excluded included (checked live on 0.159.2), so a worker held to a model
-        // list has none either.
+    } else if session.is_some_and(|session| session.allowed_models.is_some()) {
+        // A thread, the orchestrator, keeps its sub-agents as a worker does (harness D3,
+        // superseding run2-D43). But `spawn_agent` takes any model Codex offers, one Brigadier
+        // excluded included (checked live on 0.159.2), so a thread or worker held to a model
+        // list has none.
         args.push("-c".into());
         args.push(NO_SUB_AGENTS.into());
     }
@@ -3558,11 +3556,11 @@ mod tests {
         assert!(off(&app_server_args(None)), "a control connection");
     }
 
-    /// A session's or Chat's thread keeps Codex's own goals, sleep tool and shell, as in a plain
-    /// CLI (STRIP-DOWN-PLAN S3), but not its sub-agents: the orchestrator has none of its own,
-    /// while a worker without a model list keeps them (run2-D43).
+    /// A session's or Chat's thread keeps Codex's own goals, sleep tool, shell and sub-agents, as
+    /// in a plain CLI (STRIP-DOWN-PLAN S3, harness D3 superseding run2-D43), like a worker; a
+    /// model list Codex can't hold sub-agents to turns them off for both.
     #[test]
-    fn a_thread_keeps_codexs_own_tools_but_not_its_sub_agents() {
+    fn a_thread_keeps_codexs_own_tools_and_its_sub_agents() {
         let thread = spec(ToolSet::Thread, None);
         let args = app_server_args(Some(&thread));
         let disabled: Vec<&str> = args
@@ -3572,23 +3570,18 @@ mod tests {
             .collect();
         // Only what is off for every session: goals, the sleep tool and the shell are Codex's own.
         assert_eq!(disabled, DISABLED_FEATURES, "{args:?}");
-        let overrides: Vec<&str> = args
-            .windows(2)
-            .filter(|pair| pair[0] == "-c")
-            .map(|pair| pair[1].as_str())
-            .collect();
-        assert_eq!(
-            overrides
-                .iter()
-                .filter(|value| value.starts_with("agents."))
-                .collect::<Vec<_>>(),
-            [&NO_SUB_AGENTS],
-            "{args:?}"
-        );
+        assert!(!without_sub_agents(&args), "{args:?}");
         assert!(!without_sub_agents(&app_server_args(Some(&spec(
             ToolSet::Lean,
             None
         )))));
+        for tools in [ToolSet::Thread, ToolSet::Lean] {
+            let limited = spec(tools, Some(AllowedModels::default()));
+            assert!(
+                without_sub_agents(&app_server_args(Some(&limited))),
+                "{tools:?}"
+            );
+        }
     }
 
     /// Each level passes straight through as Codex's own approval policy and sandbox, for a

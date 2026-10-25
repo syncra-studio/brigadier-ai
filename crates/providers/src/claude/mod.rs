@@ -106,6 +106,9 @@ const QUESTIONS_DECLINED: &str = "The user closed these questions without answer
 /// `Workflow`, which runs a script of them (still there without `Agent`, checked live on
 /// 2.1.310).
 const SUB_AGENT_TOOLS: &str = "Agent,Task,Workflow";
+/// The one of them a session's or Chat's thread, the orchestrator, goes without: a `Workflow`
+/// runs a multi-agent orchestration of its own beside the thread's workers (harness D31).
+const WORKFLOW_TOOL: &str = "Workflow";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
@@ -706,8 +709,9 @@ fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> Sub
 
 /// The built-in tools a session runs without (`--disallowedTools`): a worker's lean start
 /// leaves some out, and sub-agents that could run on a model the task may not use are not
-/// started at all. A session's or Chat's thread, the orchestrator, has no sub-agents of its own
-/// (run2-D43); its workers keep theirs.
+/// started at all. A session's or Chat's thread, the orchestrator, has its own sub-agents for
+/// look-ups, reading across files and small edits, like a worker (harness D3, superseding
+/// run2-D43), but not `Workflow` (harness D31).
 fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
     let mut denied: Vec<&str> = Vec::new();
     if spec.tools.user_setup() {
@@ -716,8 +720,10 @@ fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
     if spec.tools == ToolSet::Lean {
         denied.push(WORKER_DENIED_TOOLS);
     }
-    if *sub_agents == SubAgents::Off || spec.tools == ToolSet::Thread {
+    if *sub_agents == SubAgents::Off {
         denied.push(SUB_AGENT_TOOLS);
+    } else if spec.tools == ToolSet::Thread {
+        denied.push(WORKFLOW_TOOL);
     }
     (!denied.is_empty()).then(|| denied.join(","))
 }
@@ -3184,12 +3190,12 @@ for line in sys.stdin:
                     .find(|pair| pair[0] == flag)
                     .map(|pair| pair[1].clone())
             };
-            // The CLI's own tools, less the ones dead in a tab (S17) and its sub-agents: the
-            // orchestrator has none of its own (run2-D43).
+            // The CLI's own tools, less the ones dead in a tab (S17) and `Workflow`: the
+            // orchestrator keeps its own sub-agents (harness D3, D31).
             assert_eq!(after("--tools"), None);
             assert_eq!(
                 after("--disallowedTools"),
-                Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"))
+                Some(format!("{TAB_DENIED_TOOLS},{WORKFLOW_TOOL}"))
             );
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(
@@ -3449,9 +3455,10 @@ for line in sys.stdin:
                 allowed_models: None,
                 ..spec(cwd, &[])
             };
-            // A thread, the orchestrator, also goes without its sub-agents (run2-D43).
+            // A thread, the orchestrator, keeps its sub-agents but not `Workflow` (harness D3,
+            // D31).
             let denied = match tools {
-                ToolSet::Thread => format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"),
+                ToolSet::Thread => format!("{TAB_DENIED_TOOLS},{WORKFLOW_TOOL}"),
                 _ => format!("{TAB_DENIED_TOOLS},{WORKER_DENIED_TOOLS}"),
             };
             assert_eq!(denied_tools(&session, &SubAgents::Any), Some(denied));
@@ -3933,12 +3940,11 @@ for line in sys.stdin:
                 .position(|arg| arg == name)
                 .map(|at| args[at + 1].clone())
         };
-        // The CLI's own tools, less those dead in a tab and the sub-agents a thread goes
-        // without (run2-D43).
+        // The CLI's own tools, less those dead in a tab and `Workflow` (harness D3, D31).
         assert_eq!(flag("--tools"), None, "{args:?}");
         assert_eq!(
             flag("--disallowedTools"),
-            Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}")),
+            Some(format!("{TAB_DENIED_TOOLS},{WORKFLOW_TOOL}")),
             "{args:?}"
         );
         let settings: Value = serde_json::from_str(&flag("--settings").unwrap()).unwrap();
@@ -3952,12 +3958,14 @@ for line in sys.stdin:
         assert_eq!(sub_agents(&raw, cwd.path(), None), SubAgents::Any);
     }
 
-    /// A session's or Chat's thread, the orchestrator, runs without its Agent tool; a worker
-    /// keeps it (run2-D43).
+    /// A session's or Chat's thread, the orchestrator, keeps its Agent tool but goes without
+    /// `Workflow` (harness D3, D31, superseding run2-D43); a worker keeps both. A model limit the
+    /// CLI can't hold sub-agents to turns them all off, for the thread as for a worker.
     #[test]
-    fn a_thread_has_no_sub_agents_and_a_worker_keeps_them() {
+    fn a_thread_keeps_its_sub_agents_but_not_workflow_and_a_worker_keeps_both() {
         let cwd = Temp::new();
         let worker = SessionSpec {
+            tools: ToolSet::Lean,
             allowed_models: None,
             ..spec(cwd.path(), &[])
         };
@@ -3965,9 +3973,28 @@ for line in sys.stdin:
             tools: ToolSet::Thread,
             ..worker.clone()
         };
-        let denied = |spec: &SessionSpec| denied_tools(spec, &sub_agents(spec, cwd.path(), None));
-        assert!(denied(&thread).is_some_and(|tools| tools.contains(SUB_AGENT_TOOLS)));
-        assert!(!denied(&worker).is_some_and(|tools| tools.contains(SUB_AGENT_TOOLS)));
+        let denied = |spec: &SessionSpec| {
+            denied_tools(spec, &sub_agents(spec, cwd.path(), None))
+                .unwrap_or_default()
+                .split(',')
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let has = |list: &[String], tool: &str| list.iter().any(|t| t == tool);
+        let thread_denied = denied(&thread);
+        assert!(has(&thread_denied, "Workflow"), "{thread_denied:?}");
+        assert!(!has(&thread_denied, "Agent"), "{thread_denied:?}");
+        assert!(!has(&thread_denied, "Task"), "{thread_denied:?}");
+        let worker_denied = denied(&worker);
+        for tool in ["Agent", "Task", "Workflow"] {
+            assert!(!has(&worker_denied, tool), "{worker_denied:?}");
+        }
+        for spec in [&thread, &worker] {
+            assert!(
+                denied_tools(spec, &SubAgents::Off)
+                    .is_some_and(|tools| tools.contains(SUB_AGENT_TOOLS))
+            );
+        }
     }
 
     #[test]
