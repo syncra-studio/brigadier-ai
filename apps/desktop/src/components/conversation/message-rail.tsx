@@ -13,7 +13,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
-import { placeOf, type ThreadListState, useThreadList } from "@/components/conversation/thread-list";
+import { placeOf, type ThreadListState, useThreadList, useThreadListIds } from "@/components/conversation/thread-list";
 import type { ThreadScroller } from "@/components/conversation/thread-scroll";
 import type { MessageMatches } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -146,6 +146,41 @@ function userRows(viewport: HTMLElement): HTMLElement[] {
   return [...viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row] > [data-role="user"][data-message-id]')];
 }
 
+/**
+ * The user message after (1) or before (-1) the one at `line`, from the whole branch `ids`: the
+ * mounted ones by where they show, the rest by their place. Null with none that way, or with no
+ * mounted row at or above `line` to place it from.
+ */
+function stepFrom(viewport: HTMLElement, ids: readonly string[], users: ReadonlySet<string>, line: number, direction: -1 | 1): string | null {
+  const rows = viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row]');
+  /** The last mounted row at or above the line, by its place. */
+  let at = -1;
+  /** Each mounted user message's top, by its place. */
+  const tops = new Map<number, number>();
+  for (const row of rows) {
+    const index = Number(row.dataset["index"]);
+    if (Number.isNaN(index)) continue;
+    if (row.getBoundingClientRect().top <= line) at = Math.max(at, index);
+    const user = row.querySelector<HTMLElement>(':scope > [data-role="user"][data-message-id]');
+    if (user) tops.set(index, user.getBoundingClientRect().top);
+  }
+  if (at < 0) return null;
+  if (direction > 0) {
+    for (let index = at; index < ids.length; index++) {
+      const id = ids[index]!;
+      const top = tops.get(index);
+      if (users.has(id) && (top === undefined ? index > at : top > line + TOLERANCE_PX)) return id;
+    }
+    return null;
+  }
+  for (let index = Math.min(at, ids.length - 1); index >= 0; index--) {
+    const id = ids[index]!;
+    const top = tops.get(index);
+    if (users.has(id) && (top === undefined ? index < at : top < line - TOLERANCE_PX)) return id;
+  }
+  return null;
+}
+
 function rowOf(viewport: HTMLElement, id: string): HTMLElement | null {
   return userRows(viewport).find((row) => row.dataset["messageId"] === id) ?? null;
 }
@@ -216,15 +251,19 @@ function typing(target: EventTarget | null): boolean {
  */
 export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: ThreadScroller }> = ({ viewport, scroller }) => {
   const history = useContext(ThreadHistoryContext);
+  const allEntries = useUserEntries();
   // Its markers join as React finds time: a long thread's thousands never hold up the view opening.
-  const entries = useDeferredValue(useUserEntries(), NO_ENTRIES);
+  const entries = useDeferredValue(allEntries, NO_ENTRIES);
+  const ids = useThreadListIds();
 
   // What the jumps read after they wait: the newest, not what was there when they began.
   const historyRef = useRef(history);
-  const entriesRef = useRef(entries);
+  const entriesRef = useRef(allEntries);
+  const idsRef = useRef(ids);
   useLayoutEffect(() => {
     historyRef.current = history;
-    entriesRef.current = entries;
+    entriesRef.current = allEntries;
+    idsRef.current = ids;
   });
   const jumps = useRef(0);
 
@@ -287,20 +326,17 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
     return null;
   }, []);
 
-  /** ⌥↑ / ⌥↓: the user message before or after the one at the view's top. */
+  /**
+   * ⌥↑ / ⌥↓: the user message before or after the one at the view's top, from the whole branch:
+   * the one next to it may be far from the rows mounted (turns the CLI began on its own between).
+   */
   const step = useCallback(
     async (direction: -1 | 1) => {
       if (!viewport || viewport.clientHeight === 0) return;
       const line = viewport.getBoundingClientRect().top + LAND_PX;
-      const rows = userRows(viewport);
-      const tops = rows.map((row) => row.getBoundingClientRect().top);
-      if (direction > 0) {
-        const next = rows.find((_, index) => (tops[index] ?? 0) > line + TOLERANCE_PX);
-        if (next?.dataset["messageId"]) await jumpTo(next.dataset["messageId"], { smooth: true, flash: true });
-        return;
-      }
-      const previous = rows.findLast((_, index) => (tops[index] ?? 0) < line - TOLERANCE_PX);
-      const id = previous?.dataset["messageId"] ?? (historyRef.current?.hasMore ? await olderThanLoaded() : null);
+      const users = new Set(entriesRef.current.map((entry) => entry.id));
+      const found = stepFrom(viewport, idsRef.current, users, line, direction);
+      const id = found ?? (direction < 0 && historyRef.current?.hasMore ? await olderThanLoaded() : null);
       if (id) await jumpTo(id, { smooth: true, flash: true });
     },
     [viewport, jumpTo, olderThanLoaded],

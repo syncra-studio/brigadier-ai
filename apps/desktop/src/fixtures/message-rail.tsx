@@ -6,6 +6,7 @@
  * - `long`: a chat of 80 turns. Opening it brings the newest 40, only those near the view mounted.
  * - `short`: a chat of 3 turns.
  * - `long-u47` is long enough to be cut until "Show more".
+ * - `gaps`: 6 user messages, each followed by 12 turns its CLI began, so the one next to any is never mounted.
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
  * `window.messageRail` holds the steps for a browser probe.
@@ -61,15 +62,38 @@ function messages(id: string, turns: number): Message[] {
   return list;
 }
 
+/**
+ * `turns` user messages, each followed by `notices` turns the CLI begins with a background
+ * command's end (no bubble, as Brigadier's word to it), each with its reply.
+ */
+function spaced(id: string, turns: number, notices: number): Message[] {
+  const list: Message[] = [];
+  const add = (message: Omit<Message, "conversationId" | "seq" | "blob" | "attachments" | "mentions" | "model" | "parentId">) =>
+    list.push({ ...message, conversationId: id, seq: list.length + 1, blob: null, attachments: [], mentions: [], model: null, parentId: list.at(-1)?.id ?? null });
+  for (let turn = 0; turn < turns; turn++) {
+    const requestId = `${id}-r${turn}`;
+    const at = start + turn * 600_000;
+    add({ id: `${id}-u${turn}`, role: "user", text: `Question ${turn + 1}, far from the next.`, createdAtMs: at, requestId });
+    add({ id: `${id}-a${turn}`, role: "assistant", text: `Answer ${turn + 1}, with a command left running.`, createdAtMs: at + 1000, requestId });
+    for (let notice = 0; notice < notices; notice++) {
+      const atMs = at + (notice + 2) * 1000;
+      add({ id: `${id}-n${turn}-${notice}`, role: "user", text: `[your background command \`job ${notice + 1}\` finished]`, createdAtMs: atMs, requestId });
+      add({ id: `${id}-m${turn}-${notice}`, role: "assistant", text: `Job ${notice + 1} of question ${turn + 1} is done.`, createdAtMs: atMs + 500, requestId });
+    }
+  }
+  return list;
+}
+
 const conversations: Record<string, Conversation> = {
   long: conversation("long", "A long chat"),
   short: conversation("short", "A short chat"),
+  gaps: conversation("gaps", "Far apart"),
 };
-const stored: Record<string, Message[]> = { long: messages("long", TURNS), short: messages("short", 3) };
+const stored: Record<string, Message[]> = { long: messages("long", TURNS), short: messages("short", 3), gaps: spaced("gaps", 6, 12) };
 
 function view(id: string): View {
   const list = stored[id] ?? [];
-  const first = Math.max(0, list.length - FIRST_TURNS * 2);
+  const first = id === "gaps" ? 0 : Math.max(0, list.length - FIRST_TURNS * 2);
   return {
     conversation: conversations[id]!,
     context: null,
@@ -455,6 +479,17 @@ const steps = {
     const down = await until(() => document.activeElement === at(first));
     await settle(100);
     return { ...roles, total: Number(shown[0]!.getAttribute("aria-setsize")), first, mountedBefore, up, down };
+  },
+  /** ⌥↑ from the bottom, then ⌥↓, where the user message next to the view's is never mounted. */
+  async farNeighbours() {
+    await open("gaps");
+    // The user messages, oldest first, as the rail marks them.
+    const ids = markerIds();
+    const mounted = userRows().map((element) => element.dataset["messageId"] ?? "");
+    const up = [];
+    for (const turn of [5, 4, 3]) up.push((await stepTo("ArrowUp", ids[turn]!)).landed);
+    const down = await stepTo("ArrowDown", ids[4]!);
+    return { markers: ids.length, setsize: Number($("[data-thread-row]")?.getAttribute("aria-setsize")), fourthMounted: mounted.includes(ids[4]!), up, down: down.landed };
   },
   /** Three messages: no rail. */
   async short() {

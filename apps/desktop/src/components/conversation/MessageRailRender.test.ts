@@ -34,6 +34,7 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     farApproval: { turnMounted: boolean; shown: boolean; gone: boolean };
     longAnswer: { messagesShown: number; current: string[]; inView: string[] };
     feed: { feed: string | null; label: string | null; articles: boolean; setsize: (string | null)[]; placed: boolean; total: number; first: number; mountedBefore: boolean; up: boolean; down: boolean };
+    farNeighbours: { markers: number; setsize: number; fourthMounted: boolean; up: boolean[]; down: boolean };
     short: { rail: boolean; rows: number };
   };
   assert.equal(seen.error, undefined);
@@ -116,6 +117,13 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
   assert.deepEqual(feed.setsize, [String(feed.total)]);
   assert.ok(feed.first > 0 && !feed.mountedBefore, `first mounted article ${feed.first}`);
   assert.deepEqual([feed.up, feed.down], [true, true]);
+
+  // The user message next to the view's is far from the rows mounted: ⌥↑ and ⌥↓ mount it and land it.
+  const { farNeighbours } = seen;
+  assert.equal(farNeighbours.markers, 6);
+  assert.ok(farNeighbours.setsize > 60, `rows: ${farNeighbours.setsize}`);
+  assert.equal(farNeighbours.fourthMounted, false);
+  assert.deepEqual([farNeighbours.up, farNeighbours.down], [[true, true, true], true]);
 
   // Three user messages: no rail.
   assert.deepEqual(seen.short, { rail: false, rows: 3 });
