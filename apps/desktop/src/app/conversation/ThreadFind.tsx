@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
+import { unmarked } from "@/app/conversation/findWords";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { ThreadHistoryContext, type ThreadMessage, type ThreadOverlayProps, useThreadKey, keptChanges, rowKeyOf, useThreadListIds, useThreadListSource, useAui, placeOf } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
@@ -176,15 +177,6 @@ function textIn(root: Element): { text: string; nodes: Text[]; starts: number[] 
     text += node.data;
   }
   return { text, nodes, starts };
-}
-
-/** Markdown's marks, which a message's text drawn shows without: fences, heads, quotes, list marks, links' targets, emphasis. */
-function unmarked(text: string): string {
-  return text
-    .replace(/^\s*```.*$/gm, "")
-    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\*\*|__|~~|`/g, "");
 }
 
 /** What each message says, lower case, made once per message. */
