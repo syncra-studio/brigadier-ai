@@ -367,6 +367,84 @@ pub struct ApprovalRequest {
     pub grant: Option<String>,
 }
 
+/// One question a CLI asks with its own question tool ([`ProviderEvent::QuestionsAsked`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CliQuestion {
+    /// The question's own short heading ("File name"), when the CLI gives one.
+    pub header: Option<String>,
+    pub question: String,
+    /// Its options, each label as the CLI wrote it less the " (Recommended)" mark.
+    pub options: Vec<CliOption>,
+    /// The option the asker recommends: the one whose label it ended with " (Recommended)"
+    /// (D28's convention, which the CLIs' own prompts use too). None when none is marked.
+    pub recommended: Option<u32>,
+    /// The user may pick several options.
+    pub multi_select: bool,
+}
+
+/// An option of a [`CliQuestion`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CliOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// How a recommended option's label ends, by the CLIs' own convention.
+pub const RECOMMENDED_MARK: &str = " (Recommended)";
+
+impl CliQuestion {
+    /// A question from the CLI's own options (label, description), the recommended one found
+    /// by its mark and the mark left out of its label. The first marked option counts; none
+    /// marked, none is recommended.
+    pub fn new(
+        header: Option<String>,
+        question: String,
+        options: impl IntoIterator<Item = (String, Option<String>)>,
+        multi_select: bool,
+    ) -> Self {
+        let mut recommended = None;
+        let options = options
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, description))| {
+                let label = match label.strip_suffix(RECOMMENDED_MARK) {
+                    Some(plain) if !plain.trim().is_empty() => {
+                        recommended.get_or_insert(index as u32);
+                        plain.to_owned()
+                    }
+                    _ => label,
+                };
+                CliOption { label, description }
+            })
+            .collect();
+        Self {
+            header: header.filter(|header| !header.trim().is_empty()),
+            question,
+            options,
+            recommended,
+            multi_select,
+        }
+    }
+
+    /// An answer as the CLI offered it: a chosen option goes back with the label the CLI wrote
+    /// (its mark included), anything typed as typed.
+    pub fn as_offered(&self, answer: &str) -> String {
+        match self.recommended {
+            Some(index)
+                if self
+                    .options
+                    .get(index as usize)
+                    .is_some_and(|o| o.label == answer) =>
+            {
+                format!("{answer}{RECOMMENDED_MARK}")
+            }
+            _ => answer.to_owned(),
+        }
+    }
+}
+
 /// The answer to an [`ApprovalRequest`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -1010,6 +1088,25 @@ pub enum ProviderEvent {
         decision: ApprovalDecision,
         decided_by: Decider,
     },
+    /// The CLI asks the user with its own question tool (Claude's `AskUserQuestion`, Codex's
+    /// `request_user_input`), and waits: answered with
+    /// [`ProviderSession::answer_questions`](crate::ProviderSession::answer_questions)
+    /// (harness D7).
+    QuestionsAsked {
+        id: String,
+        questions: Vec<CliQuestion>,
+    },
+    /// The CLI took back a question it asked ([`Self::QuestionsAsked`]) before it was
+    /// answered: its turn was stopped or ended.
+    QuestionsWithdrawn {
+        id: String,
+    },
+    /// The CLI proposed its plan from its own plan mode (Claude's `ExitPlanMode`, Codex's plan
+    /// item), and its turn ends there: the user builds it or replies (harness D7).
+    PlanProposed {
+        item_id: String,
+        plan: String,
+    },
     TurnCompleted {
         turn_id: Option<String>,
         status: TurnStatus,
@@ -1506,6 +1603,10 @@ pub enum Artifact {
         /// The enclosing project directory, only when it too was absent before the start.
         project_identity: Option<(u64, u64)>,
     },
+    /// A plan file Claude Code wrote in plan mode (`<config>/plans/<name>.md`, its
+    /// `ExitPlanMode` names it) that was not there when the session started: removed with the
+    /// session, only while it is still that file (harness D7).
+    ClaudePlanFile { path: String, identity: (u64, u64) },
     /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`,
     /// or `.claude` itself when that did not exist). Removed only while it holds no files.
     ClaudeStagingDir { path: String },

@@ -108,6 +108,7 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
         | ProviderEvent::CompactionStarted { .. }
         | ProviderEvent::CompactionRefused
         | ProviderEvent::CompactionEnded { .. }
+        | ProviderEvent::PlanProposed { .. }
         | ProviderEvent::TurnCompleted { .. } => true,
         ProviderEvent::Usage { total, .. } => {
             let count = |u: &brigadier_providers::TokenUsage| {
@@ -131,6 +132,8 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
         | ProviderEvent::RateLimits { .. }
         | ProviderEvent::ApprovalRequested { .. }
         | ProviderEvent::ApprovalResolved { .. }
+        | ProviderEvent::QuestionsAsked { .. }
+        | ProviderEvent::QuestionsWithdrawn { .. }
         | ProviderEvent::Error { .. }
         | ProviderEvent::Notice { .. }
         | ProviderEvent::TaskNotice { .. }

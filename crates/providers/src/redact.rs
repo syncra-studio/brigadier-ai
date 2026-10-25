@@ -614,6 +614,18 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
             opt(&mut request.reason);
             opt(&mut request.input);
         }
+        ProviderEvent::QuestionsAsked { questions, .. } => {
+            for question in questions {
+                opt(&mut question.header);
+                r(&mut question.question);
+                for option in &mut question.options {
+                    r(&mut option.label);
+                    opt(&mut option.description);
+                }
+            }
+        }
+        ProviderEvent::QuestionsWithdrawn { .. } => {}
+        ProviderEvent::PlanProposed { plan, .. } => r(plan),
         ProviderEvent::ApprovalResolved { decision, .. } => {
             if let ApprovalDecision::Deny { message } = decision {
                 r(message);

@@ -426,6 +426,12 @@ fn plan_name(plan: p::PlanType) -> Option<&'static str> {
     })
 }
 
+/// Codex's own question tool (`request_user_input`) in its default collaboration mode, beside
+/// plan mode where it always is: a feature still "under development" in 0.164.0, so set as a
+/// config override, which a Codex without it ignores. Without it the thread asks with
+/// `brigadier ask`, as its standing instructions say (harness D7, D28).
+const THREAD_QUESTIONS: &str = "features.default_mode_request_user_input=true";
+
 /// `codex app-server`'s arguments for a session (`None`: a control connection).
 fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let mut args: Vec<String> = vec!["app-server".into()];
@@ -487,6 +493,12 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         // list has none either.
         args.push("-c".into());
         args.push(NO_SUB_AGENTS.into());
+    }
+    // A thread asks the user with Codex's own question tool in its default mode too, as it
+    // does in plan mode (harness D7).
+    if tools == ToolSet::Thread {
+        args.push("-c".into());
+        args.push(THREAD_QUESTIONS.into());
     }
     // The user's own skills they switched off for Brigadier, by file, beside their own
     // entries: the override replaces the list (docs/research/phase7-probes.md (d)).
@@ -750,6 +762,7 @@ async fn control_reader(rpc: Arc<Rpc>, mut stdout: mpsc::Receiver<String>) {
         for output in parser.feed(&line) {
             match output {
                 Output::Control(Control::Response { id, result }) => rpc.resolve(id, result),
+                Output::Control(Control::Resolved { .. }) => {}
                 Output::Control(
                     Control::Approval { rpc_id, .. }
                     | Control::Elicitation { rpc_id, .. }
@@ -968,6 +981,7 @@ impl Provider for Codex {
             let Opened {
                 thread,
                 model,
+                effort: thread_effort,
                 notices,
                 context_window,
             } = match started {
@@ -991,6 +1005,9 @@ impl Provider for Codex {
                 writable_roots: writable_roots(&spec),
                 effort: spec.effort.clone(),
                 cwd: cwd.clone(),
+                model: model.clone(),
+                thread_effort,
+                plan: Mutex::new(None),
             });
             session
                 .emit(ProviderEvent::SessionStarted {
@@ -1148,6 +1165,8 @@ struct Opened {
     context_window: Option<i64>,
     thread: p::Thread,
     model: String,
+    /// The effort the thread runs on, as Codex says.
+    effort: Option<p::ReasoningEffort>,
     notices: Vec<String>,
 }
 
@@ -1268,16 +1287,16 @@ async fn open_thread(
     };
     let context_window = config.get("model_context_window").and_then(Value::as_i64);
     let start = start_params(spec, cwd, config);
-    let (thread, model) = match opening(spec, start) {
+    let (thread, model, effort) = match opening(spec, start) {
         Opening::Start(params) => {
             let started: p::ThreadStartResponse = rpc.call("thread/start", &params).await?;
-            (started.thread, started.model)
+            (started.thread, started.model, started.reasoning_effort)
         }
         Opening::Resume(params) => {
             // Brigadier archived it when it last closed the thread.
             unarchive_thread(rpc, &params.thread_id).await?;
             let resumed: p::ThreadResumeResponse = rpc.call("thread/resume", &params).await?;
-            (resumed.thread, resumed.model)
+            (resumed.thread, resumed.model, resumed.reasoning_effort)
         }
         Opening::Fork(params) => {
             let archived = unarchive_thread(rpc, &params.thread_id).await?;
@@ -1285,7 +1304,7 @@ async fn open_thread(
             if archived {
                 archive_thread(rpc, &params.thread_id).await?;
             }
-            (forked.thread, forked.model)
+            (forked.thread, forked.model, forked.reasoning_effort)
         }
     };
     // An ephemeral thread leaves nothing on disk: nothing to archive or delete later.
@@ -1326,6 +1345,7 @@ async fn open_thread(
         context_window,
         thread,
         model,
+        effort,
         notices,
     })
 }
@@ -2167,6 +2187,14 @@ pub struct CodexSession {
     effort: Option<String>,
     /// Its working directory, where Codex finds the repository's skills.
     cwd: PathBuf,
+    /// The model and effort the thread runs on, which a collaboration mode must name again: it
+    /// takes precedence over the turn's own (the app-server's `turn/start` docs).
+    model: String,
+    thread_effort: Option<p::ReasoningEffort>,
+    /// Codex's own plan mode for the next turns ([`ProviderSession::set_plan_mode`]): `None`
+    /// until a session is first put in or out of it, when its turns name no collaboration
+    /// mode at all.
+    plan: Mutex<Option<bool>>,
 }
 
 impl CodexSession {
@@ -2211,6 +2239,22 @@ impl CodexSession {
             ),
             None => None,
         };
+        // Plan mode is Codex's own plan collaboration mode (harness D7). Its settings replace
+        // the turn's model and effort, so they carry the session's; `developer_instructions`
+        // left out keeps the mode's own (the thread's own instructions stay, checked on
+        // 0.164.0).
+        let collaboration_mode = (*lock(&self.plan)).map(|plan| p::CollaborationMode {
+            mode: if plan {
+                p::ModeKind::Plan
+            } else {
+                p::ModeKind::Default
+            },
+            settings: p::Settings {
+                developer_instructions: None,
+                model: self.model.clone(),
+                reasoning_effort: effort.clone().or_else(|| self.thread_effort.clone()),
+            },
+        });
         let started: p::TurnStartResponse = self
             .rpc
             .call(
@@ -2227,6 +2271,7 @@ impl CodexSession {
                     )),
                     approval_policy: Some(approval_policy(self.access)),
                     approvals_reviewer: Some(REVIEWER),
+                    collaboration_mode,
                     ..Default::default()
                 },
             )
@@ -2402,8 +2447,12 @@ impl ProviderSession for CodexSession {
                     "permissions": if allow { requested.clone() } else { json!({}) },
                     "scope": "turn",
                 }),
-                // An elicitation's answer (`mcpServer/elicitation/request`); declined, the
-                // model reads "user rejected MCP tool call".
+                // Questions take answers ([`Self::answer_questions`]), not a decision.
+                PendingKind::Questions { .. } => {
+                    lock(&self.shared.approvals).insert(approval_id, (rpc_id, kind.clone()));
+                    return Err(Error::Invalid("this request asks questions".into()));
+                } // An elicitation's answer (`mcpServer/elicitation/request`); declined, the
+                  // model reads "user rejected MCP tool call".
             };
             self.rpc.respond(rpc_id, result).await?;
             // A decline carries no words (the app-server's approval responses, 0.162.1), so
@@ -2424,6 +2473,46 @@ impl ProviderSession for CodexSession {
                 if let Err(err) = self.steer_turn(turn_id, &why).await {
                     crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "could not pass a decline's reason"; thread = %self.thread_id, error = %err);
                 }
+            }
+            Ok(())
+        })
+    }
+
+    fn answer_questions(
+        &self,
+        id: String,
+        answers: Option<Vec<Vec<String>>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let pending = {
+                let mut approvals = lock(&self.shared.approvals);
+                match approvals.remove(&id) {
+                    Some((rpc_id, PendingKind::Questions { ids, questions })) => {
+                        Some((rpc_id, ids, questions))
+                    }
+                    Some(other) => {
+                        approvals.insert(id.clone(), other);
+                        None
+                    }
+                    None => None,
+                }
+            };
+            let (rpc_id, ids, questions) =
+                pending.ok_or_else(|| Error::Invalid(format!("no pending question {id}")))?;
+            // Declined: no answers, as Codex's own picker sends when it is dismissed.
+            let answers = answers.unwrap_or_default();
+            self.rpc
+                .respond(rpc_id, parse::user_input_answer(&ids, &questions, &answers))
+                .await
+        })
+    }
+
+    fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let mut plan = lock(&self.plan);
+            // Never in plan mode, a session's turns go as they always did.
+            if *plan != Some(on) && (on || plan.is_some()) {
+                *plan = Some(on);
             }
             Ok(())
         })
@@ -2637,6 +2726,30 @@ async fn read_loop(
                 Output::Control(Control::Unsupported { rpc_id, method }) => {
                     rpc.reject(rpc_id, &format!("Brigadier does not handle {method}"))
                         .await;
+                }
+                // Questions Codex no longer waits on, unanswered: their card stays, and its
+                // answer reaches the thread as a message.
+                Output::Control(Control::Resolved { rpc_id }) => {
+                    let withdrawn: Vec<String> = {
+                        let mut approvals = lock(&shared.approvals);
+                        let ids: Vec<String> = approvals
+                            .iter()
+                            .filter(|(_, (pending, kind))| {
+                                *pending == rpc_id && matches!(kind, PendingKind::Questions { .. })
+                            })
+                            .map(|(id, _)| id.clone())
+                            .collect();
+                        for id in &ids {
+                            approvals.remove(id);
+                        }
+                        ids
+                    };
+                    for id in withdrawn {
+                        shared
+                            .events
+                            .send(ProviderEvent::QuestionsWithdrawn { id })
+                            .await;
+                    }
                 }
             }
         }
@@ -3956,6 +4069,9 @@ for line in sys.stdin:
             writable_roots: Vec::new(),
             effort: None,
             cwd: scratch.clone(),
+            model: "gpt-6.1-sol".into(),
+            thread_effort: None,
+            plan: Mutex::new(None),
         };
         let methods = || std::fs::read_to_string(&log).unwrap_or_default();
         // No turn runs: refused, nothing sent.

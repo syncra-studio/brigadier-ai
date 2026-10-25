@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 use super::protocol::{self as p, ThreadItem};
 use crate::model::*;
@@ -42,6 +42,9 @@ pub enum Control {
     },
     /// A server request Brigadier does not serve.
     Unsupported { rpc_id: Value, method: String },
+    /// Codex no longer waits for the answer to one of its requests (`serverRequest/resolved`):
+    /// answered, or its turn ended first.
+    Resolved { rpc_id: Value },
 }
 
 /// How Brigadier's word on a decline begins: a decline carries no words in the app-server's
@@ -89,6 +92,13 @@ pub enum PendingKind {
     FileChange,
     /// The requested permission profile, echoed back when granted.
     Permissions(Value),
+    /// Codex's own questions (`item/tool/requestUserInput`), answered with
+    /// [`ProviderSession::answer_questions`](crate::ProviderSession::answer_questions): each
+    /// question's id, beside the question as shown.
+    Questions {
+        ids: Vec<String>,
+        questions: Vec<CliQuestion>,
+    },
 }
 
 #[derive(Debug)]
@@ -200,6 +210,13 @@ impl Parser {
 
     fn notification(&mut self, method: &str, params: Value, out: &mut Vec<Output>) {
         match method {
+            "serverRequest/resolved" => {
+                if let Some(rpc_id) = params.get("requestId") {
+                    out.push(Output::Control(Control::Resolved {
+                        rpc_id: rpc_id.clone(),
+                    }));
+                }
+            }
             "thread/started" => {
                 let Some(started) =
                     decode::<p::ThreadStartedNotification>(method, params, out, self.private_logs)
@@ -671,13 +688,10 @@ impl Parser {
                 path: saved_path.map(|path| path.to_string()),
                 prompt: revised_prompt,
             },
-            ThreadItem::Plan { id, text } if completed => ProviderEvent::ToolCall {
+            // The plan of its plan mode, which ends the turn: the user's plan card (harness D7).
+            ThreadItem::Plan { id, text } if completed => ProviderEvent::PlanProposed {
                 item_id: id,
-                name: "plan".into(),
-                input: None,
-                status: ItemStatus::Completed,
-                output: Some(text),
-                kept: None,
+                plan: text,
             },
             ThreadItem::ContextCompaction { .. } if !completed => {
                 let automatic = !std::mem::take(&mut self.compact_asked);
@@ -710,6 +724,22 @@ impl Parser {
         out: &mut Vec<Output>,
     ) {
         let approval_id = format!("codex-{}", rpc_id);
+        // Codex's own question tool: the user's question card (harness D7).
+        if method == "item/tool/requestUserInput" {
+            let Some((ids, questions)) = asked_questions(&params) else {
+                return self.unsupported(rpc_id, method, out);
+            };
+            out.push(Output::Event(ProviderEvent::QuestionsAsked {
+                id: approval_id.clone(),
+                questions: questions.clone(),
+            }));
+            out.push(Output::Control(Control::Approval {
+                approval_id,
+                rpc_id,
+                kind: PendingKind::Questions { ids, questions },
+            }));
+            return;
+        }
         if method == "mcpServer/elicitation/request" {
             let text = |key: &str| {
                 params
@@ -1443,6 +1473,57 @@ fn unreadable_message() -> Output {
 
 fn notice(level: NoticeLevel, message: String) -> Output {
     Output::Event(ProviderEvent::Notice { level, message })
+}
+
+/// `item/tool/requestUserInput`'s questions (`{questions: [{id, header, question, options:
+/// [{label, description}] | null, isOther}]}`, checked on 0.164.0), each with its id, or `None`
+/// when it asks none. Codex picks one option per question; `isOther` (typing an answer) is
+/// always open on the card.
+pub(crate) fn asked_questions(params: &Value) -> Option<(Vec<String>, Vec<CliQuestion>)> {
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    let (ids, questions): (Vec<String>, Vec<CliQuestion>) = params
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .filter_map(|asked| {
+            let id = text(asked, "id")?;
+            let question = text(asked, "question")?.trim().to_owned();
+            if question.is_empty() {
+                return None;
+            }
+            let options = asked
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|option| Some((text(option, "label")?, text(option, "description"))));
+            Some((
+                id,
+                CliQuestion::new(text(asked, "header"), question, options, false),
+            ))
+        })
+        .unzip();
+    (!questions.is_empty()).then_some((ids, questions))
+}
+
+/// The answer to `item/tool/requestUserInput`: each question's id with its answers, chosen
+/// options as Codex offered them, typed words as typed; a question left unanswered has none.
+pub(crate) fn user_input_answer(
+    ids: &[String],
+    questions: &[CliQuestion],
+    answers: &[Vec<String>],
+) -> Value {
+    let mut map = Map::new();
+    for ((id, question), chosen) in ids.iter().zip(questions).zip(answers) {
+        let chosen: Vec<Value> = chosen
+            .iter()
+            .map(|answer| answer.trim())
+            .filter(|answer| !answer.is_empty())
+            .map(|answer| Value::String(question.as_offered(answer)))
+            .collect();
+        map.insert(id.clone(), json!({ "answers": chosen }));
+    }
+    json!({ "answers": map })
 }
 
 #[cfg(test)]

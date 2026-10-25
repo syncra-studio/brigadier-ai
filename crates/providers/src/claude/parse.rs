@@ -28,6 +28,13 @@ pub enum Control {
     Unsupported { request_id: String, subtype: String },
     /// Claude withdrew a pending request (the turn was interrupted).
     Cancelled { request_id: String },
+    /// Claude proposed its plan (`ExitPlanMode`), reported as [`ProviderEvent::PlanProposed`]:
+    /// the session declines the tool at once, so the turn ends with the plan on the user's
+    /// card (harness D7). `file`: the plan file Claude wrote it to.
+    PlanCaptured {
+        request_id: String,
+        file: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -38,6 +45,9 @@ pub enum Output {
     /// own servers' prompts left out: it has the prompts of MCP servers that connected after
     /// `initialize` answered ([`merge_commands`]).
     Commands(Vec<String>),
+    /// The permission mode Claude now runs in (`system/status`), after a `set_permission_mode`
+    /// or a tool of its own changed it.
+    PermissionMode(String),
 }
 
 #[derive(Debug, Clone)]
@@ -794,6 +804,12 @@ impl Parser {
     }
 
     fn system(&mut self, value: &Value, out: &mut Vec<Output>) {
+        // The mode it runs in now, whatever else the status says.
+        if str_of(value, "subtype") == Some("status")
+            && let Some(mode) = str_of(value, "permissionMode")
+        {
+            out.push(Output::PermissionMode(mode.to_owned()));
+        }
         match str_of(value, "subtype") {
             Some("init") => {
                 if let Some(cwd) = str_of(value, "cwd") {
@@ -1332,6 +1348,32 @@ impl Parser {
         }
         let tool = str_of(&request, "tool_name").unwrap_or("tool").to_owned();
         let input = request.get("input").cloned().unwrap_or(Value::Null);
+        // The CLI's own question tool and plan: the user's question card and plan card, not a
+        // permission (harness D7).
+        if tool == ASK_TOOL
+            && let Some(questions) = asked_questions(&input)
+        {
+            out.push(Output::Event(ProviderEvent::QuestionsAsked {
+                id: request_id.clone(),
+                questions,
+            }));
+            out.push(Output::Control(Control::Approval { request_id, input }));
+            return;
+        }
+        if tool == PLAN_TOOL {
+            let item_id = str_of(&request, "tool_use_id")
+                .unwrap_or(&request_id)
+                .to_owned();
+            out.push(Output::Event(ProviderEvent::PlanProposed {
+                item_id,
+                plan: str_of(&input, "plan").unwrap_or_default().to_owned(),
+            }));
+            out.push(Output::Control(Control::PlanCaptured {
+                request_id,
+                file: str_of(&input, "planFilePath").map(str::to_owned),
+            }));
+            return;
+        }
         let escalation = input
             .get("dangerouslyDisableSandbox")
             .and_then(Value::as_bool)
@@ -2071,6 +2113,69 @@ pub fn user_message(content: Vec<Value>) -> String {
     .to_string()
 }
 
+/// Claude's own question tool ([`ProviderEvent::QuestionsAsked`]).
+pub const ASK_TOOL: &str = "AskUserQuestion";
+/// The tool Claude proposes its plan with in plan mode ([`ProviderEvent::PlanProposed`]).
+pub const PLAN_TOOL: &str = "ExitPlanMode";
+
+/// `AskUserQuestion`'s questions (`{questions: [{question, header, options: [{label,
+/// description}], multiSelect}]}`, checked on 2.1.310), or `None` when it asks none.
+pub(crate) fn asked_questions(input: &Value) -> Option<Vec<CliQuestion>> {
+    let questions: Vec<CliQuestion> = input
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .filter_map(|asked| {
+            let question = str_of(asked, "question")?.trim().to_owned();
+            let options = asked
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|option| {
+                    Some((
+                        str_of(option, "label")?.to_owned(),
+                        str_of(option, "description").map(str::to_owned),
+                    ))
+                });
+            Some(CliQuestion::new(
+                str_of(asked, "header").map(str::to_owned),
+                question,
+                options,
+                asked.get("multiSelect").and_then(Value::as_bool) == Some(true),
+            ))
+        })
+        .filter(|question| !question.question.is_empty())
+        .collect();
+    (!questions.is_empty()).then_some(questions)
+}
+
+/// `AskUserQuestion`'s input with the user's answers, as its tool result reads them:
+/// `answers` maps each question's text to its answer, several chosen options joined with ", "
+/// (as Claude Code's own picker joins them). A question without an answer is left out.
+pub(crate) fn answered_input(
+    mut input: Value,
+    questions: &[CliQuestion],
+    answers: &[Vec<String>],
+) -> Value {
+    let mut map = serde_json::Map::new();
+    for (question, chosen) in questions.iter().zip(answers) {
+        let chosen: Vec<String> = chosen
+            .iter()
+            .map(|answer| answer.trim())
+            .filter(|answer| !answer.is_empty())
+            .map(|answer| question.as_offered(answer))
+            .collect();
+        if !chosen.is_empty() {
+            map.insert(question.question.clone(), Value::String(chosen.join(", ")));
+        }
+    }
+    if let Some(object) = input.as_object_mut() {
+        object.insert("answers".into(), Value::Object(map));
+    }
+    input
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -2587,7 +2692,7 @@ mod tests {
             .flat_map(|line| parser.feed(&line.to_string()))
             .filter_map(|output| match output {
                 Output::Event(event) => Some(event),
-                Output::Control(_) | Output::Commands(_) => None,
+                Output::Control(_) | Output::Commands(_) | Output::PermissionMode(_) => None,
             })
             .collect();
         assert!(

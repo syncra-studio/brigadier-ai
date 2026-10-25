@@ -237,6 +237,28 @@ pub trait ProviderSession: Send + Sync {
     /// Answers an [`ProviderEvent::ApprovalRequested`].
     fn answer(&self, approval_id: String, decision: ApprovalDecision) -> BoxFuture<'_, Result<()>>;
 
+    /// Answers a [`ProviderEvent::QuestionsAsked`]: for each question in order, the options the
+    /// user chose (several for a multi-select question) or the words they typed, as the tool's
+    /// result. `None`: the user won't answer, which the CLI hears as a declined tool.
+    fn answer_questions(
+        &self,
+        _id: String,
+        _answers: Option<Vec<Vec<String>>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            Err(Error::Invalid(
+                "this CLI asks no questions of its own".into(),
+            ))
+        })
+    }
+
+    /// Puts the CLI in its own plan mode, or takes it out, from its next turn on (harness D7):
+    /// Claude's `plan` permission mode, Codex's plan collaboration mode. Nothing when it is
+    /// already so.
+    fn set_plan_mode(&self, _on: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Ends the CLI process and reaps it, killing its process group if it does not exit in
     /// time. Bounded; safe to call more than once.
     fn close(&self) -> BoxFuture<'_, ()>;

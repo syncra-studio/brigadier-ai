@@ -85,11 +85,23 @@ const COMPACT_SINCE: &str = "2.1.282";
 const CONTEXT_SUMMARY_SINCE: &str = "2.1.257";
 /// The only built-in tools a thread or worker goes without (STRIP-DOWN-PLAN S17): the ones that
 /// can't work inside a Brigadier tab. Scheduling, remote triggers and push notifications need the
-/// idle loop of an interactive CLI, which `-p` has none of; Claude's own question tool reaches
-/// Brigadier as a bare permission request that carries no answer back, and `brigadier ask` asks
-/// instead. Everything else the plain CLI has stays (G17; measured on 2.1.309 in the S17 run).
+/// idle loop of an interactive CLI, which `-p` has none of. Everything else the plain CLI has
+/// stays (G17; measured on 2.1.309 in the S17 run). A thread asks the user with Claude's own
+/// question tool, its answers going back as the tool's result (harness D7, superseding old-run
+/// D12; checked on 2.1.310).
 const TAB_DENIED_TOOLS: &str =
-    "RemoteTrigger,PushNotification,ScheduleWakeup,CronCreate,CronDelete,CronList,AskUserQuestion";
+    "RemoteTrigger,PushNotification,ScheduleWakeup,CronCreate,CronDelete,CronList";
+/// A worker never asks the user (G19.Q6): its session asks for it, so it goes without Claude's
+/// question tool.
+const WORKER_DENIED_TOOLS: &str = "AskUserQuestion";
+/// Claude Code's own plan mode, a permission mode (checked on 2.1.310: `set_permission_mode`
+/// takes it between turns, and `ExitPlanMode` proposes the plan as a permission request).
+const PLAN_MODE: &str = "plan";
+/// Claude's `ExitPlanMode` declined with these words once its plan is on the user's card
+/// (harness D7): the turn ends there; the user builds it or replies.
+const PLAN_CAPTURED: &str = "Brigadier showed the user your plan on a card. Stop here and end your turn: they will reply to change it, or tell you to build it.";
+/// Claude's `AskUserQuestion` declined with these words when the user won't answer it.
+const QUESTIONS_DECLINED: &str = "The user closed these questions without answering. Don't ask them again unless they come up again; go on with what you know, or say what you need.";
 /// Claude's built-in tools that start sub-agents: `Agent` (`Task` is its older name), and
 /// `Workflow`, which runs a script of them (still there without `Agent`, checked live on
 /// 2.1.310).
@@ -700,6 +712,9 @@ fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
     let mut denied: Vec<&str> = Vec::new();
     if spec.tools.user_setup() {
         denied.push(TAB_DENIED_TOOLS);
+    }
+    if spec.tools == ToolSet::Lean {
+        denied.push(WORKER_DENIED_TOOLS);
     }
     if *sub_agents == SubAgents::Off || spec.tools == ToolSet::Thread {
         denied.push(SUB_AGENT_TOOLS);
@@ -1390,6 +1405,10 @@ impl Provider for Claude {
             let session_files = SessionFiles {
                 in_folder: files::cli_started(&cwd, staging),
                 memory: memory.clone(),
+                plans: self.config_dir().map(|config| {
+                    let before = files::plan_files(&config);
+                    (config, before)
+                }),
             };
 
             let recorder = match &spec.record_to {
@@ -1474,6 +1493,8 @@ impl Provider for Claude {
                 turn_active: AtomicBool::new(false),
                 next_request: AtomicU64::new(1),
                 commands: Mutex::new(Vec::new()),
+                questions: Mutex::new(HashMap::new()),
+                mode: Mutex::new(permission_mode(&spec).to_owned()),
             });
             let (parser_tx, parser_rx) = mpsc::unbounded_channel();
             tokio::spawn(read_loop(
@@ -1503,6 +1524,7 @@ impl Provider for Claude {
                 shared,
                 parser: parser_tx,
                 memory,
+                level_mode: permission_mode(&spec),
             };
 
             let mut initialize = Map::new();
@@ -1813,7 +1835,7 @@ impl Replayer for ClaudeReplayer {
             .into_iter()
             .filter_map(|output| match output {
                 Output::Event(event) => Some(event),
-                Output::Control(_) | Output::Commands(_) => None,
+                Output::Control(_) | Output::Commands(_) | Output::PermissionMode(_) => None,
             })
             .collect();
         for event in &events {
@@ -1836,6 +1858,12 @@ struct Shared {
     /// What the session runs from a message: what `initialize` said ([`parse::commands`]),
     /// with what `system/init` added since ([`parse::merge_commands`]).
     commands: Mutex<Vec<CliCommand>>,
+    /// The questions of unanswered `AskUserQuestion` requests, by request id, as the CLI wrote
+    /// them: their answers are keyed by each question's text.
+    questions: Mutex<HashMap<String, Vec<CliQuestion>>>,
+    /// The permission mode the CLI runs in now, as it last said (`system/status`), or as it
+    /// started.
+    mode: Mutex<String>,
 }
 
 enum ParserCommand {
@@ -1854,6 +1882,9 @@ pub struct ClaudeSession {
     shared: Arc<Shared>,
     parser: mpsc::UnboundedSender<ParserCommand>,
     memory: Arc<MemoryRecord>,
+    /// The session's own permission mode ([`permission_mode`]): what it runs in out of plan
+    /// mode.
+    level_mode: &'static str,
 }
 
 impl ClaudeSession {
@@ -2040,6 +2071,48 @@ impl ProviderSession for ClaudeSession {
         })
     }
 
+    fn answer_questions(
+        &self,
+        id: String,
+        answers: Option<Vec<Vec<String>>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let questions = lock(&self.shared.questions).remove(&id);
+            let input = lock(&self.shared.approvals)
+                .remove(&id)
+                .ok_or_else(|| Error::Invalid(format!("no pending question {id}")))?;
+            let response = match (answers, questions) {
+                (Some(answers), Some(questions)) => json!({
+                    "behavior": "allow",
+                    "updatedInput": parse::answered_input(input, &questions, &answers),
+                }),
+                _ => json!({ "behavior": "deny", "message": QUESTIONS_DECLINED }),
+            };
+            let line = json!({
+                "type": "control_response",
+                "response": { "subtype": "success", "request_id": id, "response": response },
+            });
+            self.process.write_line(&line.to_string()).await
+        })
+    }
+
+    fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let wanted = if on { PLAN_MODE } else { self.level_mode };
+            // Out of plan mode is the session's own level, whatever Claude left plan mode for.
+            let now = lock(&self.shared.mode).clone();
+            if now == wanted || (!on && now != PLAN_MODE) {
+                return Ok(());
+            }
+            let mut request = Map::new();
+            request.insert("subtype".into(), "set_permission_mode".into());
+            request.insert("mode".into(), wanted.into());
+            self.request(request, CONTROL_TIMEOUT).await?;
+            *lock(&self.shared.mode) = wanted.to_owned();
+            Ok(())
+        })
+    }
+
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.process.shutdown(EXIT_GRACE).await;
@@ -2075,6 +2148,9 @@ impl MemoryRecord {
 struct SessionFiles {
     in_folder: files::CliInFolder,
     memory: Arc<MemoryRecord>,
+    /// Claude's config directory and the plan files in it at the start: a plan file it writes
+    /// later is the session's own, removed with it ([`files::owned_plan_file`]).
+    plans: Option<(PathBuf, HashSet<std::ffi::OsString>)>,
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
@@ -2110,8 +2186,30 @@ async fn read_loop(
         for output in outputs {
             match output {
                 Output::Event(event) => {
+                    if let ProviderEvent::QuestionsAsked { id, questions } = &event {
+                        lock(&shared.questions).insert(id.clone(), questions.clone());
+                    }
                     // When nobody listens any more, keep draining so the CLI never blocks.
                     shared.events.send(event).await;
+                }
+                Output::PermissionMode(mode) => *lock(&shared.mode) = mode,
+                Output::Control(Control::PlanCaptured { request_id, file }) => {
+                    let line = json!({
+                        "type": "control_response",
+                        "response": {
+                            "subtype": "success",
+                            "request_id": request_id,
+                            "response": { "behavior": "deny", "message": PLAN_CAPTURED },
+                        },
+                    });
+                    let _ = process.write_line(&line.to_string()).await;
+                    if let (Some(file), Some((config, before))) = (file, &session_files.plans)
+                        && let Some(artifact) =
+                            files::owned_plan_file(config, before, Path::new(&file))
+                        && let Err(err) = session_files.memory.ledger.record(artifact).await
+                    {
+                        tracing::warn!(error = %err, "could not record Claude's plan file");
+                    }
                 }
                 Output::Commands(names) => {
                     parse::merge_commands(&mut lock(&shared.commands), names);
@@ -2125,7 +2223,13 @@ async fn read_loop(
                     lock(&shared.approvals).insert(request_id, input);
                 }
                 Output::Control(Control::Cancelled { request_id }) => {
-                    if lock(&shared.approvals).remove(&request_id).is_some() {
+                    let asked = lock(&shared.questions).remove(&request_id).is_some();
+                    if asked && lock(&shared.approvals).remove(&request_id).is_some() {
+                        shared
+                            .events
+                            .send(ProviderEvent::QuestionsWithdrawn { id: request_id })
+                            .await;
+                    } else if lock(&shared.approvals).remove(&request_id).is_some() {
                         shared
                             .events
                             .send(ProviderEvent::ApprovalResolved {
@@ -3334,9 +3438,11 @@ for line in sys.stdin:
                 "CronCreate",
                 "CronDelete",
                 "CronList",
-                "AskUserQuestion",
             ]
         );
+        // A worker asks the user nothing (G19.Q6); a thread asks with Claude's own question
+        // tool (harness D7).
+        assert_eq!(WORKER_DENIED_TOOLS, "AskUserQuestion");
         for tools in [ToolSet::Lean, ToolSet::Thread] {
             let session = SessionSpec {
                 tools,
@@ -3346,7 +3452,7 @@ for line in sys.stdin:
             // A thread, the orchestrator, also goes without its sub-agents (run2-D43).
             let denied = match tools {
                 ToolSet::Thread => format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"),
-                _ => TAB_DENIED_TOOLS.to_owned(),
+                _ => format!("{TAB_DENIED_TOOLS},{WORKER_DENIED_TOOLS}"),
             };
             assert_eq!(denied_tools(&session, &SubAgents::Any), Some(denied));
             let args = Claude::session_args(
@@ -3460,8 +3566,8 @@ for line in sys.stdin:
             json!(["claude-sonnet-5"])
         );
         assert_eq!(
-            denied_tools(&held, &models).as_deref(),
-            Some(TAB_DENIED_TOOLS)
+            denied_tools(&held, &models),
+            Some(format!("{TAB_DENIED_TOOLS},{WORKER_DENIED_TOOLS}"))
         );
         let leaky = spec(cwd, &["claude-opus-5"]);
         let models = sub_agents(&leaky, cwd, None);
@@ -3473,7 +3579,9 @@ for line in sys.stdin:
         );
         assert_eq!(
             denied_tools(&leaky, &models),
-            Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"))
+            Some(format!(
+                "{TAB_DENIED_TOOLS},{WORKER_DENIED_TOOLS},{SUB_AGENT_TOOLS}"
+            ))
         );
         let unlimited = SessionSpec {
             allowed_models: None,

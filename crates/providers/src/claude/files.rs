@@ -18,10 +18,12 @@
 //! location; for the others the session's folder is removed with it, and the per-cwd folder
 //! too when it is empty and belonged to a project directory the session created.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use brigadier_sandbox::removal;
 
 use crate::model::Artifact;
 use crate::{Error, Result};
@@ -566,6 +568,9 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
             *project_identity,
         )),
         Artifact::ClaudeStagingDir { path } => Some(remove_staging_dir(Path::new(path))),
+        Artifact::ClaudePlanFile { path, identity } => {
+            Some(remove_plan_file(Path::new(path), *identity))
+        }
         Artifact::ClaudeTempDir { path } => Some(remove_temp_dir(Path::new(path))),
         _ => None,
     });
@@ -583,6 +588,61 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
         Ok(())
     } else {
         Err(Error::Io(io::Error::other(failures.join("; "))))
+    }
+}
+
+/// Where Claude Code writes the plans of plan mode, under its config directory.
+pub(super) const PLANS_DIR: &str = "plans";
+
+/// The plan files already in `config`'s plans folder: a plan a session reports later is the
+/// session's own only when its file is not one of these ([`owned_plan_file`]).
+pub(super) fn plan_files(config: &Path) -> HashSet<std::ffi::OsString> {
+    std::fs::read_dir(config.join(PLANS_DIR))
+        .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+        .unwrap_or_default()
+}
+
+/// The artifact for the plan file `file` Claude reported, when it is the session's own: a file
+/// right in `config`'s plans folder that was not there at its start (`before`).
+pub(super) fn owned_plan_file(
+    config: &Path,
+    before: &HashSet<std::ffi::OsString>,
+    file: &Path,
+) -> Option<Artifact> {
+    let root = config.join(PLANS_DIR);
+    let name = file.file_name()?;
+    let root = root.canonicalize().ok()?;
+    if file.parent()?.canonicalize().ok()? != root || before.contains(name) {
+        return None;
+    }
+    let path = root.join(name);
+    let bound = removal::bind(&root, &path).ok()?;
+    if bound.is_dir() {
+        return None;
+    }
+    Some(Artifact::ClaudePlanFile {
+        path: path.display().to_string(),
+        identity: bound.identity().parts(),
+    })
+}
+
+/// Removes a plan file of a session's own, while it is still the file it wrote.
+fn remove_plan_file(path: &Path, identity: (u64, u64)) -> Result<()> {
+    let Some(root) = path.parent().filter(|root| root.ends_with(PLANS_DIR)) else {
+        return Err(Error::Invalid("not a Claude plan file".into()));
+    };
+    match removal::bind_as(root, path, removal::Identity::from_parts(identity)) {
+        Ok(bound) if !bound.is_dir() => {
+            removal::delete(&bound).map_err(|err| Error::Io(io::Error::other(err)))
+        }
+        Ok(_) => Ok(()),
+        // A missing or replaced file is no longer ours: left alone.
+        Err(
+            removal::RemovalError::Gone(_)
+            | removal::RemovalError::Changed(_)
+            | removal::RemovalError::Symlink(_),
+        ) => Ok(()),
+        Err(err) => Err(Error::Io(io::Error::other(err))),
     }
 }
 
