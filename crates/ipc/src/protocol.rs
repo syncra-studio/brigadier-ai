@@ -540,6 +540,11 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// Dismisses the notice above the composer made at `at_ms` (D51).
+    DismissNotice {
+        conversation_id: ConversationId,
+        at_ms: i64,
+    },
     /// Stops the running turn; the queue pauses.
     Interrupt {
         conversation_id: ConversationId,
@@ -1596,6 +1601,7 @@ pub enum Response {
     DismissSent {
         queue: MessageQueue,
     },
+    DismissNotice,
     Interrupt,
     Resume,
     StopPreview,

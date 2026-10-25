@@ -146,6 +146,7 @@ impl Projection {
             | DomainEvent::RatingCleared { .. }
             | DomainEvent::BranchSwitched { .. }
             | DomainEvent::ConversationNotice { .. }
+            | DomainEvent::NoticeDismissed { .. }
             | DomainEvent::TaskUpdated { .. }
             | DomainEvent::ApprovalUpdated { .. }
             | DomainEvent::QuestionUpdated { .. }

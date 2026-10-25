@@ -369,6 +369,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "requestUpdated",
   "messageAppended",
   "branchSwitched",
+  "noticeDismissed",
   "workerStepped",
   "orchestratorStepped",
   "machineStepped",
@@ -575,6 +576,11 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     case "conversationNotice":
       if (!showConversationNotice(event.notice)) return board;
       return { ...board, notices: [...board.notices, shownNotice(event.notice)].slice(-NOTICES) };
+    case "noticeDismissed":
+      // Dismissed for good (D51): the problem happening again is a new notice.
+      return board.notices.some((notice) => notice.atMs === event.atMs)
+        ? { ...board, notices: board.notices.filter((notice) => notice.atMs !== event.atMs) }
+        : board;
     case "taskUpdated":
       return { ...board, tasks: placed(board.tasks, event.task, envelope, board) };
     case "approvalUpdated":

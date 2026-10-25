@@ -668,6 +668,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "messageRated":
     case "ratingCleared":
     case "conversationNotice":
+    case "noticeDismissed":
     case "taskUpdated":
     case "approvalUpdated":
     case "questionUpdated":

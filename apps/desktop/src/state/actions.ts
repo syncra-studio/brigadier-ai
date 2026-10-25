@@ -983,6 +983,11 @@ export async function runQueuedHere(conversationId: string, itemId: string): Pro
   showQueue(conversationId, queue);
 }
 
+/** Dismisses the notice above the composer made at `atMs`, for good (D51). */
+export async function dismissNotice(conversationId: string, atMs: number): Promise<void> {
+  await request({ method: "dismissNotice", conversationId, atMs });
+}
+
 /** Dismisses the notice of a queued message the session sent on to one of its workers. */
 export async function dismissSent(conversationId: string, itemId: string): Promise<void> {
   const { queue } = await request({ method: "dismissSent", conversationId, itemId });

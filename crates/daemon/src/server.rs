@@ -1504,6 +1504,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::DismissSent {
             queue: heap(|| core.dismiss_sent(&conversation_id, &item_id)).await?,
         },
+        Request::DismissNotice {
+            conversation_id,
+            at_ms,
+        } => {
+            heap(|| core.dismiss_notice(&conversation_id, at_ms)).await?;
+            Response::DismissNotice
+        }
         Request::AddAttachment {
             name,
             mime,

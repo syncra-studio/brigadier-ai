@@ -24,6 +24,7 @@ pub(crate) const KINDS: &[&str] = &[
     "conversation.run",
     "thinking.delta",
     "conversation.notice",
+    "conversation.notice_dismissed",
     "task.updated",
     "approval.updated",
     "question.updated",
@@ -707,6 +708,9 @@ impl Board {
                 if self.notices.len() > NOTICES_KEPT {
                     self.notices.remove(0);
                 }
+            }
+            DomainEvent::NoticeDismissed { at_ms, .. } => {
+                self.notices.retain(|notice| notice.at_ms != *at_ms);
             }
             DomainEvent::ThinkingDelta {
                 item_id,

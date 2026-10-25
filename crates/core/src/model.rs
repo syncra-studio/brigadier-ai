@@ -2320,6 +2320,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         notice: Notice,
     },
+    /// The user dismissed the notice made at `at_ms` (D51). It stays dismissed through every
+    /// read and redraw; the problem happening again is a new notice.
+    NoticeDismissed {
+        conversation_id: ConversationId,
+        at_ms: i64,
+    },
     /// A task was created or changed (full snapshot).
     TaskUpdated {
         task: Box<Task>,
@@ -2627,6 +2633,7 @@ impl DomainEvent {
             Self::RatingCleared { .. } => "rating.cleared",
             Self::BranchSwitched { .. } => "conversation.branch",
             Self::ConversationNotice { .. } => "conversation.notice",
+            Self::NoticeDismissed { .. } => "conversation.notice_dismissed",
             Self::TaskUpdated { .. } => "task.updated",
             Self::ApprovalUpdated { .. } => "approval.updated",
             Self::QuestionUpdated { .. } => "question.updated",

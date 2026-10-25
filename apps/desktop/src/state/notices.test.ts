@@ -113,3 +113,11 @@ test("saved usage-limit and switch notices are hidden: the thread says them as d
   assert.deepEqual(boardFromView(view, null, []).notices, [decode]);
   for (const notice of saved) assert.equal(applyToBoard(board, event(notice)), board);
 });
+
+test("a dismissed notice leaves the board for good; others stay (D51)", () => {
+  let board = applyToBoard(applyToBoard(emptyBoard("conversation"), event(decode)), event(environment));
+  const dismissed = { seq: 9, stream: "conversation", streamSeq: 9, atMs: 9, event: { type: "noticeDismissed" as const, conversationId: "conversation", atMs: decode.atMs } };
+  board = applyToBoard(board, dismissed);
+  assert.deepEqual(board.notices, [environment]);
+  assert.equal(applyToBoard(board, dismissed), board);
+});

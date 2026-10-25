@@ -114,6 +114,8 @@ function summary(event: DomainEvent): string {
       return `branch → ${event.head}`;
     case "conversationNotice":
       return event.notice.text;
+    case "noticeDismissed":
+      return `dismissed notice ${event.atMs}`;
     case "taskUpdated":
       return `task-${event.task.number} ${event.task.state}`;
     case "approvalUpdated":

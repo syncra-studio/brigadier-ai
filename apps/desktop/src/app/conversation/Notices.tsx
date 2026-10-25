@@ -6,7 +6,7 @@ import { ComposerRailItem } from "@/components/conversation";
 import { Button, TooltipIconButton } from "@/components/controls";
 import { ExclamationMarkCircle, Info, Warning, X } from "@/components/icons";
 import type { Notice } from "@/ipc/generated";
-import { loadConversation } from "@/state/actions";
+import { dismissNotice, loadConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useThreadView } from "@/state/cliThread";
 import { useApp } from "@/state/store";
@@ -29,7 +29,9 @@ export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
   // What the newest failed turn already says in the thread is never said again here.
   const turns = useThreadView(conversationId)?.turns;
   const turnError = useMemo(() => (turns ? newestFailedError(turns) : null), [turns]);
+  // Gone at once; the daemon keeps it dismissed through every read and redraw (D51).
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
+  const dismiss = useAction();
   const shown = useMemo(
     () => withoutTurnError(notices, turnError).filter((notice) => !dismissed.has(notice.atMs)).slice(-3),
     [notices, turnError, dismissed],
@@ -79,7 +81,10 @@ export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
             action={
               <Dismiss
                 label="Dismiss notice"
-                onClick={() => setDismissed((current) => new Set(current).add(notice.atMs))}
+                onClick={() => {
+                  setDismissed((current) => new Set(current).add(notice.atMs));
+                  dismiss.run(() => dismissNotice(conversationId, notice.atMs));
+                }}
               />
             }
           >

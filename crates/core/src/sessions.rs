@@ -2036,6 +2036,24 @@ impl Core {
         .map(|_| ())
     }
 
+    /// The user dismissed the notice made at `at_ms` (D51): no read or redraw shows it again.
+    pub async fn dismiss_notice(&self, id: &ConversationId, at_ms: i64) -> Result<()> {
+        if !self
+            .board(id)
+            .await?
+            .notices
+            .iter()
+            .any(|notice| notice.at_ms == at_ms)
+        {
+            return Ok(());
+        }
+        let event = DomainEvent::NoticeDismissed {
+            conversation_id: id.clone(),
+            at_ms,
+        };
+        self.record_conversation(id, vec![event]).await.map(|_| ())
+    }
+
     /// The user dismissed the notice of sent message `item_id`.
     pub async fn dismiss_sent(&self, id: &ConversationId, item_id: &str) -> Result<MessageQueue> {
         self.change_queue(id, |queue| {

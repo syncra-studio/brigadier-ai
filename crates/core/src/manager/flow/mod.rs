@@ -2412,6 +2412,8 @@ mod merge_queue_tests;
 #[cfg(unix)]
 mod no_push_tests;
 #[cfg(unix)]
+mod notice_dismiss_tests;
+#[cfg(unix)]
 #[cfg(unix)]
 #[cfg(unix)]
 mod page_tools_tests;

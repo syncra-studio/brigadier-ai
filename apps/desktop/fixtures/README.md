@@ -133,6 +133,13 @@ above the composer only the other notice shows. A bare row sits under the page. 
 presses Try again (recorded, never sent) and writes JSON into `#turn-error-result`;
 `TurnErrorRender.test.ts` checks it. This entry is absent from the production build.
 
+# A dismissed notice
+
+`/fixtures/notice-dismiss.html` is the notices tray alone with an account notice (D51). `drive=1` presses
+its ×, draws the tray anew from a fresh read (as switching back to the session does), then says the
+problem again as a new notice, and writes JSON into `#notice-dismiss-result`; a stand-in daemon keeps the
+dismissal. `NoticeDismissRender.test.ts` checks it. This entry is absent from the production build.
+
 # The Full access line
 
 `/fixtures/full-access-notice.html` is the finished phase flow with the session at Full access: one calm
