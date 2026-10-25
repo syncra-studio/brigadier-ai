@@ -5,12 +5,13 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::value::RawValue;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::blob::{BlobStore, Removal};
 use crate::{
-    BlobHash, Compacted, Counters, Error, MAX_BATCH, Maintenance, NewEvent, Result, Retention,
-    StoredEvent, WriterState, schema,
+    Appended, BlobHash, Compacted, Counters, Error, MAX_BATCH, Maintenance, NewEvent, Result,
+    Retention, StoredEvent, WriterState, schema,
 };
 
 /// SQLite virtual machine steps between two looks at whether a compaction should stop.
@@ -64,7 +65,7 @@ pub(crate) enum WriteOp {
 }
 
 type Feed = broadcast::Sender<Arc<StoredEvent>>;
-type AppendReply = oneshot::Sender<Result<Vec<Arc<StoredEvent>>>>;
+type AppendReply = oneshot::Sender<Result<Vec<Appended>>>;
 
 /// A command that changes the event log, committed in queue order within one transaction.
 enum Mutation {
@@ -393,7 +394,10 @@ impl Writer {
             match outcome {
                 Outcome::Append(reply, outcome) => {
                     if let Ok(stored) = &outcome {
-                        for event in stored {
+                        for Appended { event, fresh } in stored {
+                            if !fresh {
+                                continue;
+                            }
                             committed += 1;
                             self.counters.last_seq.store(event.seq, Ordering::Release);
                             // No receivers is fine; lagging receivers are handled on their side.
@@ -538,7 +542,7 @@ impl Writer {
 
 /// A mutation's result, held until the transaction commits.
 enum Outcome {
-    Append(AppendReply, Result<Vec<Arc<StoredEvent>>>),
+    Append(AppendReply, Result<Vec<Appended>>),
     Delete(oneshot::Sender<Result<u64>>, Result<u64>),
     Put(oneshot::Sender<Result<()>>, Result<()>),
 }
@@ -610,12 +614,45 @@ fn append(
     heads: &mut HashMap<String, i64>,
     events: Vec<NewEvent>,
     retention: Option<Retention>,
-) -> Result<Vec<Arc<StoredEvent>>> {
+) -> Result<Vec<Appended>> {
     let mut insert = conn.prepare_cached(
-        "INSERT INTO events (stream, stream_seq, kind, at_ms, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO events (stream, stream_seq, kind, at_ms, payload, idem) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    let mut keyed = conn.prepare_cached(
+        "SELECT seq, stream_seq, kind, at_ms, payload FROM events WHERE stream = ?1 AND idem = ?2",
     )?;
     let mut stored = Vec::with_capacity(events.len());
     for event in events {
+        // Stored before under its key (an earlier run of the same step, or earlier in this
+        // batch): that event stands.
+        if let Some(key) = &event.key
+            && let Some(existing) = keyed
+                .query_row(params![event.stream, key], |row| {
+                    let payload: String = row.get(4)?;
+                    Ok(StoredEvent {
+                        seq: row.get(0)?,
+                        stream: event.stream.clone(),
+                        stream_seq: row.get(1)?,
+                        kind: row.get(2)?,
+                        at_ms: row.get(3)?,
+                        payload: RawValue::from_string(payload).map_err(|err| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                4,
+                                rusqlite::types::Type::Text,
+                                Box::new(err),
+                            )
+                        })?,
+                    })
+                })
+                .optional()?
+        {
+            stored.push(Appended {
+                event: Arc::new(existing),
+                fresh: false,
+            });
+            continue;
+        }
         let head = match heads.get(&event.stream) {
             Some(head) => *head,
             None => conn
@@ -634,26 +671,30 @@ fn append(
             stream_seq,
             event.kind,
             event.at_ms,
-            event.payload.get()
+            event.payload.get(),
+            event.key,
         ])?;
         let seq = conn.last_insert_rowid();
         schema::record_blob_refs(conn, seq, event.payload.get())?;
         heads.insert(event.stream.clone(), stream_seq);
-        stored.push(Arc::new(StoredEvent {
-            seq,
-            stream: event.stream,
-            stream_seq,
-            kind: event.kind,
-            at_ms: event.at_ms,
-            payload: event.payload,
-        }));
+        stored.push(Appended {
+            event: Arc::new(StoredEvent {
+                seq,
+                stream: event.stream,
+                stream_seq,
+                kind: event.kind,
+                at_ms: event.at_ms,
+                payload: event.payload,
+            }),
+            fresh: true,
+        });
     }
     if let Some(Retention { keep_last }) = retention {
         let mut trim =
             conn.prepare_cached("DELETE FROM events WHERE stream = ?1 AND stream_seq <= ?2")?;
         let mut trimmed: Vec<&str> = Vec::new();
-        for event in &stored {
-            if trimmed.contains(&event.stream.as_str()) {
+        for Appended { event, fresh } in &stored {
+            if !fresh || trimmed.contains(&event.stream.as_str()) {
                 continue;
             }
             trimmed.push(&event.stream);

@@ -86,6 +86,10 @@ pub struct NewEvent {
     pub at_ms: i64,
     /// JSON payload.
     pub payload: Box<RawValue>,
+    /// With a key, the event is stored once per stream: appended again with the same key, the
+    /// event already stored stands and nothing new is written (D9 d). A retention trim takes
+    /// the key with its event.
+    pub key: Option<String>,
 }
 
 impl NewEvent {
@@ -100,8 +104,23 @@ impl NewEvent {
             kind: kind.into(),
             at_ms,
             payload: serde_json::value::to_raw_value(payload)?,
+            key: None,
         })
     }
+
+    /// This event, stored once per stream under `key` ([`Store::append_once`]).
+    pub fn once(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+}
+
+/// An event [`Store::append_once`] was given, as it stands in the store.
+#[derive(Debug, Clone)]
+pub struct Appended {
+    pub event: Arc<StoredEvent>,
+    /// Stored by this append; false when an event with its key was already there.
+    pub fresh: bool,
 }
 
 /// A committed event.
@@ -349,12 +368,32 @@ impl Store {
         self.append_with(events, None).await
     }
 
+    /// Like [`Store::append`], saying of each event whether this append stored it: one with a
+    /// key ([`NewEvent::once`]) already stored in its stream is given back as stored then, and
+    /// neither written again nor put on the live feed.
+    pub async fn append_once(&self, events: Vec<NewEvent>) -> Result<Vec<Appended>> {
+        self.append_keyed(events, None).await
+    }
+
     /// Like [`Store::append`], then trims each touched stream to its newest events.
     pub async fn append_with(
         &self,
         events: Vec<NewEvent>,
         retention: Option<Retention>,
     ) -> Result<Vec<Arc<StoredEvent>>> {
+        Ok(self
+            .append_keyed(events, retention)
+            .await?
+            .into_iter()
+            .map(|appended| appended.event)
+            .collect())
+    }
+
+    async fn append_keyed(
+        &self,
+        events: Vec<NewEvent>,
+        retention: Option<Retention>,
+    ) -> Result<Vec<Appended>> {
         if !self.admitting.load(Ordering::Acquire) {
             return Err(Error::ShuttingDown);
         }
@@ -792,6 +831,161 @@ mod tests {
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_millis() as i64)
+    }
+
+    fn open_in(dir: &Path) -> Store {
+        Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store")
+    }
+
+    fn keyed(stream: &str, n: u32, key: &str) -> NewEvent {
+        NewEvent::new(stream, "step", now_ms(), &serde_json::json!({ "n": n }))
+            .unwrap()
+            .once(key)
+    }
+
+    async fn count(store: &Store, stream: &str) -> usize {
+        store
+            .read_stream(
+                stream.into(),
+                StreamPage {
+                    limit: MAX_PAGE,
+                    ..StreamPage::default()
+                },
+            )
+            .await
+            .unwrap()
+            .len()
+    }
+
+    /// D9 d: a step that runs twice stores its event once. The second append gets the first
+    /// event back, unchanged, and the feed hears it once.
+    #[tokio::test]
+    async fn a_keyed_event_appended_twice_is_stored_once() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = open_in(&dir);
+        let mut feed = store.subscribe();
+        let first = store
+            .append_once(vec![keyed("conversation:a", 1, "resume:r1")])
+            .await
+            .unwrap();
+        assert!(first[0].fresh);
+        let again = store
+            .append_once(vec![keyed("conversation:a", 2, "resume:r1")])
+            .await
+            .unwrap();
+        assert!(!again[0].fresh);
+        assert_eq!(again[0].event.seq, first[0].event.seq);
+        assert_eq!(again[0].event.stream_seq, 1);
+        assert_eq!(again[0].event.payload.get(), r#"{"n":1}"#);
+        assert_eq!(count(&store, "conversation:a").await, 1);
+        assert_eq!(feed.recv().await.unwrap().seq, first[0].event.seq);
+        assert!(feed.try_recv().is_err(), "the repeat was not on the feed");
+        // Unkeyed events and the next one keep counting from there; no seq is used up.
+        let next = store
+            .append(vec![
+                NewEvent::new("conversation:a", "step", now_ms(), &1).unwrap(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(next[0].stream_seq, 2);
+        assert_eq!(next[0].seq, first[0].event.seq + 1);
+        store.shutdown().await.unwrap();
+    }
+
+    /// Twice in one append, the second is the first; the same key in another stream is its
+    /// own; the plain `append` hands the stored event back too.
+    #[tokio::test]
+    async fn keys_hold_within_a_batch_and_per_stream() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = open_in(&dir);
+        let out = store
+            .append_once(vec![
+                keyed("conversation:a", 1, "k"),
+                keyed("conversation:a", 2, "k"),
+                keyed("conversation:b", 3, "k"),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            out.iter().map(|a| a.fresh).collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        assert_eq!(out[1].event.seq, out[0].event.seq);
+        assert_eq!(count(&store, "conversation:a").await, 1);
+        assert_eq!(count(&store, "conversation:b").await, 1);
+        let plain = store
+            .append(vec![keyed("conversation:b", 4, "k")])
+            .await
+            .unwrap();
+        assert_eq!(plain[0].seq, out[2].event.seq);
+        store.shutdown().await.unwrap();
+    }
+
+    /// After a crash the store opens again, and the step that runs again finds its event.
+    #[tokio::test]
+    async fn a_key_holds_across_reopening_the_store() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = open_in(&dir);
+        let first = store
+            .append_once(vec![keyed("task:t", 1, "auto-resume")])
+            .await
+            .unwrap();
+        // Dropped without a shutdown, as a crash leaves it.
+        drop(store);
+        std::thread::sleep(Duration::from_millis(100));
+        let store = open_in(&dir);
+        let again = store
+            .append_once(vec![keyed("task:t", 2, "auto-resume")])
+            .await
+            .unwrap();
+        assert!(!again[0].fresh);
+        assert_eq!(again[0].event.seq, first[0].event.seq);
+        assert_eq!(count(&store, "task:t").await, 1);
+        store.shutdown().await.unwrap();
+    }
+
+    /// A retention trim and a stream delete take a key with its event: the step may store it
+    /// again.
+    #[tokio::test]
+    async fn a_trimmed_or_deleted_event_frees_its_key() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = open_in(&dir);
+        store
+            .append_once(vec![keyed("diag:x", 1, "k")])
+            .await
+            .unwrap();
+        store
+            .append_with(
+                vec![NewEvent::new("diag:x", "step", now_ms(), &2).unwrap()],
+                Some(Retention { keep_last: 1 }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .append_once(vec![keyed("diag:x", 3, "k")])
+                .await
+                .unwrap()[0]
+                .fresh
+        );
+        store.delete_streams(vec!["diag:x".into()]).await.unwrap();
+        assert!(
+            store
+                .append_once(vec![keyed("diag:x", 4, "k")])
+                .await
+                .unwrap()[0]
+                .fresh
+        );
+        store.shutdown().await.unwrap();
     }
 
     #[tokio::test]

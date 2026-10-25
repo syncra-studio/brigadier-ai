@@ -321,6 +321,7 @@ impl SessionManager {
                         kind: stored.kind.clone(),
                         at_ms: stored.at_ms,
                         payload,
+                        key: None,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;

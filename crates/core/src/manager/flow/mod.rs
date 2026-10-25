@@ -534,6 +534,7 @@ fn seed_events(jsonl: &str) -> Vec<brigadier_store::NewEvent> {
                 kind: line.kind,
                 at_ms: 1_759_000_000_000 + index as i64,
                 payload: line.payload,
+                key: None,
             }
         })
         .collect()

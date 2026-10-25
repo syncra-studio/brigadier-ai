@@ -63,6 +63,13 @@ fn migrations() -> Migrations<'static> {
              WHERE kind = 'request.finished';",
         )
         .comment("finished requests by stream"),
+        // An append that carries a key is stored once per stream: a step that runs again after
+        // a crash finds its event already there (D9 d).
+        M::up(
+            "ALTER TABLE events ADD COLUMN idem TEXT; \
+             CREATE UNIQUE INDEX events_idem ON events (stream, idem) WHERE idem IS NOT NULL;",
+        )
+        .comment("idempotency keys"),
     ])
 }
 

@@ -2476,6 +2476,25 @@ impl Core {
         }
         Ok(stored.iter().map(|event| event.stream_seq).collect())
     }
+
+    /// Records `event` once under `key` in `stream` (D9 d): true when this call stored it,
+    /// false when a step that ran before (a run cut off by a crash, say) already had. Only a
+    /// fresh event reaches the projection.
+    pub(crate) async fn record_once(
+        &self,
+        stream: String,
+        event: DomainEvent,
+        key: &str,
+    ) -> Result<bool> {
+        let new = to_new_event(stream, &event)?.once(key);
+        let stored = self.store.append_once(vec![new]).await?;
+        let Some(appended) = stored.first().filter(|appended| appended.fresh) else {
+            return Ok(false);
+        };
+        self.projection()
+            .apply(&event, appended.event.seq, appended.event.at_ms);
+        Ok(true)
+    }
 }
 
 impl Core {
