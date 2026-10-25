@@ -219,38 +219,6 @@ pub trait ProviderSession: Send + Sync {
         Box::pin(async { Err(Error::Invalid("this CLI cannot compact its context".into())) })
     }
 
-    /// Whether the CLI runs the session's hooks (Claude: not with the user's
-    /// `disableAllHooks`). A long session's put-back rides on them ([`RestoreHooks`]).
-    fn runs_hooks(&self) -> bool {
-        true
-    }
-
-    /// Adds `text` to the conversation's context as a note of Brigadier's, at once, even
-    /// mid-turn (Codex's `thread/inject_items`): a long session's decisions put back after a
-    /// compaction (run2-D8). A CLI that puts them back through hooks has none.
-    fn put_back(&self, _text: String) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async {
-            Err(Error::Invalid(
-                "this CLI takes no notes in its context".into(),
-            ))
-        })
-    }
-
-    /// What Brigadier put back after compaction `compaction_id` (its
-    /// [`ProviderEvent::CompactionEnded`] `native_id`) that the CLI's own file records as
-    /// reaching the model, each piece whole: Claude's `SessionStart(compact)` hook outputs after
-    /// that boundary, Codex's notes that name it ([`restore_mark`]). The receipt of a put-back.
-    fn put_back_received(&self, _compaction_id: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-
-    /// The summary the CLI's own file holds for compaction `compaction_id`, as the model reads
-    /// it after: Claude's compact summary after that boundary. A long session's checkpoint
-    /// rides in it (run2-D9). `None`: not there, or a CLI that keeps none.
-    fn compact_summary(&self, _compaction_id: &str) -> Result<Option<String>> {
-        Ok(None)
-    }
-
     /// Stops one of the CLI's background tasks ([`ProviderEvent::BackgroundTask`]) by its id.
     fn stop_task(&self, _task_id: String) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {

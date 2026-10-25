@@ -956,7 +956,6 @@ impl Provider for Codex {
 
             *lock(&shared.thread) = Some(thread.id.clone());
             let session = Arc::new(CodexSession {
-                rollout: thread.path.clone().map(PathBuf::from),
                 thread_id: thread.id.clone(),
                 context_window,
                 ephemeral: thread.ephemeral,
@@ -2128,8 +2127,6 @@ struct McpRelist {
 pub struct CodexSession {
     context_window: Option<i64>,
     thread_id: String,
-    /// Its rollout file, where a put-back's receipt is read.
-    rollout: Option<PathBuf>,
     /// Never saved ([`SessionSpec::ephemeral`]): there is nothing to archive.
     ephemeral: bool,
     /// The app-server serves `thread/compact/start`.
@@ -2320,39 +2317,6 @@ impl ProviderSession for CodexSession {
             }
             started.map(drop)
         })
-    }
-
-    fn put_back(&self, text: String) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move {
-            // One developer note, kept whole in the rollout (step 0: 75,995 characters read back
-            // byte for byte).
-            let _: Value = self
-                .rpc
-                .call(
-                    "thread/inject_items",
-                    &json!({
-                        "threadId": self.thread_id,
-                        "items": [{
-                            "type": "message",
-                            "role": "developer",
-                            "content": [{ "type": "input_text", "text": text }],
-                        }],
-                    }),
-                )
-                .await?;
-            Ok(())
-        })
-    }
-
-    fn put_back_received(&self, compaction_id: &str) -> Result<Vec<String>> {
-        let Some(path) = &self.rollout else {
-            return Ok(Vec::new());
-        };
-        let text = std::fs::read_to_string(crate::session_file::locate(ProviderKind::Codex, path))?;
-        Ok(rollout::notes_naming(
-            &text,
-            &crate::model::restore_mark(compaction_id),
-        ))
     }
 
     fn interrupt(&self) -> BoxFuture<'_, Result<()>> {
@@ -3950,7 +3914,6 @@ for line in sys.stdin:
         let session = CodexSession {
             context_window: None,
             thread_id: "t".into(),
-            rollout: None,
             ephemeral: true,
             compacts: false,
             rpc: rpc.clone(),

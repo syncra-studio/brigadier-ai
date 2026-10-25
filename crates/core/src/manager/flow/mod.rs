@@ -599,16 +599,6 @@ pub(crate) struct FakeBehavior {
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
     pub compactions: Mutex<Vec<Option<String>>>,
-    /// The notes put back in Codex's context, as its rollout keeps them, across restarts.
-    pub put_backs: Mutex<Vec<String>>,
-    /// The next put-back reaches the rollout but its answer is lost: it fails.
-    pub put_back_lost: std::sync::atomic::AtomicBool,
-    /// This many put-backs fail before reaching the rollout.
-    pub put_back_refused: std::sync::atomic::AtomicU32,
-    /// Claude runs no hooks (the user's `disableAllHooks`).
-    pub hooks_off: bool,
-    /// The summary each Claude compaction writes to its session file.
-    pub summary: Option<String>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -854,12 +844,6 @@ impl Provider for FakeCli {
             let script = self.script.clone();
             let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
             let session = Arc::new(FakeSession {
-                restore: spec
-                    .native_compaction
-                    .as_ref()
-                    .and_then(|native| native.restore.clone()),
-                restored: Mutex::default(),
-                summaries: Mutex::default(),
                 kind: self.kind,
                 transcript: self.transcripts.join(&native_id),
                 session_file,
@@ -1008,12 +992,6 @@ impl Replayer for NoRecordings {
 }
 
 struct FakeSession {
-    /// A long Claude session's put-back hooks, which its compactions run.
-    restore: Option<brigadier_providers::RestoreHooks>,
-    /// What its put-back hooks printed after each compaction, by the compaction's id.
-    restored: Mutex<std::collections::HashMap<String, Vec<String>>>,
-    /// Each compaction's summary, by its id (Claude).
-    summaries: Mutex<std::collections::HashMap<String, String>>,
     kind: ProviderKind,
     /// Its transcript ([`transcribe`]).
     transcript: PathBuf,
@@ -1361,85 +1339,13 @@ impl ProviderSession for FakeSession {
         true
     }
 
-    fn runs_hooks(&self) -> bool {
-        !self.behavior.hooks_off
-    }
-
-    fn put_back(&self, text: String) -> BoxFuture<'_, brigadier_providers::Result<()>> {
-        use std::sync::atomic::Ordering;
-        let refused = self
-            .behavior
-            .put_back_refused
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok();
-        let lost = !refused && {
-            self.behavior.put_backs.lock().unwrap().push(text);
-            self.behavior.put_back_lost.swap(false, Ordering::SeqCst)
-        };
-        Box::pin(async move {
-            if refused || lost {
-                return Err(brigadier_providers::Error::Invalid("no answer".into()));
-            }
-            Ok(())
-        })
-    }
-
-    fn compact_summary(&self, compaction_id: &str) -> brigadier_providers::Result<Option<String>> {
-        Ok(self.summaries.lock().unwrap().get(compaction_id).cloned())
-    }
-
-    fn put_back_received(&self, compaction_id: &str) -> brigadier_providers::Result<Vec<String>> {
-        if self.kind == ProviderKind::Claude {
-            return Ok(self
-                .restored
-                .lock()
-                .unwrap()
-                .get(compaction_id)
-                .cloned()
-                .unwrap_or_default());
-        }
-        let mark = brigadier_providers::restore_mark(compaction_id);
-        Ok(self
-            .behavior
-            .put_backs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|note| note.contains(&mark))
-            .cloned()
-            .collect())
-    }
-
-    /// Compacts in a turn of its own, to 20k, as Claude's `/compact` does, and runs the
-    /// session's put-back hooks as Claude does after it (`brigadierd hook restore`).
+    /// Compacts in a turn of its own, to 20k, as Claude's `/compact` does.
     fn compact(
         &self,
         instructions: Option<String>,
     ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         self.behavior.compactions.lock().unwrap().push(instructions);
         let compaction = uuid::Uuid::new_v4().to_string();
-        if let Some(summary) = &self.behavior.summary {
-            self.summaries
-                .lock()
-                .unwrap()
-                .insert(compaction.clone(), summary.clone());
-        }
-        if let Some(hooks) = self.restore.as_ref().filter(|_| !self.behavior.hooks_off) {
-            let record = hooks
-                .args
-                .iter()
-                .skip_while(|arg| *arg != "--record")
-                .nth(1)
-                .map(PathBuf::from)
-                .expect("a record");
-            let printed = (1..=hooks.slots)
-                .filter_map(|slot| crate::manager::restore_part(&record, slot))
-                .collect();
-            self.restored
-                .lock()
-                .unwrap()
-                .insert(compaction.clone(), printed);
-        }
         let tx = self.sender();
         Box::pin(async move {
             let Some(tx) = tx else {

@@ -409,11 +409,12 @@ pub(crate) fn chat(side: bool) -> String {
 mod tests {
     use super::*;
 
-    /// §6: the file stays short (S17's byte test).
+    /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
+    /// its lines from tightening the rest and about 100 bytes more: 2,100 (proposed).
     #[test]
-    fn the_standing_instructions_stay_under_two_thousand_bytes_and_fifteen_lines() {
+    fn the_standing_instructions_stay_under_twenty_one_hundred_bytes_and_fifteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 2_000,
+            STANDING_INSTRUCTIONS.len() < 2_100,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
@@ -426,6 +427,9 @@ mod tests {
             "`brigadier --help`",
             "ask the user with `brigadier ask`",
             "the brigade skill says how",
+            // D13: everything about the job is pulled, never put in.
+            "skills, MCP servers, project and routing are in `brigadier context`.",
+            "Run it when you start and after any compaction.",
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }

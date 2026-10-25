@@ -1326,7 +1326,7 @@ impl SessionManager {
         let cli = state
             .cli
             .clone()
-            .filter(|_| state.busy && !state.compacting && !state.seam.held && !state.long.asking);
+            .filter(|_| state.busy && !state.compacting && !state.seam.held);
         let steered = match cli {
             Some(cli) => {
                 // What waits for the next user message (a card's decision) goes with it.
@@ -1522,13 +1522,10 @@ impl SessionManager {
             state.held_notes.push(text);
             return;
         }
-        let cli = state.cli.clone().filter(|_| {
-            state.busy
-                && !state.compacting
-                && !state.interrupted
-                && !state.seam.held
-                && !state.long.asking
-        });
+        let cli = state
+            .cli
+            .clone()
+            .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         if let Some(cli) = cli
             && cli
                 .session
@@ -1568,7 +1565,6 @@ impl SessionManager {
                     && !state.compacting
                     && !state.interrupted
                     && !state.seam.held
-                    && !state.long.asking
                     && state.holding.is_empty()
             });
             if let Some(cli) = cli
@@ -2134,9 +2130,8 @@ impl SessionManager {
                 return;
             }
             // At a seam only the hand-off turn runs; the rest waits for the successor.
-            // A long session's checkpoint request goes before anything waiting (run2-D9).
             let due = if session {
-                Self::take_due_ask(&mut state).or_else(|| Self::take_due_nudge(&mut state))
+                Self::take_due_nudge(&mut state)
             } else {
                 None
             };
@@ -4228,7 +4223,6 @@ impl SessionManager {
                     started_at: now_ms(),
                 };
                 self.note_lineage(&conv.id, entry, conv.private_logs).await;
-                self.long_started(conv, cli).await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -4345,17 +4339,10 @@ impl SessionManager {
             ProviderEvent::CompactionEnded {
                 tokens_after,
                 error,
-                native_id,
                 ..
             } if self.long_mode(conv, cli.provider).is_some() => {
-                self.long_compacted(
-                    conv,
-                    cli,
-                    *tokens_after,
-                    native_id.as_deref(),
-                    error.as_deref(),
-                )
-                .await;
+                self.long_compacted(conv, cli, *tokens_after, error.as_deref())
+                    .await;
             }
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>

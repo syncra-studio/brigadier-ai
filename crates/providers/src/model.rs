@@ -1446,25 +1446,6 @@ pub struct NativeCompaction {
     pub backstop_window: Option<i64>,
     /// Codex: `model_auto_compact_token_limit`. `None`: Codex's own point (run2-D6).
     pub codex_limit: Option<i64>,
-    /// Claude: the hooks that put the session's decisions back after each compaction
-    /// (run2-D8), one `SessionStart` hook (matcher `compact`) per slot.
-    pub restore: Option<RestoreHooks>,
-}
-
-/// The words a note Brigadier puts back after compaction `compaction_id` carries, so its
-/// receipt and a retry find it in the CLI's own file (exactly once, review item 2).
-pub fn restore_mark(compaction_id: &str) -> String {
-    format!("brigadier-restore {compaction_id}")
-}
-
-/// The put-back hooks: slot `k` of `slots` runs `command args… --slot k`, which prints that
-/// slot's slice of the decisions, labelled, under Claude's 10,000-character cap per hook.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RestoreHooks {
-    pub command: PathBuf,
-    pub args: Vec<String>,
-    pub slots: usize,
-    pub timeout_secs: u64,
 }
 
 /// The models a session's native subagents may run on, derived only from the user's model

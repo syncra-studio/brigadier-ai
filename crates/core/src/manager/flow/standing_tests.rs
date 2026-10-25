@@ -81,11 +81,11 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         // S22b's lines (§6 as amended on 10-23): ids and the time from `ledger add`, the
         // Decision and Open kinds, and derived documents that cite entry ids.
         for line in [
-            "`brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time;",
-            "- Decision: the user's words and what they answered (the option's text, not just \"A\"), or yours marked \"I decided\"; keep the sentence that defines it, and the reason.",
+            "`brigadier ledger add` stamps each entry with an id and the time (not in chats beside a tab);",
+            "- Decision: the user's words and the option they chose (its text, not \"A\"), or yours marked \"I decided\"; with its defining sentence and reason.",
             "- Exact identifier (hash, absolute path:line, number with units, id)",
-            "- Open: a promise, or a question waiting on the user; `brigadier ledger close <id>` when it is done.",
-            "A plan or brief built from the ledger cites entry ids; mark lines of your own \"proposed\". Tell the user each \"I decided\" that changes what they asked.",
+            "- Open: a promise, or a question waiting on the user; `brigadier ledger close <id>` when done.",
+            "Plans and briefs cite ledger ids and mark your own lines \"proposed\". Tell the user each \"I decided\" that changes what they asked.",
         ] {
             assert!(expected.contains(line), "{line}");
         }

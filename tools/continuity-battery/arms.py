@@ -9,6 +9,9 @@ from summary import SummaryBattery
 # Phase B integration point: change this one constant if the build names its switch differently.
 LONG_SESSION_SWITCH = "BRIGADIER_LONG_SESSIONS"
 CODEX_DEFAULT_ARMS = {f"{arm}@codex-default": arm for arm in ("native-bare", "native", "plain")}
+# Since D13 nothing is put back after a compaction and checkpoints are pulled only: the daemon
+# runs `native`, `native-full`, `restore-only` and the `+checkpoint` arms as its default
+# (`instructions-only`), and `seam-repaired` as the size seams.
 CANDIDATES = ("native-bare", "native", "native-full", "restore-only", "instructions-only",
               "native+checkpoint", "native-full+checkpoint", "seam-repaired",
               *(arm for arm, base in CODEX_DEFAULT_ARMS.items() if base != "plain"))

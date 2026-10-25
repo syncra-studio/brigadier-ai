@@ -871,9 +871,6 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     if let Some(stop) = stop_hooks(spec) {
         settings["hooks"]["Stop"] = stop;
     }
-    if let Some(restore) = restore_hooks(spec) {
-        settings["hooks"]["SessionStart"] = restore;
-    }
     // A session that must not compact refuses Claude's own compaction: the seam starts its
     // successor instead (STRIP-DOWN-PLAN S22). A long session's thread compacts (run2-D5).
     if !compacts(spec) {
@@ -1032,29 +1029,6 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
         "PostToolUse": entry.clone(),
         "PostToolUseFailure": entry,
     }))
-}
-
-/// A long session's put-back after each compaction (run2-D8): one `SessionStart` hook on
-/// `compact` per slot, each printing its part of the decisions under Claude's cap on one hook's
-/// output (step 0: eight such parts all reached the model whole).
-fn restore_hooks(spec: &SessionSpec) -> Option<Value> {
-    let hooks = spec.native_compaction.as_ref()?.restore.as_ref()?;
-    let base = std::iter::once(hooks.command.display().to_string())
-        .chain(hooks.args.iter().cloned())
-        .map(|part| shell_quote(&part))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(Value::Array(
-        (1..=hooks.slots)
-            .map(|slot| {
-                let command = format!("{base} --slot {slot}");
-                json!({
-                    "matcher": "compact",
-                    "hooks": [{ "type": "command", "command": command, "timeout": hooks.timeout_secs }],
-                })
-            })
-            .collect(),
-    ))
 }
 
 /// A worker's `Stop` hook ([`SessionSpec::stop_hook`]) as settings `hooks.Stop`: its command
@@ -1466,8 +1440,6 @@ impl Provider for Claude {
                 compacts: cli_version
                     .as_deref()
                     .is_some_and(|version| version_at_least(version, COMPACT_SINCE)),
-                hooks_on,
-                file: None,
                 process,
                 shared,
                 parser: parser_tx,
@@ -1500,7 +1472,6 @@ impl Provider for Claude {
                     .display()
                     .to_string()
             });
-            session.file = file.as_ref().map(PathBuf::from);
             // Capture memory made during initialize before the session is handed to its caller.
             session.memory.record(false).await;
             session
@@ -1820,10 +1791,6 @@ pub struct ClaudeSession {
     context_window: Option<i64>,
     /// The CLI's version takes `/compact` in stream-json.
     compacts: bool,
-    /// It runs the session's hooks (no `disableAllHooks` in the settings it loads).
-    hooks_on: bool,
-    /// Its session file, where a put-back's receipt is read.
-    file: Option<PathBuf>,
     process: Arc<CliProcess>,
     shared: Arc<Shared>,
     parser: mpsc::UnboundedSender<ParserCommand>,
@@ -1950,26 +1917,6 @@ impl ProviderSession for ClaudeSession {
 
     fn can_compact(&self) -> bool {
         self.compacts
-    }
-
-    fn runs_hooks(&self) -> bool {
-        self.hooks_on
-    }
-
-    fn put_back_received(&self, compaction_id: &str) -> Result<Vec<String>> {
-        let Some(file) = &self.file else {
-            return Ok(Vec::new());
-        };
-        let text = std::fs::read_to_string(file)?;
-        Ok(session_file::restored_after(&text, compaction_id))
-    }
-
-    fn compact_summary(&self, compaction_id: &str) -> Result<Option<String>> {
-        let Some(file) = &self.file else {
-            return Ok(None);
-        };
-        let text = std::fs::read_to_string(file)?;
-        Ok(session_file::summary_after(&text, compaction_id))
     }
 
     fn compact(&self, instructions: Option<String>) -> BoxFuture<'_, Result<()>> {
@@ -3562,24 +3509,6 @@ for line in sys.stdin:
         assert!(layer["hooks"].get("PreCompact").is_none(), "{layer}");
         assert_eq!(layer["idleCompaction"], json!(false));
         assert!(layer["hooks"].get("SessionStart").is_none());
-        // The decisions go back after each compaction through one hook per slot (run2-D8).
-        let mut restoring = long.clone();
-        restoring.native_compaction.as_mut().unwrap().restore = Some(crate::model::RestoreHooks {
-            command: PathBuf::from("/bin/brigadierd"),
-            args: vec!["hook".into(), "restore".into()],
-            slots: 8,
-            timeout_secs: 30,
-        });
-        let starts = settings(&restoring, &SubAgents::Any, false)["hooks"]["SessionStart"].clone();
-        let starts = starts.as_array().unwrap();
-        assert_eq!(starts.len(), 8);
-        for (n, start) in starts.iter().enumerate() {
-            assert_eq!(start["matcher"], "compact");
-            assert_eq!(
-                start["hooks"][0]["command"],
-                format!("/bin/brigadierd hook restore --slot {}", n + 1)
-            );
-        }
         let window = backstop(&long, cwd.path(), Some(home.path()));
         assert_eq!(window, Some(250_000));
         let env = session_env(&long, true, window);

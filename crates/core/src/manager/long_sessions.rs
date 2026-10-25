@@ -1,31 +1,27 @@
-//! Long sessions on the CLIs' own compaction, behind `BRIGADIER_LONG_SESSIONS` (run2-D2, run2-D15:
-//! built behind a switch, off by default, on for everyone only after the test round holds up).
+//! Long sessions on the CLIs' own compaction (run2-D2), the default for every session's thread
+//! (D15, superseding run2-D15's switch, which kept it off).
 //!
-//! Off (unset, empty or a value it doesn't know), a session goes on at seams exactly as before
-//! (S22). On, a session's thread keeps one CLI session for its whole life and the CLI compacts it
-//! in place, with its own compaction (Claude's `/compact` and auto-compaction, Codex's native
-//! compaction); Brigadier re-implements no compaction, summary or tool-output handling. What it
-//! adds, each switchable so the continuity battery can tell their effects apart
-//! (`tools/continuity-battery/arms.py`, its candidate arms):
+//! A session's thread keeps one CLI session for its whole life and the CLI compacts it in
+//! place, with its own compaction (Claude's `/compact` and auto-compaction, Codex's native
+//! compaction); Brigadier re-implements no compaction, summary or tool-output handling. It puts
+//! nothing into the conversation after a compaction (D13, superseding run2-D8's restore):
+//! everything about the job is pulled with `brigadier context`, which the standing instructions
+//! and Claude's steered `/compact` point to. What it adds:
 //!
-//! - **restore**: after every compaction the ledger's active entries (open items, rules and
-//!   decisions) go back whole and word for word, with one line on how to look up the rest
-//!   (run2-D8, S22b "never cut").
 //! - **instructions**: Claude's `/compact` at the compaction point carries what its summary must
-//!   keep (run2-D7, D71). Codex's summary takes none.
-//! - **checkpoint**: a replaceable checkpoint record with exact pointers at compactions Brigadier
-//!   triggers (run2-D9, borrowed from Codex's switched-off mode, which stays off).
+//!   keep, ending on the pointer to `brigadier context` (run2-D7, D71, D13). Codex's summary
+//!   takes none.
+//! - **hand-off after 5 compactions** in one CLI session (D16), and as the rare fallback when
+//!   compaction fails or loops (run2-D10): the fresh-session seam.
 //!
-//! The test-only `seam-repaired` mode keeps size seams and adds only P3 hand-off text.
-//! In the native modes, size seams go; the fresh-session seam stays for moves to another CLI
-//! (D46), quota fallback to another provider (D23, D25) and as the rare fallback when compaction fails (run2-D10).
+//! The fresh-session seam also stays for moves to another CLI (D46) and quota fallback to
+//! another provider (D23, D25). `BRIGADIER_LONG_SESSIONS` is a test-only opt-out, never a user
+//! setting: `seams` brings back the size seams, `native-bare` drops the keep-instructions (the
+//! continuity battery's arms, `tools/continuity-battery/arms.py`).
 
 pub(crate) mod checkpoint;
-pub(crate) mod restore;
 
-use std::path::Path;
-
-use brigadier_providers::{NativeCompaction, ProviderKind, RestoreHooks};
+use brigadier_providers::{NativeCompaction, ProviderKind};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -35,71 +31,69 @@ use super::conversation::ConvLive;
 use crate::model::ConversationKind;
 use crate::{Error, Result};
 
-/// The switch, read once when the daemon starts; its value is the mode.
+/// The test-only opt-out, read once when the daemon starts.
 pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
 
-/// What a session does at long contexts with the switch on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// How many compactions in a row one CLI session of a session's thread takes before a fresh
+/// one goes on from its hand-off note (D16: each compaction summarises the one before).
+pub(crate) const SESSION_HANDOFF_AFTER: u32 = 5;
+
+/// What a session does at long contexts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LongSessions {
-    /// Test-only P3 comparison: retain size seams, with the repaired hand-off text.
-    pub size_seams: bool,
-    /// The decisions go back whole after each compaction (run2-D8).
-    pub restore: bool,
     /// Claude's `/compact` says what its summary must keep (run2-D7).
     pub instructions: bool,
-    /// The checkpoint record at compactions Brigadier triggers (run2-D9).
-    pub checkpoint: bool,
+}
+
+impl Default for LongSessions {
+    fn default() -> Self {
+        Self { instructions: true }
+    }
 }
 
 impl LongSessions {
-    /// The mode named `value`, one of the battery's candidate arms. `native` and `restore-only`
-    /// are the same: the first is the Codex arm's name (P1), the second the Claude ablation's (P2).
+    /// The mode `value` names: `None` for `seams` (size seams, as before D15). Unset, empty or
+    /// unknown: the default.
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        if value.trim() == "seam-repaired" {
-            return Some(Self {
-                size_seams: true,
-                ..Self::default()
-            });
+        match value.trim() {
+            // `seam-repaired` was the battery's size seams with P3's hand-off text.
+            "seams" | "seam-repaired" => None,
+            "native-bare" => Some(Self {
+                instructions: false,
+            }),
+            // The battery's arms that put the decisions back or asked for a checkpoint run as
+            // the default since D13: nothing is put back.
+            ""
+            | "default"
+            | "instructions-only"
+            | "native"
+            | "restore-only"
+            | "native-full"
+            | "native+checkpoint"
+            | "native-full+checkpoint" => Some(Self::default()),
+            other => {
+                tracing::warn!(value = %other, "{SWITCH_ENV} names no mode; long sessions compact in place");
+                Some(Self::default())
+            }
         }
-        let (restore, instructions, checkpoint) = match value.trim() {
-            "native-bare" => (false, false, false),
-            "native" | "restore-only" => (true, false, false),
-            "instructions-only" => (false, true, false),
-            "native-full" => (true, true, false),
-            "native+checkpoint" => (true, false, true),
-            "native-full+checkpoint" => (true, true, true),
-            _ => return None,
-        };
-        Some(Self {
-            restore,
-            instructions,
-            checkpoint,
-            ..Self::default()
-        })
     }
 
-    /// The switch as the daemon's environment sets it; `None`: off.
+    /// The mode the daemon's environment asks for; the default without one.
     pub(crate) fn from_env() -> Option<Self> {
-        let value = std::env::var(SWITCH_ENV).ok()?;
-        let mode = Self::parse(&value);
-        if mode.is_none() && !value.trim().is_empty() {
-            tracing::warn!(value = %value, "{SWITCH_ENV} names no mode; long sessions stay at seams");
-        }
-        mode
+        Self::parse(&std::env::var(SWITCH_ENV).unwrap_or_default())
     }
 }
 
 impl SessionManager {
-    /// The long-session mode a conversation's CLI on `provider` runs in: a session's thread with
-    /// the switch on. `None`: seams as before.
+    /// The long-session mode a conversation's CLI on `provider` runs in: a session's thread,
+    /// unless the test-only opt-out asks for seams. `None`: seams as before.
     pub(super) fn long_mode(
         &self,
         conv: &ConvLive,
         provider: ProviderKind,
     ) -> Option<LongSessions> {
         let mode = self.seam_config().long?;
-        (!mode.size_seams
-            && conv.kind == ConversationKind::Session
+        (conv.kind == ConversationKind::Session
             && matches!(provider, ProviderKind::Claude | ProviderKind::Codex))
         .then_some(mode)
     }
@@ -110,23 +104,11 @@ impl SessionManager {
         conv: &ConvLive,
         provider: ProviderKind,
     ) -> Option<NativeCompaction> {
-        let mode = self.long_mode(conv, provider)?;
+        self.long_mode(conv, provider)?;
         let config = self.seam_config();
         Some(match provider {
             ProviderKind::Claude => NativeCompaction {
                 backstop_window: Some(backstop_window(config.tokens)),
-                // The decisions go back after each compaction through hooks (run2-D8).
-                restore: mode.restore.then(|| RestoreHooks {
-                    command: self.config.daemon_exe.clone(),
-                    args: vec![
-                        "hook".into(),
-                        "restore".into(),
-                        "--record".into(),
-                        self.session_dir(&conv.id).record().display().to_string(),
-                    ],
-                    slots: restore::SLOTS,
-                    timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
-                }),
                 ..NativeCompaction::default()
             },
             _ => NativeCompaction {
@@ -135,31 +117,6 @@ impl SessionManager {
             },
         })
     }
-}
-
-/// The ledger's active entries in session record `record`, each whole and in order: its open
-/// items, then its rules and decisions (what a hand-off carries verbatim, S22b).
-pub(crate) fn active_entries(record: &Path) -> Vec<String> {
-    let Ok(ledger) = super::cli_ledger::Ledger::read(record) else {
-        return Vec::new();
-    };
-    ledger
-        .open()
-        .into_iter()
-        .chain(ledger.rules())
-        .map(|entry| entry.text.trim_end().to_owned())
-        .collect()
-}
-
-/// Part `slot` (from 1) of the decisions put back after a compaction, read from session record
-/// `record` as it stands (`brigadierd hook restore`, run2-D8). `None`: nothing for this slot,
-/// or the decisions can't go back whole, which the receipt then finds (the fallback, run2-D10).
-pub fn restore_part(record: &Path, slot: usize) -> Option<String> {
-    let back = restore::restoration(&active_entries(record), &restore::lookup_line());
-    if !back.whole {
-        return None;
-    }
-    back.parts.into_iter().nth(slot.checked_sub(1)?)
 }
 
 /// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point
@@ -171,7 +128,8 @@ fn backstop_window(point: i64) -> i64 {
 
 /// What Claude's summary must keep when Brigadier asks it to compact (run2-D7, D71): the
 /// words after `/compact`. Exact pointers back to the evidence, so each fact can be read again
-/// word for word, and never a secret.
+/// word for word, and never a secret. Its last line points to `brigadier context` (D13), where
+/// the decisions, open items and ledger are, instead of Brigadier putting them back.
 pub(crate) const COMPACT_INSTRUCTIONS: &str = "\
 Besides your usual summary, keep these exactly, each under its own heading: \
 the open items and what is still to do; \
@@ -185,26 +143,20 @@ the skills in use. \
 For each fact, keep the exact pointer to where its evidence lives: file paths with line numbers, \
 commit hashes, command lines, and Brain ids as `brigadier brain search` and `brigadier brain read` show them, \
 so it can be read again word for word. \
-Never copy a secret (a key, token or password) into the summary.";
+Never copy a secret (a key, token or password) into the summary. \
+End the summary with this line: next: run `brigadier context`.";
 
 impl LongSessions {
-    /// The words after Claude's `/compact` in this mode: what its summary must keep (run2-D7)
-    /// and, with the checkpoint, the section that carries it (run2-D9). `None` without either
-    /// (as in `native-bare`).
+    /// The words after Claude's `/compact` in this mode: what its summary must keep (run2-D7).
+    /// `None` in `native-bare`.
     pub(crate) fn compact_instructions(self) -> Option<String> {
-        let keep = [
-            self.instructions.then(|| COMPACT_INSTRUCTIONS.to_owned()),
-            self.checkpoint.then(checkpoint::claude_keep),
-        ];
-        let words: String = keep.into_iter().flatten().collect();
-        let words = words.trim();
-        (!words.is_empty()).then(|| words.to_owned())
+        self.instructions.then(|| COMPACT_INSTRUCTIONS.to_owned())
     }
 }
 
 impl SessionManager {
-    /// `brigadier checkpoint set|show`: the session thread's checkpoint record (run2-D9). It
-    /// works with the switch off too: the record is only read back when the mode is on.
+    /// `brigadier checkpoint set|show`: the session thread's checkpoint record (run2-D9), pulled
+    /// only: nothing puts it back into the conversation (D13).
     pub(super) async fn cli_checkpoint(
         &self,
         caller: &CliCaller,
@@ -257,28 +209,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_candidate_arm_of_the_battery_is_a_mode() {
-        let on = |restore, instructions, checkpoint| {
-            Some(LongSessions {
-                restore,
-                instructions,
-                checkpoint,
-                ..LongSessions::default()
-            })
-        };
-        for (arm, mode) in [
-            ("native-bare", on(false, false, false)),
-            ("native", on(true, false, false)),
-            ("restore-only", on(true, false, false)),
-            ("instructions-only", on(false, true, false)),
-            ("native-full", on(true, true, false)),
-            ("native+checkpoint", on(true, false, true)),
-            ("native-full+checkpoint", on(true, true, true)),
+    fn compaction_in_place_is_the_default_and_seams_only_a_test_opt_out() {
+        let on = |instructions| Some(LongSessions { instructions });
+        for (value, mode) in [
+            ("", on(true)),
+            ("default", on(true)),
+            ("instructions-only", on(true)),
+            ("unknown", on(true)),
+            ("native-bare", on(false)),
+            ("native-full+checkpoint", on(true)),
+            ("seams", None),
+            ("seam-repaired", None),
         ] {
-            assert_eq!(LongSessions::parse(arm), mode, "{arm}");
+            assert_eq!(LongSessions::parse(value), mode, "{value:?}");
         }
-        for off in ["", "1", "on", "seam", "plain", "native-ful"] {
-            assert_eq!(LongSessions::parse(off), None, "{off:?}");
-        }
+    }
+
+    #[test]
+    fn claudes_compact_summary_ends_on_the_context_pointer() {
+        let words = LongSessions::default().compact_instructions().unwrap();
+        assert!(words.ends_with("next: run `brigadier context`."), "{words}");
+        assert_eq!(
+            LongSessions {
+                instructions: false
+            }
+            .compact_instructions(),
+            None
+        );
     }
 }

@@ -327,44 +327,8 @@ fn file_change(path: &str, change: &Value) -> FileChange {
     }
 }
 
-/// The developer notes in rollout `text` that hold `needle`, each whole: a put-back's receipt
-/// ([`crate::model::restore_mark`]).
-pub fn notes_naming(text: &str, needle: &str) -> Vec<String> {
-    text.lines()
-        .filter(|line| line.contains(needle))
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|value| {
-            value.get("type").and_then(Value::as_str) == Some("response_item")
-                && value.pointer("/payload/role").and_then(Value::as_str) == Some("developer")
-        })
-        .filter_map(|value| {
-            let parts = value.pointer("/payload/content")?.as_array()?.clone();
-            Some(
-                parts
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<String>(),
-            )
-        })
-        .filter(|note| note.contains(needle))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    /// A 75,995-character note put back by `thread/inject_items` right after
-    /// `thread/compact/start` (step 0, Codex 0.164.0): the rollout keeps it whole, once.
-    #[test]
-    fn a_put_back_note_reads_back_whole_from_the_rollout() {
-        const INJECTED: &str =
-            include_str!("../../fixtures/long-sessions/codex-compact-inject.jsonl");
-        let notes = super::notes_naming(INJECTED, "brigadier-restore ");
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].chars().count(), 75_995);
-        assert!(notes[0].starts_with("[Brigadier · decisions restored after compaction]"));
-        assert!(super::notes_naming(INJECTED, "brigadier-restore other").is_empty());
-    }
-
     use super::*;
 
     /// Codex keeps no item of a declined command; Brigadier's word on it stands for it, in

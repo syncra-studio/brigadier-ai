@@ -165,6 +165,10 @@ class Battery:
             raise RuntimeError("daemon startup timeout")
 
     def configure_environment(self, env):
+        # The daemon compacts in place by default (D15); the seam arm asks for the test-only
+        # size seams.
+        if getattr(self.args, "arm", None) == "seam":
+            env["BRIGADIER_LONG_SESSIONS"] = "seams"
         return env
 
     def setup(self):

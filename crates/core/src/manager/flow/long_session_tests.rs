@@ -1,6 +1,7 @@
-//! Long sessions behind `BRIGADIER_LONG_SESSIONS` (run2-D2, run2-D15): with the switch on, a
-//! session's thread compacts in place with its CLI's own compaction instead of going on in a
-//! fresh session at a size; off, the seam comes as before.
+//! Long sessions (run2-D2, D15): by default a session's thread compacts in place with its CLI's
+//! own compaction instead of going on in a fresh session at a size, and nothing goes back into
+//! the conversation after it (D13); the test-only `seams` opt-out keeps the seam as before. After
+//! five compactions in one CLI session it goes on in a fresh one (D16).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,7 +9,7 @@ use std::time::Duration;
 use brigadier_providers::{ProviderEvent, ProviderKind};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::manager::conversation::long::{PutBackState, read_long};
+use crate::manager::conversation::long::read_long;
 use crate::manager::long_sessions::LongSessions;
 use crate::manager::seam::{Phase, SeamConfig, read_seam, without_handoff};
 use crate::model::DomainEvent;
@@ -108,7 +109,7 @@ async fn breaches(flow: &Flow) -> usize {
 }
 
 #[tokio::test]
-async fn a_codex_session_compacts_in_place_with_the_switch_on() {
+async fn a_codex_session_compacts_in_place_by_default_with_nothing_put_back() {
     let inputs: Inputs = Arc::default();
     let mut flow = Flow::start(
         "long-codex",
@@ -116,19 +117,23 @@ async fn a_codex_session_compacts_in_place_with_the_switch_on() {
         thread(inputs.clone()),
     )
     .await;
-    switch(&mut flow, LongSessions::parse("native-bare"));
+    switch(&mut flow, LongSessions::parse(""));
     flow.say("Start.").await;
     flow.settled().await;
     flow.say("Grow.").await;
     flow.settled().await;
     flow.say("After.").await;
     flow.settled().await;
-    // No hand-off was asked for and no successor started: the same CLI session goes on.
-    let seen = inputs.lock().unwrap().clone();
-    assert!(
-        seen.iter().all(|(_, input)| !input.starts_with(NUDGE_MARK)),
-        "{seen:?}"
-    );
+    // No hand-off was asked for, no successor started and nothing of Brigadier's went in: the
+    // same CLI session goes on with only the user's messages (D13).
+    let seen: Vec<String> = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, input)| input.clone())
+        .collect();
+    assert_eq!(seen, ["Start.", "Grow.", "After."]);
+    assert_eq!(read_long(&record(&flow)).compactions, 1);
     let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
     assert_eq!((file.generation, file.phase), (1, Phase::Live));
     assert!(file.seams.is_empty());
@@ -142,12 +147,11 @@ async fn a_codex_session_compacts_in_place_with_the_switch_on() {
         .unwrap();
     let native = spec.native_compaction.clone().expect("compacts natively");
     assert_eq!(native.codex_limit, Some(60_000));
-    assert!(native.restore.is_none());
     flow.stop().await;
 }
 
 #[tokio::test]
-async fn with_the_switch_off_a_codex_session_still_goes_on_at_its_seam() {
+async fn with_the_seams_opt_out_a_codex_session_still_goes_on_at_its_seam() {
     let inputs: Inputs = Arc::default();
     let mut flow = Flow::start(
         "long-codex-off",
@@ -155,7 +159,7 @@ async fn with_the_switch_off_a_codex_session_still_goes_on_at_its_seam() {
         thread(inputs.clone()),
     )
     .await;
-    switch(&mut flow, None);
+    switch(&mut flow, LongSessions::parse("seams"));
     flow.say("Start.").await;
     flow.settled().await;
     let specs = flow.specs();
@@ -203,45 +207,6 @@ fn claude_thread(inputs: Inputs) -> Script {
             }
         }
     })
-}
-
-#[tokio::test]
-async fn seam_repaired_keeps_size_seams_and_adds_only_p3_text() {
-    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-        let inputs: Inputs = Arc::default();
-        let options = options(provider);
-        let behavior = options.behavior.clone();
-        let mut flow = Flow::start("seam-repaired", options, claude_thread(inputs.clone())).await;
-        let mode = LongSessions::parse("seam-repaired").expect("test-only mode");
-        assert!(mode.size_seams);
-        assert!(!mode.restore && !mode.instructions && !mode.checkpoint);
-        switch(&mut flow, Some(mode));
-        flow.say("Start.").await;
-        flow.settled().await;
-        flow.say("Grow.").await;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while read_seam(&flow.manager.session_dir(&flow.conversation).record()).generation < 2 {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("size seam still starts its successor");
-        flow.settled().await;
-        let seen = inputs.lock().unwrap().clone();
-        assert!(
-            seen.iter()
-                .any(|(_, input)| input.contains(crate::manager::seam::LONG_NOTE))
-        );
-        assert!(seen.iter().any(|(_, input)| input.contains("Before you say something is unknown, look it up")));
-        assert!(
-            flow.specs()
-                .iter()
-                .all(|(_, spec)| spec.native_compaction.is_none())
-        );
-        assert!(behavior.compactions.lock().unwrap().is_empty());
-        assert_eq!(breaches(&flow).await, 0);
-        flow.stop().await;
-    }
 }
 
 /// Runs a Claude session in `arm` through a turn past the point and one after it: what each
@@ -294,7 +259,7 @@ async fn claude_compactions(arm: &str) -> Vec<Option<String>> {
 
 #[tokio::test]
 async fn a_claude_session_compacts_once_at_its_point_with_what_its_summary_must_keep() {
-    let compactions = claude_compactions("native-full").await;
+    let compactions = claude_compactions("").await;
     assert_eq!(
         compactions,
         vec![Some(
@@ -315,6 +280,8 @@ async fn a_claude_session_compacts_once_at_its_point_with_what_its_summary_must_
     ] {
         assert!(instructions.contains(kept), "{kept}");
     }
+    // The summary points to where everything else is (D13).
+    assert!(instructions.ends_with("next: run `brigadier context`."));
 }
 
 #[tokio::test]
@@ -322,7 +289,7 @@ async fn a_bare_claude_session_compacts_at_its_point_without_instructions() {
     assert_eq!(claude_compactions("native-bare").await, vec![None]);
 }
 
-/// The session's ledger: two decisions and an open item go back; a note doesn't.
+/// The session's ledger: it stays where it is, for `brigadier context` (D13).
 const LEDGER: &str = "- L1 · 10-24 14:42 · gen 1 · Decision: store it in SQLite
 - L2 · 10-24 14:43 · gen 1 · Rule: never push to main
 - L3 · 10-24 14:44 · gen 1 · Note: the build took 4 minutes
@@ -354,293 +321,6 @@ async fn notices(flow: &Flow) -> Vec<String> {
             _ => None,
         })
         .collect()
-}
-
-/// Waits until the put-back is in `state`.
-async fn until_put_back(flow: &Flow, state: PutBackState) {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while read_long(&record(flow)).put_back.map(|put| put.state) != Some(state) {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("a put-back {state:?}: {:?}", read_long(&record(flow))));
-}
-
-/// Starts a session on `thread` in `arm`, with the ledger.
-async fn long_flow(
-    name: &str,
-    provider: ProviderKind,
-    behavior: FakeBehavior,
-    arm: &str,
-    inputs: Inputs,
-) -> Flow {
-    let options = Options {
-        thread: provider,
-        behavior: Arc::new(FakeBehavior {
-            session_file: true,
-            take_in_steers: true,
-            ..behavior
-        }),
-        ..Options::default()
-    };
-    let script = if provider == ProviderKind::Claude {
-        claude_thread(inputs)
-    } else {
-        thread(inputs)
-    };
-    let mut flow = Flow::start(name, options, script).await;
-    switch(&mut flow, LongSessions::parse(arm));
-    write_ledger(&flow, LEDGER);
-    flow.say("Start.").await;
-    flow.settled().await;
-    flow
-}
-
-#[tokio::test]
-async fn claudes_decisions_go_back_whole_after_its_compaction_with_no_notice() {
-    let inputs: Inputs = Arc::default();
-    let flow = long_flow(
-        "long-claude-restore",
-        ProviderKind::Claude,
-        FakeBehavior::default(),
-        "native",
-        inputs.clone(),
-    )
-    .await;
-    flow.say("Grow.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    let file = read_seam(&record(&flow));
-    assert_eq!((file.generation, file.phase), (1, Phase::Live));
-    assert!(notices(&flow).await.is_empty());
-    // `native` puts back but says nothing of what the summary must keep (run2-D7 off).
-    assert_eq!(*flow.behavior.compactions.lock().unwrap(), vec![None]);
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn with_claudes_hooks_off_the_user_is_told_once_and_the_session_goes_on() {
-    let inputs: Inputs = Arc::default();
-    let flow = long_flow(
-        "long-claude-hooks-off",
-        ProviderKind::Claude,
-        FakeBehavior {
-            hooks_off: true,
-            ..FakeBehavior::default()
-        },
-        "native-full",
-        inputs.clone(),
-    )
-    .await;
-    for round in 1..=2 {
-        flow.say("Grow.").await;
-        // The compaction is the turn after: idle can fall between the two.
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while flow.behavior.compactions.lock().unwrap().len() < round {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the compaction");
-        flow.idle().await;
-    }
-    assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 2);
-    let told = notices(&flow).await;
-    assert_eq!(told.len(), 1, "{told:?}");
-    assert!(told[0].contains("hooks are off"));
-    assert!(read_long(&record(&flow)).hooks_off_told);
-    let file = read_seam(&record(&flow));
-    assert_eq!((file.generation, file.phase), (1, Phase::Live));
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn decisions_too_long_to_go_back_whole_send_the_session_to_a_fresh_one() {
-    let inputs: Inputs = Arc::default();
-    let flow = long_flow(
-        "long-claude-too-long",
-        ProviderKind::Claude,
-        FakeBehavior::default(),
-        "native",
-        inputs.clone(),
-    )
-    .await;
-    let long = format!(
-        "- L1 · 10-24 14:42 · gen 1 · Decision: {}\n",
-        "keep every word ".repeat(700)
-    );
-    write_ledger(&flow, &long);
-    flow.say("Grow.").await;
-    until_put_back(&flow, PutBackState::Failed).await;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while read_seam(&record(&flow)).generation < 2 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("a fresh session at the fallback");
-    flow.idle().await;
-    let told = notices(&flow).await;
-    assert_eq!(told.len(), 1, "{told:?}");
-    assert!(
-        told[0].contains("because its decisions did not all arrive whole"),
-        "{told:?}"
-    );
-    flow.stop().await;
-}
-
-/// The Codex notes put back after compaction `compaction-1` so far.
-fn codex_notes(flow: &Flow) -> Vec<String> {
-    flow.behavior
-        .put_backs
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|note| note.contains("brigadier-restore compaction-1"))
-        .cloned()
-        .collect()
-}
-
-/// Codex compacts mid-turn; its decisions go back once, whole, as one note, whatever its
-/// answer does.
-async fn codex_put_back(name: &str, behavior: FakeBehavior) {
-    let inputs: Inputs = Arc::default();
-    let flow = long_flow(name, ProviderKind::Codex, behavior, "native", inputs).await;
-    flow.say("Grow.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    let notes = codex_notes(&flow);
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    for kept in KEPT {
-        assert_eq!(notes[0].matches(kept).count(), 1, "{kept}");
-    }
-    assert!(!notes[0].contains("L3 · "));
-    assert!(notes[0].contains("you may quote them"));
-    assert!(notes[0].contains("brigadier brain search"));
-    assert!(notices(&flow).await.is_empty());
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn codexs_decisions_go_back_once_after_its_compaction() {
-    codex_put_back("long-codex-restore", FakeBehavior::default()).await;
-}
-
-#[tokio::test]
-async fn a_put_back_whose_answer_was_lost_is_not_sent_again() {
-    codex_put_back(
-        "long-codex-lost",
-        FakeBehavior {
-            put_back_lost: true.into(),
-            ..FakeBehavior::default()
-        },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn a_put_back_that_never_arrived_is_sent_again_once() {
-    codex_put_back(
-        "long-codex-refused",
-        FakeBehavior {
-            put_back_refused: 1.into(),
-            ..FakeBehavior::default()
-        },
-    )
-    .await;
-}
-
-/// A restart between sending the put-back and recording its receipt: the rollout decides.
-async fn restarted(name: &str, state: PutBackState, arrived: bool) -> usize {
-    let inputs: Inputs = Arc::default();
-    let mut flow = long_flow(
-        name,
-        ProviderKind::Codex,
-        FakeBehavior::default(),
-        "native",
-        inputs,
-    )
-    .await;
-    flow.say("Grow.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    if !arrived {
-        flow.behavior.put_backs.lock().unwrap().clear();
-    }
-    let mut file = read_long(&record(&flow));
-    file.put_back.as_mut().unwrap().state = state;
-    std::fs::write(
-        record(&flow).join("long.json"),
-        serde_json::to_vec(&file).unwrap(),
-    )
-    .unwrap();
-    flow.restart().await;
-    flow.say("After.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    let notes = codex_notes(&flow).len();
-    flow.stop().await;
-    notes
-}
-
-#[tokio::test]
-async fn after_a_restart_a_put_back_that_arrived_is_not_sent_again() {
-    assert_eq!(
-        restarted("long-codex-receipt-lost", PutBackState::Sent, true).await,
-        1
-    );
-    assert_eq!(
-        restarted("long-codex-sending-arrived", PutBackState::Sending, true).await,
-        1
-    );
-}
-
-/// A decision written after the compaction and before a restart cut the put-back's answer off:
-/// what went back is checked, not the ledger as it stands by then, and nothing goes twice.
-#[tokio::test]
-async fn after_a_restart_a_put_back_is_checked_for_what_went_back() {
-    let inputs: Inputs = Arc::default();
-    let mut flow = long_flow(
-        "long-codex-ledger-grew",
-        ProviderKind::Codex,
-        FakeBehavior::default(),
-        "native",
-        inputs,
-    )
-    .await;
-    flow.say("Grow.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    let mut file = read_long(&record(&flow));
-    let put = file.put_back.as_mut().unwrap();
-    put.state = PutBackState::Sent;
-    put.entries = crate::manager::long_sessions::active_entries(&record(&flow));
-    std::fs::write(
-        record(&flow).join("long.json"),
-        serde_json::to_vec(&file).unwrap(),
-    )
-    .unwrap();
-    write_ledger(
-        &flow,
-        &format!("{LEDGER}- L5 · 10-24 15:01 · gen 1 · Decision: ship on Friday\n"),
-    );
-    flow.restart().await;
-    flow.say("After.").await;
-    until_put_back(&flow, PutBackState::Received).await;
-    flow.idle().await;
-    assert_eq!(codex_notes(&flow).len(), 1);
-    assert!(notices(&flow).await.is_empty());
-    assert_eq!(read_seam(&record(&flow)).generation, 1);
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn after_a_restart_a_put_back_that_never_arrived_goes_once() {
-    assert_eq!(
-        restarted("long-codex-sending-lost", PutBackState::Sending, false).await,
-        1
-    );
 }
 
 /// Waits until the session went on in a fresh one.
@@ -693,7 +373,7 @@ async fn codex_compacting(name: &str, error: Option<&str>, after: i64) -> (Flow,
         }),
     )
     .await;
-    switch(&mut flow, LongSessions::parse("native"));
+    switch(&mut flow, LongSessions::parse(""));
     write_ledger(&flow, LEDGER);
     flow.say("Start.").await;
     flow.settled().await;
@@ -748,9 +428,39 @@ async fn a_context_still_above_half_the_point_after_compacting_sends_the_session
 #[tokio::test]
 async fn a_compaction_well_under_half_the_point_keeps_the_session() {
     let (flow, _) = codex_compacting("long-codex-under-half", None, 25_000).await;
-    until_put_back(&flow, PutBackState::Received).await;
     flow.idle().await;
+    assert_eq!(read_long(&record(&flow)).compactions, 1);
     assert_eq!(read_seam(&record(&flow)).generation, 1);
+    flow.stop().await;
+}
+
+/// D16: the fifth compaction in one CLI session hands off to a fresh one, under the hood (no
+/// notice, run2-D44); the fourth doesn't, and the successor counts from none.
+#[tokio::test]
+async fn the_fifth_compaction_in_a_row_hands_off_to_a_fresh_session() {
+    let (flow, inputs) = codex_compacting("long-codex-five", None, 25_000).await;
+    flow.idle().await;
+    for _ in 2..crate::manager::long_sessions::SESSION_HANDOFF_AFTER {
+        flow.say("Grow.").await;
+        flow.idle().await;
+    }
+    assert_eq!(read_long(&record(&flow)).compactions, 4);
+    assert_eq!(read_seam(&record(&flow)).generation, 1);
+    flow.say("Grow.").await;
+    until_successor(&flow).await;
+    assert!(notices(&flow).await.is_empty());
+    let seen = inputs.lock().unwrap().clone();
+    assert_eq!(
+        seen.iter()
+            .filter(|(_, input)| input.starts_with(NUDGE_MARK))
+            .count(),
+        1
+    );
+    // The successor's own compactions count again from none.
+    flow.say("Grow.").await;
+    flow.idle().await;
+    let file = read_long(&record(&flow));
+    assert_eq!((file.generation, file.compactions), (2, 1));
     flow.stop().await;
 }
 
@@ -880,379 +590,6 @@ async fn claudes_thrash_stop_sends_the_session_to_a_fresh_one() {
     until_successor(&flow).await;
     assert!(flow.behavior.compactions.lock().unwrap().is_empty());
     flow.stop().await;
-}
-
-/// The checkpoint record (run2-D9): Codex is asked for it in a turn of its own at the point,
-/// then compacts and gets it back beside the decisions.
-mod checkpoint {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::manager::conversation::long::checkpoint::{CheckpointPhase, CheckpointRun};
-    use crate::manager::long_sessions::checkpoint::{self, ASK_MARK, Source};
-
-    /// What each turn was given, with how many compactions Brigadier had asked for by then.
-    type Seen = Arc<Mutex<Vec<(usize, String)>>>;
-
-    /// How the checkpoint turn goes.
-    #[derive(Clone, Copy)]
-    struct Ask {
-        /// The checkpoint it writes.
-        writes: Option<&'static str>,
-        /// Codex compacts by itself during it.
-        compacts: bool,
-        /// It takes this long, for a message to come meanwhile.
-        takes: Duration,
-    }
-
-    const WRITTEN: Ask = Ask {
-        writes: Some("Goal: ship the parser.\nNext: run cargo test -p parser."),
-        compacts: false,
-        takes: Duration::ZERO,
-    };
-
-    /// A Codex session in `arm` whose "Fill." ends past the point.
-    async fn codex(name: &str, arm: &str, ask: Ask) -> (Flow, Seen) {
-        let seen: Seen = Arc::default();
-        let record_at: Arc<Mutex<Option<PathBuf>>> = Arc::default();
-        let behavior = Arc::new(FakeBehavior {
-            session_file: true,
-            take_in_steers: true,
-            ..FakeBehavior::default()
-        });
-        let (turns, at, asked) = (seen.clone(), record_at.clone(), behavior.clone());
-        let options = Options {
-            thread: ProviderKind::Codex,
-            behavior,
-            ..Options::default()
-        };
-        let mut flow = Flow::start(
-            name,
-            options,
-            script(move |turn| {
-                let (turns, at, asked) = (turns.clone(), at.clone(), asked.clone());
-                async move {
-                    let compactions = asked.compactions.lock().unwrap().len();
-                    turns
-                        .lock()
-                        .unwrap()
-                        .push((compactions, turn.input.clone()));
-                    if turn.input.contains(ASK_MARK) {
-                        tokio::time::sleep(ask.takes).await;
-                        let record = at.lock().unwrap().clone().expect("the record");
-                        if let Some(text) = ask.writes {
-                            checkpoint::set(&record, text, Source::Thread).unwrap();
-                        }
-                        if ask.compacts {
-                            turn.emit(ProviderEvent::CompactionStarted { automatic: true })
-                                .await;
-                            turn.emit(ProviderEvent::CompactionEnded {
-                                automatic: true,
-                                tokens_before: Some(63_000),
-                                tokens_after: Some(15_000),
-                                error: None,
-                                native_id: Some("compaction-auto".into()),
-                            })
-                            .await;
-                        }
-                        return Reply::text("Checkpoint written.");
-                    }
-                    let tokens = if turn.input.contains("Fill.") {
-                        62_000
-                    } else {
-                        20_000
-                    };
-                    Reply {
-                        text: "Done.".into(),
-                        context_tokens: Some(tokens),
-                        ..Reply::default()
-                    }
-                }
-            }),
-        )
-        .await;
-        switch(&mut flow, LongSessions::parse(arm));
-        *record_at.lock().unwrap() = Some(record(&flow));
-        write_ledger(&flow, LEDGER);
-        flow.say("Start.").await;
-        flow.settled().await;
-        (flow, seen)
-    }
-
-    fn asks(seen: &Seen) -> usize {
-        seen.lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, input)| input.contains(ASK_MARK))
-            .count()
-    }
-
-    /// The notes put back so far.
-    fn notes(flow: &Flow) -> Vec<String> {
-        flow.behavior
-            .put_backs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|note| note.contains("brigadier-restore "))
-            .cloned()
-            .collect()
-    }
-
-    fn sources(flow: &Flow) -> Vec<Source> {
-        checkpoint::history(&record(flow))
-            .iter()
-            .map(|version| version.source)
-            .collect()
-    }
-
-    /// The one note put back, holding the decisions and `holds` once each.
-    fn one_note_with(flow: &Flow, holds: &str) {
-        let notes = notes(flow);
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert_eq!(
-            notes[0].matches(holds).count(),
-            1,
-            "{holds} in {}",
-            notes[0]
-        );
-        for kept in KEPT {
-            assert_eq!(notes[0].matches(kept).count(), 1, "{kept}");
-        }
-    }
-
-    #[tokio::test]
-    async fn codex_writes_its_checkpoint_then_compacts_and_gets_it_back_beside_the_decisions() {
-        let (flow, seen) = codex("long-checkpoint-written", "native+checkpoint", WRITTEN).await;
-        flow.say("Fill.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        flow.idle().await;
-        assert_eq!(asks(&seen), 1);
-        // Codex's compaction takes no instructions; the checkpoint was asked for before it.
-        assert_eq!(*flow.behavior.compactions.lock().unwrap(), vec![None]);
-        one_note_with(
-            &flow,
-            "Goal: ship the parser.\nNext: run cargo test -p parser.",
-        );
-        let file = read_long(&record(&flow));
-        assert_eq!(file.checkpoint, None);
-        assert!(file.put_back.unwrap().checkpoint.is_some());
-        assert_eq!(sources(&flow), [Source::Thread]);
-        assert!(notices(&flow).await.is_empty());
-        flow.stop().await;
-    }
-
-    #[tokio::test]
-    async fn with_no_checkpoint_written_codex_still_compacts_and_it_is_marked_missing() {
-        let ask = Ask {
-            writes: None,
-            ..WRITTEN
-        };
-        let (flow, _seen) = codex("long-checkpoint-missing", "native+checkpoint", ask).await;
-        flow.say("Fill.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        flow.idle().await;
-        assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
-        one_note_with(&flow, KEPT[0]);
-        assert!(!notes(&flow)[0].contains("checkpoint, written"));
-        assert_eq!(sources(&flow), [Source::Missing]);
-        flow.stop().await;
-    }
-
-    #[tokio::test]
-    async fn codex_compacting_by_itself_during_the_checkpoint_turn_calls_off_brigadiers() {
-        let ask = Ask {
-            compacts: true,
-            ..WRITTEN
-        };
-        let (flow, seen) = codex("long-checkpoint-auto", "native+checkpoint", ask).await;
-        flow.say("Fill.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        flow.idle().await;
-        flow.say("After.").await;
-        flow.idle().await;
-        assert!(flow.behavior.compactions.lock().unwrap().is_empty());
-        assert_eq!(asks(&seen), 1);
-        one_note_with(&flow, "Goal: ship the parser.");
-        assert!(notes(&flow)[0].contains("brigadier-restore compaction-auto"));
-        assert_eq!(read_long(&record(&flow)).checkpoint, None);
-        flow.stop().await;
-    }
-
-    #[tokio::test]
-    async fn a_message_sent_during_the_checkpoint_turn_waits_for_the_compaction() {
-        let ask = Ask {
-            takes: Duration::from_millis(400),
-            ..WRITTEN
-        };
-        let (flow, seen) = codex("long-checkpoint-held", "native+checkpoint", ask).await;
-        flow.say("Fill.").await;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while asks(&seen) == 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the checkpoint request");
-        flow.say("Meanwhile.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        // It goes once the compaction is done: idle can fall between the two.
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while !seen
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(_, input)| input.contains("Meanwhile."))
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the message held for the compaction");
-        flow.idle().await;
-        let turns = seen.lock().unwrap().clone();
-        let meanwhile: Vec<_> = turns
-            .iter()
-            .filter(|(_, input)| input.contains("Meanwhile."))
-            .collect();
-        assert_eq!(meanwhile.len(), 1, "{turns:?}");
-        assert_eq!(meanwhile[0].0, 1, "it ran after the compaction");
-        assert!(!meanwhile[0].1.contains(ASK_MARK));
-        flow.stop().await;
-    }
-
-    #[tokio::test]
-    async fn codex_compacting_by_itself_outside_a_checkpoint_run_marks_it_missing() {
-        let inputs: Inputs = Arc::default();
-        let flow = long_flow(
-            "long-checkpoint-stale",
-            ProviderKind::Codex,
-            FakeBehavior::default(),
-            "native+checkpoint",
-            inputs,
-        )
-        .await;
-        flow.say("Grow.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        flow.idle().await;
-        assert_eq!(sources(&flow), [Source::Missing]);
-        assert!(flow.behavior.compactions.lock().unwrap().is_empty());
-        flow.stop().await;
-    }
-
-    /// A restart with a run in `phase` on record: Codex compacts at once, and never asks again.
-    async fn restarted_in(name: &str, phase: CheckpointPhase) -> Flow {
-        let (mut flow, seen) = codex(name, "native+checkpoint", WRITTEN).await;
-        let record = record(&flow);
-        let since_ms = crate::now_ms() - 1_000;
-        let text = match phase {
-            CheckpointPhase::Asked => {
-                checkpoint::set(&record, "Goal: resume.", Source::Thread).unwrap();
-                None
-            }
-            CheckpointPhase::Compacting => Some("Goal: resume.".to_owned()),
-        };
-        let mut file = read_long(&record);
-        file.checkpoint = Some(CheckpointRun {
-            since_ms,
-            phase,
-            text,
-        });
-        std::fs::write(record.join("long.json"), serde_json::to_vec(&file).unwrap()).unwrap();
-        flow.restart().await;
-        flow.say("After.").await;
-        until_put_back(&flow, PutBackState::Received).await;
-        flow.idle().await;
-        assert_eq!(asks(&seen), 0);
-        assert_eq!(flow.behavior.compactions.lock().unwrap().len(), 1);
-        one_note_with(&flow, "Goal: resume.");
-        assert_eq!(read_long(&record).checkpoint, None);
-        flow
-    }
-
-    #[tokio::test]
-    async fn after_a_restart_while_asked_codex_compacts_with_what_was_written() {
-        restarted_in("long-checkpoint-restart-asked", CheckpointPhase::Asked)
-            .await
-            .stop()
-            .await;
-    }
-
-    #[tokio::test]
-    async fn after_a_restart_while_compacting_codex_compacts_again_with_its_checkpoint() {
-        restarted_in(
-            "long-checkpoint-restart-compacting",
-            CheckpointPhase::Compacting,
-        )
-        .await
-        .stop()
-        .await;
-    }
-
-    /// A Claude session in `arm` through a turn past the point, its summary `summary`.
-    async fn claude(name: &str, arm: &str, summary: Option<&str>) -> Flow {
-        let inputs: Inputs = Arc::default();
-        let flow = long_flow(
-            name,
-            ProviderKind::Claude,
-            FakeBehavior {
-                summary: summary.map(str::to_owned),
-                ..FakeBehavior::default()
-            },
-            arm,
-            inputs,
-        )
-        .await;
-        flow.say("Grow.").await;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while checkpoint::history(&record(&flow)).is_empty() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("a checkpoint kept or marked missing");
-        flow.idle().await;
-        flow
-    }
-
-    #[tokio::test]
-    async fn claudes_steered_summary_carries_the_checkpoint_which_is_kept_as_the_record() {
-        let flow = claude(
-            "long-checkpoint-claude",
-            "native-full+checkpoint",
-            Some("## Summary\nWork.\n## Checkpoint\nGoal: ship.\nNext: test.\n## Other\nx"),
-        )
-        .await;
-        let asked = flow.behavior.compactions.lock().unwrap()[0]
-            .clone()
-            .unwrap();
-        assert!(asked.starts_with("Besides your usual summary"));
-        assert!(asked.contains("\"## Checkpoint\""));
-        assert_eq!(
-            checkpoint::read(&record(&flow)).as_deref(),
-            Some("Goal: ship.\nNext: test.")
-        );
-        assert_eq!(sources(&flow), [Source::Summary]);
-        flow.stop().await;
-    }
-
-    #[tokio::test]
-    async fn a_claude_summary_without_the_checkpoint_marks_it_missing() {
-        let flow = claude(
-            "long-checkpoint-claude-missing",
-            "native+checkpoint",
-            Some("## Summary\nWork."),
-        )
-        .await;
-        // Only the checkpoint's section is asked for without the keep-instructions (run2-D7 off).
-        let asked = flow.behavior.compactions.lock().unwrap()[0]
-            .clone()
-            .unwrap();
-        assert!(asked.starts_with("End the summary"));
-        assert_eq!(checkpoint::read(&record(&flow)), None);
-        assert_eq!(sources(&flow), [Source::Missing]);
-        flow.stop().await;
-    }
 }
 
 /// `brigadier checkpoint` (run2-D9): the thread replaces and shows its checkpoint, with the

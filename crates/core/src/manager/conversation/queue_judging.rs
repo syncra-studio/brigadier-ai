@@ -178,7 +178,6 @@ impl SessionManager {
                 && !state.compacting
                 && !state.interrupted
                 && !state.seam.held
-                && !state.long.asking
         });
         let mut bytes = 0;
         let steered = match cli {
@@ -448,13 +447,10 @@ impl SessionManager {
         let mut state = conv.state.lock().await;
         state.deciding.retain(|id| id != item_id);
         state.held_items.retain(|id| id != item_id);
-        let cli = state.cli.clone().filter(|_| {
-            state.busy
-                && !state.compacting
-                && !state.interrupted
-                && !state.seam.held
-                && !state.long.asking
-        });
+        let cli = state
+            .cli
+            .clone()
+            .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         let steered = match cli {
             Some(cli) => matches!(
                 cli.session
