@@ -162,7 +162,9 @@ just like the delegator, how an orchestrator works"; supersedes old-run D43 "Def
   then asks the user all it can at once on one `brigadier ask` card, each question with a recommended answer,
   a next round only for questions that hang on those answers (the user, 2026-10-25: never one card per
   question; this supersedes "one question at a time"), and says the shared understanding back
-  before work starts. It answers its workers' questions itself when the code or a web search settle them, else
+  before work starts. (Superseded by harness D7/D28: every new job opens with a grilling round in the CLI's own
+  question tool, skipped only when nothing is left to decide; `brigadier ask` stays for a worker's question
+  passed up and a CLI without one.) It answers its workers' questions itself when the code or a web search settle them, else
   asks the user; the user always decides spending money, a push or publish they didn't ask for, credentials,
   and changes to their settled decisions (run2-D32; the always-ask list is proposed, from the Delegator's
   rules). A Chat's and side chat's own grilling line points to the skill's: all at once on one card, no
@@ -1223,7 +1225,8 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     report lists each block and tool with its size. Then Brigadier denies only the tools that cannot work inside
     a Brigadier tab: `RemoteTrigger`, `PushNotification`, `ScheduleWakeup` and `Cron*` (no idle loop in `-p`),
     `AskUserQuestion` (it reaches Brigadier as a bare permission card that carries no answer back; `brigadier
-    ask` asks instead), and claude.ai connectors (`disableClaudeAiConnectors`). Nothing of the user's is denied.
+    ask` asks instead; superseded by harness D7: a thread asks with it on Brigadier's question card, the answer
+    going back as the tool's result, and only workers go without it), and claude.ai connectors (`disableClaudeAiConnectors`). Nothing of the user's is denied.
     A provider test asserts that deny list and nothing more.
 
 **S18. Brain = pull-only search over the records (G14, Q5).** Codex for the reader, Opus for the deletions.
@@ -1922,8 +1925,8 @@ Each entry says its kind and source (message, command, file). Kinds:
 - Learned: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
 A plan or brief built from the ledger cites entry ids; mark lines of your own "proposed". Tell the user each "I decided" that changes what they asked.
-Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `brigadier ask`.
-You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.
+Read exact ranges. Brigadier's commands: `brigadier --help`.
+You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.
 ```
 
 **Seam text (not standing).** S22 sends the first part as the seam nudge; the successor's bootstrap carries the
@@ -2326,7 +2329,8 @@ sessions with token economy. Each has a measurable bar against the best rival to
 16. (D11) The shipped rules file carries the user's personal rules → a neutral shipped default; those rules live in
     the user's own file (§1, S13b, S33).
 17. (D12) Only one session may use the Local checkout → stays as built.
-18. (D12) The CLI's own question tool is denied → stays as built (S17).
+18. (D12) The CLI's own question tool is denied → stays as built (S17). Superseded by harness D7: a thread asks
+    with it on Brigadier's question card; a worker still goes without it.
 19. (D12) Folder trust forces Ask and stops workers → stays as built.
 20. (D1) A Chat's shell can run only `brigadier` → folds into 1: the CLI's own shell, cwd = the Chat's session folder
     (S16c, S28).

@@ -39,7 +39,7 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
 /// does itself, what goes to its workers, and how it replies. A worker goes without it:
 /// `brigadier start` refuses a worker's own workers, it has no brigade skill, and it keeps
 /// full reports (run2-D27).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -108,7 +108,7 @@ macro_rules! research_report {
 /// Asking before researching, only what changes the answer (Q78).
 macro_rules! clarify_rule {
     () => {
-        "Before you research a question whose answer depends on something only the user knows (their budget, where they live, what they already own), ask that first on one `brigadier ask` card: at most one card before researching, holding only what changes the answer, never what their messages or memories already say. Otherwise start at once."
+        "Before you research a question whose answer depends on something only the user knows (their budget, where they live, what they already own), ask that first in one call of your CLI's own question tool: at most one round before researching, holding only what changes the answer, never what their messages or memories already say. Otherwise start at once."
     };
 }
 
@@ -246,9 +246,10 @@ pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 /// How the log names role instructions.
 pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
 
-/// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then one
-/// question at a time on a card, the shared understanding said back before it acts.
-const CHAT_GRILLING: &str = "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, grill them as the brigade skill says: first look up all you can, then ask all you can at once on one `brigadier ask` card, each with your recommended option first (never write \"Recommended\" yourself) and its why; a next round only for questions that hang on those answers, never one card per question. Say the shared understanding back in a few lines before you act on it.";
+/// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then all
+/// it can ask at once with the CLI's own question tool, the shared understanding said back
+/// before it acts. Every new job opens with it (harness D7, D28).
+const CHAT_GRILLING: &str = "Every new job the user gives you (build, change, fix, design, research) opens with a grilling round, as does an invitation to question a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"). Grill them as the brigade skill says: first look up all you can, then ask all you can at once in one call of your CLI's own question tool (without one, on one `brigadier ask` card), each with your recommended option first, labelled \"… (Recommended)\", and its why; a next round only for questions that hang on those answers, never one call per question. Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction. Say the shared understanding back in a few lines before you act on it.";
 
 /// What a Chat can do as a thread (Q76, S28).
 const CHAT_THREAD: &str = chat_thread!();
@@ -426,7 +427,6 @@ mod tests {
             "$BRIGADIER_LEDGER",
             "$TMPDIR",
             "`brigadier --help`",
-            "ask the user with `brigadier ask`",
             "the brigade skill says how",
             // D13: everything about the job is pulled, never put in.
             "skills, MCP servers, project and routing are in `brigadier context`.",
@@ -434,11 +434,15 @@ mod tests {
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }
+        // A session or Chat asks with its CLI's own question tool (harness D7); a worker never
+        // asks the user (G19.Q6), so its instructions say nothing of asking.
+        assert!(WORKERS_LINE.contains("ask with your CLI's question tool"));
+        assert!(!STANDING_INSTRUCTIONS.contains("brigadier ask"));
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
         // The session orchestrates and replies short; no subagent split (run2-D23, D24, D27,
         // D43). The line goes to sessions and Chats only ([`WORKERS_LINE`]).
         for words in [
-            "You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test.",
+            "You orchestrate: talk, ask with your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test.",
             "Bigger work, builds, tests and research go to workers",
             "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
         ] {
@@ -535,13 +539,19 @@ mod tests {
         assert!(side.starts_with(&head));
         assert!(side.contains("Your shell runs only `brigadier` commands"));
         assert!(side.contains("starts no workers"));
-        // One way to grill, the brigade skill's (run2-D32): all it can ask at once on one card,
-        // a next round only for what hangs on those answers; never one question at a time, nor
-        // numbered rounds.
+        // One way to grill, the brigade skill's (run2-D32): all it can ask at once in one call
+        // of the CLI's own question tool, `brigadier ask` without one, the recommended option
+        // marked as the adapters read it; a next round only for what hangs on those answers;
+        // never one question at a time, nor numbered rounds. Every new job opens with it,
+        // skipped only when nothing is left to decide (harness D7, D28).
         for text in [&chat, &side] {
-            assert!(text.contains("grill them as the brigade skill says"));
-            assert!(text.contains("ask all you can at once on one `brigadier ask` card"));
-            assert!(text.contains("never one card per question"));
+            assert!(text.contains("Grill them as the brigade skill says"));
+            assert!(text.contains("Every new job the user gives you (build, change, fix, design, research) opens with a grilling round"));
+            assert!(text.contains("ask all you can at once in one call of your CLI's own question tool (without one, on one `brigadier ask` card)"));
+            assert!(text.contains("labelled \"… (Recommended)\""));
+            assert!(text.contains("Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction."));
+            assert!(text.contains("never one call per question"));
+            assert!(!text.contains("never write \"Recommended\""));
             assert!(!text.contains("one question at a time"));
             assert!(!text.contains("Round N"));
         }

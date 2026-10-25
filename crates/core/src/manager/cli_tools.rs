@@ -290,17 +290,29 @@ impl SessionManager {
         let ask = AskUser {
             questions: questions
                 .iter()
-                .map(|item| AskQuestion {
-                    question: item.question.clone(),
-                    recommended: (!item.options.is_empty()).then_some(0),
-                    options: item
-                        .options
-                        .iter()
-                        .map(|label| AskOption {
-                            label: label.clone(),
-                            description: None,
-                        })
-                        .collect(),
+                .map(|item| {
+                    // The recommended option is first, or the one labelled "… (Recommended)",
+                    // the mark left off its label, as the CLI's own question tool is read
+                    // (harness D28).
+                    let marked = brigadier_providers::CliQuestion::new(
+                        None,
+                        item.question.clone(),
+                        item.options.iter().map(|label| (label.clone(), None)),
+                        false,
+                    );
+                    AskQuestion {
+                        question: item.question.clone(),
+                        recommended: (!item.options.is_empty())
+                            .then(|| marked.recommended.unwrap_or(0)),
+                        options: marked
+                            .options
+                            .into_iter()
+                            .map(|option| AskOption {
+                                label: option.label,
+                                description: None,
+                            })
+                            .collect(),
+                    }
                 })
                 .collect(),
             task: None,

@@ -137,8 +137,9 @@ mod tests {
         // A session that reads it keeps it in context for every later call (the w152 bench:
         // about 3.1k tokens written once, then read again on each call). The short-job path
         // added 0.7 KB to save a whole call (w155); keeping a watcher on what ends after the
-        // turn, 0.27 KB (D21).
-        assert!(SKILL.len() <= 9_870, "{} bytes", SKILL.len());
+        // turn, 0.27 KB (D21); grilling every new job with the CLI's own question tool,
+        // 0.09 KB (harness D7, D28).
+        assert!(SKILL.len() <= 9_950, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
@@ -175,10 +176,11 @@ mod tests {
         assert!(SKILL.contains("`gh run watch <id> --exit-status`, or Monitor"));
         // An app the user asked to see is started by the session itself, as a preview.
         assert!(SKILL.contains("brigadier preview start"));
-        // S22b's four lines: decisions travel to workers, derived documents and the user.
+        // S22b's four lines: decisions travel to workers, derived documents and the user (a
+        // gap asked with the CLI's own question tool now, harness D7).
         for line in [
             "The brief carries the rules that bear on its job, verbatim, with their ledger ids",
-            "A plan or brief built from decisions cites their ids. Lines of your own say \"proposed\", and a gap the decisions don't cover goes to `brigadier ask`, never a silent fill.",
+            "A plan or brief built from decisions cites their ids. Lines of your own say \"proposed\", and a gap the decisions don't cover goes to the user, never a silent fill.",
             "run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question \"what is missing, changed or added?\"",
             "When the user writes after a gap, raise the oldest open question first",
         ] {
@@ -236,14 +238,24 @@ mod tests {
         for line in [
             "## Ask the user: grilling",
             "First answer all you can yourself (the code, the ledger, a web search, a research worker).",
-            "Ask all you can at once on one `brigadier ask` card, in plain words, each with your recommended answer first and why; a next round only for questions that hang on those answers, never one card per question.",
-            "`brigadier ask --question Q [--option O]… [--question …]`",
+            "Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled \"… (Recommended)\", why in its description; a next round only for what hangs on those answers, never one call per question.",
+            "`brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
             "Say the shared understanding back in a few lines, then start.",
             "answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once",
             "Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.",
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
+        // D7 as D28 reads it: every new job opens with a grilling round, skipped only when
+        // nothing is left to decide; nothing small and clear starts unasked.
+        for line in [
+            "Every new job (build, change, fix, design, research) opens with a grilling round.",
+            "Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction.",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
+        assert!(!SKILL.contains("A small, clear job starts at once"));
+        assert!(!SKILL.contains("Before a big or unclear job"));
         // Where work lands (the user): workers merge into the session's branch, and all work
         // stays there, a New worktree's or a Local checkout's; at the end the session asks
         // before a push or a merge into the base branch, never landing on it by itself.

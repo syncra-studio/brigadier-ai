@@ -534,8 +534,9 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "ask",
         summary: "Ask the user questions on one card and wait for the answers.",
-        details: "Ask everything you can at once: one card per round, never one card per \
-                  question; only questions that depend on its answers wait for the next \
+        details: "Your CLI's own question tool asks on the same card; this is for a worker's \
+                  question you pass up, or a CLI without one (harness D7). Ask everything you \
+                  can at once: one card per round, never one card per question; only questions that depend on its answers wait for the next \
                   round. One question: `brigadier ask \"<question>\" --option A --option B`. \
                   Several (up to 6): `--question \"<q>\"` for each, each followed by its own \
                   `--option`s. Each question takes 2 to 4 options or none, the recommended \

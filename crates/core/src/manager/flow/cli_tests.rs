@@ -1377,7 +1377,7 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                         CliRequest::Ask {
                             questions: vec![AskItem {
                                 question: "Which colour?".into(),
-                                options: vec!["Red".into(), "Green".into()],
+                                options: vec!["Red".into(), "Green (Recommended)".into()],
                             }],
                             title: None,
                         },
@@ -1439,7 +1439,14 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
                 "Yes"
             }
         );
-        assert_eq!(card.items[0].recommended, Some(0));
+        // The one labelled "… (Recommended)", its mark left off, else the first (harness
+        // D28).
+        if given[0] == "Blue, please" {
+            assert_eq!(card.items[0].options[1].label, "Green");
+            assert_eq!(card.items[0].recommended, Some(1));
+        } else {
+            assert_eq!(card.items[0].recommended, Some(0));
+        }
         // A round's questions on one card, each with its own options.
         assert_eq!(card.items.len(), given.len());
         if given.len() > 1 {
