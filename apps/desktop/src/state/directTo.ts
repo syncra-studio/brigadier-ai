@@ -8,6 +8,8 @@ import { armBackgroundSend } from "@/state/backgroundSend";
  * the worker took the message; a click on its chip, or leaving the session, takes it back.
  */
 const recipients = new Map<string, string>();
+/** Each conversation's count of To: changes: a send's end touches only the To: it went with. */
+const generations = new Map<string, number>();
 /** Conversations whose direct message is on its way: none goes twice. */
 const sending = new Set<string>();
 const listeners = new Set<() => void>();
@@ -18,7 +20,9 @@ function changed(): void {
 
 /** Sets (or, with null, takes away) the worker a conversation's next message goes to. */
 export function setDirectTo(conversationId: string, taskId: string | null): void {
-  if ((recipients.get(conversationId) ?? null) === taskId) return;
+  if (taskId === null && !recipients.has(conversationId)) return;
+  // Picked again, even the same worker, it is a new To: a send on its way leaves it be.
+  generations.set(conversationId, directGenerationOf(conversationId) + 1);
   if (taskId === null) recipients.delete(conversationId);
   else {
     recipients.set(conversationId, taskId);
@@ -26,6 +30,11 @@ export function setDirectTo(conversationId: string, taskId: string | null): void
     armBackgroundSend(conversationId, false);
   }
   changed();
+}
+
+/** Which To: a conversation shows now: it changes each time the To: is set or taken away. */
+export function directGenerationOf(conversationId: string): number {
+  return generations.get(conversationId) ?? 0;
 }
 
 /** The worker a conversation's next message goes to, if any. */

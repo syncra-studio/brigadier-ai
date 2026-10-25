@@ -1336,6 +1336,19 @@ async fn the_user_messages_a_worker_directly() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("write a message"), "{err}");
+    // A file that can't be written for the worker (its attachments folder made a link) stops
+    // the message before the worker hears anything.
+    let folder = std::path::Path::new(&saved[0]).parent().unwrap().to_owned();
+    std::fs::remove_dir_all(&folder).unwrap();
+    let elsewhere = folder.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+    let blocked = file(blobs.put(b"three".to_vec()).await.unwrap());
+    let err = send(flow.conversation.clone(), "Hi.", vec![blocked])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("could not be saved"), "{err}");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
     let unknown = file("0".repeat(64).parse().unwrap());
     let err = send(flow.conversation.clone(), "Hi.", vec![unknown])
         .await

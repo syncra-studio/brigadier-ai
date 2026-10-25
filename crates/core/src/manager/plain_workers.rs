@@ -786,7 +786,7 @@ impl SessionManager {
         };
         let input = self
             .direct_input(&conversation_id, scratch, &text, &attachments, &mentions)
-            .await;
+            .await?;
         let queued = live.busy().await;
         self.deliver_to_worker(&conversation_id, &task, input)
             .await?;

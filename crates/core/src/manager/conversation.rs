@@ -3013,7 +3013,8 @@ impl SessionManager {
 
     /// What the user sent one of `owner`'s workers directly, as its CLI takes it: their words,
     /// pastes, attachments and mentions as a session's turn takes them, with the files written
-    /// in the worker's `scratch` folder.
+    /// in the worker's `scratch` folder. Every attachment is written (and every paste read)
+    /// first: one that can't be is an error, before anything reaches the worker.
     pub(crate) async fn direct_input(
         &self,
         owner: &ConversationId,
@@ -3021,12 +3022,37 @@ impl SessionManager {
         text: &str,
         attachments: &[AttachmentRef],
         mentions: &[Mention],
-    ) -> TurnInput {
+    ) -> Result<TurnInput> {
+        let at = FilesAt::Worker(scratch);
         let mut copied = HashMap::new();
+        for attachment in attachments {
+            if attachment.pasted
+                && self
+                    .core
+                    .read_blob_text(attachment.id.clone())
+                    .await
+                    .is_err()
+            {
+                return Err(Error::Invalid(format!(
+                    "the pasted text \"{}\" could not be read; paste it again",
+                    attachment.name
+                )));
+            }
+            if copied.contains_key(&attachment.id) {
+                continue;
+            }
+            let Some(file) = self.attachment_file(&at, attachment).await else {
+                return Err(Error::Invalid(format!(
+                    "{} could not be saved for the worker",
+                    attachment.name
+                )));
+            };
+            copied.insert(attachment.id.clone(), Some(file));
+        }
         let mut files = Vec::new();
         let parts = self
             .message_input(
-                &FilesAt::Worker(scratch),
+                &at,
                 owner,
                 ConversationKind::Session,
                 text,
@@ -3036,7 +3062,7 @@ impl SessionManager {
                 &mut files,
             )
             .await;
-        merged_input(files, parts)
+        Ok(merged_input(files, parts))
     }
 
     /// One message's part of a CLI's input (see [`Self::turn_input`]): its text with what it
@@ -5671,6 +5697,8 @@ fn name_inline_images(
         let sent = copied
             .get(&attachment.id)
             .and_then(Option::as_ref)
+            // Only images go as images; another file copied for the turn is named in its text.
+            .filter(|_| is_image(&attachment.mime))
             .map(|file| {
                 files.push(InputFile {
                     path: file.path.clone(),

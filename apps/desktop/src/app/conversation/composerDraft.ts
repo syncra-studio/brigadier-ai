@@ -46,30 +46,20 @@ export function putBack(scope: string, text: string): void {
 export type SentDraft = { text: string; attachments: AttachmentRef[]; mentions: Mention[] };
 
 /** The composers open now by draft scope, each taking a whole message back (`restoreDraft`). */
-const restorers = new Map<string, (draft: SentDraft) => void>();
+const restorers = new Map<string, (draft: SentDraft) => boolean>();
 
 /**
- * Puts a whole message the daemon didn't take back into the composer of `scope`, before
- * anything typed since, with its attachments and mentions; into its kept draft when no
- * composer for it is open.
+ * Puts a whole message the daemon didn't take, with its attachments and mentions, back into
+ * the open composer of `scope`, only while that composer is empty: it is never mixed with
+ * anything typed since. False when it isn't open or holds something.
  */
-export function restoreDraft(scope: string, draft: SentDraft): void {
-  const restore = restorers.get(scope);
-  if (restore) {
-    restore(draft);
-    return;
-  }
-  const saved = loadDraft(scope);
-  const shift = saved?.text ? draft.text.length + 1 : 0;
-  saveDraft(
-    scope,
-    saved?.text ? `${draft.text}\n${saved.text}` : draft.text,
-    [...draft.attachments, ...(saved?.attachments ?? [])],
-    [
-      ...mentionsAt(draft.text, named(draft.mentions)),
-      ...(saved?.mentions ?? []).map((mention) => ({ ...mention, at: mention.at + shift })),
-    ],
-  );
+export function restoreDraft(scope: string, draft: SentDraft): boolean {
+  return restorers.get(scope)?.(draft) ?? false;
+}
+
+/** A whole message kept as a draft of its own, with its `@name`s where they stand. */
+export function keepWhole(scope: string, draft: SentDraft): void {
+  saveDraft(scope, draft.text, draft.attachments, mentionsAt(draft.text, named(draft.mentions)));
 }
 
 /** Each file, folder, conversation or tab mention with the `@name` it leaves in the text. */
@@ -155,10 +145,12 @@ export function useComposerDraft(
     };
     const restore = (draft: SentDraft) => {
       const composer = aui.composer();
-      const now = composer.getState().text;
+      const now = composer.getState();
+      if (now.text !== "" || now.attachments.length > 0) return false;
       memory.recall(draft.mentions);
-      composer.setText(now === "" ? draft.text : `${draft.text}\n${now}`);
+      composer.setText(draft.text);
       for (const ref of draft.attachments) void composer.addAttachment(attachments.adopt(ref));
+      return true;
     };
     typists.set(scope, type);
     restorers.set(scope, restore);

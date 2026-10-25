@@ -99,7 +99,8 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { takeBackgroundSend } from "@/state/backgroundSend";
-import { beginDirectSend, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
+import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
+import { holdDirect } from "@/state/heldDirect";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { loadWorkerThread, readSessionImageBlob, sessionImageOf, useThreadView, useWorkerRows } from "@/state/cliThread";
@@ -762,9 +763,11 @@ export function ConversationView({
   const { setPanel: showWorker } = agents;
   /**
    * The message to the composer's To: worker alone: past the session's queue, its paused
-   * state and a new background session. Refused, the whole message (text, attachments,
-   * mentions and its To:) goes back where it was written; taken, the To: goes and the worker's
-   * thread opens, if this visit still lasts. Nothing after the worker took it fails the send.
+   * state and a new background session. Its end touches only the visit and the To: it was
+   * sent from. Refused, the whole message goes back into the composer with its To: when
+   * nothing changed there meanwhile, else it is kept whole apart, offered back on the rail;
+   * taken, the To: goes and the worker's thread opens. Nothing after the worker took it fails
+   * the send.
    */
   const sendDirect = useCallback(
     (message: AppendMessage, from: string, taskId: string) => {
@@ -773,9 +776,11 @@ export function ConversationView({
       if (!text && refs.length === 0) return;
       const draft = { text, attachments: refs, mentions: mentionsIn(text, targets, mentions.known()) };
       const here = visit.current;
+      const generation = directGenerationOf(from);
+      // This visit, and the To: it was sent with, still showing.
+      const unchanged = () => visit.current === here && directGenerationOf(from) === generation;
       const keep = (cause: unknown) => {
-        restoreDraft(from, draft);
-        if (directToOf(from) === null) setDirectTo(from, taskId);
+        if (!(unchanged() && restoreDraft(from, draft))) holdDirect(from, taskId, draft);
         if (visit.current === here) fail(cause);
         else toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
       };
@@ -793,8 +798,10 @@ export function ConversationView({
         () => {
           endDirectSend(from);
           try {
-            if (directToOf(from) === taskId) setDirectTo(from, null);
-            if (visit.current === here) showWorker(taskId);
+            if (unchanged()) {
+              setDirectTo(from, null);
+              showWorker(taskId);
+            }
             void loadWorkerThread(from, taskId).catch((cause: unknown) =>
               console.error("reading the worker's thread failed", cause),
             );

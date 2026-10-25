@@ -45,6 +45,7 @@ import { PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ToWorkerChip } from "@/app/conversation/ToWorkerChip";
+import { HeldDirectMessages } from "@/app/conversation/HeldDirect";
 import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
@@ -153,6 +154,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
           {conversation && !archived && <ComposerStatusSlot conversationId={conversation.id} />}
           {conversation && <Notices conversationId={conversation.id} />}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
+          {conversation && !archived && <HeldDirectMessages conversationId={conversation.id} />}
           {current && (
             <PendingActionCard
               action={current}
