@@ -12,6 +12,9 @@ type Seen = {
   description: string;
   sections: SectionSeen[];
   tabs: string[];
+  rows: RowSeen[];
+  search: string | null;
+  focusedTab: string | null;
   filter: string;
   folds: { text: string; open: boolean; rows: RowSeen[] }[];
   agentRows: string[];
@@ -37,7 +40,7 @@ const row = (rows: RowSeen[], name: string) => rows.find((entry) => entry.name =
 
 // The page in Chromium over a faked daemon, through every state the Plugins board draws.
 test("plugins: every drawn list, details and dialog state, and what the switches and dialogs ask for", { timeout: 120000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "plugins.html?drive=1", "plugins-result", 40000)) as Record<string, unknown> & Record<string, Seen>;
+  const seen = JSON.parse(await renderFixturePage(t, "plugins.html?drive=1", "plugins-result", 40000)) as Record<string, unknown> & Record<string, Seen> & { attentionKeys: Seen[]; regularKeys: Seen[] };
   assert.equal(seen.error, undefined);
   for (const state of ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "D1", "D2", "D3"]) {
     assert.equal(seen[state]!.settingsColumn, true, `${state}: the column every Settings page uses`);
@@ -48,10 +51,10 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   const l1 = seen.L1!;
   assert.equal(l1.title, "Plugins");
   assert.equal(l1.description, "Skills and MCP servers your agents can use. Pick a project to choose what's on there.");
-  assert.deepEqual(l1.tabs, ["MCP servers7 *", "Skills6"]);
+  assert.deepEqual(l1.tabs, ["Needs attention3", "MCP servers7 *", "Skills6"]);
   assert.equal(l1.filter, "All projects");
-  assert.deepEqual(l1.sections.map((entry) => `${entry.title} ${entry.count}`), ["Needs attention 3", "Every project 6", "Only in some projects 1"]);
-  const attention = section(l1, "Needs attention").rows;
+  assert.deepEqual(l1.sections.map((entry) => `${entry.title} ${entry.count}`), ["Every project 6", "Only in some projects 1"]);
+  const attention = seen.attention!.rows;
   assert.deepEqual(attention.map((entry) => [entry.name, entry.line, entry.tone, entry.button]), [
     ["linear", "Codex needs you to sign in.", "warning", "Sign in"],
     ["figma-dev", 'Won\'t start: unknown type "websocket".', "error", "Details"],
@@ -75,10 +78,34 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   // D4: Found in other apps, folded until opened.
   assert.deepEqual(l1.folds, [{ text: "Found in other apps3 in Claude Desktop and Cursor. Your agents can't use them until you bring them in.", open: false, rows: [] }]);
 
+  // Attention is first, has its total count, and contains only the existing attention rows.
+  for (const state of ["attention", "attentionProject", "attentionReveal", "attentionRevealDetails", "attentionRevealMount"]) {
+    const attentionTab = seen[state]!;
+    assert.deepEqual(attentionTab.tabs, ["Needs attention3 *", "MCP servers7", "Skills6"], state);
+    assert.deepEqual(names(attentionTab.rows), ["linear", "figma-dev", "grill-me"], state);
+    assert.deepEqual(attentionTab.sections, [], "the tab replaces the section heading");
+    assert.deepEqual(attentionTab.folds, [], "only attention rows appear");
+    assert.equal(attentionTab.search, null, "the attention list has no search field");
+    assert.equal(attentionTab.overflow, false, state);
+  }
+  assert.equal(seen.attentionProject!.filter, "steady-app");
+  assert.deepEqual(seen.attentionSearch, { label: "Needs attention", target: "Needs attention" });
+  assert.equal(seen.afterAttentionReveal!.search, "", "revealing attention clears the earlier search");
+  assert.deepEqual(seen.attentionResolved!.tabs, ["MCP servers7 *", "Skills6"]);
+  assert.equal(seen.attentionResolved!.search, "");
+  assert.ok(seen.attentionResolved!.sections.some((entry) => entry.title === "From every project"));
+  for (const [states, expected] of [
+    [seen.attentionKeys, ["Skills", "Needs attention", "MCP servers", "Skills", "Needs attention"]],
+    [seen.regularKeys, ["Skills", "MCP servers", "Skills", "Skills", "MCP servers"]],
+  ] as [Seen[], string[]][]) {
+    assert.deepEqual(states.map((state) => state.focusedTab), expected);
+    assert.deepEqual(states.map((state) => state.tabs.find((tab) => tab.endsWith(" *"))?.replace(/\d+ \*$/, "")), expected);
+  }
+
   // L2: All projects, Skills.
   const l2 = seen.L2!;
-  assert.deepEqual(l2.tabs, ["MCP servers7", "Skills6 *"]);
-  assert.equal(section(l2, "Needs attention").rows.length, 3, "Needs attention shows both tabs' items");
+  assert.deepEqual(l2.tabs, ["Needs attention3", "MCP servers7", "Skills6 *"]);
+  assert.ok(!l2.sections.some((entry) => entry.title === "Needs attention"));
   const skills = section(l2, "Every project").rows;
   assert.deepEqual(names(skills), ["higgsfield", "impeccable", "hallmark", "use-railway", "grill-me"]);
   assert.match(l2.sections.flatMap((entry) => entry.rows).find((entry) => entry.name === "higgsfield")!.line, /Images, video/);
@@ -90,7 +117,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   // L3: one project.
   const l3 = seen.L3!;
   assert.equal(l3.filter, "brigadier-ai");
-  assert.deepEqual(l3.sections.map((entry) => entry.title), ["Needs attention", "Only in brigadier-ai", "From every project"]);
+  assert.deepEqual(l3.sections.map((entry) => entry.title), ["Only in brigadier-ai", "From every project"]);
   assert.equal(section(l3, "Only in brigadier-ai").description, "Sessions in your other projects don't see these.");
   assert.deepEqual(names(section(l3, "Only in brigadier-ai").rows), ["postgres"]);
   const fromEvery = section(l3, "From every project");
@@ -270,7 +297,7 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.deepEqual(seen.addedWithWarning!.dialog!.buttons, ["Close", "Done"]);
 
   // Only some agents have it: a Library item is added to the rest; another agent's plugin offers nothing.
-  const partial = section(seen.partial!, "Needs attention").rows;
+  const partial = seen.partial!.rows;
   assert.deepEqual([row(partial, "delegator").button, row(partial, "higgsfield").button, row(partial, "grill-me").button], ["Add to every agent", null, "Use everywhere"]);
   assert.deepEqual(seen.spreadCalls, AGENTS.slice(1).map((agent) => `switchPlugin lib:delegator p-brigadier on ${agent}`));
   assert.equal(seen.pluginBanner!.banner, "Only Claude Code has it. It came in that agent's own plugin, so the other agents can't add it.");
@@ -293,5 +320,5 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.deepEqual(seen.trustCalls, ["trustProject p-landing"]);
 
   // Search keeps the rows that match; an empty section goes.
-  assert.deepEqual(seen.searched!.sections.map((entry) => [entry.title, names(entry.rows)]), [["Needs attention", ["linear", "figma-dev", "grill-me"]], ["Every project", ["railway"]]]);
+  assert.deepEqual(seen.searched!.sections.map((entry) => [entry.title, names(entry.rows)]), [["Every project", ["railway"]]]);
 });

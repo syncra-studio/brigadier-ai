@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
-import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
+import { PluginsPage, pluginSearchRows } from "@/app/settings/plugins/PluginsPage";
+import { revealSetting, useReveal } from "@/app/settings/reveal";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
@@ -282,6 +283,9 @@ function read() {
       count: text(section.querySelector("h2")?.parentElement?.nextElementSibling),
       rows: rowsOf(section),
     })),
+    rows: rowsOf(main()),
+    search: document.querySelector<HTMLInputElement>('[data-slot="plugins-toolbar"] input')?.value ?? null,
+    focusedTab: document.activeElement?.getAttribute("data-setting") ?? null,
     tabs: all('main [role="tab"]').map((tab) => `${text(tab)}${tab.getAttribute("aria-selected") === "true" ? " *" : ""}`),
     filter: text(document.querySelector('main [data-slot="plugins-toolbar"] button')),
     folds: all('main [data-slot="fold"]').map((fold) => ({ text: text(fold.querySelector("button")), open: fold.querySelector("button")?.getAttribute("aria-expanded") === "true", rows: rowsOf(fold) })),
@@ -342,6 +346,8 @@ const OPENERS: Record<string, () => Promise<void>> = {
   },
   D1: async () => click("Open linear"),
   D2: async () => {
+    click("Needs attention3");
+    await pause();
     click("Details");
   },
   D3: async () => click("Open postgres"),
@@ -377,8 +383,16 @@ const OPENERS: Record<string, () => Promise<void>> = {
     await pause();
     all<HTMLButtonElement>("[data-dialog] button[aria-expanded]").find((button) => text(button).startsWith("Advanced"))!.click();
   },
-  G5: async () => click("Sign in"),
-  G6: async () => click("Use everywhere"),
+  G5: async () => {
+    click("Needs attention3");
+    await pause();
+    click("Sign in");
+  },
+  G6: async () => {
+    click("Needs attention3");
+    await pause();
+    click("Use everywhere");
+  },
   G7: async () => {
     click("Open linear");
     await pause();
@@ -506,6 +520,8 @@ async function drive(setKey: (key: number) => void) {
   Object.assign(spec("plugin:higgsfield")!, { only: ["claude"], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
   usePlugins.getState().refresh();
   await pause(120);
+  click("Needs attention5");
+  await pause();
   seen.partial = read();
   const spread = calls.length;
   click("Add to every agent");
@@ -545,6 +561,54 @@ async function drive(setKey: (key: number) => void) {
   click("Trust landing");
   await pause();
   seen.trustCalls = calls.filter((call) => call.startsWith("trust"));
+
+  // Needs attention is its own tab; project filtering stays available and search stays hidden.
+  await reset(setKey);
+  click("Needs attention3");
+  await pause(120);
+  seen.attention = read();
+  project("p-steady");
+  await pause(120);
+  seen.attentionProject = read();
+
+  // Every navigation key follows the tabs that are actually visible, selecting and focusing.
+  const navigate = async (key: string) => {
+    document.querySelector<HTMLButtonElement>('main [role="tab"][aria-selected="true"]')!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    await pause();
+    return read();
+  };
+  const keys = ["ArrowLeft", "ArrowRight", "ArrowRight", "End", "Home"];
+  seen.attentionKeys = [];
+  for (const key of keys) (seen.attentionKeys as unknown[]).push(await navigate(key));
+
+  // A data refresh can resolve the last issue while this tab is selected.
+  usePlugins.setState((state) => ({ view: { ...state.view, items: state.view.items.map((item) => ({ ...item, attention: null })) } }));
+  await pause(120);
+  seen.attentionResolved = read();
+  seen.regularKeys = [];
+  for (const key of keys) (seen.regularKeys as unknown[]).push(await navigate(key));
+
+  // Settings search reveals the attention tab, both on this page and before it mounts.
+  await reset(setKey);
+  type("Search MCP servers", "rail");
+  await pause();
+  const attentionSearch = pluginSearchRows().find((entry) => entry.label === "Needs attention")!;
+  seen.attentionSearch = attentionSearch;
+  revealSetting(attentionSearch.target!);
+  await pause(120);
+  seen.attentionReveal = read();
+  click("Skills6");
+  await pause();
+  seen.afterAttentionReveal = read();
+  click("Open higgsfield");
+  await pause();
+  revealSetting(attentionSearch.target!);
+  await pause(120);
+  seen.attentionRevealDetails = read();
+  useReveal.setState({ label: attentionSearch.target! });
+  await reset(setKey);
+  seen.attentionRevealMount = read();
+  useReveal.setState({ label: null });
 
   // Search keeps the rows that match.
   await reset(setKey);

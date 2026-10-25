@@ -42,7 +42,10 @@ export function PluginsPage() {
   return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} onProject={setProject} />;
 }
 
-const KINDS: PluginKind[] = ["server", "skill"];
+type PluginTab = PluginKind | "attention";
+const TABS: PluginTab[] = ["attention", "server", "skill"];
+const TAB_TITLES: Record<PluginTab, string> = { attention: "Needs attention", ...TAB_LABEL };
+const revealTab = (label: string | null): PluginTab => label === "Needs attention" ? "attention" : label === "Skills" ? "skill" : "server";
 
 function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: {
   view: PluginsView;
@@ -52,14 +55,16 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   refresh: () => void;
   onProject: (projectId: string | null) => void;
 }) {
-  const [tab, setTab] = useState<PluginKind>(() => (useReveal.getState().label === "Skills" ? "skill" : "server"));
+  const [tab, setTab] = useState<PluginTab>(() => revealTab(useReveal.getState().label));
+  const attentionCount = needsAttention(view).length;
+  if (tab === "attention" && attentionCount === 0) setTab("server");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
-    if (label === "Skills" || label === "MCP servers") {
-      setTab(label === "Skills" ? "skill" : "server");
+    if (label === "Needs attention" || label === "Skills" || label === "MCP servers") {
+      setTab(revealTab(label));
       setSelected(null);
       setQuery("");
     } else if (label?.startsWith("plugin:")) {
@@ -207,11 +212,11 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
 function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onProject, onOpen, onFlip, onAddMissing, onDialog }: {
   view: PluginsView;
   focus: PluginProjectView | null;
-  tab: PluginKind;
+  tab: PluginTab;
   query: string;
   busy: boolean;
   adapter: PluginsAdapter | null;
-  onTab: (tab: PluginKind) => void;
+  onTab: (tab: PluginTab) => void;
   onQuery: (query: string) => void;
   onProject: (projectId: string | null) => void;
   onOpen: (item: PluginItemView) => void;
@@ -220,9 +225,9 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
   onDialog: (open: Open) => void;
 }) {
   const attention = needsAttention(view);
-  const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
+  const count = (kind: PluginTab) => kind === "attention" ? attention.length : view.items.filter((item) => item.kind === kind).length;
   const elsewhere = view.elsewhere.filter((item) => item.kind === tab);
-  const lists = sections(view, focus, tab, query);
+  const lists = tab === "attention" ? [] : sections(view, focus, tab, query);
   const empty = count(tab) === 0;
   const row = (entry: Row, dim: boolean) => (
     <PluginRow
@@ -237,96 +242,92 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
     />
   );
   return (
-    <>
-      {attention.length > 0 && (
-        <SettingsSection title="Needs attention" aside={attention.length} setting="Needs attention">
-          <SettingsCard>
-            {attention.map((item) => {
-              const kind = item.attention!.type;
-              const spread = kind === "notEverywhere" ? spreadOf(item) : null;
-              return (
-                <PluginRow
-                  key={item.key}
-                  view={view}
-                  item={item}
-                  line={{ text: item.attention!.message, tone: ATTENTION_TONE[kind] }}
-                  lit={(state) => state.type === "ready" || state.type === "working"}
-                  onOpen={() => onOpen(item)}
-                  end={
-                    (kind === "signIn" && !adapter?.signIn) || (kind === "notEverywhere" && !spread) ? undefined : <Button
-                      variant="soft"
-                      size="sm"
-                      disabled={kind === "notEverywhere" ? busy : !adapter}
-                      onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : spread === "addMissing" ? onAddMissing(item) : onDialog({ type: "useEverywhere", key: item.key }))}
-                    >
-                      {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : spread === "addMissing" ? "Add to every agent" : "Use everywhere"}
-                    </Button>
-                  }
-                />
-              );
-            })}
-          </SettingsCard>
-        </SettingsSection>
-      )}
-      <div className={cn("flex flex-col gap-10", attention.length > 0 && "pt-5")}>
-        <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
-        {empty && !focus ? (
-          <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
-        ) : (
-          lists.map((section) => {
-            if (!section.rows.length && section.key !== "own") return null;
+    <div className="flex flex-col gap-10">
+      <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />
+      {tab === "attention" ? (
+        <SettingsCard>
+          {attention.map((item) => {
+            const kind = item.attention!.type;
+            const spread = kind === "notEverywhere" ? spreadOf(item) : null;
             return (
-              <SettingsSection key={section.key} title={section.title} description={section.description} aside={section.rows.length || undefined} setting={section.title}>
-                <SettingsCard>
-                  {section.rows.length ? (
-                    section.rows.map((entry) => row(entry, !entry.on))
-                  ) : (
-                    <div data-slot="empty-row" className="flex items-center gap-4 px-4 py-4">
-                      <span className="text-foreground/65 min-w-0 flex-1 text-label">Nothing only for {focus?.name} yet. Add one here, or turn one on below.</span>
-                      <Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "add", projectId: focus?.id ?? null })}>Add to {focus?.name}</Button>
-                    </div>
-                  )}
-                </SettingsCard>
-              </SettingsSection>
-            );
-          })
-        )}
-        {!focus && elsewhere.length > 0 && (
-          <FoldCard title="Found in other apps" line={elsewhereLine(elsewhere)} setting="Found in other apps">
-            {elsewhere.map((item) => (
               <PluginRow
                 key={item.key}
                 view={view}
                 item={item}
-                line={{ text: item.description || item.detail, tone: "muted" }}
-                lit={has}
-                end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Use everywhere</Button>}
+                line={{ text: item.attention!.message, tone: ATTENTION_TONE[kind] }}
+                lit={(state) => state.type === "ready" || state.type === "working"}
+                onOpen={() => onOpen(item)}
+                end={
+                  (kind === "signIn" && !adapter?.signIn) || (kind === "notEverywhere" && !spread) ? undefined : <Button
+                    variant="soft"
+                    size="sm"
+                    disabled={kind === "notEverywhere" ? busy : !adapter}
+                    onClick={() => (kind === "signIn" ? onDialog({ type: "signIn", key: item.key }) : kind === "wontStart" ? onOpen(item) : spread === "addMissing" ? onAddMissing(item) : onDialog({ type: "useEverywhere", key: item.key }))}
+                  >
+                    {kind === "signIn" ? "Sign in" : kind === "wontStart" ? "Details" : spread === "addMissing" ? "Add to every agent" : "Use everywhere"}
+                  </Button>
+                }
               />
-            ))}
-          </FoldCard>
-        )}
-      </div>
-    </>
+            );
+          })}
+        </SettingsCard>
+      ) : empty && !focus ? (
+        <EmptyTab tab={tab} onAdd={() => onDialog({ type: "add", projectId: null })} />
+      ) : (
+        lists.map((section) => {
+          if (!section.rows.length && section.key !== "own") return null;
+          return (
+            <SettingsSection key={section.key} title={section.title} description={section.description} aside={section.rows.length || undefined} setting={section.title}>
+              <SettingsCard>
+                {section.rows.length ? (
+                  section.rows.map((entry) => row(entry, !entry.on))
+                ) : (
+                  <div data-slot="empty-row" className="flex items-center gap-4 px-4 py-4">
+                    <span className="text-foreground/65 min-w-0 flex-1 text-label">Nothing only for {focus?.name} yet. Add one here, or turn one on below.</span>
+                    <Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "add", projectId: focus?.id ?? null })}>Add to {focus?.name}</Button>
+                  </div>
+                )}
+              </SettingsCard>
+            </SettingsSection>
+          );
+        })
+      )}
+      {!focus && elsewhere.length > 0 && (
+        <FoldCard title="Found in other apps" line={elsewhereLine(elsewhere)} setting="Found in other apps">
+          {elsewhere.map((item) => (
+            <PluginRow
+              key={item.key}
+              view={view}
+              item={item}
+              line={{ text: item.description || item.detail, tone: "muted" }}
+              lit={has}
+              end={<Button variant="soft" size="sm" disabled={!adapter} onClick={() => onDialog({ type: "useEverywhere", key: item.key })}>Use everywhere</Button>}
+            />
+          ))}
+        </FoldCard>
+      )}
+    </div>
   );
 }
 
 function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, onAddProject }: {
   view: PluginsView;
   focus: PluginProjectView | null;
-  tab: PluginKind;
+  tab: PluginTab;
   query: string;
-  count: (kind: PluginKind) => number;
-  onTab: (tab: PluginKind) => void;
+  count: (kind: PluginTab) => number;
+  onTab: (tab: PluginTab) => void;
   onQuery: (query: string) => void;
   onProject: (projectId: string | null) => void;
   onAddProject: () => void;
 }) {
-  const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginKind) => {
+  const tabs = TABS.filter((kind) => kind !== "attention" || count(kind) > 0);
+  const keys = (event: KeyboardEvent<HTMLButtonElement>, kind: PluginTab) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const at = KINDS.indexOf(kind);
-    const next = event.key === "Home" ? 0 : event.key === "End" ? KINDS.length - 1 : (at + (event.key === "ArrowRight" ? 1 : KINDS.length - 1)) % KINDS.length;
-    onTab(KINDS[next]!);
+    const at = tabs.indexOf(kind);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (at + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+    onTab(tabs[next]!);
     event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]")[next]?.focus();
   };
   return (
@@ -334,25 +335,25 @@ function Toolbar({ view, focus, tab, query, count, onTab, onQuery, onProject, on
       <ProjectFilter view={view} focus={focus} onProject={onProject} onAddProject={onAddProject} />
       <span aria-hidden className="bg-divider h-5 w-px shrink-0" />
       <div role="tablist" aria-label="Plugins" className="flex shrink-0 items-center gap-1">
-        {KINDS.map((kind) => (
+        {tabs.map((kind) => (
           <button
             key={kind}
             type="button"
             role="tab"
             aria-selected={tab === kind}
             tabIndex={tab === kind ? 0 : -1}
-            data-setting={TAB_LABEL[kind]}
+            data-setting={TAB_TITLES[kind]}
             className={cn("rounded-capsule flex h-7 items-center gap-1.5 px-3 text-label", tab === kind ? "bg-foreground/10" : "text-foreground/65")}
             onClick={() => onTab(kind)}
             onKeyDown={(event) => keys(event, kind)}
           >
-            {TAB_LABEL[kind]}
+            {TAB_TITLES[kind]}
             <span className="text-foreground/50">{count(kind)}</span>
           </button>
         ))}
       </div>
       <span className="flex-1" />
-      <SettingsSearch className="max-w-60" label={tab === "server" ? "Search MCP servers" : "Search skills"} value={query} onChange={onQuery} />
+      {tab !== "attention" && <SettingsSearch className="max-w-60" label={tab === "server" ? "Search MCP servers" : "Search skills"} value={query} onChange={onQuery} />}
     </div>
   );
 }
