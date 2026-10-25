@@ -72,6 +72,33 @@ impl SessionManager {
                 live.mcp.clear();
                 mcp = Some(Vec::new());
             }
+            // A turn the CLI began on its own for a background job's end: its notice, or the
+            // first item of its own before any user message (Claude's stream doesn't say the
+            // notice its file keeps). It goes on with the turn before, which reads as open until
+            // it ends, and its end is that turn's; a message the user sends meanwhile is a steer
+            // of that turn, its request one more of that turn's.
+            let on_its_own = live.open
+                && live.awaiting_user
+                && event.is_some_and(|event| {
+                    shown_live(event)
+                        && !matches!(
+                            event,
+                            ProviderEvent::Message {
+                                role: Role::User,
+                                ..
+                            }
+                        )
+                });
+            if on_its_own {
+                live.awaiting_user = false;
+                live.continues = true;
+                // The thread reads its turns again: that turn is open once more.
+                opened = true;
+                if live.user_message.is_none() {
+                    live.user_message =
+                        thread_view::last_user_message(&self.session_dir(&conv.id).record());
+                }
+            }
             match event {
                 Some(ProviderEvent::TurnStarted { .. }) => {
                     if !live.open {
@@ -125,19 +152,6 @@ impl SessionManager {
                         ..entry(event.cloned(), at)
                     };
                     news.push(entry);
-                }
-                // A turn the CLI began on its own for a background job's end: it goes on with
-                // the turn before, which reads as open until it ends, and its end is that turn's.
-                Some(ProviderEvent::TaskNotice { .. }) if live.open && live.awaiting_user => {
-                    live.awaiting_user = false;
-                    live.continues = true;
-                    // The thread reads its turns again: that turn is open once more.
-                    opened = true;
-                    if live.user_message.is_none() {
-                        live.user_message =
-                            thread_view::last_user_message(&self.session_dir(&conv.id).record());
-                    }
-                    news.push(entry(event.cloned(), at));
                 }
                 Some(ProviderEvent::Error { error }) if live.open => {
                     live.error = Some(error.message.clone());

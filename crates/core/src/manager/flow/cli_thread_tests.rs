@@ -247,3 +247,104 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
     );
     flow.stop().await;
 }
+
+/// Session 82123c64's shape: after a turn ended, Claude began one on its own for a background
+/// job's end, its stream saying nothing of the notice (only the turn's start, then its
+/// commands); a queued message reached it mid-turn and joined it. That turn goes on with the
+/// turn before: the message is its steer, its request one more of that turn's, never a turn's
+/// opening message the thread has no turn of. Live, and after a restart.
+#[tokio::test]
+async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request() {
+    use brigadier_providers::{ItemStatus, ProviderEvent, Role, TurnStatus};
+
+    let mut flow = Flow::start(
+        "cli-thread-on-its-own",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Start the dev app.").await;
+    eventually("the first turn ends", || {
+        let view = flow.manager.thread_view(&id).unwrap();
+        view.turns.len() == 1 && view.turns[0].end.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let first = flow.manager.thread_view(&id).unwrap().turns[0].clone();
+    let [asked] = first.requests.as_slice() else {
+        panic!("{first:#?}");
+    };
+
+    let conv = flow.manager.conv(&id).unwrap();
+    let follow = |event: ProviderEvent| {
+        let (manager, conv) = (flow.manager.clone(), conv.clone());
+        async move { manager.follow_cli_thread(&conv, Some(&event)).await }
+    };
+    let command = |status| ProviderEvent::Command {
+        item_id: "toolu_wait".into(),
+        command: "cat /tmp/wait-output".into(),
+        cwd: None,
+        status,
+        exit_code: None,
+        output: None,
+        duration_ms: None,
+        kept: None,
+    };
+    follow(ProviderEvent::TurnStarted { turn_id: None }).await;
+    follow(command(ItemStatus::InProgress)).await;
+    follow(command(ItemStatus::Completed)).await;
+    // The turn before reads open again while this one runs.
+    let running = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(running.turns.len(), 1, "{running:#?}");
+    assert_eq!(running.turns[0].end, None);
+    follow(ProviderEvent::Message {
+        item_id: "65ae8f04-ec73-40e2-8ebc-0283dd40a248".into(),
+        role: Role::User,
+        text: "[queued message 2f334bc5 · judge it: brigadier queue 2f334bc5 join|wait|worker \
+               <id>|new-session; unjudged, it joins this work]\nsure, do"
+            .into(),
+    })
+    .await;
+    // Judged: it joins, and the rest of the turn answers its request.
+    let joined = "01a171d2-7c9f-7787-bd17-63a32f334bc5";
+    conv.answer_request(joined).await;
+    follow(ProviderEvent::TurnCompleted {
+        turn_id: None,
+        status: TurnStatus::Completed,
+        duration_ms: None,
+        usage: None,
+    })
+    .await;
+
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(view.turns.len(), 1, "{view:#?}");
+    assert_eq!(view.turns[0].user_message, first.user_message);
+    assert_eq!(view.turns[0].requests, [asked.clone(), joined.to_owned()]);
+    assert_eq!(view.turns[0].end, Some(TurnEnd::Done));
+    let steer = view
+        .entries
+        .iter()
+        .find(|entry| matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id.starts_with("65ae8f04")))
+        .expect("the steer shows");
+    assert!(steer.steer, "{steer:#?}");
+    // No turn is noted under the steer's id: the turn before's notes hold its request.
+    let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
+    assert!(
+        records
+            .iter()
+            .all(|record| record.user_message.as_deref() == Some(first.user_message.as_str())),
+        "{records:#?}"
+    );
+    flow.restart().await;
+    let after = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(after.turns.len(), 1, "{after:#?}");
+    assert_eq!(after.turns[0].requests, [asked.clone(), joined.to_owned()]);
+    flow.stop().await;
+}
