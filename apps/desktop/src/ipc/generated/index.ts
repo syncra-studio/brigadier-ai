@@ -90,6 +90,8 @@ export type { CleanProgress } from "./CleanProgress";
 export type { CleanReport } from "./CleanReport";
 export type { CliCommand } from "./CliCommand";
 export type { CliJobs } from "./CliJobs";
+export type { CliOption } from "./CliOption";
+export type { CliQuestion } from "./CliQuestion";
 export type { ClientFrame } from "./ClientFrame";
 export type { ClientInfo } from "./ClientInfo";
 export type { CommitOutcome } from "./CommitOutcome";

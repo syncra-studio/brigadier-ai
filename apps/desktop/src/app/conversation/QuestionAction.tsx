@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { create } from "zustand";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
-import { questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
+import { multiPicks, questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
 import { ChoiceCard } from "@/app/conversation/ChoiceCard";
 import { StepCounter } from "@/app/conversation/StepCounter";
 import { useAction } from "@/app/conversation/useAction";
@@ -20,9 +20,11 @@ type KeptQuestion = {
   drafts: readonly (string | undefined)[];
   /** The answer lit on each question; -1 is the free-text row, null none. */
   lit: readonly (number | null | undefined)[];
+  /** A multi-select question's answers marked but not sent yet. */
+  marked: readonly (readonly number[] | undefined)[];
 };
 
-const FRESH: KeptQuestion = { page: 0, answers: [], drafts: [], lit: [] };
+const FRESH: KeptQuestion = { page: 0, answers: [], drafts: [], lit: [], marked: [] };
 
 /** Open question cards' state, by card id, until each is answered. */
 const useKept = create<{ byCard: Readonly<Record<string, KeptQuestion>> }>(() => ({
@@ -83,7 +85,7 @@ export function QuestionAction({
   const action = useAction();
   // Kept by card id, not in the card: opening Settings unmounts it, and coming back finds the
   // round's answers, the text typed and the answer lit as they were.
-  const { page, answers, drafts, lit } = useKept((s) => s.byCard[id] ?? FRESH);
+  const { page, answers, drafts, lit, marked } = useKept((s) => s.byCard[id] ?? FRESH);
   if (!question) return null;
 
   const round = questionRound(question);
@@ -116,6 +118,8 @@ export function QuestionAction({
   };
   const given = answers[at] ?? null;
   const picked = given === null ? -1 : item.options.findIndex((option) => option.label === given);
+  // A multi-select answer names each option marked, joined with ", " (the daemon splits it back).
+  const givenMarks = given === null || !item.multiSelect ? null : multiPicks(item, given);
   const pager =
     round.length > 1 ? (
       <StepCounter
@@ -169,7 +173,18 @@ export function QuestionAction({
         recommended: item.recommended === index,
       }))}
       kept={lit[at] ?? (picked >= 0 ? picked : null)}
-      initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
+      multiple={
+        item.multiSelect
+          ? {
+              kept: marked[at] ?? givenMarks ?? [],
+              onMarked: (indexes) =>
+                keepQuestion(id, { marked: round.map((_, other) => (other === at ? indexes : useKept.getState().byCard[id]?.marked[other])) }),
+              onChooseAll: (indexes, input) =>
+                answer(indexes.map((index) => item.options[index]?.label ?? "").join(", "), input),
+            }
+          : undefined
+      }
+      initialText={drafts[at] ?? (given !== null && picked < 0 && givenMarks === null && given !== SKIPPED ? given : "")}
       placeholder={
         item.options.length > 0
           ? "No, and tell Brigadier what to do differently"

@@ -24,4 +24,4 @@ details: string,
 /**
  * The very call asked about: a yes holds for it alone.
  */
-fingerprint: string, };
+fingerprint: string, } | { "type": "plan", plan: string, };

@@ -3,6 +3,7 @@ import type { ApprovalDecision } from "./ApprovalDecision";
 import type { ApprovalRequest } from "./ApprovalRequest";
 import type { BackgroundTask } from "./BackgroundTask";
 import type { CallCache } from "./CallCache";
+import type { CliQuestion } from "./CliQuestion";
 import type { Decider } from "./Decider";
 import type { FileChange } from "./FileChange";
 import type { FileRead } from "./FileRead";
@@ -72,7 +73,7 @@ calls?: Array<CallCache>, } | { "type": "contextSize", usedTokens: number, windo
  * `contextCompaction` item id), when it gives one: what a put-back of the session's
  * decisions is tied to, so it happens once per compaction (run2-D8).
  */
-nativeId?: string, } | { "type": "taskNotice", itemId: string, text: string, } | { "type": "rateLimits", quota: QuotaSnapshot, } | { "type": "approvalRequested", request: ApprovalRequest, } | { "type": "approvalResolved", id: string, decision: ApprovalDecision, decidedBy: Decider, } | { "type": "turnCompleted", turnId: string | null, status: TurnStatus, durationMs: number | null, usage: TokenUsage | null, } | { "type": "error", error: ProviderError, } | { "type": "notice", level: NoticeLevel, message: string, } | { "type": "exited", code: number | null, 
+nativeId?: string, } | { "type": "taskNotice", itemId: string, text: string, } | { "type": "rateLimits", quota: QuotaSnapshot, } | { "type": "approvalRequested", request: ApprovalRequest, } | { "type": "approvalResolved", id: string, decision: ApprovalDecision, decidedBy: Decider, } | { "type": "questionsAsked", id: string, questions: Array<CliQuestion>, } | { "type": "questionsWithdrawn", id: string, } | { "type": "planProposed", itemId: string, plan: string, } | { "type": "turnCompleted", turnId: string | null, status: TurnStatus, durationMs: number | null, usage: TokenUsage | null, } | { "type": "error", error: ProviderError, } | { "type": "notice", level: NoticeLevel, message: string, } | { "type": "exited", code: number | null, 
 /**
  * The signal that ended it, when one did.
  */

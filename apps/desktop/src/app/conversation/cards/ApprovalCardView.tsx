@@ -2,6 +2,7 @@ import { memo, type ReactNode, useState } from "react";
 
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
+import { PlanText, planTitle } from "@/app/conversation/cards/planCard";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { ActionCard, ActionCardTitle, ToolBox, DECIDERS, paper } from "@/components/conversation";
 import { Badge } from "@/components/controls";
@@ -151,6 +152,13 @@ function describe(
         title: subject.question,
         subtitle: by,
         body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
+      };
+    case "plan":
+      return {
+        icon: <Sparkle />,
+        title: planTitle(subject.plan),
+        subtitle: by,
+        body: <PlanText plan={subject.plan} />,
       };
   }
 }

@@ -35,6 +35,9 @@ function clickInput(event: MouseEvent): AnswerInput {
  * (a merge), so nothing is lit until the user moves to an answer, even when the
  * card took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing),
  * and the recommended answer is only marked. A click on an answer picks it.
+ *
+ * `multiple` (a CLI's own multi-select question, harness D7): a click or Enter marks an answer
+ * or unmarks it, its dot staying, and the button sends the marked ones together.
  */
 export function ChoiceCard({
   name,
@@ -50,6 +53,7 @@ export function ChoiceCard({
   last = true,
   onPage,
   onChoose,
+  multiple,
   onText,
   onTyped,
   onLit,
@@ -83,6 +87,12 @@ export function ChoiceCard({
   onPage?: (step: -1 | 1) => void;
   /** An answer picked, and how: a click or Enter. */
   onChoose: (index: number, input: AnswerInput) => void;
+  /** Several answers may be marked: those marked at first, as they change, and sent together. */
+  multiple?: {
+    kept: readonly number[];
+    onMarked: (indexes: number[]) => void;
+    onChooseAll: (indexes: number[], input: AnswerInput) => void;
+  } | undefined;
   /** Words typed in the free-text row. */
   onText: (text: string) => void;
   /** What the free-text row holds as it is typed, so paging away and back keeps it. */
@@ -140,9 +150,17 @@ export function ChoiceCard({
   }, [pickable]);
   useEffect(() => () => clearTimeout(timer.current), []);
 
+  const [marked, setMarked] = useState<readonly number[]>(multiple?.kept ?? []);
   const idle = !busy && chosen === null;
   const commit = (index: number, input: AnswerInput) => {
     if (!idle || choices[index] === undefined) return;
+    if (multiple) {
+      const next = marked.includes(index) ? marked.filter((other) => other !== index) : [...marked, index].toSorted((a, b) => a - b);
+      setMarked(next);
+      setHighlight(index);
+      multiple.onMarked(next);
+      return;
+    }
     setChosen(index);
     setHighlight(index);
     timer.current = setTimeout(() => {
@@ -154,8 +172,11 @@ export function ChoiceCard({
   const send = (input: AnswerInput) => {
     if (!idle) return;
     if (text) onText(text);
+    else if (multiple && marked.length > 0) multiple.onChooseAll([...marked], input);
     else onSkip(input);
   };
+  // Something to send: words typed, or answers marked.
+  const ready = !!text || (!!multiple && marked.length > 0);
   useCardKeys(
     idle,
     {
@@ -231,21 +252,21 @@ export function ChoiceCard({
         <div className="flex flex-col gap-1 px-2">
           {choices.length > 0 && (
             <div
-              role="radiogroup"
+              role={multiple ? "group" : "radiogroup"}
               aria-label="Answers"
               className="flex flex-col gap-1"
             >
               {choices.map((choice, index) => (
                 <ActionOption
                   key={choice.label}
-                  role="radio"
-                  aria-checked={index === highlight}
+                  role={multiple ? "checkbox" : "radio"}
+                  aria-checked={multiple ? marked.includes(index) : index === highlight}
                   number={index + 1}
                   label={choice.label}
                   description={choice.description ?? undefined}
                   recommended={choice.recommended}
                   highlighted={index === highlight}
-                  chosen={index === chosen}
+                  chosen={index === chosen || (!!multiple && marked.includes(index))}
                   disabled={busy}
                   onClick={(event) => commit(index, clickInput(event))}
                   {...row(index + 2)}
@@ -288,13 +309,13 @@ export function ChoiceCard({
             <button
               type="button"
               className={actionButton(
-                text ? "primary" : "outline",
+                ready ? "primary" : "outline",
                 "font-medium",
               )}
               disabled={busy}
               onClick={(event) => send(clickInput(event))}
             >
-              {!text ? skipLabel : last ? "Submit" : "Next"}
+              {!ready ? skipLabel : last ? "Submit" : "Next"}
             </button>
           </ActionFreeText>
         </div>

@@ -51,7 +51,22 @@ export function questionOpen(question: Question): boolean {
 export function answerWords(item: QuestionItem, answer: string): string {
   if (!answer.trim()) return "No answer provided";
   const recommended = item.recommended === null ? undefined : item.options[item.recommended];
-  return recommended?.label === answer ? `${answer} (Recommended)` : answer.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+  const mark = (label: string) => (recommended?.label === label ? `${label} (Recommended)` : label);
+  // A multi-select answer, each option marked as one would be.
+  const picks = item.multiSelect ? multiPicks(item, answer) : null;
+  if (picks) return picks.map((index) => mark(item.options[index]!.label)).join(", ");
+  return recommended?.label === answer ? mark(answer) : answer.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+}
+
+/**
+ * A multi-select answer's options, by index, as the card joins them ("red, blue"); `null` when
+ * it is the user's own words. An option whose label holds ", " is one pick.
+ */
+export function multiPicks(item: QuestionItem, answer: string): number[] | null {
+  const index = (label: string) => item.options.findIndex((option) => option.label === label);
+  if (index(answer) >= 0) return [index(answer)];
+  const parts = answer.split(", ").map(index);
+  return parts.length > 1 && parts.every((at) => at >= 0) ? parts : null;
 }
 
 /** Text with its `code` spans' backticks left out, for where it can't show code (a tooltip, a label). */

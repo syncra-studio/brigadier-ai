@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
+import { PlanText, planTitle } from "@/app/conversation/cards/planCard";
 import { QuestionAction } from "@/app/conversation/QuestionAction";
 import { ReplyButton } from "@/app/conversation/ReplyButton";
 import { StepCounter } from "@/app/conversation/StepCounter";
@@ -154,6 +155,8 @@ type Shown = {
   allow?: string;
   /** The refusing button's words; "Deny" by default. */
   deny?: string;
+  /** No refusing button, and Esc refuses nothing: the user replies instead (a plan). */
+  noDeny?: boolean;
 };
 
 /** A file's line counts, at the end of its row. */
@@ -304,6 +307,16 @@ function describe(
         allow: "Go ahead",
         deny: "Don't",
       };
+    // The plan the CLI proposed in its own plan mode: build it, or reply to change it (harness D7).
+    case "plan":
+      return {
+        icon: <Sparkle />,
+        kind: "Plan",
+        title: planTitle(subject.plan),
+        body: <PlanText plan={subject.plan} className="mx-3" />,
+        allow: "Build it",
+        noDeny: true,
+      };
   }
 }
 
@@ -368,12 +381,13 @@ export function ApprovalAction({
   };
   const deny = () => answer({ type: "deny", message: "" });
   const peer = approval?.subject.type === "peerMessage";
+  const plan = approval?.subject.type === "plan";
   const card = useRef<HTMLElement>(null);
   useEffect(() => {
     if (peer && !inField(document.activeElement)) card.current?.focus();
   }, [peer]);
   useCardKeys(
-    approval !== undefined && !action.busy,
+    approval !== undefined && !action.busy && !plan,
     peer ? { enter: () => answer({ type: "allow" }), escape: deny } : { escape: deny },
     card,
   );
@@ -429,20 +443,22 @@ export function ApprovalAction({
           </>
         }
       >
-        <button
-          type="button"
-          className={actionButton(
-            "outline",
-            "@max-md/approval-card:justify-center",
-          )}
-          disabled={action.busy}
-          onClick={deny}
-        >
-          {shown.deny ?? "Deny"}
-          <Kbd variant="chip" aria-hidden className="group-hover/action:bg-current/15 @max-md/approval-card:hidden">
-            Esc
-          </Kbd>
-        </button>
+        {!shown.noDeny && (
+          <button
+            type="button"
+            className={actionButton(
+              "outline",
+              "@max-md/approval-card:justify-center",
+            )}
+            disabled={action.busy}
+            onClick={deny}
+          >
+            {shown.deny ?? "Deny"}
+            <Kbd variant="chip" aria-hidden className="group-hover/action:bg-current/15 @max-md/approval-card:hidden">
+              Esc
+            </Kbd>
+          </button>
+        )}
         {grant && (
           <Tooltip>
             <TooltipTrigger asChild>

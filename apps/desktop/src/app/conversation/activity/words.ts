@@ -53,9 +53,10 @@ export function toolName(name: string): string {
 
 /**
  * Calls of the CLIs' own plumbing, never a row: what came of them shows elsewhere (the tools a
- * search loaded, the worker an agent became).
+ * search loaded, the worker an agent became, the question card and plan card of the CLI's own
+ * question tool and plan, harness D7).
  */
-const PLUMBING = new Set(["ToolSearch", "tool_search", "spawn_agent"]);
+const PLUMBING = new Set(["ToolSearch", "tool_search", "spawn_agent", "AskUserQuestion", "request_user_input", "ExitPlanMode"]);
 
 /** Whether a call is plumbing, shown by what came of it rather than as a row. */
 export function isPlumbing(name: string): boolean {

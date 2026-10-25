@@ -27,7 +27,7 @@ cwd?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "cla
 /**
  * The enclosing project directory, only when it too was absent before the start.
  */
-projectIdentity: [number, number] | null, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
+projectIdentity: [number, number] | null, } | { "type": "claudePlanFile", path: string, identity: [number, number], } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
 /**
  * The `CODEX_HOME` of the account it ran on; absent: the user's own.
  */

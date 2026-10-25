@@ -8,4 +8,9 @@ export type QuestionItem = { text: string, options: Array<QuestionOption>,
 /**
  * The option the asker recommends, by its index in `options`.
  */
-recommended: number | null, };
+recommended: number | null, 
+/**
+ * The user may pick several options: its answer names each, joined with ", " (a CLI's
+ * own multi-select question, harness D7).
+ */
+multiSelect?: boolean, };
