@@ -2014,6 +2014,19 @@ impl Core {
         Ok(found)
     }
 
+    /// Reserves an existing queued message for a worker hand-off. Unlike settling, a missing
+    /// item is an error: a stale snapshot must never authorize sending it (#630).
+    pub(crate) async fn claim_queued(&self, id: &ConversationId, item_id: &str) -> Result<()> {
+        self.change_queue(id, |queue| {
+            let item = find_queued(queue, item_id)?;
+            item.deciding = true;
+            item.held_by = None;
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
+
     /// Ends the judging of queued messages `item_ids` (`deciding`: claims them again, for a
     /// hand-off under way): those still queued wait there for their turn. Returns those whose
     /// mark changed.

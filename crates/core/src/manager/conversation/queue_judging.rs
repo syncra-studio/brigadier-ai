@@ -169,10 +169,12 @@ impl SessionManager {
         conv: &Arc<ConvLive>,
         mut item: QueuedMessage,
     ) -> QueuedMessage {
+        let _routing = conv.queue_routing.lock().await;
         let shown = short(&item.id);
         let mut state = conv.state.lock().await;
         let cli = state.cli.clone().filter(|_| {
             state.busy
+                && !state.judging_ended
                 && !state.compacting
                 && !state.interrupted
                 && !state.seam.held
@@ -277,23 +279,31 @@ impl SessionManager {
     }
 
     async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        let _routing = conv.queue_routing.lock().await;
         {
-            let mut state = conv.state.lock().await;
+            let state = conv.state.lock().await;
             if !state.deciding.iter().any(|id| id == item_id) || state.claimed.contains(item_id) {
                 return;
             }
-            state.joined_unjudged.push(item_id.to_owned());
-            let over = state.joined_unjudged.len().saturating_sub(JOINED_KEPT);
-            state.joined_unjudged.drain(..over);
         }
-        if let Err(err) = self.join_delivered(conv, item_id).await {
-            crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
+        match self.join_delivered(conv, item_id).await {
+            Ok(()) => Self::remember_join(conv, item_id).await,
+            Err(err) => {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
+            }
         }
+    }
+
+    async fn remember_join(conv: &ConvLive, item_id: &str) {
+        let mut state = conv.state.lock().await;
+        state.joined_unjudged.push(item_id.to_owned());
+        let over = state.joined_unjudged.len().saturating_sub(JOINED_KEPT);
+        state.joined_unjudged.drain(..over);
     }
 
     /// Queued message `item_id`, which the session already has, joins the running turn as the
     /// user's message of a request of its own, never sent again; with no turn running it is
-    /// kept as that request, which ends at once.
+    /// kept as that request, which ends at once. The caller holds `queue_routing`.
     async fn join_delivered(&self, conv: &Arc<ConvLive>, item_id: &str) -> Result<()> {
         {
             let mut state = conv.state.lock().await;
@@ -360,8 +370,10 @@ impl SessionManager {
     /// (`completed`), else wait for their own turn. Those being handed to a worker are left to
     /// that hand-off.
     pub(super) async fn end_judging(&self, conv: &Arc<ConvLive>, completed: bool) {
+        let _routing = conv.queue_routing.lock().await;
         let unjudged: Vec<String> = {
             let mut state = conv.state.lock().await;
+            state.judging_ended = true;
             let claimed = state.claimed.clone();
             let (kept, unjudged) = std::mem::take(&mut state.deciding)
                 .into_iter()
@@ -375,8 +387,11 @@ impl SessionManager {
         }
         if completed {
             for item_id in &unjudged {
-                if let Err(err) = self.join_delivered(conv, item_id).await {
-                    crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
+                match self.join_delivered(conv, item_id).await {
+                    Ok(()) => Self::remember_join(conv, item_id).await,
+                    Err(err) => {
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
+                    }
                 }
             }
         } else if let Err(err) = self.core.settle_queued(&conv.id, &unjudged, false).await {
@@ -412,10 +427,15 @@ impl SessionManager {
         id: &crate::model::ConversationId,
         item_id: &str,
     ) -> Result<()> {
+        let conv = self.conv(id)?;
+        let _routing = conv.queue_routing.lock().await;
+        if conv.state.lock().await.claimed.contains(item_id) {
+            return Err(crate::Error::Invalid(
+                "this message is being sent to a worker".into(),
+            ));
+        }
         let item = self.core.take_queued(id, item_id).await?;
-        if item.delivered
-            && let Ok(conv) = self.conv(id)
-        {
+        if item.delivered {
             self.withdraw(&conv, item_id).await;
         }
         Ok(())
@@ -495,30 +515,8 @@ impl SessionManager {
         let item = match found.as_slice() {
             [item] => (*item).clone(),
             [] => {
-                let joined = conv
-                    .state
-                    .lock()
-                    .await
-                    .joined_unjudged
-                    .iter()
-                    .find(|joined| {
-                        joined.as_str() == id
-                            || (id.len() >= MIN_ID && short(joined).starts_with(id))
-                    })
-                    .cloned();
-                return Ok(match joined {
-                    // It joined by itself, unjudged: the session acts on it here.
-                    Some(joined) => CliReply::ok(&QueueOutput {
-                        id: short(&joined),
-                        state: QueueState::Joined,
-                        already: true,
-                        worker: None,
-                    }),
-                    None => CliReply::error(
-                        ErrorCode::NotFound,
-                        format!("no message {id} waits in the user's queue"),
-                    ),
-                });
+                let _routing = conv.queue_routing.lock().await;
+                return Ok(Self::queue_gone(&conv, id).await);
             }
             _ => {
                 return Ok(CliReply::error(
@@ -526,6 +524,27 @@ impl SessionManager {
                     format!("{id} starts several queued messages' ids"),
                 ));
             }
+        };
+        #[cfg(test)]
+        {
+            let pause = conv.queue_judgment_pause.lock().unwrap().clone();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
+        let routing = conv.queue_routing.lock().await;
+        // The lookup above can outlive an automatic join, a steer or a delete (#630).
+        // Reserve only an item that still exists while all routing paths are serialized.
+        let current = self.core.board(&conv.id).await?;
+        let Some(item) = current
+            .queue
+            .items
+            .iter()
+            .find(|queued| queued.id == item.id)
+            .cloned()
+        else {
+            return Ok(Self::queue_gone(&conv, &item.id).await);
         };
         let shown = short(&item.id);
         if conv.state.lock().await.claimed.contains(&item.id) {
@@ -539,6 +558,7 @@ impl SessionManager {
                 if item.delivered {
                     self.join_delivered(&conv, &item.id).await?;
                 } else {
+                    drop(routing);
                     Box::pin(self.steer_queued(conv.id.clone(), item.id.clone())).await?;
                 }
                 QueueState::Joined
@@ -570,7 +590,9 @@ impl SessionManager {
                 QueueState::Offered
             }
             Judgment::Worker { id: worker } => {
-                return self.queued_to_worker(caller, &conv, item, &worker).await;
+                return self
+                    .queued_to_worker(caller, &conv, item, &worker, routing)
+                    .await;
             }
         };
         Ok(CliReply::ok(&QueueOutput {
@@ -579,6 +601,25 @@ impl SessionManager {
             already: false,
             worker: None,
         }))
+    }
+
+    /// A late judgment hears whether the message auto-joined, including at turn end.
+    async fn queue_gone(conv: &ConvLive, id: &str) -> CliReply {
+        let state = conv.state.lock().await;
+        match state.joined_unjudged.iter().find(|joined| {
+            joined.as_str() == id || (id.len() >= MIN_ID && short(joined).starts_with(id))
+        }) {
+            Some(joined) => CliReply::ok(&QueueOutput {
+                id: short(joined),
+                state: QueueState::Joined,
+                already: true,
+                worker: None,
+            }),
+            None => CliReply::error(
+                ErrorCode::NotFound,
+                format!("no message {id} waits in the user's queue"),
+            ),
+        }
     }
 
     /// Ends the judging of queued message `item_id` in the live state.
@@ -597,21 +638,22 @@ impl SessionManager {
         conv: &Arc<ConvLive>,
         item: QueuedMessage,
         worker: &str,
+        routing: tokio::sync::MutexGuard<'_, ()>,
     ) -> Result<CliReply> {
         let shown = short(&item.id);
         let task = match self.own_worker(caller, worker).await {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
-        if !conv.state.lock().await.claimed.insert(item.id.clone()) {
-            return Ok(CliReply::error(
-                ErrorCode::Failed,
-                format!("{shown} is being sent to a worker now"),
-            ));
-        }
-        // Claimed in the queue too: the pump leaves it while it goes.
+        // Reserve in both live state and the queue under the driver's lock: the pump
+        // either already took it, or sees it Deciding and leaves it to this hand-off.
         let ids = std::slice::from_ref(&item.id);
-        let claimed = self.core.settle_queued(&conv.id, ids, true).await;
+        {
+            let mut state = conv.state.lock().await;
+            self.core.claim_queued(&conv.id, &item.id).await?;
+            state.claimed.insert(item.id.clone());
+        }
+        drop(routing);
         let mut files = Vec::new();
         let mut copied = HashMap::new();
         for attachment in item.attachments.iter().filter(|a| !a.pasted) {
@@ -621,19 +663,16 @@ impl SessionManager {
                 path.map(|path| path.display().to_string()),
             ));
         }
-        let sent = match claimed {
-            Ok(_) => {
-                let words = self.full_words(&as_message(&conv.id, &item)).await;
-                self.cli_send(caller, worker, Some(worker_text(words, &files)), None)
-                    .await
-            }
-            Err(err) => Err(err),
-        };
+        let words = self.full_words(&as_message(&conv.id, &item)).await;
+        let sent = self
+            .cli_send(caller, worker, Some(worker_text(words, &files)), None)
+            .await;
         let failed = match &sent {
             Ok(CliReply::Ok { .. }) => None,
             Ok(CliReply::Error { error }) => Some(error.message.clone()),
             Err(err) => Some(err.to_string()),
         };
+        let _routing = conv.queue_routing.lock().await;
         if let Some(why) = failed {
             // Back in its slot, waiting for its own turn.
             {
@@ -653,8 +692,7 @@ impl SessionManager {
                 ),
             ));
         }
-        // Gone already if the user deleted it meanwhile: the worker has it all the same.
-        let _ = self.core.take_queued(&conv.id, &item.id).await;
+        self.core.take_queued(&conv.id, &item.id).await?;
         let kept = self
             .core
             .keep_sent(

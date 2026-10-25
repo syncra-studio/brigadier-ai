@@ -304,6 +304,8 @@ struct ConvState {
     /// still Deciding: each joins by itself after [`queue_judging::DECIDING_WAIT`], or when its
     /// turn completes.
     deciding: Vec<String>,
+    /// The turn's judging is settled, even while the rest of its end is being recorded.
+    judging_ended: bool,
     /// Those being handed to a worker right now: no timer, turn end or pump settles them.
     claimed: HashSet<String>,
     /// Queued messages that joined unjudged, newest last: the session's late judgment of one
@@ -511,6 +513,9 @@ pub(crate) struct ConvLive {
     /// Held while waiting messages are routed again, so a timer and a routing change never
     /// both start a model for them.
     retry: tokio::sync::Mutex<()>,
+    /// Serializes queue judgments, automatic joins and user takes until the item is reserved.
+    /// Released before sending to a worker, which may still be starting.
+    queue_routing: tokio::sync::Mutex<()>,
     /// How many times the user wrote: a message or a queue item stored (sent, edited, moved
     /// from the queue). Held while each is stored, so two are stored one after the other.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
@@ -547,6 +552,10 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) hand_over_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Tests: pauses a queue judgment after reading its queue item, before reserving it.
+    #[cfg(test)]
+    pub(super) queue_judgment_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
@@ -570,6 +579,7 @@ impl ConvLive {
                 ..ConvState::default()
             }),
             retry: tokio::sync::Mutex::new(()),
+            queue_routing: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
             feedback_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
@@ -584,6 +594,8 @@ impl ConvLive {
             frames: std::sync::Mutex::default(),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            queue_judgment_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -1200,6 +1212,7 @@ impl SessionManager {
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
+        let routing = conv.queue_routing.lock().await;
         // At a seam it stays queued for the successor (S22).
         if conv.state.lock().await.seam.held {
             return Ok(());
@@ -1215,6 +1228,7 @@ impl SessionManager {
                 self.core.append_queued(id.clone(), item).await
             })
             .await?;
+        drop(routing);
         self.join_working(&conv, message).await;
         Ok(())
     }
@@ -1842,6 +1856,7 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
+            state.judging_ended = false;
             state.interrupted = false;
             state.compacting = true;
             state.request = None;
@@ -2181,6 +2196,7 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
+            state.judging_ended = false;
             state.interrupted = false;
             state.landed = false;
             state.watchdog.begin(now_ms());
@@ -3407,6 +3423,13 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => {
                     self.note_thread_progress(&conv, &cli, event.as_ref()).await;
+                    // Auto-joined messages belong to this turn's final request list (#629).
+                    // Settle them while it is still busy, before persisting its end.
+                    if let Some(ProviderEvent::TurnCompleted { status, .. }) = &event {
+                        let completed = *status == TurnStatus::Completed
+                            && conv.state.lock().await.limit_hit.is_none();
+                        self.end_judging(&conv, completed).await;
+                    }
                     self.follow_cli_thread(&conv, event.as_ref()).await;
                     match event {
                     // Never stored.
@@ -4176,6 +4199,7 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
+                        state.judging_ended = false;
                         state.interrupted = false;
                         state.limit_hit = None;
                         state.turn_error = None;
@@ -4572,9 +4596,6 @@ impl SessionManager {
                 .await;
         }
         self.release_held(conv).await;
-        // What it left unjudged joins it when it got through, else waits (run2-D40).
-        self.end_judging(conv, status == TurnStatus::Completed && limit_hit.is_none())
-            .await;
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
             #[cfg(test)]
