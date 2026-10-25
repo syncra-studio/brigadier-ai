@@ -16,7 +16,7 @@ test("a new worktree starts from the picked base, else the checked-out branch, u
   assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree", base: "main", sessionBranch: " fix-login " }), {
     request: { type: "newWorktree", base: "main", branch: "fix-login" },
   });
-  assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree", current: null, loading: true }), { problem: "Reading the repository…" });
+  assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree", current: null, loading: true }), { problem: "Reading the repository…", waiting: true });
   assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree", current: null }), { problem: "Pick the base branch." });
 });
 
@@ -24,7 +24,7 @@ test("the local checkout works on the branch the project's folder has checked ou
   assert.deepEqual(environmentRequest({ ...place, environment: "localCheckout", base: "main", sessionBranch: "ignored" }), {
     request: { type: "localCheckout", branch: "feature-x", createFrom: null },
   });
-  assert.deepEqual(environmentRequest({ ...place, environment: "localCheckout", current: null, loading: true }), { problem: "Reading the repository…" });
+  assert.deepEqual(environmentRequest({ ...place, environment: "localCheckout", current: null, loading: true }), { problem: "Reading the repository…", waiting: true });
   assert.match(
     (environmentRequest({ ...place, environment: "localCheckout", current: null }) as { problem: string }).problem,
     /isn't on a branch/,

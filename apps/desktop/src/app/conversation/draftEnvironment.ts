@@ -32,16 +32,18 @@ export function checkoutHolder(conversations: readonly Conversation[], repo: str
   );
 }
 
+const READING = { problem: "Reading the repository…", waiting: true } as const;
+
 /**
  * Where a draft session works, as the setup asks for it, or why it can't start yet. A new
  * worktree starts from its base; the local checkout works in the project's own folder, on the
- * branch it has checked out.
+ * branch it has checked out. `waiting`: it only waits for the repository to be read.
  */
-export function environmentRequest(place: DraftPlace): { request: EnvironmentRequest } | { problem: string } {
+export function environmentRequest(place: DraftPlace): { request: EnvironmentRequest } | { problem: string; waiting?: true } {
   const { environment, current, loading } = place;
   if (environment === "localCheckout") {
     if (!current) {
-      return { problem: loading ? "Reading the repository…" : "Your checkout isn't on a branch. Check one out to work there." };
+      return loading ? READING : { problem: "Your checkout isn't on a branch. Check one out to work there." };
     }
     if (place.holder) {
       return { problem: `“${place.holder}” already works in this checkout. Archive it, or start this session in a new worktree.` };
@@ -49,6 +51,6 @@ export function environmentRequest(place: DraftPlace): { request: EnvironmentReq
     return { request: { type: "localCheckout", branch: current, createFrom: null } };
   }
   const base = place.base ?? current;
-  if (!base) return { problem: loading ? "Reading the repository…" : "Pick the base branch." };
+  if (!base) return loading ? READING : { problem: "Pick the base branch." };
   return { request: { type: "newWorktree", base, branch: place.sessionBranch.trim() || null } };
 }
