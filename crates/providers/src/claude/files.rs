@@ -836,6 +836,7 @@ pub(super) fn temp_dir_path(tag: Option<&str>) -> Option<PathBuf> {
 }
 
 /// A session's tag in its temp folder's name: exactly 8 lowercase hex characters.
+#[cfg(unix)]
 fn is_temp_tag(tag: &str) -> bool {
     tag.len() == 8 && tag.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
