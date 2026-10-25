@@ -137,3 +137,19 @@ test("a finished thread with no named state keeps its unread dot", { timeout: 60
   assert.equal(row?.mark, "unread");
   assert.equal(row?.words, null);
 });
+
+
+test("waiting questions show Question and the unread dot, even when open or an approval also waits; answers and skips clear it", { timeout: 60000 }, async (t) => {
+  type Row = { status: string; tip: string; mark: string | null; active: boolean };
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?questions=1", "sessions-result", 20000)) as { before: Row[]; opened: Row; after: Row[] };
+  for (const row of [...seen.before, seen.opened]) {
+    assert.equal(row.status, "question:Question");
+    assert.equal(row.tip, "Question");
+    assert.equal(row.mark, "unread");
+  }
+  assert.equal(seen.opened.active, true);
+  assert.deepEqual(seen.after.map(({ status, tip, mark }) => ({ status, tip, mark })), [
+    { status: "working:Working", tip: "Working", mark: "spinner" },
+    { status: "needsYou:Needs you", tip: "Needs you · approval", mark: "spinner" },
+  ]);
+});

@@ -136,6 +136,7 @@ export const SESSION_STATUS_WORDS = {
   ...Object.fromEntries(Object.entries(TAB_STATE_WORDS).map(([state, words]) => [state, words.one])) as Record<TabState, string>,
   prOpen: PULL_REQUEST_STATE_WORDS.open,
   prDraft: PULL_REQUEST_STATE_WORDS.draft,
+  question: "Question",
   failed: "Failed",
   stopped: "Stopped",
 };
@@ -153,7 +154,7 @@ function clock(ms: number): string {
 
 /**
  * Its state with the reason its row's tip names: Working · waiting for reset HH:MM, Needs you ·
- * approval / · question / · sign-in, Failed, Stopped, PR open (or Draft) · proof attached. How many
+ * approval / · sign-in, Question, Failed, Stopped, PR open (or Draft) · proof attached. How many
  * workers it runs is never a reason: workers show in the session itself, not its row or tab.
  * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
  */
@@ -162,7 +163,9 @@ export function sessionStatus(
   quotaWait: { resetsAtMs: number | null } | null,
   settled: Settled | undefined,
   stopped = false,
+  question = activity.awaiting === "input",
 ): SessionStatus | null {
+  if (question) return { state: "question", reason: null };
   let state: SessionStatus["state"] | null = tabState(activity, quotaWait !== null, settled?.state);
   if (state === "needsYou" && activity.awaiting === "failed") state = "failed";
   if (state !== "needsYou" && state !== "working" && state !== "failed") {
@@ -176,11 +179,9 @@ export function sessionStatus(
     reason =
       activity.awaiting === "approval"
         ? "approval"
-        : activity.awaiting === "input"
-          ? "question"
-          : activity.awaiting === "signIn"
-            ? "sign-in"
-            : "failed";
+        : activity.awaiting === "signIn"
+          ? "sign-in"
+          : "failed";
   } else if (state === "working") {
     if (quotaWait && !activity.running) {
       reason = quotaWait.resetsAtMs === null ? "waiting for a usage limit" : `waiting for reset ${clock(quotaWait.resetsAtMs)}`;
@@ -191,17 +192,23 @@ export function sessionStatus(
   return { state, reason };
 }
 
-/** Busy work replaces an unread mark; an idle error keeps its own leading icon. */
-export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean) {
-  const working = activity.awaiting !== "input" && (activity.running || quotaWait);
-  return { working, error: !working && activity.awaiting === "failed", unread: !working && unread };
+/** A waiting question keeps the unread dot even while open; busy work replaces other unread marks. */
+export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean, question = activity.awaiting === "input") {
+  const working = !question && (activity.running || quotaWait);
+  return { working, error: !question && !working && activity.awaiting === "failed", unread: question || (!working && unread) };
+}
+
+/** Read the cards separately: row activity gives approvals precedence, but the session names questions first. */
+function usePendingQuestion(id: string): boolean {
+  return useActivity((s) => (s.byConversation[id]?.questions.size ?? 0) > 0);
 }
 
 /** The sidebar's activity marks, independent of the state words shared with the tab. */
 export function useSidebarIndicators(id: string, unread = false) {
   const activity = useRowActivity(id);
   const quotaWait = useApp((s) => !!s.conversations[id]?.quotaWait);
-  return sidebarIndicators(activity, quotaWait, unread);
+  const question = usePendingQuestion(id);
+  return sidebarIndicators(activity, quotaWait, unread, question);
 }
 
 /** One session's state and reason; re-renders only when they change. */
@@ -213,11 +220,13 @@ export function useSessionStatus(id: string): SessionStatus | null {
   });
   const settled = useSettledTabs((s) => s.byTab[id]);
   const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
+  const question = usePendingQuestion(id);
   const status = sessionStatus(
     activity,
     resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets },
     settled,
     stopped,
+    question,
   );
   return status;
 }

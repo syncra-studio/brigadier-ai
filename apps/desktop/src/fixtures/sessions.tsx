@@ -15,8 +15,8 @@ import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
 import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
-import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";
-import { fromSnapshot, useActivity } from "@/state/activity";
+import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request } from "@/ipc/generated";
+import { applyActivityEvents, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
@@ -54,6 +54,10 @@ const conversations = [
   session("w11-a", "Paused task", 0),
   session("w13-a", "Draft the notes", -2),
 ];
+if (params.has("questions")) conversations.push(
+  session("question", "Choose a direction", 13),
+  session("question-approval", "Question and approval", 12),
+);
 if (params.has("unread")) for (const conversation of conversations) conversation.finishedAtMs = 1;
 if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1, { finishedAtMs: 1 }));
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
@@ -76,6 +80,10 @@ useActivity.setState({
     activity("w7-a", { failed: true }),
     activity("w11-a", { stopped: true }),
     activity("w9-a", { signIns: ["linear"] }),
+    ...(params.has("questions") ? [
+      activity("question", { questions: ["q"], turnOpen: true, run: "running" }),
+      activity("question-approval", { questions: ["qa"], approvals: ["a"], turnOpen: true, run: "running" }),
+    ] : []),
   ]),
 });
 let seq = 0;
@@ -227,9 +235,33 @@ function OpenBar() {
   );
 }
 
+const questionRow = (id: string) => rows().find((row) => row.title === (id === "question" ? "Choose a direction" : "Question and approval"))!;
+
+const answered = (id: string, conversationId: string, answer: string): Question => ({
+  id, conversationId, taskId: null, requestId: null, position: 0, kind: { type: "orchestrator" },
+  text: "Which direction?", options: [], recommended: null, items: [], answer, answers: [], createdAtMs: 0, answeredAtMs: 1,
+});
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("questions")) {
+      void (async () => {
+        await until(() => questionRow("question")?.status === "question:Question");
+        const before = [questionRow("question"), questionRow("question-approval")];
+        // Opening a session must not clear its waiting-question dot.
+        useApp.setState({ selection: { type: "conversation", id: "question" } });
+        await until(() => questionRow("question")?.active);
+        const opened = questionRow("question");
+        applyActivityEvents([
+          envelope("conversation:question", { type: "questionUpdated", question: answered("q", "question", "Use blue") }),
+          envelope("conversation:question-approval", { type: "questionUpdated", question: answered("qa", "question-approval", "Skipped") }),
+        ]);
+        await until(() => questionRow("question")?.status === "working:Working" && questionRow("question-approval")?.status === "needsYou:Needs you");
+        setResult(JSON.stringify({ before, opened, after: [questionRow("question"), questionRow("question-approval")] }));
+      })();
+      return;
+    }
     if (params.has("states")) {
       void (async () => {
         const states = [];

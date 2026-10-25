@@ -52,8 +52,10 @@ test("the app reads each case of the sidebar's states table as the engine does (
     const settled = each.settled ?? undefined;
     assert.equal(tabState(row, !!each.quotaWait, settled), each.expect, each.name);
     const status = sessionStatus(row, each.quotaWait ? { resetsAtMs: null } : null, settled ? { state: settled } : undefined, stoppedOf(activity));
-    assert.equal(status?.state ?? null, each.status, `${each.name}: its words`);
-    if (each.reason) assert.equal(status?.reason, each.reason, `${each.name}: its reason`);
+    // The engine still calls a question needsYou; the session's display names it explicitly.
+    const question = (each.questions?.length ?? 0) > 0;
+    assert.equal(status?.state ?? null, question ? "question" : each.status, `${each.name}: its words`);
+    if (each.reason) assert.equal(status?.reason, question ? null : each.reason, `${each.name}: its reason`);
   }
 });
 
@@ -65,7 +67,7 @@ test("a session's state comes with the reason its row names", () => {
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: reset }, { state: "ready" }), { state: "working", reason: "waiting for reset 14:05" });
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: null }, undefined), { state: "working", reason: "waiting for a usage limit" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "approval" }, null, undefined), { state: "needsYou", reason: "approval" });
-  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "input" }, null, undefined), { state: "needsYou", reason: "question" });
+  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "input" }, null, undefined), { state: "question", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, null, undefined), { state: "failed", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "signIn" }, null, undefined), { state: "needsYou", reason: "sign-in" });
   assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "open", proof: true }), { state: "prOpen", reason: "proof attached" });
@@ -143,4 +145,20 @@ test("sidebar marks follow live work, errors and unread activity independently o
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "input", running: true }, false, true), { working: false, error: false, unread: true });
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed" }, false, true), { working: false, error: true, unread: true });
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed", running: true }, false, true), { working: true, error: false, unread: false });
+});
+
+
+test("questions take display precedence over approvals without changing the underlying tab state", () => {
+  const activity = activityOf({ name: "both", approvals: ["a"], questions: ["q"], turn: { open: true }, expect: "needsYou", status: "question" }, "both")!;
+  const row = rowActivity(activity);
+  assert.equal(row.awaiting, "approval", "the shared activity fold is unchanged");
+  assert.equal(tabState(row, false, "merged"), "needsYou");
+  assert.deepEqual(sessionStatus(row, null, { state: "merged" }, false, activity.questions.size > 0), { state: "question", reason: null });
+  assert.deepEqual(sidebarIndicators(row, false, false, true), { working: false, error: false, unread: true });
+});
+
+test("a pending question has a dot regardless of read state, running turn or quota wait", () => {
+  for (const running of [false, true]) for (const quotaWait of [false, true]) for (const unread of [false, true]) {
+    assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "input", running }, quotaWait, unread), { working: false, error: false, unread: true });
+  }
 });

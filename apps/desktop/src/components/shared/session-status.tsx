@@ -45,11 +45,12 @@ export function SidebarError({ conversationId }: { conversationId: string }) {
   </span>;
 }
 
-/** The trailing 20-unit slot contains a running spinner or an unread dot, otherwise nothing. */
+/** The trailing 20-unit slot contains a spinner or the same dot for unread activity and waiting questions. */
 export function SidebarActivityMark({ conversationId, unread }: { conversationId: string; unread: boolean }) {
   const mark = useSidebarIndicators(conversationId, unread);
+  const question = useSessionStatus(conversationId)?.state === "question";
   if (!mark.working && !mark.unread) return null;
   return <span className="flex size-icon-lg shrink-0 items-center justify-center">
-    {mark.working ? <SidebarWorking data-slot="status-spinner" role="status" aria-label="Working" className="text-foreground/70 size-icon-md motion-safe:animate-[spin_2s_steps(60,end)_infinite]" /> : <span data-slot="status-unread" role="img" aria-label="Unread" className="bg-link size-2 shrink-0 rounded-full" />}
+    {mark.working ? <SidebarWorking data-slot="status-spinner" role="status" aria-label="Working" className="text-foreground/70 size-icon-md motion-safe:animate-[spin_2s_steps(60,end)_infinite]" /> : <span data-slot="status-unread" role="img" aria-label={question ? "Question waiting" : "Unread"} className="bg-link size-2 shrink-0 rounded-full" />}
   </span>;
 }
