@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
@@ -825,4 +825,12 @@ test("Brigadier's word that the user took a queued message back is never drawn",
   );
   assert.deepEqual(block!.steers.map((steer) => steer.text), ["Then the docs."]);
   assert.deepEqual(block!.nudges, []);
+});
+
+test("a background command whose task completed reads completed, even when its item never said it ended", () => {
+  const step = { type: "tool" as const, itemId: "c1", name: "Bash", detail: "sleep 2", status: "inProgress" as const, throughPosition: 0, item: "command" as const };
+  const task = { id: "p1", itemId: "c1", kind: "terminal" as const, label: "sleep 2", status: "completed" as const, startedAtMs: 1000, endedAtMs: 3000, outputFile: null, summary: null, lastLine: null };
+  const ended = stepInTurn(step, { end: "done", endedAtMs: 1200 }, task);
+  assert.equal(ended?.status, "completed");
+  assert.equal(ended?.endedAtMs, 3000);
 });

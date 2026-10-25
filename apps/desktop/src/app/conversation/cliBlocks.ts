@@ -300,7 +300,9 @@ export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" |
   const taskEnd = task?.endedAtMs ?? undefined;
   if (task?.status === "stopped") return { ...running, status: "failed", stopped: true, ...(taskEnd !== undefined && { endedAtMs: taskEnd }) };
   if (task?.status === "failed") return { ...step, status: "failed", ...(taskEnd !== undefined && { endedAtMs: taskEnd }) };
-  if (task && taskEnd !== undefined) return { ...step, endedAtMs: Math.max(taskEnd, step.endedAtMs ?? taskEnd) };
+  // Its task completed: so did the call, even when the CLI never said so of the item itself (a
+  // Codex terminal that left the list first).
+  if (task && taskEnd !== undefined) return { ...step, ...(step.status === "inProgress" && { status: "completed" as const }), endedAtMs: Math.max(taskEnd, step.endedAtMs ?? taskEnd) };
   if (step.status !== "inProgress" || !ended) return step;
   return { ...running, status: "failed", stopped: true, ...(turn?.endedAtMs != null && { endedAtMs: turn.endedAtMs }) };
 }
