@@ -410,11 +410,12 @@ mod tests {
     use super::*;
 
     /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
-    /// its lines from tightening the rest and about 100 bytes more: 2,100 (proposed).
+    /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The lines a
+    /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
     #[test]
-    fn the_standing_instructions_stay_under_twenty_one_hundred_bytes_and_fifteen_lines() {
+    fn the_standing_instructions_stay_under_2050_bytes_and_fifteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 2_100,
+            STANDING_INSTRUCTIONS.len() < 2_050,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
