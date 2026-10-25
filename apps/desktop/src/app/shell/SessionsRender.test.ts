@@ -29,20 +29,20 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
       ["Ship the release", "needsYou:Needs you", "Needs you · sign-in"],
       ["Footer", "working:Working", "Working"],
       ["Header", "working:Working", "Working"],
-      ["Fix the login", "prOpen:PR open", "PR open · proof attached"],
-      ["Tidy the docs", "merged:Merged", "Merged"],
+      ["Fix the login", "done:Done", "Done"],
+      ["Tidy the docs", "done:Done", "Done"],
       ["Waiting on a limit", "working:Working", "Working · waiting for reset 14:05"],
       ["Lone worker", "working:Working", "Working"],
-      ["Old fix", "reverted:Reverted", "Reverted"],
-      ["Ready to review", "ready:Ready", "Ready"],
+      ["Old fix", "done:Done", "Done"],
+      ["Finished reply", "done:Done", "Done"],
       ["Paused task", "stopped:Stopped", "Stopped"],
-      // A draft PR in the context card's word (issue 551).
-      ["Draft the notes", "prDraft:Draft", "Draft"],
+      // Git/PR state never changes the completed turn's Done word.
+      ["Draft the notes", "done:Done", "Done"],
     ],
   );
   for (const row of seen.rows) {
     assert.ok(row.words, `${row.title}: a plain state word`);
-    assert.equal(row.mark, row.status?.startsWith("working:") ? "spinner" : null, `${row.title}: its mark`);
+    assert.equal(row.mark, row.status?.startsWith("working:") ? "spinner" : row.status?.startsWith("needsYou:") ? "unread" : null, `${row.title}: its mark`);
     assert.equal(row.error, row.status?.startsWith("failed:"));
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
@@ -57,7 +57,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
     seen.rowsAfter,
-    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ready to review", "Paused task", "Draft the notes"],
+    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Finished reply", "Paused task", "Draft the notes"],
     "a session that starts needing the user moves up",
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
@@ -65,7 +65,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   for (const cut of [seen.cut, seen.cutStopped]) {
     assert.deepEqual(cut, { overflows: true, ellipsis: "ellipsis", mask: "none", clear: true, word: cut.word }, JSON.stringify(cut));
   }
-  assert.equal(seen.cut.word, "Draft");
+  assert.equal(seen.cut.word, "Done");
   // A session's workers show in the session itself (context card, Workers panel, thread), never
   // under its row, though "Header" runs two.
   assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
@@ -77,7 +77,7 @@ test("the Projects flyout shows a folder and name without a count, preserving it
     sessions: string[];
   };
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
-  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ready to review", "Paused task", "Draft the notes"]);
+  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Finished reply", "Paused task", "Draft the notes"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
@@ -106,13 +106,13 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
       title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
-    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merged", "PR open", "Draft", "Failed", "Stopped", "Reverted"].toSorted());
-    // A draft PR's tab says Draft too, as its row and context card do (issue 551).
-    assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes · Draft");
+    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Done", "Failed", "Stopped"].toSorted());
+    // A draft PR does not supply the tab's state word.
+    assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes · Done");
     for (const row of seen) {
       const busy = row.state === "working";
-      assert.equal(row.beforeMark, busy ? "spinner" : unread ? "unread" : null, `${row.title}: closed row mark`);
-      assert.equal(row.rowMark, busy ? "spinner" : null, `${row.title}: the open row has no unread mark`);
+      assert.equal(row.beforeMark, busy ? "spinner" : row.state === "needsYou" || (row.state === "done" && unread) ? "unread" : null, `${row.title}: closed row mark`);
+      assert.equal(row.rowMark, busy ? "spinner" : row.state === "needsYou" ? "unread" : null, `${row.title}: an open row keeps only a Needs you dot`);
       assert.equal(row.error, row.state === "failed", `${row.title}: errors have a separate leading icon`);
       assert.equal(row.plain, true, `${row.title}: no chip`);
       if (row.beforeMark === "unread") { assert.equal(row.unreadSize, 8); assert.equal(row.unreadSlot, 20); }
@@ -131,43 +131,64 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
 }
 
 
-test("a finished thread with no named state keeps its unread dot", { timeout: 60000 }, async (t) => {
+test("an idle session whose turn ended shows Done with its unread dot", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?unreadOnly=1", "sessions-result", 20000)) as { rows: { title: string; mark: string | null; words: string | null }[] };
   const row = seen.rows.find((each) => each.title === "Unread reply");
   assert.equal(row?.mark, "unread");
-  assert.equal(row?.words, null);
+  assert.equal(row?.words, "Done");
 });
 
 
-test("waiting questions show Question and the unread dot, even when open or an approval also waits; answers and skips clear it", { timeout: 60000 }, async (t) => {
+test("waiting questions show Needs you and the blue dot, even when open or an approval also waits; answers and skips clear it", { timeout: 60000 }, async (t) => {
   type Row = { status: string; tip: string; mark: string | null; active: boolean };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?questions=1", "sessions-result", 20000)) as { before: Row[]; opened: Row; after: Row[] };
   for (const row of [...seen.before, seen.opened]) {
-    assert.equal(row.status, "question:Question");
-    assert.equal(row.tip, "Question");
+    assert.equal(row.status, "needsYou:Needs you");
+    assert.ok(["Needs you · question", "Needs you · approval"].includes(row.tip));
     assert.equal(row.mark, "unread");
   }
   assert.equal(seen.opened.active, true);
   assert.deepEqual(seen.after.map(({ status, tip, mark }) => ({ status, tip, mark })), [
     { status: "working:Working", tip: "Working", mark: "spinner" },
-    { status: "needsYou:Needs you", tip: "Needs you · approval", mark: "spinner" },
+    { status: "needsYou:Needs you", tip: "Needs you · approval", mark: "unread" },
   ]);
 });
 
 
-test("unopened sessions with working workers keep Working over Merged, including reconnect snapshots; user requests still win", { timeout: 60000 }, async (t) => {
+test("unopened sessions with working workers keep Working until idle, including reconnect snapshots; user requests still win", { timeout: 60000 }, async (t) => {
   type Row = { title: string; status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
   assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
-    ["Approval with workers", "needsYou:Needs you", "spinner"],
-    ["Question with workers", "question:Question", "unread"],
+    ["Approval with workers", "needsYou:Needs you", "unread"],
+    ["Question with workers", "needsYou:Needs you", "unread"],
     ["Workers still running", "working:Working", "spinner"],
   ]);
   for (const row of [seen.someWorking, seen.reconnected]) {
     assert.equal(row.status, "working:Working");
     assert.equal(row.mark, "spinner");
   }
-  assert.equal(seen.idle.status, "merged:Merged");
+  assert.equal(seen.idle.status, "done:Done");
   assert.equal(seen.idle.mark, null);
   assert.deepEqual(seen.threadReads, [], "no sidebar session's thread was read");
+});
+
+
+test("a session that never ran has no state word or dot", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?neverRan=1", "sessions-result", 20000)) as { rows: { title: string; status: string | null; mark: string | null }[] };
+  const row = seen.rows.find((each) => each.title === "Never ran");
+  assert.ok(row);
+  assert.equal(row.status, null);
+  assert.equal(row.mark, null);
+});
+
+
+test("Done uses the recorded turn-end unread dot: opening clears it through closing, and a later turn restores it", { timeout: 60000 }, async (t) => {
+  type Row = { status: string; mark: string | null };
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?doneRead=1", "sessions-result", 20000)) as { before: Row; afterClose: Row; nextTurn: Row };
+  assert.equal(seen.before.status, "done:Done");
+  assert.equal(seen.before.mark, "unread");
+  assert.equal(seen.afterClose.status, "done:Done");
+  assert.equal(seen.afterClose.mark, null);
+  assert.equal(seen.nextTurn.status, "done:Done");
+  assert.equal(seen.nextTurn.mark, "unread");
 });

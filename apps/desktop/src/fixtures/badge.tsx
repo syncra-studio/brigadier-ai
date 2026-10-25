@@ -21,7 +21,7 @@ function Fixture() {
     return () => result.remove();
   }, []);
   return <>
-    <Badge variant="warning">Question</Badge>
+    <Badge variant="warning">Needs you</Badge>
     <div id="padding-token" style={{ width: "var(--spacing-pill-x)" }} />
   </>;
 }

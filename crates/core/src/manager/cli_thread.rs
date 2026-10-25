@@ -208,6 +208,7 @@ impl SessionManager {
                 entries: news,
                 opened,
                 ended,
+                turn_ended_at_ms: ended.map(|_| at),
                 context,
                 background,
                 mcp,
@@ -276,6 +277,7 @@ impl SessionManager {
                     entries: Vec::new(),
                     opened: false,
                     ended: None,
+                    turn_ended_at_ms: None,
                     context: None,
                     background: Some(background),
                     mcp: None,
@@ -293,9 +295,13 @@ impl SessionManager {
             .unwrap()
             .get(id)
             .is_some_and(|live| live.open);
+        let last = thread_view::last_turn(&self.session_dir(id).record());
         CliTurn {
             open,
-            last_end: thread_view::last_end(&self.session_dir(id).record()),
+            last_end: last.as_ref().and_then(|turn| turn.end),
+            turn_ended_at_ms: last
+                .filter(|turn| turn.end.is_some())
+                .and_then(|turn| turn.ended_at_ms),
         }
     }
 

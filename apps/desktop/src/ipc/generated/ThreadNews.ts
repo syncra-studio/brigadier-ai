@@ -20,6 +20,10 @@ opened?: boolean,
  */
 ended?: TurnEnd, 
 /**
+ * When that turn ended, from the same clock as its turn record.
+ */
+turnEndedAtMs?: number, 
+/**
  * How full its model's context is, as its CLI just said.
  */
 context?: ContextUsage, 

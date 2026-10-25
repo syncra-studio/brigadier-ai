@@ -12,16 +12,14 @@ export function statusWords({ state, reason }: SessionStatus): string {
 export function SessionStatusLabel({
   conversationId,
   className,
-  fallback = null,
   rowIndicator,
 }: {
   conversationId: string;
   className?: string;
-  fallback?: React.ReactNode;
   rowIndicator?: React.ReactNode;
 }) {
   const status = useSessionStatus(conversationId);
-  if (!status) return fallback;
+  if (!status) return null;
   const { state } = status;
   return (
     <span
@@ -45,12 +43,12 @@ export function SidebarError({ conversationId }: { conversationId: string }) {
   </span>;
 }
 
-/** The trailing 20-unit slot contains a spinner or the same dot for unread activity and waiting questions. */
+/** The trailing 20-unit slot contains a spinner or a blue dot for Needs you or unread Done. */
 export function SidebarActivityMark({ conversationId, unread }: { conversationId: string; unread: boolean }) {
   const mark = useSidebarIndicators(conversationId, unread);
-  const question = useSessionStatus(conversationId)?.state === "question";
+  const needsYou = useSessionStatus(conversationId)?.state === "needsYou";
   if (!mark.working && !mark.unread) return null;
   return <span className="flex size-icon-lg shrink-0 items-center justify-center">
-    {mark.working ? <SidebarWorking data-slot="status-spinner" role="status" aria-label="Working" className="text-foreground/70 size-icon-md motion-safe:animate-[spin_2s_steps(60,end)_infinite]" /> : <span data-slot="status-unread" role="img" aria-label={question ? "Question waiting" : "Unread"} className="bg-link size-2 shrink-0 rounded-full" />}
+    {mark.working ? <SidebarWorking data-slot="status-spinner" role="status" aria-label="Working" className="text-foreground/70 size-icon-md motion-safe:animate-[spin_2s_steps(60,end)_infinite]" /> : <span data-slot="status-unread" role="img" aria-label={needsYou ? "Needs you" : "Unread"} className="bg-link size-2 shrink-0 rounded-full" />}
   </span>;
 }

@@ -18,6 +18,8 @@ type Activity = {
   turnOpen: boolean;
   /** One of its own workers has an open CLI turn, as the daemon's rows read it. */
   workersWorking?: boolean;
+  /** Last recorded turn end, independent of git and requests. */
+  turnEndedAtMs?: number;
   /** How its CLI's last turn ended, as its row names it: failed (or cut off), stopped, or neither. */
   ended: "failed" | "stopped" | null;
   /** Tasks not over yet, by id. */
@@ -159,6 +161,7 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
     run: activity.run,
     turnOpen: activity.turnOpen ?? false,
     workersWorking: activity.workersWorking ?? false,
+    ...(activity.turnEndedAtMs === undefined ? {} : { turnEndedAtMs: activity.turnEndedAtMs }),
     ended,
     tasks: Object.fromEntries(activity.tasks),
     titles: Object.fromEntries(activity.titles ?? []),
@@ -269,11 +272,12 @@ export function applyActivityNews(news: ThreadNews): void {
     ? {
         ...current,
         turnOpen: false,
+        turnEndedAtMs: news.turnEndedAtMs ?? Date.now(),
         ended: news.ended === "failed" || news.ended === "interrupted" ? "failed" : news.ended === "stopped" ? "stopped" : null,
       }
     : news.opened ? { ...current, turnOpen: true, ended: null } : current;
   const next = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };
-  if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking) return;
+  if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking && next.turnEndedAtMs === current.turnEndedAtMs) return;
   activityStore.setState({ byConversation: { ...byConversation, [news.conversationId]: next } });
 }
 

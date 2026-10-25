@@ -18,6 +18,7 @@ import { TooltipProvider, Toaster } from "@/components/overlays";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
+import { useLastOpened } from "@/state/lastOpened";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
@@ -50,7 +51,7 @@ const conversations = [
   session("w8-a", "Old fix", 3),
   session("w9-a", "Ship the release", 2),
   session("w5-a", "Lone worker", 5),
-  session("w10-a", "Ready to review", 1),
+  session("w10-a", "Finished reply", 1),
   session("w11-a", "Paused task", 0),
   session("w13-a", "Draft the notes", -2),
 ];
@@ -64,7 +65,10 @@ if (params.has("questions")) conversations.push(
   session("question-approval", "Question and approval", 12),
 );
 if (params.has("unread")) for (const conversation of conversations) conversation.finishedAtMs = 1;
-if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1, { finishedAtMs: 1 }));
+if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1));
+if (params.has("doneRead")) conversations.push(session("done-read", "A finished turn", -4));
+if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran", -3, { finishedAtMs: 500 }));
+useLastOpened.setState({ at: Object.fromEntries(conversations.map((each) => [each.id, params.has("unread") ? 0 : 100])) });
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
 useApp.setState({
   catalogLoaded: true,
@@ -84,9 +88,12 @@ useActivity.setState({
     activity("w6-a", { approvals: ["a-1"] }),
     activity("w7-a", { failed: true }),
     activity("w11-a", { stopped: true }),
+    ...["w2-a", "w3-a", "w8-a", "w10-a", "w13-a"].map((id) => activity(id, { turnEndedAtMs: 1 })),
+    ...(params.has("unreadOnly") ? [activity("w12-a", { turnEndedAtMs: 200 })] : []),
+    ...(params.has("doneRead") ? [activity("done-read", { turnEndedAtMs: 200 })] : []),
     activity("w9-a", { signIns: ["linear"] }),
     ...(params.has("workerActivity") ? [
-      activity("worker-activity", { workersWorking: true }),
+      activity("worker-activity", { workersWorking: true, turnEndedAtMs: 1 }),
       activity("worker-approval", { workersWorking: true, approvals: ["a"] }),
       activity("worker-question", { workersWorking: true, questions: ["q"] }),
     ] : []),
@@ -98,7 +105,7 @@ useActivity.setState({
 });
 let seq = 0;
 const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
-useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" }, "w13-a": { state: "ready", pullRequest: "draft" } } });
+useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" }, "w13-a": { state: "ready" } } });
 if (params.has("workerActivity")) useSettledTabs.setState((s) => ({ byTab: {
   ...s.byTab, "worker-activity": { state: "merged" }, "worker-approval": { state: "merged" }, "worker-question": { state: "merged" },
 } }));
@@ -262,9 +269,28 @@ const liveWorker = (id: string, working: boolean): WorkerRow => ({
 });
 const workerActivityRow = () => rows().find((row) => row.title === "Workers still running")!;
 
+const doneReadRow = () => rows().find((row) => row.title === "A finished turn")!;
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("doneRead")) {
+      void (async () => {
+        await until(() => doneReadRow()?.mark === "unread");
+        const before = doneReadRow();
+        useApp.setState({ selection: { type: "conversation", id: "done-read" } });
+        await until(() => doneReadRow()?.active && doneReadRow()?.mark === null);
+        useApp.setState({ selection: { type: "none" } });
+        await until(() => !doneReadRow()?.active);
+        const afterClose = doneReadRow();
+        applyActivityNews({ conversationId: "done-read", entries: [], opened: true });
+        await until(() => doneReadRow()?.status === "working:Working");
+        applyActivityNews({ conversationId: "done-read", entries: [], ended: "done", turnEndedAtMs: Date.now() + 100 });
+        await until(() => doneReadRow()?.status === "done:Done" && doneReadRow()?.mark === "unread");
+        setResult(JSON.stringify({ before, afterClose, nextTurn: doneReadRow() }));
+      })();
+      return;
+    }
     if (params.has("workerActivity")) {
       void (async () => {
         await until(() => workerActivityRow()?.status === "working:Working");
@@ -273,9 +299,9 @@ function Fixture() {
         await wait(100);
         const someWorking = workerActivityRow();
         applyActivityNews({ conversationId: "worker-activity", entries: [], workers: [liveWorker("one", false), liveWorker("two", false), liveWorker("three", false)] });
-        await until(() => workerActivityRow()?.status === "merged:Merged");
+        await until(() => workerActivityRow()?.status === "done:Done");
         const idle = workerActivityRow();
-        useActivity.setState((s) => ({ byConversation: { ...s.byConversation, ...Object.fromEntries([activity("worker-activity", { workersWorking: true })]) } }));
+        useActivity.setState((s) => ({ byConversation: { ...s.byConversation, ...Object.fromEntries([activity("worker-activity", { workersWorking: true, turnEndedAtMs: 1 })]) } }));
         await until(() => workerActivityRow()?.status === "working:Working");
         setResult(JSON.stringify({ before, someWorking, idle, reconnected: workerActivityRow(), threadReads: requests.filter((method) => method === "threadView") }));
       })();
@@ -283,7 +309,7 @@ function Fixture() {
     }
     if (params.has("questions")) {
       void (async () => {
-        await until(() => questionRow("question")?.status === "question:Question");
+        await until(() => questionRow("question")?.status === "needsYou:Needs you");
         const before = [questionRow("question"), questionRow("question-approval")];
         // Opening a session must not clear its waiting-question dot.
         useApp.setState({ selection: { type: "conversation", id: "question" } });
@@ -354,6 +380,7 @@ function Fixture() {
       }, 300);
       return () => clearTimeout(timer);
     }
+    if (params.has("neverRan")) { const timer = setTimeout(() => setResult(JSON.stringify({ rows: rows() })), 100); return () => clearTimeout(timer); }
     if (params.has("manual")) return;
     const timer = setTimeout(async () => {
       const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), projectHeader: projectHeader(), workers: workerRows() };
