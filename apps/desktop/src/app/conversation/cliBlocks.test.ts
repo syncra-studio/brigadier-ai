@@ -338,6 +338,52 @@ test("Brigadier's message of what the workers did is a quiet line per worker in 
   assert.deepEqual(workerNotices("A message of the user's own"), null);
 });
 
+/** A worker of the session's, done with its run. */
+const row = (id: string, startedAtMs: number) => ({
+  id, number: 1, title: id, agent: "claude" as const, model: null, startedAtMs, working: false, lastEnd: "done" as const, gone: false,
+  lastEventAtMs: null, limit: null, freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
+});
+
+test("Brigadier's word of what workers did joins the block that started them, as one more turn of it; a message the user typed still starts its own", () => {
+  const news = (id: string, worker: string, atMs: number) => user(id, `[worker events wn-0123456789ab] Worker "Fix" (${worker}): finished · Done. (ev-1234abcd)`, atMs);
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Fix it with a worker", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Started a worker." }, 1100),
+        news("n1", "aa11bb22", 5000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "The worker fixed it." }, 5100),
+        user("u2", "Thanks, now the docs", 8000),
+        at({ type: "message", itemId: "a3", role: "assistant", text: "On it." }, 8100),
+        // A worker the block before started: this block is the user's, so its word is a turn of its own.
+        news("n2", "cc33dd44", 9000),
+        at({ type: "message", itemId: "a4", role: "assistant", text: "Late news." }, 9100),
+      ],
+      turns: [turn("u1", 1000, 1200, "done"), turn("n1", 5000, 5200, "done"), turn("u2", 8000, 8200, "done"), turn("n2", 9000, 9200, "done")],
+      workers: [row("aa11bb22", 1050), row("cc33dd44", 1060)],
+    },
+    "conv",
+  );
+  assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"], ["u2", "message"], ["n2", null]]);
+  const [first] = blocks;
+  assert.ok(first);
+  assert.deepEqual(first.texts.map((text) => text.messageId), ["a1", "a2"]);
+  // It started with its first turn and worked in each; it ended with the last.
+  assert.equal(first.startedAtMs, 1000);
+  assert.equal(first.endedAtMs, 5200);
+  assert.deepEqual(first.worked, [{ fromMs: 1000, toMs: 1200 }, { fromMs: 5000, toMs: 5200 }]);
+  // The worker's line is in the work: done, it folds with it, under one answer.
+  assert.deepEqual(first.taskNotices, [{ position: 2, text: 'Worker "Fix" finished · Done.', inWork: true }]);
+  const sequence = blockSequence({ ...first, steers: [] });
+  const answer = answerIndex(first.texts, true);
+  assert.equal(answer, 1);
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
+  assert.deepEqual(parts.map((part) => part.type), ["work"]);
+  assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
+  // The one that stays its own turn keeps its line out of the fold, as before.
+  assert.equal(blocks[2]?.taskNotices[0]?.inWork, undefined);
+});
+
 const stored = (id: string, createdAtMs: number): Message => ({
   id,
   conversationId: "conv",

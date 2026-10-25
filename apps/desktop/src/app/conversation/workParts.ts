@@ -3,13 +3,16 @@ import { foldsAway, type SequenceEntry as Entry } from "@/app/conversation/block
 
 /**
  * A turn's work cut where a new turn of its CLI's joined it: runs of work, and what came between
- * them, the user's follow-up bubble or the CLI's line for a background job's end.
+ * them, the user's follow-up bubble or a line of what a worker did.
  */
 export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry } | { type: "between"; entry: Entry };
 
-/** Whether an entry cuts the work: a follow-up steered in, or a line of what a worker did. */
+/**
+ * Whether an entry cuts the work: a follow-up steered in, or a line of what a worker did, unless
+ * it came with a turn that joined the block that started the worker (that is the same work).
+ */
 function cuts(entry: Entry): boolean {
-  return entry.kind === "steer" || entry.kind === "taskNotice";
+  return entry.kind === "steer" || (entry.kind === "taskNotice" && !entry.inWork);
 }
 
 /**

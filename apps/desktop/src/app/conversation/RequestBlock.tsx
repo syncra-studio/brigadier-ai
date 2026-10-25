@@ -163,7 +163,7 @@ export const RequestBlock: FC = () => {
   });
   // The workers its turn started that still work: over, it stays open and live until they finish
   // (its own wake-ups when they do are in the same turn), with no end cards yet; then it folds.
-  const holding = useTurnWorkers(conversationId, meta?.state === "done" ? meta.startedAtMs : null);
+  const holding = useTurnWorkers(conversationId, meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -359,6 +359,9 @@ export const RequestBlock: FC = () => {
     </MessagePrimitive.Root>
   );
 };
+
+/** No turns. */
+const NO_STARTS: readonly number[] = [];
 
 /** The user's open or closed choice per turn, by request: kept while the app runs, through a thread switch. */
 const folds = new Map<string, boolean>();

@@ -388,17 +388,26 @@ function startsTurn(entry: FileEntry): boolean {
   return entry.event.type === "message" && entry.event.role === "user" && !entry.parent && !entry.steer;
 }
 
-/** A turn's state, start and end set on its block, from how the CLI ended it. */
-function settle(block: Block, turn: ThreadTurn | undefined): void {
+/**
+ * A turn's state, start and end set on its block, from how the CLI ended it. `earlier`: the
+ * block's turns before it (Brigadier's word of its workers joined it): it started with the
+ * first, and worked in each.
+ */
+function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = []): void {
   const { state, error } = turnState(turn ?? { end: null, error: null });
-  const startedAtMs = turn?.startedAtMs ?? block.startedAtMs;
-  const endedAtMs = turn?.end ? (turn.endedAtMs ?? startedAtMs) : null;
+  const first = earlier[0] ? (earlier[0].startedAtMs ?? block.startedAtMs) : null;
+  const own = turn?.startedAtMs ?? first ?? block.startedAtMs;
+  const endedAtMs = turn?.end ? (turn.endedAtMs ?? own) : null;
+  const before = earlier.map((each) => {
+    const fromMs = each.startedAtMs ?? first ?? own;
+    return { fromMs, toMs: each.endedAtMs ?? fromMs };
+  });
   Object.assign(block, {
     state,
     error,
-    startedAtMs,
+    startedAtMs: first ?? own,
     endedAtMs,
-    worked: [{ fromMs: startedAtMs, toMs: endedAtMs }],
+    worked: [...before, { fromMs: own, toMs: endedAtMs }],
   } satisfies Partial<Block>);
   // A turn over has no reasoning still coming.
   if (endedAtMs !== null) block.thinking = block.thinking.map((segment) => (segment.complete ? segment : { ...segment, complete: true }));
@@ -464,6 +473,16 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // CLI begins with a notice inside Brigadier's own turn goes on that turn's block, not a block of its own.
   let turn = -1;
   const turnOf = new Map<Block, ThreadTurn | undefined>();
+  // A block's turns before its last: Brigadier's word of what its workers did joins the block
+  // that started them, as one more turn of it.
+  const joined = new Map<Block, ThreadTurn[]>();
+  const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
+  // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
+  const startedIn = (each: Block, text: string): boolean => {
+    const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
+    const named = [...text.matchAll(/Worker ".*?" \(([^)\s]+)\): /g)].map((match) => match[1]!);
+    return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && row.startedAtMs >= from));
+  };
   const internal = new Set<Block>();
   let maintenance: "turn" | "steered" | "upkeep" | null = null;
   const seams = view.seams ?? [];
@@ -503,7 +522,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       if (nudge) {
         if (startsTurn(entry)) {
           maintenance = "turn";
-          if (block) settle(block, turnOf.get(block));
+          if (block) close(block);
           block = emptyBlock(asked.itemId, entry.atMs ?? 0, []);
           blocks.push(block);
           turnOf.set(block, view.turns[turn]);
@@ -536,19 +555,28 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // its word to carry on, no bubble; the successor's work shows.
     const own = !!asked && (carried.has(asked.itemId) || (brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
     if (asked && (own || compacting || news || unshown || says)) {
-      if (startsTurn(entry)) {
-        if (block) settle(block, turnOf.get(block));
+      // Brigadier's word of what workers did that the block before started: a turn more of
+      // that block, never one of its own (a message the user typed still starts one).
+      const joins = !!news && startsTurn(entry) && !!block && !internal.has(block) && startedIn(block, asked.text);
+      if (joins && block) {
+        const last = turnOf.get(block);
+        joined.set(block, [...(joined.get(block) ?? []), ...(last ? [last] : [])]);
+        turnOf.set(block, view.turns[turn]);
+        for (const request of view.turns[turn]?.requests ?? []) if (!block.requestIds.includes(request)) block.requestIds.push(request);
+        if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
+      } else if (startsTurn(entry)) {
+        if (block) close(block);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[turn]?.requests ?? []);
         blocks.push(block);
         turnOf.set(block, view.turns[turn]);
         times.push([[position, entry.atMs ?? 0]]);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
-      if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text }));
+      if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text, ...(joins && { inWork: true }) }));
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      if (block) settle(block, turnOf.get(block));
+      if (block) close(block);
       const requests = view.turns[turn]?.requests ?? [];
       const atMs = entry.atMs ?? 0;
       block = emptyBlock(event.itemId, atMs, requests);
@@ -637,7 +665,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
     }
   });
-  if (block) settle(block, turnOf.get(block));
+  if (block) close(block);
   if (board) place(blocks, times, board);
   // Each seam's divider after the turn before its successor's first message, or after the last
   // turn while the successor is still to come.

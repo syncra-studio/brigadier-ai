@@ -289,11 +289,11 @@ export function useWorkerRows(conversationId: string | null): readonly WorkerRow
   return useCliThread((s) => (conversationId ? (s.views[conversationId] ? workersOf(conversationId, s.views[conversationId]) : NO_ROWS) : NO_ROWS));
 }
 
-/** How many of the workers a session's turn started at `startedAtMs` still work (`workingWorkers`); 0 for `null`. */
-export function useTurnWorkers(conversationId: string | null, startedAtMs: number | null): number {
+/** How many of the workers a session's block, its turns started at `starts`, started still work (`workingWorkers`). */
+export function useTurnWorkers(conversationId: string | null, starts: readonly number[]): number {
   return useCliThread((s) => {
-    const view = conversationId && startedAtMs !== null ? s.views[conversationId] : undefined;
-    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, startedAtMs!) : 0;
+    const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
+    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, starts) : 0;
   });
 }
 

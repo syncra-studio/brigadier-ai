@@ -32,25 +32,33 @@ const turns = [{ startedAtMs: 1000 }, { startedAtMs: 5000 }];
 
 test("a turn holds for the workers it started until each finished", () => {
   // Started in the first turn, still on its first run: the first turn holds, the second doesn't.
-  assert.equal(workingWorkers([worker("w1", 1500)], turns, 1000), 1);
-  assert.equal(workingWorkers([worker("w1", 1500)], turns, 5000), 0);
+  assert.equal(workingWorkers([worker("w1", 1500)], turns, [1000]), 1);
+  assert.equal(workingWorkers([worker("w1", 1500)], turns, [5000]), 0);
   // Started after the newest turn's start (a turn the CLI began on its own after a wait ended is the same turn).
-  assert.equal(workingWorkers([worker("w2", 9000)], turns, 5000), 1);
+  assert.equal(workingWorkers([worker("w2", 9000)], turns, [5000]), 1);
   // Not started yet by its CLI: not finished either.
-  assert.equal(workingWorkers([worker("w3", 6000, { working: false })], turns, 5000), 1);
+  assert.equal(workingWorkers([worker("w3", 6000, { working: false })], turns, [5000]), 1);
   // Finished, or gone: no hold.
-  assert.equal(workingWorkers([worker("w4", 6000, { working: false, lastEnd: "done" })], turns, 5000), 0);
-  assert.equal(workingWorkers([worker("w5", 6000, { working: false, lastEnd: "failed", gone: true })], turns, 5000), 0);
-  assert.equal(workingWorkers([worker("w6", 6000, { gone: true })], turns, 5000), 0);
+  assert.equal(workingWorkers([worker("w4", 6000, { working: false, lastEnd: "done" })], turns, [5000]), 0);
+  assert.equal(workingWorkers([worker("w5", 6000, { working: false, lastEnd: "failed", gone: true })], turns, [5000]), 0);
+  assert.equal(workingWorkers([worker("w6", 6000, { gone: true })], turns, [5000]), 0);
 });
 
 test("a worker waiting on the user still holds its turn; sent back to work, only the newest turn's", () => {
   const asks = worker("w1", 6000, { working: false, lastEnd: "done", waiting: [{ kind: "question", what: "Which?", card: null }] });
-  assert.equal(workingWorkers([asks], turns, 5000), 1);
+  assert.equal(workingWorkers([asks], turns, [5000]), 1);
   const again = worker("w2", 1500, { working: true, lastEnd: "done" });
   // A later turn sent it more work: the older turn it started in stays folded.
-  assert.equal(workingWorkers([again], turns, 1000), 0);
-  assert.equal(workingWorkers([{ ...again, startedAtMs: 6000 }], turns, 5000), 1);
+  assert.equal(workingWorkers([again], turns, [1000]), 0);
+  assert.equal(workingWorkers([{ ...again, startedAtMs: 6000 }], turns, [5000]), 1);
+});
+
+test("a block Brigadier's word of its workers joined holds for the workers any of its turns started", () => {
+  const three = [{ startedAtMs: 1000 }, { startedAtMs: 5000 }, { startedAtMs: 8000 }];
+  // The block is the first two turns: a worker its joined turn started counts, the third turn's doesn't.
+  assert.equal(workingWorkers([worker("w1", 6000)], three, [1000, 5000]), 1);
+  assert.equal(workingWorkers([worker("w2", 8500)], three, [1000, 5000]), 0);
+  assert.equal(workingWorkers([worker("w1", 6000)], three, []), 0);
 });
 
 test("a turn held by its workers says it waits for them", () => {
