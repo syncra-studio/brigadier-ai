@@ -581,9 +581,16 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       const atMs = entry.atMs ?? 0;
       block = emptyBlock(event.itemId, atMs, requests);
       // A turn of a request an earlier turn carried (a background command's end, told after its
-      // turn) starts with the CLI's message, not the user's: it keeps its own id.
+      // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message
+      // the CLI began a turn with is its own request, which the turn names only once it joined:
+      // the request before it may still lead the turn's list.
       const first = requests[0];
-      const id = first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first) ? first : event.itemId;
+      const named = queuedId(event.text);
+      const id = named
+        ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+        : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
+          ? first
+          : event.itemId;
       const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
       block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
       blocks.push(block);
@@ -715,15 +722,23 @@ export function cliThreadTree(
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
   // shows it as it was sent, its pasted chips, mentions and attachments with it.
   const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));
+  // A queued message no turn names yet (`queued-‹id›`) is kept under its queue id.
+  const keptOf = (id: string): Message | undefined =>
+    own.get(id) ?? (id.startsWith("queued-") ? [...own.entries()].find(([request]) => request.endsWith(id.slice("queued-".length)))?.[1] : undefined);
   const asSent = (message: Message, text: string): { message: Message; text: string } => {
-    const kept = own.get(message.id);
+    const kept = keptOf(message.id);
     return kept ? { message: kept, text: fullText[kept.id] ?? kept.text } : { message, text };
   };
+  // The user's messages a turn already shows: none of them is on its way as well.
+  const drawn = new Set<string>();
   for (const block of blocks) {
     if (block.user?.kind === "message") block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
+    for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
   }
-  const carried = new Set(view.turns.flatMap((turn) => turn.requests));
+  // A queued message joins the turn that read it after the CLI had it (the turn names it only
+  // once it ends): it is drawn there, not on its way too.
+  const carried = new Set([...view.turns.flatMap((turn) => turn.requests), ...drawn]);
   const heard = Math.max(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),
