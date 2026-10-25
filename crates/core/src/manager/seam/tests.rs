@@ -40,13 +40,14 @@ fn transcript(exchanges: usize, answer: &str) -> Vec<FileEntry> {
     entries
 }
 
+/// A move to another CLI's hand-off, the one that carries the conversation (D49).
 fn boot<'a>(entries: &'a [FileEntry], note: Option<&'a str>, death: Option<&'a str>) -> String {
     boot_tail(
         entries,
         note,
         death,
         TailBudget {
-            reason: Reason::Size,
+            reason: Reason::Request,
             hot_tokens: None,
             target_window: None,
         },
@@ -64,10 +65,6 @@ fn boot_tail(
         tail,
         key: "abcd1234",
         folder: Path::new("/s/abcd1234"),
-        ledger_path: Path::new("/s/abcd1234/record/ledger.md"),
-        ledger: Some("- Rule from the user: keep it short"),
-        archive_path: Path::new("/s/abcd1234/record/ledger-archive.md"),
-        archive: None,
         lineage: &[],
         note_path: Path::new("/s/abcd1234/record/handoff/2.md"),
         note,
@@ -75,7 +72,6 @@ fn boot_tail(
         death,
         entries,
         blobs: Path::new("/nowhere"),
-        long: false,
     })
 }
 
@@ -172,6 +168,39 @@ fn a_quoted_end_mark_does_not_end_the_handoff() {
     );
 }
 
+/// A hand-off on the same CLI (a compaction count, a failed or looping compaction) is small:
+/// the successor lines, the `brigadier context` pointer and the note, nothing of the
+/// conversation or the ledger (D13, D14, D16).
+#[test]
+fn a_same_cli_handoff_is_the_note_and_the_pointer() {
+    let entries = transcript(40, "x");
+    let size = TailBudget {
+        reason: Reason::Size,
+        hot_tokens: Some(150_000),
+        target_window: Some(1_000_000),
+    };
+    let text = boot_tail(&entries, Some("doing now: the parser"), None, size);
+    assert!(text.starts_with("[Brigadier hand-off 2 · abcd1234]\nResume the user's work"));
+    assert!(text.contains("You continue an earlier session.\n"));
+    assert!(text.contains(CONTEXT_POINTER));
+    assert!(text.contains("Took over gen 3 · open <ids>"));
+    assert!(text.contains("## Hand-off note\ndoing now: the parser\n"));
+    assert!(text.ends_with(HANDOFF_END));
+    for absent in [
+        "## Map",
+        "FIRST: the standing rule",
+        "answer 39",
+        "brigadier brain read",
+    ] {
+        assert!(!text.contains(absent), "{absent}: {text}");
+    }
+    assert!(text.len() < 1_500, "{}", text.len());
+    // Without a note, why, and where to look first.
+    let text = boot_tail(&entries, None, Some("the CLI exited"), size);
+    assert!(text.contains("ended without a hand-off note (the CLI exited): check `git status`"));
+    assert!(!text.contains("## Hand-off note"));
+}
+
 #[test]
 fn the_handoff_comes_in_its_order() {
     let entries = transcript(400, &"x".repeat(400));
@@ -183,17 +212,17 @@ fn the_handoff_comes_in_its_order() {
     assert!(text.starts_with("[Brigadier hand-off 2 · abcd1234]\nResume the user's work"));
     assert!(text.contains("without announcing this internal continuation"));
     assert!(text.contains("Took over gen 3 · open <ids>"));
-    assert!(at("## Map") < at("## Open items, verbatim and whole"));
-    assert!(at("## Open items") < at("## Rules and decisions, verbatim and whole"));
-    assert!(at("## Rules and decisions") < at("## Hand-off note"));
+    assert!(text.contains(CONTEXT_POINTER));
+    assert!(text.contains("on another CLI, which has none of its history"));
+    assert!(at("## Map") < at("## Hand-off note"));
+    // No ledger travels; it is a `brigadier context` away (D13).
+    assert!(!text.contains("verbatim and whole"), "{}", &text[..2_000]);
+    assert!(!text.contains("ledger.md"));
     assert!(at("## Hand-off note") < at("## The user's messages, oldest first"));
     assert!(at("## The user's messages") < at("## The latest exchange, after #798 (above)"));
     assert!(at("## The latest exchange") < at("## Earlier, newest first"));
     assert!(at("## Earlier, newest first") < at("## Left out, each a read away"));
     assert!(text.ends_with(HANDOFF_END));
-    assert!(text.contains(
-        "## Rules and decisions, verbatim and whole\n- Rule from the user: keep it short\n"
-    ));
     // Every message of the user's, oldest first, the first and the latest among them.
     let said = &text[at("## The user's messages")..at("## The latest exchange")];
     assert_eq!(shown(said), (0..400).map(|i| i * 2).collect::<Vec<_>>());
@@ -211,147 +240,6 @@ fn the_handoff_comes_in_its_order() {
     assert!(!text.contains("The previous session ended without a hand-off note"));
 }
 
-/// A ledger far over its budget: every open item, rule and decision still travels whole, and
-/// the `sed` the hand-off names for the rest prints every entry it left out.
-#[test]
-fn a_ledger_over_budget_carries_every_open_item_rule_and_decision_whole() {
-    let dir = std::env::temp_dir().join(format!("brigadier-seam-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let ledger_path = dir.join("ledger.md");
-    let archive = "- L1 · 10-22 09:00 · gen 1 · Rule from the user: \"no Fable\" (message 1)\n\
-                   - L2 · 10-22 09:05 · gen 1 · Open: the terms page waits on the user\n";
-    let mut ledger = String::from("# Ledger\n\n");
-    let mut pinned = vec![
-        "- L1 · 10-22 09:00 · gen 1 · Rule from the user: \"no Fable\" (message 1)".to_owned(),
-        "- L2 · 10-22 09:05 · gen 1 · Open: the terms page waits on the user".to_owned(),
-    ];
-    let mut closed = Vec::new();
-    let mut id = 3;
-    for i in 0..3_000 {
-        let line = match i % 100 {
-            0 => format!(
-                "- L{id} · 10-23 10:00 · gen 2 · Rule from the user: \"rule {i}\" (message {i})"
-            ),
-            1 => format!(
-                "- L{id} · 10-23 10:00 · gen 2 · Decision: option {i}; the user answered \
-                 \"B: the long one\"\n  reason: {}",
-                "because ".repeat(200)
-            ),
-            2 => format!("- L{id} · 10-23 10:00 · gen 2 · Open: promise {i}"),
-            // Every promise but the last is kept and closed.
-            3 if i < 2_900 => {
-                closed.push(format!(
-                    "- L{} · 10-23 10:00 · gen 2 · Open: promise {}",
-                    id - 1,
-                    i - 1
-                ));
-                format!("- L{id} · 10-23 10:00 · gen 2 · Closed L{}: kept", id - 1)
-            }
-            _ => format!(
-                "- L{id} · 10-23 10:00 · gen 2 · Learned from reading: crates/x.rs:{i} builds \
-                 part {i} of the map"
-            ),
-        };
-        if matches!(i % 100, 0 | 1) {
-            pinned.push(line.clone());
-        }
-        ledger.push_str(&line);
-        ledger.push('\n');
-        id += 1;
-    }
-    // One rule far longer than any budget is still never cut.
-    let long = format!(
-        "- L{id} · 10-23 12:00 · gen 2 · Rule from the user: \"{}\"",
-        "z".repeat(50_000)
-    );
-    ledger.push_str(&long);
-    ledger.push('\n');
-    pinned.push(long);
-    assert!(ledger.len() > 300_000);
-    std::fs::write(&ledger_path, &ledger).unwrap();
-
-    let entries = transcript(3, "short");
-    let text = bootstrap(&Boot {
-        n: 2,
-        tail: TailBudget {
-            reason: Reason::Size,
-            hot_tokens: None,
-            target_window: None,
-        },
-        key: "abcd1234",
-        folder: &dir,
-        ledger_path: &ledger_path,
-        ledger: Some(&ledger),
-        archive_path: &dir.join("ledger-archive.md"),
-        archive: Some(archive),
-        lineage: &[],
-        note_path: &dir.join("handoff/2.md"),
-        note: Some("doing now: the map"),
-        start_path: &dir.join("handoff/2-start.md"),
-        death: None,
-        entries: &entries,
-        blobs: Path::new("/nowhere"),
-        long: false,
-    });
-    let at = |needle: &str| {
-        text.find(needle)
-            .unwrap_or_else(|| panic!("{needle} missing"))
-    };
-    let kept = &text[..at("## The rest of the ledger, newest first")];
-    for entry in &pinned {
-        assert!(kept.contains(&format!("{entry}\n")), "{}", &entry[..60]);
-    }
-    for entry in &closed {
-        assert!(
-            !kept.contains(&format!("{entry}\n")),
-            "a closed item: {entry}"
-        );
-    }
-    // Promise 2 was closed; the archive's open item and the last promise were not.
-    let open = &text[at("## Open items")..at("## Rules and decisions")];
-    assert!(open.contains("- L2 · 10-22 09:05 · gen 1 · Open: the terms page waits on the user\n"));
-    assert!(!open.contains("Open: promise 2\n"));
-    assert!(open.contains("Open: promise 2902\n"));
-    assert!(text.contains(&format!(
-        "- Ledger archive: {}",
-        dir.join("ledger-archive.md").display()
-    )));
-
-    // The rest: newest first, within ≈8k tokens, then the read for what it left out.
-    let rest = &text[at("## The rest of the ledger")..at("## Hand-off note")];
-    assert!(rest.len() <= 32_000 + 500, "{}", rest.len());
-    assert!(rest.contains("crates/x.rs:2999 builds"));
-    let read = rest
-        .lines()
-        .find(|line| line.contains("older entries left out"))
-        .expect("the read for the rest");
-    let command = read.split('`').nth(1).unwrap();
-    let words: Vec<String> = command
-        .split(' ')
-        .map(|word| word.trim_matches('\'').to_owned())
-        .collect();
-    assert_eq!(words[..2], ["sed", "-n"]);
-    let printed = std::process::Command::new(&words[0])
-        .args(&words[1..])
-        .output()
-        .unwrap();
-    assert!(printed.status.success());
-    let printed = String::from_utf8(printed.stdout).unwrap();
-    for line in ledger
-        .lines()
-        .filter(|line| line.contains("Learned from reading"))
-    {
-        assert!(
-            rest.contains(line) || printed.contains(line),
-            "neither carried nor read: {line}"
-        );
-    }
-    assert!(!printed.contains("crates/x.rs:2999 builds"));
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-/// The user's own messages: all of them while they fit in ≈8k tokens, the first and the latest
-/// always, the rest named with their read.
 #[test]
 fn the_users_messages_come_within_their_budget_the_first_and_latest_always() {
     let mut entries = transcript(300, "short");
@@ -702,7 +590,10 @@ fn a_claude_startup_window_expands_only_request_and_quota_bootstraps() {
                     target_window,
                 },
             );
-            if reason == Reason::Size || target_window.is_none() {
+            if reason == Reason::Size {
+                // On the same CLI it carries none of the conversation (D13).
+                assert!(!text.contains("## Map") && shown(&text).is_empty());
+            } else if target_window.is_none() {
                 assert_eq!(text, size);
             } else {
                 assert!(shown(&text).len() > shown(&size).len());

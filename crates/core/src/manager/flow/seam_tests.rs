@@ -187,7 +187,10 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
     assert_ne!(Some(successor), first.seams[0].end.predecessor.as_ref());
     assert!(input.starts_with(HANDOFF_MARK), "{input}");
     assert!(input.contains("## Hand-off note\nDoing now: nothing."));
-    assert!(input.contains("Plant: keep the code K-001 as it is."));
+    // The rest is pulled, never put in (D13): the user's earlier words are a `brigadier
+    // context` away.
+    assert!(input.contains(crate::manager::seam::CONTEXT_POINTER));
+    assert!(!input.contains("Plant: keep the code K-001 as it is."));
     assert!(input.trim_end().ends_with(CARRY_ON));
     let start = std::fs::read_to_string(&first.seams[0].start).unwrap();
     assert!(input.starts_with(start.as_str()));
@@ -199,43 +202,6 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
     assert_eq!(after.len(), 1, "{after:?}");
     assert_eq!(after[0].0, first.seams[0].successor);
     assert!(!after[0].1.contains(HANDOFF_MARK));
-
-    // Every span the hand-off leaves out is a read that works.
-    let key = flow.conversation.short().to_owned();
-    let spans: Vec<(i64, i64)> = start
-        .lines()
-        .filter_map(|line| line.strip_prefix("- #"))
-        .filter_map(|line| {
-            let words: Vec<String> = line
-                .split('`')
-                .nth(1)?
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect();
-            assert_eq!(words[3], key);
-            Some((words[4].parse().ok()?, words[5].parse().ok()?))
-        })
-        .collect();
-    assert!(!spans.is_empty(), "{start}");
-    for (from, to) in spans {
-        let read = flow
-            .manager
-            .records_read(
-                &flow.conversation,
-                None,
-                crate::manager::records::RecordRead {
-                    session: key.clone(),
-                    from: Some(from),
-                    to: Some(to),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(read.starts_with(&format!("[#{from} ·")), "{read}");
-        // All of it: the span's last item too.
-        assert!(read.contains(&format!("[#{to} ·")), "{from}–{to}");
-    }
 
     // A restart keeps the seam; a second one comes the same way.
     flow.restart().await;
@@ -386,19 +352,15 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         Some("it was still working a minute after a message came")
     );
     // It reached the working thread at once, Deciding (run2-D40), and joined that work; the
-    // successor has it in its hand-off, and nothing sends it again.
+    // successor reads it with `brigadier context` (D13), and nothing sends it again.
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 2, "{meanwhile:?}");
+    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
     assert_ne!(meanwhile[0].0, file.seams[0].successor);
     assert!(
         meanwhile[0].1.starts_with("[queued message "),
         "{meanwhile:?}"
     );
-    assert_eq!(meanwhile[1].0, file.seams[0].successor);
-    assert!(
-        meanwhile[1].1.starts_with("[Brigadier hand-off"),
-        "{meanwhile:?}"
-    );
+    assert!(!given(&inputs, CARRY_ON).is_empty());
     flow.stop().await;
 }
 
@@ -501,7 +463,8 @@ async fn a_context_too_long_ends_the_generation_without_a_note() {
         "The previous session ended without a hand-off note (its context was too long for \
          the model): check `git status` and `git log` first."
     ));
-    assert!(carried[0].1.contains("First."));
+    assert!(!carried[0].1.contains("First."));
+    assert!(carried[0].1.contains(crate::manager::seam::CONTEXT_POINTER));
     let view = flow.manager.thread_view(&flow.conversation).unwrap();
     assert_eq!(
         view.seams[0].death.as_deref(),

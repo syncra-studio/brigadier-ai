@@ -3,10 +3,10 @@
 //! message it ever pushes into a thread: finish the step you are on, update the ledger, write
 //! the hand-off note. Once that turn ends the CLI closes, the thread shows a divider and the
 //! successor starts at once (user, 10-23); its first lines are the hand-off (the bootstrap): the
-//! map; the open items, rules and decisions, verbatim and whole, never cut; the rest of the
-//! ledger newest first within its budget; the note; every user message of the lineage; the
-//! latest exchange and a newest-first verbatim tail, with the exact read command of everything
-//! left out (§9.5 L2, S22b, `research/CONTINUITY.md` §3.3).
+//! note and the pointer to `brigadier context`, where it pulls everything else (D13). A move to
+//! another CLI, which has no history of its own, also carries every user message of the lineage,
+//! the latest exchange and a newest-first verbatim tail, with the exact read command of
+//! everything left out (D49, §9.5 L2), but never the ledger (D13).
 //!
 //! `record/seam.json` is the seam's truth across restarts: the CLI generation, where the seam
 //! stands ([`Phase`]) and every completed seam. Each phase is written before what it leads to
@@ -20,7 +20,6 @@ use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind, Role};
 use serde::{Deserialize, Serialize};
 
-use super::cli_ledger::{Ledger, LedgerFile};
 use super::long_sessions::LongSessions;
 use super::records::{READ_MAX, entry_text};
 use super::session_dir::{LineageEntry, write_atomic};
@@ -49,9 +48,6 @@ const EXPANDED_TAIL_BYTES: usize = 128_000;
 const ITEM_BYTES: usize = 6_000;
 /// One tool item's most in the latest exchange (its messages go whole).
 const LATEST_TOOL_BYTES: usize = 4_000;
-/// The rest of the ledger's budget, after its open items, rules and decisions (which are never
-/// cut), ≈8k tokens.
-const LEDGER_BYTES: usize = 32_000;
 /// The user's own messages' budget, ≈20k tokens; the first and the latest go whole regardless.
 const USER_BYTES: usize = 80_000;
 
@@ -303,8 +299,8 @@ pub(crate) fn nudge(note: &Path) -> String {
          work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close or carry \
          each open item by id, and check your last steps kept each rule; write any slip as a \
          Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
-         \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; they \
-         travel verbatim. Absolute paths only.\nAdd a \"Skills to use next\" section when any \
+         \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; the \
+         next session reads them with `brigadier context`. Absolute paths only.\nAdd a \"Skills to use next\" section when any \
          apply, naming the skills by the names available to you.\nKeep API keys, passwords, \
          tokens and personal data out of the note; say where they live instead. Then stop.\n\
          If this is your second hand-off in a \
@@ -313,18 +309,19 @@ pub(crate) fn nudge(note: &Path) -> String {
     )
 }
 
-/// What a hand-off note adds in a long session (P3 b and e, behind `BRIGADIER_LONG_SESSIONS`):
-/// there a seam is the rare fallback or a move to another CLI (run2-D10), and the successor
-/// starts from the working state and the evidence, not from a re-read.
+/// What a hand-off note adds in a long session (P3 b and e, the default since D15): there a seam
+/// is the rare fallback or a move to another CLI (run2-D10), and the successor starts from the
+/// working state and the evidence, not from a re-read.
 pub(crate) const LONG_NOTE: &str = "\nIn the note also name the files you changed, the last \
 test you ran with its exact command and result, any failure still open, and the next step you \
 can run. For each failed check and each worker claim you verified, one line: what it said and \
 the exact `brigadier brain read <session> --item <id>` that shows it.";
 
-/// What a successor is told of looking things up in a long session (P3 a).
-const LONG_LOOKUP: &str = "Before you say something is unknown, look it up: `brigadier brain \
-search \"<words>\"` finds it in this session's record and `brigadier brain read <session> --item \
-<id>` reads it whole.";
+/// Where a successor finds everything about its job (D13): it pulls it, as every session and
+/// worker does after a compaction; Brigadier puts none of it in.
+pub(crate) const CONTEXT_POINTER: &str = "Everything about your job (brief, decisions, open \
+questions, ledger, transcript, skills, MCP servers, project, routing) is in `brigadier context`; \
+run it now.";
 
 /// The first line of seam `n`'s hand-off in session `key`: what recovery looks for in the
 /// successor's session.
@@ -332,17 +329,21 @@ pub(crate) fn handoff_line(n: u32, key: &str) -> String {
     format!("{HANDOFF_MARK}{n} · {key}]")
 }
 
-/// §6's successor lines, for the successor that starts generation `generation`.
-fn successor_lines(generation: u32) -> String {
+/// §6's successor lines, for the successor that starts generation `generation`; `moved`: on
+/// another CLI, given the conversation below.
+fn successor_lines(generation: u32, moved: bool) -> String {
+    let carried = if moved {
+        " on another CLI, which has none of its history: the note and the conversation below \
+         are what it carried, and authoritative"
+    } else {
+        ""
+    };
     format!(
         "Resume the user's work without announcing this internal continuation, ledger \
-         operations, or hand-off files. You continue an earlier session. The open items, rules and \
-         decisions below are verbatim \
-         and authoritative; so are the note and last exchanges.\nFirst add one ledger entry: \
-         \"Took over gen {generation} · open <ids> · applies next: <id> (how), …\". If a question \
-         waits on the user, raise the oldest one in this reply.\nFor anything else from before, \
-         search the record (`brigadier brain search`, `brigadier brain read`) and quote what you \
-         find; if it isn't there, say so rather than guess."
+         operations, or hand-off files. You continue an earlier session{carried}.\n\
+         {CONTEXT_POINTER} Then add one ledger entry: \"Took over gen {generation} · open <ids> \
+         · applies next: <id> (how), …\". If a question waits on the user, raise the oldest one \
+         in this reply."
     )
 }
 
@@ -362,10 +363,6 @@ pub(crate) struct Boot<'a> {
     /// How `brigadier brain read` names the session.
     pub key: &'a str,
     pub folder: &'a Path,
-    pub ledger_path: &'a Path,
-    pub ledger: Option<&'a str>,
-    pub archive_path: &'a Path,
-    pub archive: Option<&'a str>,
     pub lineage: &'a [LineageEntry],
     pub note_path: &'a Path,
     pub note: Option<&'a str>,
@@ -374,15 +371,37 @@ pub(crate) struct Boot<'a> {
     /// The session's transcript, every generation, as `brigadier brain read` numbers it.
     pub entries: &'a [FileEntry],
     pub blobs: &'a Path,
-    /// A long session's seam (P3, behind `BRIGADIER_LONG_SESSIONS`).
-    pub long: bool,
 }
 
-/// Seam `n`'s hand-off, as the successor's first lines (S22b, §9.5 L2): the successor lines,
-/// the map, the open items, rules and decisions whole, the rest of the ledger newest first,
-/// the note, the user's own messages, the latest exchange, the tail newest first, and one read
-/// command for everything left out.
+/// Seam `n`'s hand-off, as the successor's first lines. On the same CLI (a compaction count, a
+/// failed or looping compaction, a size seam): the successor lines with the `brigadier context`
+/// pointer, and the note, or why there is none (D13, D14, D16). A move to another CLI (a
+/// request or a usage limit, D46/D49) has no history of its own there, so it also gets the map,
+/// the user's own messages, the latest exchange, the tail newest first and one read command
+/// for everything left out (§9.5 L2), but no ledger sections: the decisions and the rest are a
+/// `brigadier context` away like everything else (D13).
 pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
+    if boot.tail.reason == Reason::Size {
+        let mut out = format!(
+            "{}\n{}\n",
+            handoff_line(boot.n, boot.key),
+            successor_lines(boot.n + 1, false)
+        );
+        match (boot.note, boot.death) {
+            (Some(note), _) => {
+                out.push_str("\n## Hand-off note\n");
+                out.push_str(note.trim());
+                out.push('\n');
+            }
+            (None, why) => {
+                out.push_str(&death_line(why.unwrap_or("none written")));
+                out.push('\n');
+            }
+        }
+        let mut out = out.replace(HANDOFF_END, QUOTED_END);
+        out.push_str(&format!("\n{HANDOFF_END}"));
+        return out;
+    }
     let readable: Vec<Option<(&'static str, String)>> = boot
         .entries
         .iter()
@@ -432,35 +451,15 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     let mut out = format!(
         "{}\n{}\n",
         handoff_line(boot.n, boot.key),
-        successor_lines(boot.n + 1)
+        successor_lines(boot.n + 1, true)
     );
-    if boot.long {
-        out.push_str(LONG_LOOKUP);
-        out.push('\n');
-    }
     if let Some(why) = boot.death {
         out.push_str(&death_line(why));
         out.push('\n');
     }
 
-    let ledger = Ledger::parse(boot.archive.unwrap_or(""), boot.ledger.unwrap_or(""));
     out.push_str("\n## Map\n");
     out.push_str(&format!("- Session folder: {}\n", boot.folder.display()));
-    out.push_str(&format!(
-        "- Ledger: {} (its open items, rules and decisions whole below; the rest newest first)\n",
-        boot.ledger_path.display()
-    ));
-    if ledger
-        .entries
-        .iter()
-        .any(|entry| entry.file == LedgerFile::Archive)
-    {
-        out.push_str(&format!(
-            "- Ledger archive: {} (its open items, rules and decisions below too; \
-             `brigadier brain search` finds the rest)\n",
-            boot.archive_path.display()
-        ));
-    }
     match (boot.note, boot.death) {
         (Some(_), _) => out.push_str(&format!(
             "- Hand-off note: {} (below)\n",
@@ -491,8 +490,6 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             read(0, 0).replace(" 0 0`", " <from> <to>`")
         ));
     }
-
-    out.push_str(&ledger_sections(&ledger, boot.ledger_path));
 
     if let Some(note) = boot.note {
         out.push_str("\n## Hand-off note\n");
@@ -640,58 +637,6 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     // One end mark, the last line: one quoted from an earlier hand-off is no end.
     let mut out = out.replace(HANDOFF_END, QUOTED_END);
     out.push_str(&format!("\n{HANDOFF_END}"));
-    out
-}
-
-/// The ledger's part of a hand-off: its open items, rules and decisions verbatim and whole,
-/// never cut; then the rest of `ledger.md` newest first within [`LEDGER_BYTES`], with the read
-/// command for the older entries left out.
-fn ledger_sections(ledger: &Ledger, path: &Path) -> String {
-    if ledger.entries.is_empty() {
-        return "\n## Ledger\n(no ledger yet)\n".to_owned();
-    }
-    let mut out = String::new();
-    for (title, entries) in [
-        ("Open items", ledger.open()),
-        ("Rules and decisions", ledger.rules()),
-    ] {
-        out.push_str(&format!("\n## {title}, verbatim and whole\n"));
-        if entries.is_empty() {
-            out.push_str("(none)\n");
-        }
-        for entry in entries {
-            out.push_str(&entry.text);
-            out.push('\n');
-        }
-    }
-    let rest: Vec<_> = ledger
-        .entries
-        .iter()
-        .filter(|entry| entry.file == LedgerFile::Ledger && !ledger.pinned(entry))
-        .collect();
-    if rest.is_empty() {
-        return out;
-    }
-    out.push_str("\n## The rest of the ledger, newest first\n");
-    let mut budget = LEDGER_BYTES;
-    let mut left = None;
-    for (at, entry) in rest.iter().enumerate().rev() {
-        if entry.text.len() + 1 > budget {
-            left = Some(at);
-            break;
-        }
-        budget -= entry.text.len() + 1;
-        out.push_str(&entry.text);
-        out.push('\n');
-    }
-    if let Some(at) = left {
-        out.push_str(&format!(
-            "[{} older entries left out, for length: `sed -n '1,{}p' '{}'` reads them]\n",
-            at + 1,
-            rest[at].last_line,
-            path.display()
-        ));
-    }
     out
 }
 

@@ -168,13 +168,6 @@ pub(crate) struct Entry {
     pub supersedes: Vec<u32>,
 }
 
-impl Entry {
-    /// A rule, a decision or an open item: what travels whole across every seam.
-    fn pinned_kind(&self) -> bool {
-        matches!(self.kind, Kind::Rule | Kind::Decision | Kind::Open)
-    }
-}
-
 /// How an entry stopped applying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ended {
@@ -247,12 +240,6 @@ impl Ledger {
             .iter()
             .filter(|entry| matches!(entry.kind, Kind::Rule | Kind::Decision) && self.live(entry))
             .collect()
-    }
-
-    /// Whether `entry` travels whole across a seam: an open item, rule or decision still
-    /// standing.
-    pub(crate) fn pinned(&self, entry: &Entry) -> bool {
-        entry.pinned_kind() && self.live(entry)
     }
 
     fn find(&self, id: u32) -> Option<&Entry> {

@@ -488,10 +488,6 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         },
         key: "test",
         folder: &record,
-        ledger_path: &record.join("ledger.md"),
-        ledger: None,
-        archive_path: &record.join("ledger-archive.md"),
-        archive: None,
         lineage: &[],
         note_path: &record.join("handoff/1.md"),
         note: Some("Next: wait."),
@@ -499,10 +495,12 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         death: None,
         entries: &entries,
         blobs: flow.core.store().blobs().root(),
-        long: false,
     });
+    // A same-CLI hand-off carries no conversation: the note and the pointer (D13).
     assert!(!size.contains("SECRET-ASSISTANT-DETAIL"));
-    assert!(size.contains("brigadier brain read test"));
+    assert!(size.contains("Next: wait."));
+    assert!(size.contains("`brigadier context`"));
+    assert!(!size.contains("brigadier brain read test"));
     flow.stop().await;
 }
 

@@ -800,7 +800,6 @@ impl SessionManager {
             target_window: cli.session.context_window(),
         };
         let own = cli.session.native_id();
-        let long = self.seam_config().long.is_some();
         crate::manager::blocking(move || {
             let record = dir.record();
             let lineage: Vec<_> = read_lineage(&record)
@@ -823,20 +822,12 @@ impl SessionManager {
             let entries = crate::manager::records::transcript(&files);
             let note_at = note_path(&record, n);
             let note = std::fs::read_to_string(&note_at).ok();
-            let ledger_at = dir.ledger();
-            let ledger = std::fs::read_to_string(&ledger_at).ok();
-            let archive_at = record.join(crate::manager::records::LEDGER_ARCHIVE_FILE);
-            let archive = std::fs::read_to_string(&archive_at).ok();
             let start = start_path(&record, n);
             let text = bootstrap(&Boot {
                 n,
                 tail,
                 key: &key,
                 folder: dir.root(),
-                ledger_path: &ledger_at,
-                ledger: ledger.as_deref(),
-                archive_path: &archive_at,
-                archive: archive.as_deref(),
                 lineage: &lineage,
                 note_path: &note_at,
                 note: note.as_deref(),
@@ -848,7 +839,6 @@ impl SessionManager {
                 },
                 entries: &entries,
                 blobs: &blobs,
-                long,
             });
             if let Some(parent) = start.parent() {
                 std::fs::create_dir_all(parent)

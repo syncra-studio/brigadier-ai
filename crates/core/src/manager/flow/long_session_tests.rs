@@ -406,10 +406,10 @@ async fn a_failed_compaction_sends_the_session_to_a_fresh_one_with_its_working_s
             .1
             .contains("`brigadier brain read <session> --item <id>`")
     );
-    // …and the successor is told to look things up before calling them unknown (P3 a).
+    // …and the successor is pointed at `brigadier context`, where it pulls the rest (D13).
     assert!(
         seen.iter()
-            .any(|(_, input)| input.contains("Before you say something is unknown"))
+            .any(|(_, input)| input.contains(crate::manager::seam::CONTEXT_POINTER))
     );
     let told = notices(&flow).await;
     assert_eq!(told.len(), 1, "{told:?}");
