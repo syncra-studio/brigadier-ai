@@ -66,6 +66,15 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   });
   assert.deepEqual(seen.sites, { title: "Site settings", choices: ["Ask", "Block"] });
 
+  // Every list's rows sit as far in from their card's edges as a Settings row does.
+  const inset = seen.rowEdges as number[];
+  assert.ok(inset[0]! > 1 && inset[1]! > 1, `a Settings row sits in from its card: ${String(inset)}`);
+  for (const list of ["clearEdges", "historyEdges", "downloadEdges", "siteEdges"]) {
+    const rows = seen[list] as (number[] | null)[];
+    assert.ok(rows.length > 0, list);
+    for (const row of rows) assert.deepEqual(row, inset, list);
+  }
+
   // Off, only the switch and a note are left.
   assert.deepEqual(seen.off, {
     title: "Browser",

@@ -67,7 +67,7 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
         )}
         {days.map((day) => (
           <SettingsSection key={day.key} title={day.label}>
-            <SettingsCard>
+            <SettingsCard inset>
               <ul className="divide-divider divide-y">
                 {day.items.map((download) => (
                   <DownloadRow

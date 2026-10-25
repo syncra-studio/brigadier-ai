@@ -121,6 +121,14 @@ const page = () => ({
   rows: all('[data-slot="settings-row"]').map((element) => element.dataset.setting ?? text(element.querySelector(".text-label, .text-sm"))),
 });
 const settings = () => useApp.getState().settings;
+/** How far in from its card's edges a row's first and last parts sit: [start, end], in px. */
+const edges = (first: Element | null | undefined, last: Element | null | undefined = first) => {
+  const card = first?.closest('[data-slot="settings-card"]')?.getBoundingClientRect();
+  const start = first?.getBoundingClientRect();
+  const end = last?.getBoundingClientRect();
+  return card && start && end ? [Math.round(start.left - card.left), Math.round(card.right - end.right)] : null;
+};
+const rowEdges = (row: Element | null | undefined) => edges(row?.firstElementChild, row?.lastElementChild);
 
 /** The step that opens a `?view=` state. */
 const VIEWS: Record<string, () => void> = {
@@ -144,6 +152,7 @@ function Fixture() {
     const steps: (() => void | "menu" | Promise<void>)[] = [
       () => {
         seen.on = page();
+        seen.rowEdges = rowEdges(document.querySelector('[data-setting="Open web links in"]'));
         seen.importButton = button("Import…") !== undefined;
         seen.links = [text(button("Open web links in")), text(button("Open local dev URLs in"))];
         return openMenu("Open web links in");
@@ -159,6 +168,7 @@ function Fixture() {
       () => {
         seen.clearKinds = boxes();
         seen.clearNotes = all(".text-xs", dialog() ?? document).map(text);
+        seen.clearEdges = all("label", dialog() ?? document).map(rowEdges);
         // All time, and the cache kept.
         button("All time")?.click();
         all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document)[2]?.click();
@@ -170,6 +180,10 @@ function Fixture() {
       },
       () => {
         seen.history = { ...page(), visits: all("main li button[title]").map((element) => element.title) };
+        seen.historyEdges = [
+          edges(document.querySelector("main [data-state] > button[aria-controls]")),
+          ...all("main li").map(rowEdges),
+        ];
         return openMenu("Filter browsing history");
       },
       () => {
@@ -188,11 +202,13 @@ function Fixture() {
       () => VIEWS.downloads?.(),
       () => {
         seen.downloads = { title: text(document.querySelector("main h1")), files: all("main li [title]").map((element) => element.title) };
+        seen.downloadEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },
       () => VIEWS.sites?.(),
       () => {
         seen.sites = { title: text(document.querySelector("main h1")), choices: [text(button("Camera for http://localhost:3000")), text(button("Microphone for http://localhost:3000"))] };
+        seen.siteEdges = all("main li").map(rowEdges);
         button("Browser")?.click();
       },
       () => button("Browser", document.querySelector('[data-slot="settings-row"]') ?? document)?.click(),
