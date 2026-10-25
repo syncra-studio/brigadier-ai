@@ -6,13 +6,14 @@ import { conversationNoun, deleteAll, previewDelete } from "@/state/actions";
 import { clearPicked, useDeleteAsk } from "@/state/picking";
 import { useApp } from "@/state/store";
 
-/** Branches named in the line before it gives a count instead. */
+/** Branches (or files) named in the line before it gives a count instead. */
 const NAMED_BRANCHES = 3;
 
 /**
  * Confirms deleting the conversations {@link askDelete} names: their transcripts and everything
  * they made go for good, with the branches Brigadier created for them. One plain line says so
- * when one of those branches holds work that never landed.
+ * when one of those branches holds work that never landed, and one when files a session left
+ * uncommitted in its checkout go too.
  */
 export function DeleteDialog() {
   const ids = useDeleteAsk((s) => s.ids);
@@ -42,10 +43,15 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   // The check for unlanded work runs meanwhile and its line shows when ready; Delete never waits
   // for it. `failed` when it couldn't be told.
   const [branches, setBranches] = useState<UnlandedBranch[] | "failed" | null>(null);
+  const [files, setFiles] = useState<string[]>([]);
   useEffect(() => {
     let current = true;
     previewDelete(ids)
-      .then((found) => current && setBranches(found))
+      .then((found) => {
+        if (!current) return;
+        setBranches(found.branches);
+        setFiles(found.files);
+      })
       .catch(() => current && setBranches("failed"));
     return () => {
       current = false;
@@ -87,6 +93,7 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
           )
         : branches &&
           branches.length > 0 && <UnlandedLine branches={branches} single={count === 1} />}
+      {files.length > 0 && <FilesLine files={files} />}
     </ConfirmForm>
   );
 }
@@ -125,6 +132,30 @@ function UnlandedLine({ branches, single }: { branches: UnlandedBranch[]; single
     );
   }
   return <p className="text-muted-foreground text-sm">{line}</p>;
+}
+
+/** One line about the uncommitted files a Local checkout session made, which go too. */
+function FilesLine({ files }: { files: string[] }) {
+  const what =
+    files.length > NAMED_BRANCHES ? (
+      <>{files.length} files</>
+    ) : (
+      files
+        .map((file) => (
+          <code key={file} className="text-foreground/85 font-mono text-xs">
+            {file}
+          </code>
+        ))
+        .flatMap((entry, index) =>
+          index === 0 ? [entry] : [index === files.length - 1 ? " and " : ", ", entry],
+        )
+    );
+  return (
+    <p className="text-muted-foreground text-sm">
+      Uncommitted {files.length === 1 ? "file" : "files"} it made in your checkout ({what}){" "}
+      {files.length === 1 ? "is" : "are"} deleted too.
+    </p>
+  );
 }
 
 function branchName(branch: UnlandedBranch): ReactNode {

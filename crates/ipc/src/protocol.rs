@@ -1858,6 +1858,10 @@ pub enum Response {
     },
     PreviewDelete {
         branches: Vec<UnlandedBranch>,
+        /// Files a Local checkout session left uncommitted in the user's checkout, which go
+        /// too (D5).
+        #[serde(default)]
+        files: Vec<String>,
     },
     RenameConversation {
         conversation: Box<Conversation>,

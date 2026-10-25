@@ -302,6 +302,7 @@ impl SessionManager {
     /// session's): they become a WIP commit on its branch before the worktree goes.
     pub async fn preview_delete(&self, ids: &[ConversationId]) -> Vec<UnlandedBranch> {
         let mut records = Vec::new();
+        let mut spaces = Vec::new();
         let owned = self.runtime.ledger().branch_ownership();
         let mut worktrees = Vec::new();
         for id in ids {
@@ -311,6 +312,8 @@ impl SessionManager {
             let board = self.core.board(id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
             records.extend(branch_records(&owned, &conversation, &tasks));
+            // And those its CLIs made in its namespaces, which Delete takes too (D7).
+            spaces.extend(self.branch_spaces(&conversation, &tasks));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -329,9 +332,116 @@ impl SessionManager {
             );
         }
         let git = self.git.clone();
-        blocking(move || Ok(unlanded(&git, &worktrees, records)))
-            .await
-            .unwrap_or_default()
+        blocking(move || {
+            for (repo, namespace, target) in spaces {
+                let Ok(found) = git
+                    .open(Path::new(&repo))
+                    .and_then(|repo| repo.branches_in(&namespace))
+                else {
+                    continue;
+                };
+                records.extend(found.into_iter().map(|(name, _)| BranchRecord {
+                    repo: PathBuf::from(&repo),
+                    name,
+                    target: target.clone(),
+                    tip: None,
+                }));
+            }
+            Ok(unlanded(&git, &worktrees, records))
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// The branch namespaces a delete of `conversation` takes, each with its repository and
+    /// the branch its work lands on: the recorded ones and those its branch names show.
+    fn branch_spaces(
+        &self,
+        conversation: &Conversation,
+        tasks: &[Task],
+    ) -> Vec<(String, String, String)> {
+        let Some(Setup::Session {
+            repo, environment, ..
+        }) = &conversation.setup
+        else {
+            return Vec::new();
+        };
+        let target = match environment {
+            Environment::NewWorktree { base, .. } => base,
+            Environment::LocalCheckout { branch } => branch,
+        };
+        let mut spaces: Vec<String> = self
+            .runtime
+            .ledger()
+            .artifacts(&super::branch_names::branches_owner(&conversation.id))
+            .into_iter()
+            .filter_map(|artifact| match artifact {
+                Artifact::GitBranches {
+                    repo: there,
+                    namespace,
+                } if there == *repo => Some(namespace),
+                _ => None,
+            })
+            .collect();
+        let named = tasks
+            .iter()
+            .filter_map(|task| task.workspace.as_ref()?.branch.as_deref())
+            .chain(match environment {
+                Environment::NewWorktree { branch, .. } => Some(branch.as_str()),
+                Environment::LocalCheckout { .. } => None,
+            });
+        spaces.extend(
+            named.filter_map(|branch| {
+                super::branch_names::branch_namespace(&conversation.id, branch)
+            }),
+        );
+        spaces.sort();
+        spaces.dedup();
+        spaces
+            .into_iter()
+            .map(|space| (repo.clone(), space, target.clone()))
+            .collect()
+    }
+
+    /// The files deleting `ids` removes from a Local checkout: those the session's turns made
+    /// that git doesn't track and that are as the session left them (D5). Committed work and
+    /// files changed since never go.
+    pub async fn preview_delete_files(&self, ids: &[ConversationId]) -> Vec<String> {
+        let mut checks = Vec::new();
+        for id in ids {
+            if let Ok(Conversation {
+                setup:
+                    Some(Setup::Session {
+                        repo,
+                        environment: Environment::LocalCheckout { .. },
+                        ..
+                    }),
+                ..
+            }) = self.core.conversation(id)
+            {
+                checks.push((repo, id.0.clone()));
+            }
+        }
+        if checks.is_empty() {
+            return Vec::new();
+        }
+        let git = self.git.clone();
+        blocking(move || {
+            let mut files = Vec::new();
+            for (repo, session) in checks {
+                let Ok(checkout) = git.open(Path::new(&repo)) else {
+                    continue;
+                };
+                for (path, blob) in checkout.session_added_files(&session).unwrap_or_default() {
+                    if checkout.untracked_unchanged(&path, &blob).unwrap_or(false) {
+                        files.push(path);
+                    }
+                }
+            }
+            Ok(files)
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Whether a turn, work waiting for one, or a worker of the conversation is running.

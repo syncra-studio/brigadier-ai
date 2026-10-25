@@ -1519,9 +1519,15 @@ export async function deleteAll(ids: string[]): Promise<void> {
   forgetRightSidebarTabs(deleted.map((conversation) => conversation.id));
 }
 
-/** The branches deleting `ids` takes whose work never landed (or may not have). */
-export async function previewDelete(ids: string[]): Promise<UnlandedBranch[]> {
-  return (await request({ method: "previewDelete", ids })).branches;
+/**
+ * What deleting `ids` takes that the user may not expect: the branches whose work never landed
+ * (or may not have), and the files a Local checkout session left uncommitted in the checkout.
+ */
+export async function previewDelete(
+  ids: string[],
+): Promise<{ branches: UnlandedBranch[]; files: string[] }> {
+  const { branches, files } = await request({ method: "previewDelete", ids });
+  return { branches, files };
 }
 
 /** What removing a project takes with it. */

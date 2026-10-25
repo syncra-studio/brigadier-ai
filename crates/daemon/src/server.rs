@@ -2309,6 +2309,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::PreviewDelete { ids } => Response::PreviewDelete {
             branches: heap(|| sessions.preview_delete(&ids)).await,
+            files: heap(|| sessions.preview_delete_files(&ids)).await,
         },
         Request::RenameConversation { id, title } => Response::RenameConversation {
             conversation: Box::new(heap(|| core.rename_conversation(id, title)).await?),
