@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The V2 scorer's rules on synthetic runs (no daemon, no model): each case builds a run directory
-the way run.py leaves one, scores it, checks the verdicts, and checks that rescoring is
+the way the removed run.py left one, scores it, checks the verdicts, and checks that rescoring is
 byte-identical. With a root, also rescores every real run under it and compares with its
 score.json.
 
@@ -93,23 +93,6 @@ CASES = [
 ]
 
 
-def app_servers():
-    """run.py's kill seam finds a Codex thread's app-server by its flags (#116): the thread's,
-    not a worker's or a review's, as crates/providers/src/codex/mod.rs builds them."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("v2run", os.path.join(HERE, "run.py"))
-    v2run = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(v2run)
-    base = "/bin/codex app-server" + "".join(f" --disable {f}" for f in
-                                             ("plugins", "apps", "hooks", "computer_use", "browser_use", "memories"))
-    thread = base + "".join(f" --disable {f}" for f in ("multi_agent", "multi_agent_v2", "goals", "sleep_tool")) + \
-        " -c agents.enabled=false -c skills.include_instructions=false -c notify=[]"
-    review = base + "".join(f" --disable {f}" for f in ("view_image", "image_generation", "multi_agent", "multi_agent_v2",
-                                                          "goals", "sleep_tool", "shell_tool", "unified_exec")) + " -c notify=[]"
-    worker = base + " -c notify=[] -c allow_login_shell=false"
-    return [v2run.thread_app_server(c) for c in (thread, review, worker)] == [True, False, False]
-
-
 def main():
     failed = 0
     tmp = tempfile.mkdtemp(prefix="v2-selftest-")
@@ -125,9 +108,6 @@ def main():
             print("ok  " if good else "FAIL", name, "" if same else "(rescoring differs)")
             if not good:
                 print(json.dumps({k: v for k, v in json.loads(first).items() if k != "items"}, indent=1))
-        good = app_servers()
-        failed += not good
-        print("ok  " if good else "FAIL", "the kill seam finds a Codex thread's app-server, not a worker's or a review's")
         for root in sys.argv[1:]:
             for run in sorted(os.listdir(os.path.join(root, "runs"))):
                 d = os.path.join(root, "runs", run)

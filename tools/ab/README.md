@@ -118,13 +118,11 @@ ruled-out approach, and a probe asks for every item.
   - `limit`: a usage limit is injected (`debugInjectLimit`);
   - `none`: no seam, as a control.
 
-    export BRIGD=<dev brigadierd> BRIG_SRC=<its source tree>
-    v2/run.py template --root /tmp/v2-X --provider claude --tag X    # or --provider codex (thread and workers)
-    v2/run.py battery --root /tmp/v2-X --seam restart
-    v2/run.py set --root /tmp/v2-X --seam restart --reruns 3            # D1.0: three reruns, one build
+The runner (`v2/run.py`) is gone: it read the removed orchestrator log (#540). New seam runs go through
+`tools/continuity-battery`; runs already on disk still rescore:
+
     v2/summary.py /tmp/v2-X        # rescored; per item and run; exit 1 when the reruns disagree on an item
     v2/selftest.py [/tmp/v2-X]     # the scorer's rules on synthetic runs, and byte-identical rescoring
-    v2/run.py cleanup --root /tmp/v2-X [--export DIR]
 
 **Scoring** (`v2/score.py`, from the run dir alone):
 - **Item verdicts:** each item is `pass`, `fail` or `unknown` (lost, and the thread said it didn't know).

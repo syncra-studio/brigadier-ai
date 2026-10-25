@@ -8,7 +8,7 @@ didn't know is `unknown`, one it guessed wrong is `fail`.
 A run whose seams didn't happen at least twice between the last plant and the probe is invalid
 (`valid: false`).
 
-usage: score.py <run-dir>     prints the score as JSON (run.py writes it to score.json)"""
+usage: score.py <run-dir>     prints the score as JSON (a run's score.json holds it)"""
 import glob, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
