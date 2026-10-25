@@ -481,6 +481,7 @@ export type { WorkerRole } from "./WorkerRole";
 export type { WorkerRow } from "./WorkerRow";
 export type { WorkerStep } from "./WorkerStep";
 export type { WorkerStepKind } from "./WorkerStepKind";
+export type { WorkerTask } from "./WorkerTask";
 export type { WorkerWait } from "./WorkerWait";
 export type { WorkerWaitKind } from "./WorkerWaitKind";
 export type { Workspace } from "./Workspace";

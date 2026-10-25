@@ -3,7 +3,8 @@
 //! ([`ThreadView::workers`], [`ThreadNews::workers`]) as Background is.
 //!
 //! - What a worker's CLI does (its turn open or how it ended, a usage limit, a compaction, when
-//!   it last said anything, the calls it has at work) is followed from its events, live only.
+//!   it last said anything, the calls it has at work, its background tasks) is followed from
+//!   its events, live only.
 //! - What it waits on the user for is its CLI's open permission prompts and questions and its
 //!   MCP servers that want a sign-in.
 //! - Its +/−, commits ahead and whether it merged are git's, against its session's branch
@@ -14,13 +15,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use brigadier_providers::{ItemStatus, LimitHit, McpStatus, ProviderEvent, Role, TurnStatus};
+use brigadier_providers::{
+    BackgroundTask, ItemStatus, LimitHit, McpStatus, ProviderEvent, Role, TurnStatus,
+};
 
+use super::cli_thread::update_background;
 use super::thread_items::step_detail;
 use super::{SessionManager, blocking};
 use crate::model::ConversationId;
 use crate::thread_view::{
-    self, StepAtWork, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerWait, WorkerWaitKind,
+    self, StepAtWork, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerTask, WorkerWait,
+    WorkerWaitKind,
 };
 use crate::work::{ApprovalSubject, CardState, DiffStat, Task, TaskId, TaskState};
 use crate::{Result, now_ms};
@@ -32,6 +37,8 @@ pub(crate) const GIT_EVERY_MS: i64 = 2_000;
 /// How stale a row's `last_event_at_ms` may grow before it is sent again for that alone: the
 /// app counts a worker quiet after 20 minutes of nothing.
 const EVENT_STALE_MS: i64 = 60_000;
+/// How many commands of background calls are kept for the tasks they start.
+const COMMANDS_KEPT: usize = 32;
 
 /// What a worker's CLI did, as far as its rows tell.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -45,6 +52,11 @@ pub(crate) struct WorkerCli {
     pub fresh_context: bool,
     /// The calls it has at work in the open turn, by item id, oldest first.
     steps: Vec<(String, StepAtWork)>,
+    /// Its background tasks, as its CLI says them, and those that ended lately.
+    background: Vec<BackgroundTask>,
+    /// The commands of its latest background calls, by item id: a Claude task is labelled with
+    /// its description, and only its call says what it runs.
+    commands: Vec<(String, String)>,
     /// The context it last said it holds, and its window when it said one. Not part of its
     /// rows: `brigadier workers` reads it.
     pub context: Option<(i64, Option<i64>)>,
@@ -84,6 +96,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
     let before = WorkerCli {
         user_message: None,
         context: None,
+        commands: Vec::new(),
         ..cli.clone()
     };
     cli.last_event_ms = Some(at);
@@ -136,13 +149,28 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
             });
             cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
         }
-        ProviderEvent::Exited { .. } if cli.open => {
-            cli.open = false;
-            cli.steps.clear();
-            cli.last_end = Some(TurnEnd::Interrupted);
-            cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
+        ProviderEvent::Exited { .. } => {
+            // Its background tasks end with its CLI.
+            cli.background.clear();
+            cli.commands.clear();
+            if cli.open {
+                cli.open = false;
+                cli.steps.clear();
+                cli.last_end = Some(TurnEnd::Interrupted);
+                cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
+            }
+        }
+        ProviderEvent::BackgroundTask { task } => {
+            update_background(&mut cli.background, task, at);
         }
         _ => {
+            if let Some((item_id, command)) = background_call(event) {
+                cli.commands.retain(|(id, _)| id != item_id);
+                cli.commands.push((item_id.to_owned(), command));
+                if cli.commands.len() > COMMANDS_KEPT {
+                    cli.commands.remove(0);
+                }
+            }
             if let Some((item_id, status, step)) = step_of(event) {
                 follow_step(&mut cli.steps, item_id, status, step);
             }
@@ -152,6 +180,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         user_message: None,
         line: None,
         context: None,
+        commands: Vec::new(),
         ..cli.clone()
     };
     now.last_event_ms = before.last_event_ms;
@@ -163,6 +192,29 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         cli.sent_event_ms = Some(at);
     }
     changed
+}
+
+/// A call that runs a command in the background (Claude's `run_in_background` Bash): its item
+/// id and its command.
+fn background_call(event: &ProviderEvent) -> Option<(&str, String)> {
+    let ProviderEvent::ToolCall {
+        item_id,
+        input: Some(input),
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let args: serde_json::Value = serde_json::from_str(input).ok()?;
+    if args
+        .get("run_in_background")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    let command = args.get("command")?.as_str()?;
+    Some((item_id, command.to_owned()))
 }
 
 /// A call `event` says of, by its item id, with how it stands and, when it says, the step it is.
@@ -281,6 +333,11 @@ pub(crate) fn row(
         _ => None,
     });
     let git = git.cloned().unwrap_or_default();
+    let background = if gone {
+        Vec::new()
+    } else {
+        background_of(&cli)
+    };
     WorkerRow {
         id: task.id.clone(),
         number: task.number,
@@ -302,14 +359,47 @@ pub(crate) fn row(
         ahead: git.ahead,
         merged: git.merged,
         steps: if cli.open && !gone {
-            cli.steps.into_iter().map(|(_, step)| step).collect()
+            cli.steps.iter().map(|(_, step)| step.clone()).collect()
         } else {
             Vec::new()
         },
+        background,
     }
 }
 
+/// `cli`'s background tasks, each with the command its call ran when its CLI said one.
+fn background_of(cli: &WorkerCli) -> Vec<WorkerTask> {
+    cli.background
+        .iter()
+        .map(|task| WorkerTask {
+            task: task.clone(),
+            command: task.item_id.as_ref().and_then(|item| {
+                cli.commands
+                    .iter()
+                    .find(|(id, _)| id == item)
+                    .map(|(_, command)| command.clone())
+            }),
+        })
+        .collect()
+}
+
 impl SessionManager {
+    /// What `shell` finds among worker `worker`'s background tasks: a command's output file.
+    pub(super) fn worker_background_file(
+        &self,
+        worker: &TaskId,
+        shell: impl Fn(&BackgroundTask) -> Option<String>,
+    ) -> Option<String> {
+        self.worker_rows
+            .cli
+            .lock()
+            .unwrap()
+            .get(worker)?
+            .background
+            .iter()
+            .find_map(shell)
+    }
+
     /// How full worker `task`'s context is, as its CLI last said, with its model's window when
     /// known; `None` before it said, and once it ended or was closed.
     pub(crate) fn worker_context(
@@ -803,6 +893,62 @@ mod tests {
         assert_eq!(steps(&cli), [("shell", Some("pnpm build"))]);
         follow(&mut cli, &turn_end(TurnStatus::Completed), 6);
         assert!(cli.steps.is_empty());
+    }
+
+    /// A worker's background tasks follow its CLI's word, each with the command its call ran,
+    /// and end with its CLI.
+    #[test]
+    fn a_workers_background_tasks_follow_its_cli() {
+        use brigadier_providers::{BackgroundTaskKind, BackgroundTaskStatus};
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        let call = ProviderEvent::ToolCall {
+            item_id: "b1".into(),
+            name: "Bash".into(),
+            input: Some(r#"{"command":"pnpm tauri:dev","run_in_background":true}"#.into()),
+            status: ItemStatus::Completed,
+            output: None,
+            kept: None,
+        };
+        follow(&mut cli, &call, 2);
+        let task = |status| BackgroundTask {
+            id: "t1".into(),
+            item_id: Some("b1".into()),
+            kind: BackgroundTaskKind::Shell,
+            label: "Run the dev app".into(),
+            status,
+            started_at_ms: 3,
+            ended_at_ms: None,
+            output_file: Some("/tmp/t1.output".into()),
+            summary: None,
+            last_line: None,
+        };
+        assert!(follow(
+            &mut cli,
+            &ProviderEvent::BackgroundTask {
+                task: task(BackgroundTaskStatus::Running)
+            },
+            3
+        ));
+        assert_eq!(
+            background_of(&cli),
+            [WorkerTask {
+                task: task(BackgroundTaskStatus::Running),
+                command: Some("pnpm tauri:dev".into()),
+            }]
+        );
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 4);
+        assert_eq!(background_of(&cli).len(), 1, "it outlives the turn");
+        follow(
+            &mut cli,
+            &ProviderEvent::Exited {
+                code: Some(0),
+                signal: None,
+                stderr_tail: None,
+            },
+            5,
+        );
+        assert!(background_of(&cli).is_empty());
     }
 
     /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its

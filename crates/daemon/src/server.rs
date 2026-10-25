@@ -1948,18 +1948,24 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::StopBackgroundTask {
             conversation_id,
+            worker_id,
             task_id,
         } => {
             sessions
-                .stop_background_task(&conversation_id, task_id)
+                .stop_background_task(&conversation_id, worker_id.as_ref(), task_id)
                 .await?;
             Response::StopBackgroundTask
         }
         Request::ReadBackgroundTaskOutput {
             conversation_id,
+            worker_id,
             task_id,
         } => Response::ReadBackgroundTaskOutput {
-            output: sessions.background_task_output(&conversation_id, &task_id)?,
+            output: sessions.background_task_output(
+                &conversation_id,
+                worker_id.as_ref(),
+                &task_id,
+            )?,
         },
         Request::ThreadView { conversation_id } => Response::ThreadView {
             view: heap(|| sessions.thread_view_with_workers(&conversation_id)).await?,

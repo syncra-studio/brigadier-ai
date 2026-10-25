@@ -11,7 +11,7 @@ use super::conversation::ConvLive;
 use super::session_dir::read_lineage;
 use crate::model::{ContextUsage, ConversationId};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
-use crate::work::ConversationActivity;
+use crate::work::{ConversationActivity, TaskId};
 use crate::{Error, Result, now_ms};
 
 impl SessionManager {
@@ -366,10 +366,21 @@ impl SessionManager {
         ))
     }
 
-    /// Stops background task `task` of conversation `id`'s CLI, as the CLI's own Stop does.
-    pub async fn stop_background_task(&self, id: &ConversationId, task: String) -> Result<()> {
-        let conv = self.conv(id)?;
-        let cli = conv.live_cli().await;
+    /// Stops background task `task` of conversation `id`'s CLI, or of its worker `worker`'s,
+    /// as the CLI's own Stop does.
+    pub async fn stop_background_task(
+        &self,
+        id: &ConversationId,
+        worker: Option<&TaskId>,
+        task: String,
+    ) -> Result<()> {
+        let cli = match worker {
+            None => self.conv(id)?.live_cli().await,
+            Some(worker) => match self.existing_task_live(worker) {
+                Some(live) if live.conversation_id == *id => live.cli().await,
+                _ => None,
+            },
+        };
         let cli = cli.ok_or_else(|| Error::Invalid("its CLI isn't running".into()))?;
         cli.session
             .stop_task(task)
@@ -377,19 +388,30 @@ impl SessionManager {
             .map_err(|err| Error::Provider(err.to_string()))
     }
 
-    /// What background command `task` of conversation `id` printed so far: the end of its
-    /// output file, as much as a row's output shows.
-    pub fn background_task_output(&self, id: &ConversationId, task: &str) -> Result<String> {
+    /// What background command `task` of conversation `id`'s CLI, or of its worker `worker`'s,
+    /// printed so far: the end of its output file, as much as a row's output shows.
+    pub fn background_task_output(
+        &self,
+        id: &ConversationId,
+        worker: Option<&TaskId>,
+        task: &str,
+    ) -> Result<String> {
         use std::io::{Read, Seek, SeekFrom};
-        let file = self
-            .cli_threads
-            .lock()
-            .unwrap()
-            .get(id)
-            .and_then(|live| live.background.iter().find(|held| held.id == task))
-            .filter(|held| held.kind == BackgroundTaskKind::Shell)
-            .and_then(|held| held.output_file.clone())
-            .ok_or_else(|| Error::NotFound(format!("output of background task {task}")))?;
+        let shell = |held: &BackgroundTask| {
+            (held.id == task && held.kind == BackgroundTaskKind::Shell)
+                .then(|| held.output_file.clone())
+                .flatten()
+        };
+        let file = match worker {
+            None => self
+                .cli_threads
+                .lock()
+                .unwrap()
+                .get(id)
+                .and_then(|live| live.background.iter().find_map(shell)),
+            Some(worker) => self.worker_background_file(worker, shell),
+        }
+        .ok_or_else(|| Error::NotFound(format!("output of background task {task}")))?;
         let mut file = std::fs::File::open(&file).map_err(|err| Error::Invalid(err.to_string()))?;
         let len = file
             .metadata()
@@ -420,7 +442,7 @@ const OUTPUT_SHOWN: u64 = 256 * 1024;
 const LINE_MAX: usize = 200;
 
 /// `task` as it stands now among `tasks`, those ended long ago dropped; the tasks after.
-fn update_background(
+pub(super) fn update_background(
     tasks: &mut Vec<BackgroundTask>,
     task: &BackgroundTask,
     at: i64,

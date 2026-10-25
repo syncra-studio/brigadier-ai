@@ -7,8 +7,11 @@
  * With `ended=1` it runs processes, then ends them (failed, finished, stopped) and writes that
  * their rows left. With `tasks=1` the CLI's own background tasks come as its live stream says
  * them (a `run_in_background` command and a background subagent): their rows, Stop, the command's
- * output, and each row dropping as soon as it ends; it writes what it saw. With `names=1` it
- * measures long and short names beside state words at wide and narrow card widths.
+ * output, and each row dropping as soon as it ends; it writes what it saw. With `workerTasks=1` a
+ * worker's CLI's background tasks come on its row (its dev app and a `brigadier wait`): the dev
+ * app's row with the worker's name, its Stop and output reaching the worker, and the row leaving
+ * as the task ends. With `names=1` it measures long and short names beside state words at wide
+ * and narrow card widths.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -70,8 +73,8 @@ mockIPC((command, payload) => {
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
-  if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}`);
-  if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: "sleeping\nmarker\n" };
+  if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}${req.workerId ? ` of ${req.workerId}` : ""}`);
+  if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: req.workerId ? `${req.workerId} printed\n` : "sleeping\nmarker\n" };
   return { method: req.method };
 });
 
@@ -266,6 +269,33 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   return seen;
 }
 
+/** A worker's CLI's background tasks, as its row carries them. */
+const devApp: BackgroundTask = { id: "b7dev", itemId: "toolu_dev", kind: "shell", label: "Run the dev app", status: "running",
+  startedAtMs: now - 30_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/b7dev.output", summary: null, lastLine: "VITE ready" };
+const workerWait: BackgroundTask = { ...devApp, id: "b7wait", itemId: "toolu_wait", label: "Wait for my helper", outputFile: null };
+const workerTasksSaid = (...background: { task: BackgroundTask; command: string | null }[]) => showRows(id, [rowOf(worker, { background })]);
+
+async function driveWorkerTasks(): Promise<Record<string, unknown>> {
+  const seen: Record<string, unknown> = {};
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  workerTasksSaid({ task: devApp, command: "pnpm tauri:dev" }, { task: workerWait, command: "brigadier wait w3" });
+  await until(() => ids().length === 1, 3000);
+  seen.running = ids();
+  seen.row = read("task:task-2:b7dev");
+  seen.worker = text(row("task:task-2:b7dev")?.querySelector("[data-activity-worker]"));
+  row("task:task-2:b7dev")?.click();
+  await frame();
+  seen.opened = sessionTabs(id).active;
+  seen.output = await until(() => !!document.querySelector('[data-slot="output-tab"]')?.textContent?.includes("task-2 printed"), 3000) < 3000;
+  stop("task:task-2:b7dev")?.click();
+  await until(() => calls.length > 0, 3000);
+  seen.calls = calls.toSorted();
+  workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() }, command: "pnpm tauri:dev" });
+  await frame();
+  seen.ended = ids();
+  return seen;
+}
+
 /** Long names use the available room; state words stay whole, directly beside short names. */
 async function readNames(): Promise<Record<string, unknown>> {
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
@@ -319,6 +349,7 @@ function Fixture() {
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("tasks")) void driveTasks().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("workerTasks")) void driveWorkerTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("names")) void readNames().then((seen) => setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
@@ -336,6 +367,7 @@ function Fixture() {
         </div>
         {/* The tab a command's row opens, as the side panel shows it. */}
         {params.has("tasks") && <OutputTab conversationId={id} view={{ type: "output", source: "task", id: sleep.id }} />}
+        {params.has("workerTasks") && <OutputTab conversationId={id} view={{ type: "output", source: "task", id: devApp.id, worker: worker.id }} />}
       </main>
       {result && <pre id="activities-result">{result}</pre>}
     </AssistantRuntimeProvider>

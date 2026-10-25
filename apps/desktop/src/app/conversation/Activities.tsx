@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { rowName } from "@/app/conversation/activity/workerState";
@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * One thing the session has going: a preview (the thread's or a worker's), or a background task
- * of its CLI's.
+ * of its CLI's or a worker's CLI's.
  */
 type Activity = BackgroundRow;
 
@@ -43,8 +43,9 @@ const NO_PREVIEWS: readonly Preview[] = [];
 
 /**
  * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews (`brigadier preview`) and its CLI's running background tasks, except
- * `brigadier wait` (the workers have their own card), each with its state in a word and an icon
+ * and the workers' previews (`brigadier preview`) and its CLI's and its workers' CLIs' running
+ * background tasks, except `brigadier wait` (the workers have their own card), a worker's named
+ * by it, each with its state in a word and an icon
  * (a worker's copy of an app or a browser at it is a state of the app's row), how long it has gone,
  * and Stop on hover. A click on a web preview that is up opens its page in the browser
  * (Brigadier's, by Settings › Browser),
@@ -58,14 +59,15 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
+  const workerTasks = workerTaskRows(workers, (taskId) => rowName(workers, taskId));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
-  const since = [...rows, ...cliTasks].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
+  const since = [...rows, ...cliTasks, ...workerTasks].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
   // eslint-disable-next-line react/purity
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries), ...workerTasks].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
@@ -82,11 +84,15 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   );
 }
 
-/** Only the name truncates; a live dot needs no word, and every other state keeps its room. */
-function ActivityLabel({ name, state }: { name: string; state: BackgroundState }) {
+/**
+ * Only the name truncates; a live dot needs no word, and every other state, and the worker whose
+ * it is, keeps its room.
+ */
+function ActivityLabel({ name, state, worker }: { name: string; state: BackgroundState; worker?: string | null | undefined }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
       <span data-activity-name className="truncate">{name}</span>
+      {worker && <span data-activity-worker className="text-muted-foreground shrink-0 whitespace-nowrap">{worker}</span>}
       {state !== "running" && (
         <span data-state={state} className={cn("text-muted-foreground shrink-0 whitespace-nowrap", live(state) && "shimmer")}>
           {state}
@@ -100,7 +106,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
   const name = label(activity);
   // A task that ended shows how long it ran.
   const meta = elapsedWords((activity.type === "task" ? (activity.task.endedAtMs ?? now) : now) - activity.startedAtMs);
-  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} name={name} meta={meta} state={activity.state} />;
+  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} worker={activity.worker} name={name} meta={meta} state={activity.state} />;
   const tip = [
     `${previewWord(activity.preview)}: ${activity.preview.command}`,
     activity.worker && `From ${activity.worker}`,
@@ -135,27 +141,31 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
 }
 
 /**
- * A row for one of the CLI's background tasks: its last line on hover, Stop while it runs, and a
- * command's output in a tab on a click. A subagent or a Codex terminal has no output to open.
+ * A row for one of the CLI's background tasks, or a worker's CLI's: its last line on hover, Stop
+ * while it runs, and a command's output in a tab on a click. A subagent or a Codex terminal has no
+ * output to open.
  */
-function TaskRow({ conversationId, task, name, meta, state }: {
+function TaskRow({ conversationId, task, worker, name, meta, state }: {
   conversationId: string;
   task: BackgroundTask;
+  worker: { id: string; name: string | null } | null;
   name: string;
   meta: string;
   state: BackgroundState;
 }) {
+  const said = task.lastLine ?? task.summary ?? task.label;
   const parts = {
-    "data-activity": `task:${task.id}`,
-    title: task.lastLine ?? task.summary ?? task.label,
+    "data-activity": worker ? `task:${worker.id}:${task.id}` : `task:${task.id}`,
+    title: worker?.name ? `${said}\nFrom ${worker.name}` : said,
     icon: <StateIcon state={state} />,
     meta,
-    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id)} /> : undefined,
+    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id)} /> : undefined,
   };
-  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}><ActivityLabel name={name} state={state} /></SummaryRow>;
+  const words = <ActivityLabel name={name} state={state} worker={worker?.name} />;
+  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
   return (
-    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id }, name)}>
-      <ActivityLabel name={name} state={state} />
+    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, ...(worker && { worker: worker.id }) }, name)}>
+      {words}
     </SummaryRowButton>
   );
 }
