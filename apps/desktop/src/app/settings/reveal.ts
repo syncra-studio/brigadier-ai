@@ -9,6 +9,14 @@ const FIND_FRAMES = 60;
  */
 export const useReveal = create<{ label: string | null }>(() => ({ label: null }));
 
+let generation = 0;
+
+/** Leaving a destination cancels its pending reveal, including a lazily loading page. */
+export function cancelSettingReveal(): void {
+  generation++;
+  useReveal.setState({ label: null });
+}
+
 /** A setting's row, else a section named like it (the Usage page's sections). */
 function findSetting(label: string): HTMLElement | undefined {
   const rows = document.querySelectorAll<HTMLElement>("[data-setting]");
@@ -25,9 +33,11 @@ function findSetting(label: string): HTMLElement | undefined {
 
 /** Brings the setting labelled `label` into view once its page shows it. */
 export function revealSetting(label: string): void {
+  const asked = ++generation;
   useReveal.setState({ label });
   let frames = 0;
   const reveal = () => {
+    if (asked !== generation) return;
     const target = findSetting(label);
     if (target) {
       target.scrollIntoView({ block: "center" });

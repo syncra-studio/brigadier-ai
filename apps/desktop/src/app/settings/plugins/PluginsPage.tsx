@@ -9,6 +9,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { SettingsCard, SettingsSearch } from "@/components/shared";
 import type { PluginItemView, PluginKind, PluginProjectView, PluginsView } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { openSettings, select } from "@/state/actions";
+import { useApp } from "@/state/store";
 import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
@@ -54,19 +56,17 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
 }) {
   const [tab, setTab] = useState<PluginKind>(() => (useReveal.getState().label === "Skills" ? "skill" : "server"));
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = useApp((s) => s.selection.type === "settings" && s.selection.page === "plugins" ? s.selection.detail?.plugin : undefined);
   const [open, setOpen] = useState<Open | null>(null);
   const action = useAction();
   useEffect(() => useReveal.subscribe(({ label }) => {
     if (label === "Skills" || label === "MCP servers") {
       setTab(label === "Skills" ? "skill" : "server");
-      setSelected(null);
       setQuery("");
     } else if (label?.startsWith("plugin:")) {
       const item = usePlugins.getState().view.items.find((entry) => `plugin:${entry.key}` === label);
       if (item) {
         setTab(item.kind);
-        setSelected(null);
         setQuery("");
       }
     }
@@ -109,7 +109,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
         focus={focus}
         actions={{
           busy,
-          onBack: () => setSelected(null),
+          onBack: () => openSettings("plugins"),
           onSwitch: (where, on) => flip(current, on, where),
           onSwitchAgent: (agent, on) => action.run(async () => {
             await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
@@ -151,7 +151,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           }}
           onQuery={setQuery}
           onProject={onProject}
-          onOpen={(item) => setSelected(item.key)}
+          onOpen={(item) => select({ type: "settings", page: "plugins", detail: { plugin: item.key } })}
           onFlip={(item, on) => flip(item, on)}
           onAddMissing={addMissing}
           onDialog={setOpen}
@@ -194,7 +194,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
           adapter={adapter}
           onClose={close}
           onRemoved={() => {
-            setSelected(null);
+            openSettings("plugins");
             refresh();
           }}
         />

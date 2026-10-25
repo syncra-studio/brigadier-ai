@@ -323,6 +323,7 @@ async function reset(setKey: (key: number) => void, signIns = 1) {
   adding = null;
   document.querySelectorAll('[data-dialog] button[aria-label="Close"]').forEach((button) => (button as HTMLButtonElement).click());
   usePlugins.setState({ project: null });
+  useApp.setState({ selection: { type: "settings", page: "plugins" } });
   setKey(Date.now());
   usePlugins.getState().refresh();
   await pause();

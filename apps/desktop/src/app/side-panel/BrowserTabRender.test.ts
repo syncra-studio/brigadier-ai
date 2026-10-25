@@ -76,12 +76,12 @@ for (const full of [false, true]) {
 
     const browser = { type: "settings", page: "browser" };
     assert.deepEqual(seen.destinations, {
-      Downloads: { selection: browser, title: "Download history", dialog: "" },
-      History: { selection: browser, title: "Browsing history", dialog: "" },
+      Downloads: { selection: { ...browser, detail: { view: "downloads" } }, title: "Download history", dialog: "" },
+      History: { selection: { ...browser, detail: { view: "history" } }, title: "Browsing history", dialog: "" },
       "Clear browsing data": { selection: browser, title: "Browser", dialog: "Clear browsing data" },
       "Import Browser Data…": { selection: { type: "settings", page: "browserImport" }, title: "Import Browser Data", dialog: "" },
       "Browser settings": { selection: browser, title: "Browser", dialog: "" },
-      "Site settings": { selection: browser, title: "Site settings", dialog: "" },
+      "Site settings": { selection: { ...browser, detail: { view: "sites" } }, title: "Site settings", dialog: "" },
     });
 
     // The New tab page has no site: no site information, nothing to open outside, and Back faint.

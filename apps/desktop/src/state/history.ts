@@ -20,7 +20,7 @@ export const useHistory = create<{ entries: Selection[]; index: number }>(() => 
   index: -1,
 }));
 
-/** A place as history tells places apart: Settings is one place whatever its page. */
+/** A place as history tells places apart, including pages inside Settings pages. */
 function placeKey(selection: Selection): string | null {
   switch (selection.type) {
     case "conversation":
@@ -28,15 +28,15 @@ function placeKey(selection: Selection): string | null {
     case "draft":
       return selection.kind === "chat" ? "draft:chat" : `draft:session:${selection.projectId}`;
     case "settings":
-      return "settings";
+      return JSON.stringify(["settings", selection.page, selection.detail ?? null]);
     case "none":
       return null;
   }
 }
 
 /**
- * Notes that `selection` is about to show. A push onto the place already showing (another
- * Settings page, the same conversation again) updates that entry instead.
+ * Notes that `selection` is about to show. A push onto the place already showing (the same
+ * page or conversation again) updates that entry instead.
  */
 export function recordPlace(selection: Selection, mode: HistoryMode): void {
   if (mode === "none" || selection.type === "none") return;

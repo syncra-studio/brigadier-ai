@@ -1,30 +1,27 @@
 import { create } from "zustand";
 
-import { openSettings } from "@/state/actions";
-import { type Selection, useApp } from "@/state/store";
+import { openSettings, select } from "@/state/actions";
+import { type BrowserSubView, type Selection, useApp } from "@/state/store";
 
 /** A sub-view of Settings › Browser. */
-export type BrowserSubView = "history" | "downloads" | "sites";
+export type { BrowserSubView } from "@/state/store";
 
 /** A part of Settings › Browser: a sub-view, or the Clear browsing data dialog over the page. */
 export type BrowserSettingsView = BrowserSubView | "clear";
 
 /**
- * What Settings › Browser shows over its page: a sub-view, and whether Clear browsing data is
- * open. Each lasts while Settings shows what it was opened under, so Browser picked again in
- * the sidebar opens the page itself. Kept here, not in the page, so the Browser tab's ⋯ menu
- * can open them too.
+ * Clear browsing data is a dialog attached to its destination, never a history entry.
  */
 export const useBrowserSettingsView = create<{
-  opened: { view: BrowserSubView; under: Selection } | null;
   clearing: Selection | null;
-}>(() => ({ opened: null, clearing: null }));
+}>(() => ({ clearing: null }));
 
 /** Shows `view` (or the page itself) under what Settings shows now. */
 export function showBrowserSettingsView(view: BrowserSettingsView | "page"): void {
   const under = useApp.getState().selection;
   if (view === "clear") useBrowserSettingsView.setState({ clearing: under });
-  else useBrowserSettingsView.setState({ opened: view === "page" ? null : { view, under } });
+  else if (view === "page") openSettings("browser");
+  else select({ type: "settings", page: "browser", detail: { view } });
 }
 
 /** Opens or closes the Clear browsing data dialog. */
@@ -35,6 +32,6 @@ export function setClearingBrowsingData(open: boolean): void {
 
 /** Shows Settings › Browser, at `view` when given. */
 export function openBrowserSettings(view?: BrowserSettingsView): void {
-  openSettings("browser");
-  showBrowserSettingsView(view ?? "page");
+  if (!view || view === "clear") openSettings("browser");
+  if (view) showBrowserSettingsView(view);
 }

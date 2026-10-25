@@ -23,11 +23,11 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
   // A row no longer opens under itself: it opens its provider's page.
   assert.equal(seen.expandable, 0);
   assert.deepEqual(seen.claudePage, {
-    ask: { provider: "claude", signIn: false },
-    selection: { type: "settings", page: "providers" },
+    ask: null,
+    selection: { type: "settings", page: "providers", detail: { provider: "claude" } },
     closed: true,
   });
-  assert.deepEqual(seen.codexPage, { ask: { provider: "codex", signIn: false }, closed: true });
+  assert.deepEqual(seen.codexPage, { ask: null, closed: true });
   // The account in use at its limit: said in its row, red, and on the icon.
   assert.deepEqual(seen.limitRows, [
     ["Claude Code", "At limit · resets in 3h 38m", "100% used"],
@@ -40,7 +40,7 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
     ["Codex", "Not signed in", "Sign in"],
     ["Claude Code", "Weekly · resets in 1d 8h", "61% used"],
   ]);
-  assert.deepEqual(seen.signIn, { ask: { provider: "codex", signIn: true }, closed: true });
+  assert.deepEqual(seen.signIn, { ask: { provider: "codex", under: { type: "settings", page: "providers", detail: { provider: "codex" } } }, closed: true });
   assert.deepEqual(seen.help, ["Send feedback…", "Keyboard shortcuts"]);
   assert.deepEqual(seen.shortcuts, { type: "settings", page: "shortcuts" });
   assert.equal(seen.feedback, true);

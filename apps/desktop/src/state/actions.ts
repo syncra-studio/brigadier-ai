@@ -1,6 +1,6 @@
-import { revealSetting } from "@/app/settings/reveal";
+import { cancelSettingReveal, revealSetting } from "@/app/settings/reveal";
 import { expectSentTurn } from "@/components/conversation/thread-scroll";
-import { request } from "@/ipc/client";
+import { browserFocus, request } from "@/ipc/client";
 import type {
   AnswerInput,
   Access,
@@ -36,6 +36,8 @@ import type {
 import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
+import { useAgentPageAsk } from "@/state/agentSignIn";
+import { providerForSetting } from "@/state/providerDestination";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
@@ -279,6 +281,10 @@ function conversationHeld(id: string): boolean {
 
 function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
   const { selection: shown } = useApp.getState();
+  if (selection !== shown) {
+    cancelSettingReveal();
+    useAgentPageAsk.setState({ ask: null });
+  }
   // What leaving Settings goes back to, however it was reached (Back and Forward too).
   if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
   recordPlace(selection, mode);
@@ -333,14 +339,17 @@ export type SettingsPageLink = SettingsPageId | keyof typeof MERGED_SETTINGS_PAG
  * Shows a page of Settings (what to go back to is remembered by `select`). A merged page's id
  * opens the page it is part of at the row it held.
  */
-export function openSettings(page: SettingsPageLink = "general"): void {
+export function openSettings(page: SettingsPageLink = "general", row?: string): void {
   if (Object.hasOwn(MERGED_SETTINGS_PAGES, page)) {
     const merged = MERGED_SETTINGS_PAGES[page as keyof typeof MERGED_SETTINGS_PAGES];
-    select({ type: "settings", page: merged.page });
-    revealSetting(merged.row);
+    openSettings(merged.page, row ?? merged.row);
     return;
   }
-  select({ type: "settings", page: page as SettingsPageId });
+  const provider = page === "providers" && row ? providerForSetting(row) : null;
+  select(provider
+    ? { type: "settings", page: "providers", detail: { provider } }
+    : { type: "settings", page: page as SettingsPageId });
+  if (row) revealSetting(row);
 }
 
 /** Leaves Settings for what was shown before it (a new chat if that conversation is gone). */
@@ -365,6 +374,8 @@ export function toggleSettings(): void {
 export function stepHistory(delta: -1 | 1): void {
   const target = stepPlace(delta);
   if (!target) return;
+  // A native browser page can own the keyboard when the View menu asks to leave it.
+  if (typeof document !== "undefined" && !document.hasFocus()) void browserFocus(null).catch(() => {});
   const { conversations, projects } = useApp.getState();
   const gone =
     (target.type === "conversation" && !conversations[target.id]) ||

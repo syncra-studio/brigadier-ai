@@ -27,7 +27,7 @@ export const VENDOR_LABELS: Record<ProviderKind, string> = {
   codex: "Codex",
 };
 
-export const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
+export { PROVIDERS } from "@/lib/providerKinds";
 
 export const CATEGORIES: readonly TaskCategory[] = [
   "scout",

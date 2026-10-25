@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { BackLink } from "@/app/settings/BackLink";
@@ -46,6 +46,18 @@ export function SettingsPage({
   className?: string;
   sectionsClassName?: string;
 }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  const selection = useApp((s) => s.selection);
+  useEffect(() => {
+    // Run in the page itself, including when loaded lazily. A removed page control leaves
+    // focus on body; search and titlebar controls keep their focus across navigation.
+    const frame = requestAnimationFrame(() => {
+      if (selection.type === "settings" && document.activeElement === document.body) {
+        heading.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selection]);
   return (
     <div data-slot="settings-page" className="relative flex h-full flex-col">
       <div
@@ -71,7 +83,7 @@ export function SettingsPage({
             <div className="flex min-w-0 flex-1 items-center gap-3.5">
               {mark}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <h1 className="text-page-title font-medium">{title}</h1>
+                <h1 ref={heading} tabIndex={-1} className="text-page-title font-medium">{title}</h1>
                 {description && <p className="text-foreground/65 text-sm">{description}</p>}
               </div>
             </div>

@@ -145,7 +145,7 @@ test("the old Accounts and Usage ids open Providers at the accounts", async () =
     const { useReveal } = await server.ssrLoadModule("/src/app/settings/reveal.ts");
     for (const id of ["accounts", "usage"]) {
       openSettings(id);
-      assert.deepEqual(useApp.getState().selection, { type: "settings", page: "providers" });
+      assert.deepEqual(useApp.getState().selection, { type: "settings", page: "providers", detail: { provider: "claude" } });
       assert.equal(useReveal.getState().label, "Accounts");
     }
     openSettings("routing");

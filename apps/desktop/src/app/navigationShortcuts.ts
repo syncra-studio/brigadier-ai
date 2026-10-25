@@ -14,7 +14,7 @@ const MOUSE_FORWARD = 4;
  */
 export function useNavigationShortcuts(): void {
   useEffect(() => {
-    const blocked = () => document.querySelector('[role="dialog"], [role="menu"]') !== null;
+    const blocked = () => document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
       const mac = useApp.getState().info?.platform === "macos";
