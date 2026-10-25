@@ -534,6 +534,7 @@ impl SessionManager {
             background: None,
             mcp: None,
             workers: Some(rows),
+            jobs: None,
         });
     }
 

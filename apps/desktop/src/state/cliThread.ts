@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 
+import { turnCommands } from "@/app/conversation/turnCommands";
 import { workingWorkers } from "@/app/conversation/turnWorkers";
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
@@ -118,7 +119,7 @@ function isDelta(event: ProviderEvent): boolean {
 }
 
 /** What news carries whole, all of it, when any of it changed: the view's, as it stands. */
-type Lists = Partial<Pick<ThreadView, "background" | "mcp" | "workers">>;
+type Lists = Partial<Pick<ThreadView, "background" | "mcp" | "workers" | "jobs">>;
 
 /** The lists a piece of news carries. */
 function listsOf(news: ThreadNews): Lists {
@@ -126,6 +127,7 @@ function listsOf(news: ThreadNews): Lists {
     ...(news.background && { background: news.background }),
     ...(news.mcp && { mcp: news.mcp }),
     ...(news.workers && { workers: news.workers }),
+    ...(news.jobs && { jobs: news.jobs }),
   };
 }
 
@@ -294,6 +296,14 @@ export function useTurnWorkers(conversationId: string | null, starts: readonly n
   return useCliThread((s) => {
     const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
     return view ? workingWorkers(workersOf(conversationId!, view), view.turns, starts) : 0;
+  });
+}
+
+/** How many of the background commands a session's block, its turns started at `starts`, started still hold it (`turnCommands`, D21). */
+export function useTurnCommands(conversationId: string | null, starts: readonly number[]): number {
+  return useCliThread((s) => {
+    const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
+    return view ? turnCommands(view, view.turns, starts) : 0;
   });
 }
 

@@ -2,7 +2,7 @@ import { type FC, useMemo } from "react";
 
 import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
-import { workersWaitWords } from "@/app/conversation/requestTime";
+import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import type { BlockState } from "@/app/conversation/blocks";
 import { Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
@@ -18,6 +18,8 @@ export type ThreadStatusProps = {
   quotaWait: QuotaWait | null;
   /** The turn is over, and this many of the workers it started still work. */
   workers?: number;
+  /** The turn is over, and this many background commands it started still hold it (D21). */
+  commands?: number;
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */
@@ -33,10 +35,12 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const words = useWorkerText(view?.head?.text ?? "");
   const head = view?.head;
   const workers = props?.workers ?? 0;
+  const commands = props?.commands ?? 0;
   return useMemo(() => {
     if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" as const };
+    if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" as const };
     return head ? { ...head, text: words } : null;
-  }, [head, words, workers]);
+  }, [head, words, workers, commands]);
 }
 
 /** The status line on its own, when no work row says it; a long run's says how long it has gone. */

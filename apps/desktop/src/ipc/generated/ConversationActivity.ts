@@ -19,6 +19,11 @@ turnOpen?: boolean,
  */
 workersWorking?: boolean, 
 /**
+ * Its CLI's background commands hold its turn, or one's end owes it a turn
+ * (`thread_view::CliJobs`, D21).
+ */
+commandsWorking?: boolean, 
+/**
  * When its last recorded CLI turn ended; absent before any turn ended.
  */
 turnEndedAtMs?: number, 

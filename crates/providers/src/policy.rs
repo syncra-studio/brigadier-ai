@@ -43,6 +43,28 @@ pub fn unwrapped_command(command: &str) -> String {
     command.trim().to_owned()
 }
 
+/// Whether `command` (or the script of its `sh -c` wrapper) runs `brigadier <sub>` as one of its
+/// commands (`brigadier start … && brigadier wait`, `X=1 /usr/local/bin/brigadier wait`), never
+/// words inside an argument (`echo 'brigadier wait'`). The app's Background rows read a command
+/// the same (`runsBrigadier`).
+pub fn runs_brigadier(command: &str, sub: &str) -> bool {
+    simple_commands(&unwrapped_command(command))
+        .iter()
+        .any(|words| {
+            let mut words = words.iter().skip_while(|word| {
+                word.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && !name.starts_with(|c: char| c.is_ascii_digit())
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+            });
+            words
+                .next()
+                .is_some_and(|program| program.rsplit('/').next() == Some("brigadier"))
+                && words.next().is_some_and(|word| word == sub)
+        })
+}
+
 /// Whether `command` (or the script of its `sh -c` wrapper) runs `brigadier` and nothing else:
 /// one command whose program is `brigadier` itself, its words plain or quoted, with no
 /// operator, redirection, expansion or substitution; its text may come from a here-document
@@ -734,6 +756,42 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn a_command_runs_brigadier_wait_only_as_a_command_of_its_own() {
+        for command in [
+            "brigadier wait",
+            "brigadier wait w1 w2 --json",
+            "brigadier start \"implement the fix\" && brigadier wait",
+            "brigadier start fix; brigadier wait w1",
+            "brigadier start fix\nbrigadier wait",
+            "brigadier start fix || brigadier wait",
+            "BRIGADIER_SESSION_ID=s brigadier wait",
+            "/usr/local/bin/brigadier wait",
+            "/bin/zsh -lc 'cd /repo && brigadier start fix && brigadier wait'",
+        ] {
+            assert!(runs_brigadier(command, "wait"), "{command}");
+        }
+        for command in [
+            "pnpm test",
+            "wait",
+            "brigadier start fix",
+            "brigadier waiting",
+            "echo 'brigadier wait'",
+            "echo brigadier wait",
+            "gh run watch 12 --exit-status",
+        ] {
+            assert!(!runs_brigadier(command, "wait"), "{command}");
+        }
+        assert!(runs_brigadier(
+            "brigadier preview start --purpose user pnpm dev",
+            "preview"
+        ));
+        assert!(!runs_brigadier(
+            "brigadier preview start --purpose user pnpm dev",
+            "wait"
+        ));
+    }
 
     /// A folder `real/scratch/outputs` and a symlink `link` → `real`, as `/tmp` → `/private/tmp`.
     struct Linked {

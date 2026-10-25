@@ -7,7 +7,7 @@ use brigadier_providers::{
 };
 
 use super::SessionManager;
-use super::conversation::ConvLive;
+use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive};
 use super::session_dir::read_lineage;
 use crate::model::{ContextUsage, ConversationId};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
@@ -40,12 +40,30 @@ impl SessionManager {
         let mut background = None;
         let mut mcp = None;
         let mut read_output = false;
+        let jobs;
+        let mut wake_owed = None;
         {
             let mut threads = self.cli_threads.lock().unwrap();
             let live = threads.entry(conv.id.clone()).or_default();
+            if let Some(event) = event {
+                live.note_command(event);
+            }
             match event {
                 Some(ProviderEvent::BackgroundTask { task }) => {
+                    // A command that ends while no turn is open starts one of its CLI's: it is
+                    // owed until it starts, or the grace passes (D21).
+                    let ended = task.status != BackgroundTaskStatus::Running
+                        && task.kind != BackgroundTaskKind::Agent
+                        && live.background.iter().any(|held| {
+                            held.id == task.id && held.status == BackgroundTaskStatus::Running
+                        });
                     background = Some(update_background(&mut live.background, task, at));
+                    if ended && !live.open {
+                        let until = at
+                            + i64::try_from(BACKGROUND_TURN_GRACE.as_millis()).unwrap_or(i64::MAX);
+                        live.waking_until = Some(until);
+                        wake_owed = Some(until);
+                    }
                     read_output = !live.reading_output && reads_output(&live.background);
                     live.reading_output |= read_output;
                 }
@@ -63,6 +81,7 @@ impl SessionManager {
                 // The CLI's background tasks end with it.
                 Some(ProviderEvent::Exited { .. }) | None if !live.background.is_empty() => {
                     live.background.clear();
+                    live.waking_until = None;
                     background = Some(Vec::new());
                 }
                 _ => {}
@@ -92,6 +111,7 @@ impl SessionManager {
             if on_its_own {
                 live.awaiting_user = false;
                 live.continues = true;
+                live.waking_until = None;
                 // The thread reads its turns again: that turn is open once more.
                 opened = true;
                 if live.user_message.is_none() {
@@ -111,6 +131,8 @@ impl SessionManager {
                             user_message: live.user_message.take(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
+                            commands: std::mem::take(&mut live.commands),
+                            jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
@@ -128,6 +150,8 @@ impl SessionManager {
                             open: true,
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
+                            commands: std::mem::take(&mut live.commands),
+                            jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
@@ -209,6 +233,7 @@ impl SessionManager {
                     crate::logging::private_trace!(conv.private_logs, warn, "could not note a turn"; conversation = %conv.id, error = %err);
                 }
             }
+            jobs = said_jobs(live, at);
         }
         if !news.is_empty()
             || opened
@@ -216,6 +241,7 @@ impl SessionManager {
             || context.is_some()
             || background.is_some()
             || mcp.is_some()
+            || jobs.is_some()
         {
             let _ = self.thread_news.send(ThreadNews {
                 conversation_id: conv.id.clone(),
@@ -227,7 +253,11 @@ impl SessionManager {
                 background,
                 mcp,
                 workers: None,
+                jobs,
             });
+        }
+        if let Some(until) = wake_owed {
+            self.wake_grace(conv.id.clone(), until);
         }
         // A command of the session may merge a worker's branch, or move its own.
         if matches!(
@@ -296,9 +326,46 @@ impl SessionManager {
                     background: Some(background),
                     mcp: None,
                     workers: None,
+                    jobs: None,
                 });
             }
         }
+    }
+
+    /// The turn a background command's end owes conversation `id` (`CliJobs::waking`) that
+    /// hasn't started by `until` won't: its sidebar row and the turn that started the command
+    /// stop waiting for it.
+    fn wake_grace(&self, id: ConversationId, until: i64) {
+        let manager = self.arc();
+        tokio::spawn(async move {
+            let wait = until.saturating_sub(now_ms()).max(0);
+            tokio::time::sleep(std::time::Duration::from_millis(wait.unsigned_abs())).await;
+            let jobs = {
+                let mut threads = manager.cli_threads.lock().unwrap();
+                let Some(live) = threads.get_mut(&id) else {
+                    return;
+                };
+                if live.waking_until != Some(until) {
+                    return;
+                }
+                live.waking_until = None;
+                said_jobs(live, now_ms())
+            };
+            if let Some(jobs) = jobs {
+                let _ = manager.thread_news.send(ThreadNews {
+                    conversation_id: id,
+                    entries: Vec::new(),
+                    opened: false,
+                    ended: None,
+                    turn_ended_at_ms: None,
+                    context: None,
+                    background: None,
+                    mcp: None,
+                    workers: None,
+                    jobs: Some(jobs),
+                });
+            }
+        });
     }
 
     /// Where conversation `id`'s CLI turn stands: open now, else how its last turn ended.
@@ -337,6 +404,12 @@ impl SessionManager {
             if let Ok(tasks) = self.core.tasks(&entry.conversation_id).await {
                 entry.workers_working = self.workers_working(&tasks);
             }
+            entry.commands_working = self
+                .cli_threads
+                .lock()
+                .unwrap()
+                .get(&entry.conversation_id)
+                .is_some_and(|live| !live.jobs(now_ms()).is_empty());
         }
         activity
     }
@@ -468,6 +541,16 @@ const OUTPUT_SHOWN: u64 = 256 * 1024;
 const LINE_MAX: usize = 200;
 
 /// `task` as it stands now among `tasks`, those ended long ago dropped; the tasks after.
+/// What of `live`'s background work holds its turn at `at`, when that changed since it was
+/// last said.
+fn said_jobs(live: &mut LiveTurn, at: i64) -> Option<thread_view::CliJobs> {
+    let jobs = live.jobs(at);
+    (jobs != live.jobs_said).then(|| {
+        live.jobs_said = jobs.clone();
+        jobs
+    })
+}
+
 pub(super) fn update_background(
     tasks: &mut Vec<BackgroundTask>,
     task: &BackgroundTask,

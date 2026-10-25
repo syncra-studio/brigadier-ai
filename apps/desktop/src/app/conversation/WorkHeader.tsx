@@ -25,13 +25,16 @@ export const WorkHeader: FC<{
   answerAtMs: number | undefined;
   /** Over, the workers it started that still work: it says it waits for them, since it ended. */
   workers: number;
+  /** Over, the background commands it started that still hold it (D21): it says it waits for them. */
+  commands?: number;
   onToggle: () => void;
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, open, foldable, quota, answering, answerAtMs, workers, onToggle, denied, onDenied }) => {
-  const now = useTicking(isLive(meta.state) || workers > 0);
-  const elapsed = workers > 0 ? Math.max(0, now - (meta.endedAtMs ?? now)) : turnTime(meta, now, answerAtMs);
+}> = ({ meta, open, foldable, quota, answering, answerAtMs, workers, commands = 0, onToggle, denied, onDenied }) => {
+  const held = workers > 0 || commands > 0;
+  const now = useTicking(isLive(meta.state) || held);
+  const elapsed = held ? Math.max(0, now - (meta.endedAtMs ?? now)) : turnTime(meta, now, answerAtMs);
   // Waiting on its own question card, the turn still reads as working.
   const onCard = !answering && waitsOnCard(meta);
   const state = answering ? "done" : onCard ? "working" : meta.state;
@@ -39,7 +42,7 @@ export const WorkHeader: FC<{
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" && interruptedByQuit(String(status.error ?? ""));
   });
-  const label = headerLabel(state, elapsed, quota, interrupted, workers);
+  const label = headerLabel(state, elapsed, quota, interrupted, workers, commands);
   const text = (
     <span
       data-slot="request-work-label"

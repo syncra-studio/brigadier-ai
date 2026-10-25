@@ -127,3 +127,25 @@ test("turn-end timestamps survive snapshots and worker-only news, independent of
   applyActivityNews({ conversationId: "done", entries: [], ended: "done", turnEndedAtMs: 456 });
   assert.equal(useActivity.getState().byConversation.done?.turnEndedAtMs, 456);
 });
+
+test("a session stays Working while its CLI's background commands hold its turn, and while one's end owes it a turn (D21)", () => {
+  const id = "watching";
+  applyActivityNews({ conversationId: id, entries: [], opened: true });
+  applyActivityNews({ conversationId: id, entries: [], jobs: { holding: ["bwatch12"] } });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done" });
+  assert.equal(row(id).running, true, "its turn ended; the watcher it started still runs");
+  assert.equal(tabState(row(id), false, false, true), "working");
+  // The watcher ended: its end owes the turn it starts.
+  applyActivityNews({ conversationId: id, entries: [], jobs: { waking: true } });
+  assert.equal(row(id).running, true);
+  // That turn starts, then ends.
+  applyActivityNews({ conversationId: id, entries: [], opened: true, jobs: {} });
+  assert.equal(row(id).running, true);
+  applyActivityNews({ conversationId: id, entries: [], ended: "done" });
+  assert.equal(row(id).running, false);
+  assert.equal(tabState(row(id), false, false, true), "done");
+  // A reconnect's snapshot says it too.
+  const snapshot = fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], commandsWorking: true });
+  assert.equal(rowActivity(snapshot).running, true);
+  assert.equal(rowActivity({ ...snapshot, commandsWorking: false }).running, false);
+});

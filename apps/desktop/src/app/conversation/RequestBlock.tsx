@@ -50,7 +50,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useTurnWorkers } from "@/state/cliThread";
+import { useTurnCommands, useTurnWorkers } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -163,7 +163,11 @@ export const RequestBlock: FC = () => {
   });
   // The workers its turn started that still work: over, it stays open and live until they finish
   // (its own wake-ups when they do are in the same turn), with no end cards yet; then it folds.
-  const holding = useTurnWorkers(conversationId, meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS);
+  const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
+  const holding = useTurnWorkers(conversationId, starts);
+  // So do the background commands it started (a CI watch, a Monitor) until the turn their end
+  // starts is over (D21).
+  const commands = useTurnCommands(conversationId, starts);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -171,7 +175,7 @@ export const RequestBlock: FC = () => {
   }, [hasCards]);
   if (!meta) return null;
 
-  const held = holding > 0;
+  const held = holding > 0 || commands > 0;
   const live = isLive(meta.state) || held;
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
@@ -214,7 +218,7 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
-    ...(held && { workers: holding }),
+    ...(held && { workers: holding, commands }),
   };
 
   return (
@@ -246,6 +250,7 @@ export const RequestBlock: FC = () => {
             answering={answering !== null}
             answerAtMs={answerAtMs}
             workers={holding}
+            commands={commands}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {

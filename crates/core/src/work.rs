@@ -1476,6 +1476,11 @@ pub struct ConversationActivity {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub workers_working: bool,
+    /// Its CLI's background commands hold its turn, or one's end owes it a turn
+    /// (`thread_view::CliJobs`, D21).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub commands_working: bool,
     /// When its last recorded CLI turn ended; absent before any turn ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

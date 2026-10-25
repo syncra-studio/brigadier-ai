@@ -348,3 +348,135 @@ async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request
     assert_eq!(after.turns[0].requests, [asked.clone(), joined.to_owned()]);
     flow.stop().await;
 }
+
+/// A background command the session started holds its turn, as its workers do (D21): Claude's
+/// stream (`fixtures/claude-background-watch.jsonl`, D9(c)) starts a watcher and a
+/// `brigadier wait` it moves to the background, then ends its turn. The view and the sidebar's
+/// snapshot hold the watcher, never the wait; once the watcher ends its end owes a turn (still
+/// Working) until Claude starts it; a command whose end starts none stops being waited for
+/// after the grace.
+#[tokio::test]
+async fn a_sessions_background_command_holds_its_turn_until_the_turn_its_end_starts() {
+    use brigadier_providers::ProviderEvent;
+    use brigadier_providers::claude::parse::{Output, Parser};
+
+    let flow = Flow::start(
+        "cli-thread-background-holds",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let conv = flow.manager.conv(&id).unwrap();
+    let mut news = flow.manager.subscribe_thread_news();
+    let mut parser = Parser::live();
+    let mut phases = Vec::new();
+    let mut phase = Vec::new();
+    for line in include_str!("fixtures/claude-background-watch.jsonl").lines() {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        if let Some(name) = value.get("phase").and_then(serde_json::Value::as_str) {
+            phases.push((name.to_owned(), std::mem::take(&mut phase)));
+        } else if value.get("fixture").is_none() {
+            phase.extend(
+                parser
+                    .feed(line)
+                    .into_iter()
+                    .filter_map(|output| match output {
+                        Output::Event(event) => Some(event),
+                        _ => None,
+                    }),
+            );
+        }
+    }
+    let commands_working = || async {
+        flow.manager
+            .activity()
+            .await
+            .into_iter()
+            .find(|entry| entry.conversation_id == id)
+            .is_some_and(|entry| entry.commands_working)
+    };
+    let mut said = Vec::new();
+    let mut follow = async |events: Vec<ProviderEvent>| {
+        for event in events {
+            flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+        }
+        while let Ok(item) = news.try_recv() {
+            if item.conversation_id == id
+                && let Some(jobs) = item.jobs
+            {
+                said.push(jobs);
+            }
+        }
+    };
+    let mut phases = phases.into_iter();
+
+    let (name, events) = phases.next().unwrap();
+    assert_eq!(name, "watching");
+    follow(events).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(TurnEnd::Done)
+    );
+    // The watcher holds the turn; the wait, moved to the background, doesn't.
+    assert_eq!(view.jobs.holding, ["bwatch12"], "{:#?}", view.background);
+    assert!(!view.jobs.waking);
+    assert!(commands_working().await, "the sidebar says Working");
+
+    let (name, events) = phases.next().unwrap();
+    assert_eq!(name, "owed");
+    follow(events).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.jobs.holding.is_empty());
+    assert!(view.jobs.waking, "its end owes the turn it starts");
+    assert!(
+        commands_working().await,
+        "still Working until that turn starts"
+    );
+
+    let (name, events) = phases.next().unwrap();
+    assert_eq!(name, "woken");
+    follow(events).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(
+        view.jobs.is_empty(),
+        "the turn started: its own open turn says Working"
+    );
+    assert_eq!(view.turns.last().and_then(|turn| turn.end), None);
+
+    let (name, events) = phases.next().unwrap();
+    assert_eq!(name, "answered");
+    follow(events).await;
+    assert!(!commands_working().await, "done once that turn ends");
+
+    // A command whose end starts no turn: waited for only the grace.
+    let (name, events) = phases.next().unwrap();
+    assert_eq!(name, "no wake");
+    follow(events).await;
+    assert!(flow.manager.thread_view(&id).unwrap().jobs.waking);
+    tokio::time::sleep(super::super::conversation::BACKGROUND_TURN_GRACE * 2).await;
+    follow(Vec::new()).await;
+    assert!(flow.manager.thread_view(&id).unwrap().jobs.is_empty());
+    assert!(!commands_working().await);
+    // Each change was said once, as it came: held, owed, started, held again, owed, given up.
+    let holding = |jobs: &crate::thread_view::CliJobs| (jobs.holding.clone(), jobs.waking);
+    assert_eq!(
+        said.iter().map(holding).collect::<Vec<_>>(),
+        [
+            (vec!["bwatch12".to_owned()], false),
+            (vec![], true),
+            (vec![], false),
+            (vec!["b13".to_owned()], false),
+            (vec![], true),
+            (vec![], false),
+        ]
+    );
+    flow.stop().await;
+}

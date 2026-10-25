@@ -500,7 +500,7 @@ impl Background {
 /// How long a request waits, once its background jobs have ended, for the turn their end
 /// starts: the CLI starts it at once, so one that doesn't come won't.
 #[cfg(not(test))]
-const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
+pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
 

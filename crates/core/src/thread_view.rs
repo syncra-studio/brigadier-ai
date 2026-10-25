@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use brigadier_providers::session_file::{self, FileEntry};
 use brigadier_providers::{
-    BackgroundTask, ErrorKind, LimitHit, McpServerState, ProviderEvent, ProviderKind, Role,
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ErrorKind, LimitHit, McpServerState,
+    ProviderEvent, ProviderKind, Role, policy,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -45,6 +46,34 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<SeamMark>>", optional)]
     pub seams: Vec<SeamMark>,
+    /// What of its CLI's background work keeps its turn going (D21).
+    #[serde(default, skip_serializing_if = "CliJobs::is_empty")]
+    #[ts(as = "Option<CliJobs>", optional)]
+    pub jobs: CliJobs,
+}
+
+/// What of a session CLI's background work keeps the turn that started it going (D21): the
+/// turn's work stays open and live, and the sidebar says Working, as for its workers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CliJobs {
+    /// The background commands its CLI runs now that hold their turn, by task id: not a
+    /// subagent, a `brigadier wait` (its workers hold the turn) or a `brigadier preview` call
+    /// (a preview has its own row and runs on).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub holding: Vec<String>,
+    /// One ended while no turn of its CLI's was open, and the turn its end starts hasn't yet:
+    /// until it does, or a grace of a minute passes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub waking: bool,
+}
+
+impl CliJobs {
+    pub fn is_empty(&self) -> bool {
+        self.holding.is_empty() && !self.waking
+    }
 }
 
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
@@ -253,6 +282,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub workers: Option<Vec<WorkerRow>>,
+    /// What of its CLI's background work holds its turn, when that changed (D21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub jobs: Option<CliJobs>,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
@@ -294,6 +327,97 @@ pub(crate) struct LiveTurn {
     pub reading_output: bool,
     /// Its CLI's MCP servers: they outlast the turn too.
     pub mcp: Vec<McpServerState>,
+    /// The commands of its CLI's latest calls, by item id, whether or not they began in the
+    /// background (Claude moves a running command there): a background task is named by its
+    /// call. Those of its background tasks are kept while the tasks are.
+    pub commands: Vec<(String, String)>,
+    /// A background command ended while no turn was open: until when the turn its end starts
+    /// is owed (`CliJobs::waking`).
+    pub waking_until: Option<i64>,
+    /// What of its background work was last said to hold its turn.
+    pub jobs_said: CliJobs,
+}
+
+/// How many commands of calls not (yet) a background task's are kept.
+const COMMANDS_KEPT: usize = 64;
+
+impl LiveTurn {
+    /// Notes the command of a call `event` says, if any: Claude's shell call (its streamed
+    /// arguments say it, maybe after its start), a Codex command.
+    pub(crate) fn note_command(&mut self, event: &ProviderEvent) {
+        let (item, command) = match event {
+            ProviderEvent::ToolCall {
+                item_id,
+                input: Some(input),
+                ..
+            } => {
+                let Some(command) = serde_json::from_str::<serde_json::Value>(input)
+                    .ok()
+                    .and_then(|args| args.get("command")?.as_str().map(str::to_owned))
+                else {
+                    return;
+                };
+                (item_id, command)
+            }
+            ProviderEvent::Command {
+                item_id, command, ..
+            } => (item_id, command.clone()),
+            _ => return,
+        };
+        self.commands.retain(|(id, _)| id != item);
+        self.commands.push((item.clone(), command));
+        let tasks: Vec<&str> = self
+            .background
+            .iter()
+            .filter_map(|task| task.item_id.as_deref())
+            .collect();
+        let others = self
+            .commands
+            .iter()
+            .filter(|(id, _)| !tasks.contains(&id.as_str()))
+            .count();
+        if others > COMMANDS_KEPT
+            && let Some(at) = self
+                .commands
+                .iter()
+                .position(|(id, _)| !tasks.contains(&id.as_str()))
+        {
+            self.commands.remove(at);
+        }
+    }
+
+    /// The command background task `task` runs, when its CLI said it.
+    fn command_of<'a>(&'a self, task: &'a BackgroundTask) -> Option<&'a str> {
+        if task.kind == BackgroundTaskKind::Terminal {
+            return Some(&task.label);
+        }
+        let item = task.item_id.as_deref()?;
+        self.commands
+            .iter()
+            .find(|(id, _)| id == item)
+            .map(|(_, command)| command.as_str())
+    }
+
+    /// What of its CLI's background work holds its turn now (`CliJobs`).
+    pub(crate) fn jobs(&self, now: i64) -> CliJobs {
+        let holding = self
+            .background
+            .iter()
+            .filter(|task| {
+                task.status == BackgroundTaskStatus::Running
+                    && task.kind != BackgroundTaskKind::Agent
+                    && !self.command_of(task).is_some_and(|command| {
+                        policy::runs_brigadier(command, "wait")
+                            || policy::runs_brigadier(command, "preview")
+                    })
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        CliJobs {
+            holding,
+            waking: !self.open && self.waking_until.is_some_and(|until| now < until),
+        }
+    }
 }
 
 /// A session file's items, with the length and change time of it and its subagents' files
@@ -408,6 +532,9 @@ pub(crate) fn view(
         mcp: live.map(|live| live.mcp.clone()).unwrap_or_default(),
         workers: Vec::new(),
         seams: Vec::new(),
+        jobs: live
+            .map(|live| live.jobs(crate::now_ms()))
+            .unwrap_or_default(),
     }
 }
 

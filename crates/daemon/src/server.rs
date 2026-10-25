@@ -2996,6 +2996,7 @@ mod tests {
             mcp: vec![],
             workers: vec![],
             seams: vec![],
+            jobs: Default::default(),
         };
         let frame = ServerFrame::Response {
             id: 7,

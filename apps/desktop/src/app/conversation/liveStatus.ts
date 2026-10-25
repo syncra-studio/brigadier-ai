@@ -1,5 +1,6 @@
 import { isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
+import { commandsWaitWords } from "@/app/conversation/requestTime";
 import { activelyWorking } from "@/app/conversation/taskActivity";
 import type { QuotaWait, Task } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
@@ -142,8 +143,7 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   // starts the turn that answers.
   const jobs = requestIds.reduce((sum, id) => sum + (board.requests[id]?.backgroundJobs ?? 0), 0);
   if (jobs > 0) {
-    const text = jobs === 1 ? "Waiting for a command" : `Waiting for ${jobs} commands`;
-    return { head: { text, tone: "still" } };
+    return { head: { text: commandsWaitWords(jobs), tone: "still" } };
   }
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the
   // lead's text waits for nothing; the user is asked on cards.

@@ -25,13 +25,20 @@ export function workersWaitWords(workers: number): string {
   return workers === 1 ? "Waiting for a worker" : `Waiting for ${workers} workers`;
 }
 
+/** What a turn over says while background commands it started still run, or one's end is owed its turn (D21). */
+export function commandsWaitWords(commands: number): string {
+  return commands === 1 ? "Waiting for a command" : `Waiting for ${commands} commands`;
+}
+
 /**
- * A turn's header: how long it worked, and how it ended. `workers`: a turn over whose workers
- * still work says it waits for them, and for how long.
+ * A turn's header: how long it worked, and how it ended. `workers`, `commands`: a turn over
+ * whose workers still work, or whose background commands still run, says it waits for them,
+ * and for how long; its workers first.
  */
-export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, workers = 0): string {
+export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, workers = 0, commands = 0): string {
   const time = formatDuration(elapsed);
   if (workers > 0) return `${workersWaitWords(workers)} · ${time}`;
+  if (commands > 0) return `${commandsWaitWords(commands)} · ${time}`;
   switch (state) {
     case "working": {
       if (quota) return `Waiting for quota · ${time}`;

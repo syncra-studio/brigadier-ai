@@ -1,0 +1,23 @@
+{"fixture":"claude-background-watch","cliVersion":"2.1.308","note":"D9(c)/D21: Claude stream lines in the shapes Claude Code 2.1.308 sends (parse.rs tests); a {\"phase\":\u2026} line marks where the test checks. Fold into the per-version recording set."}
+{"type":"user","isReplay":true,"uuid":"u-watch","message":{"role":"user","content":"Start the nightly and tell me how it ends."}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_watch","name":"Bash","input":{"command":"gh run watch 12 --exit-status","description":"Watch nightly run 12","run_in_background":true}},{"type":"tool_use","id":"toolu_wait","name":"Bash","input":{"command":"brigadier wait","description":"Wait for the workers"}}]}}
+{"type":"system","subtype":"task_started","task_id":"bwatch12","tool_use_id":"toolu_watch","description":"Watch nightly run 12","is_backgrounded":true,"task_type":"local_bash"}
+{"type":"system","subtype":"task_started","task_id":"bwait1","tool_use_id":"toolu_wait","description":"Wait for the workers","is_backgrounded":false,"task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","task_id":"bwait1","patch":{"is_backgrounded":true}}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bwatch12","task_type":"local_bash","description":"Watch nightly run 12"},{"task_id":"bwait1","task_type":"local_bash","description":"Wait for the workers"}]}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m2","content":[{"type":"text","text":"The nightly runs; I'm watching run 12."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"The nightly runs; I'm watching run 12."}
+{"phase":"watching"}
+{"type":"system","subtype":"task_notification","task_id":"bwatch12","tool_use_id":"toolu_watch","status":"completed","output_file":"/private/tmp/claude-501/-w/s1/tasks/bwatch12.output","summary":"Background command \"gh run watch 12 --exit-status\" completed (exit code 0)"}
+{"phase":"owed"}
+{"type":"user","isReplay":true,"uuid":"n-watch","message":{"role":"user","content":"<task-notification>\n<task-id>bwatch12</task-id>\n<status>completed</status>\n<summary>Background command &quot;gh run watch 12 --exit-status&quot; completed (exit code 0)</summary>\n</task-notification>"}}
+{"phase":"woken"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m3","content":[{"type":"text","text":"Run 12 passed."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Run 12 passed."}
+{"phase":"answered"}
+{"type":"user","isReplay":true,"uuid":"u-13","message":{"role":"user","content":"Watch run 13 too."}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m4","content":[{"type":"tool_use","id":"toolu_13","name":"Bash","input":{"command":"gh run watch 13 --exit-status","description":"Watch run 13","run_in_background":true}}]}}
+{"type":"system","subtype":"task_started","task_id":"b13","tool_use_id":"toolu_13","description":"Watch run 13","is_backgrounded":true,"task_type":"local_bash"}
+{"type":"result","subtype":"success","is_error":false,"result":"Watching run 13."}
+{"type":"system","subtype":"task_notification","task_id":"b13","tool_use_id":"toolu_13","status":"stopped","output_file":"/private/tmp/claude-501/-w/s1/tasks/b13.output"}
+{"phase":"no wake"}
