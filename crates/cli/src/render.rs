@@ -525,9 +525,22 @@ pub fn saved_images(
     Ok(output)
 }
 
-/// `ask`: the user's answer, as they gave it.
+/// `ask`: the user's answer, as they gave it; for several questions, each numbered with its
+/// answer under it.
 pub fn ask(output: &AskOutput) -> String {
-    format!("{}\n", output.answer.trim_end())
+    if output.answers.len() < 2 {
+        return format!("{}\n", output.answer.trim_end());
+    }
+    let mut out = String::new();
+    for (index, answer) in output.answers.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {}\n   {}\n",
+            index + 1,
+            answer.question.trim(),
+            answer.answer.trim_end().replace('\n', "\n   ")
+        ));
+    }
+    out
 }
 
 /// A usage window id as people say it ("five_hour" -> "5-hour").

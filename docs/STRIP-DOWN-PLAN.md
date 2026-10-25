@@ -159,11 +159,13 @@ just like the delegator, how an orchestrator works"; supersedes old-run D43 "Def
   finished, unclosed worker (`brigadier send`) while its context is useful and not near full, which `brigadier
   workers` shows; a closed worker is not resumed (run2-D38, run2-D42).
 - Grilling is part of the skill: before a big or unclear job it first answers what the code or a web search can,
-  then asks the user one question at a time with a recommended answer, and says the shared understanding back
+  then asks the user all it can at once on one `brigadier ask` card, each question with a recommended answer,
+  a next round only for questions that hang on those answers (the user, 2026-10-25: never one card per
+  question; this supersedes "one question at a time"), and says the shared understanding back
   before work starts. It answers its workers' questions itself when the code or a web search settle them, else
   asks the user; the user always decides spending money, a push or publish they didn't ask for, credentials,
   and changes to their settled decisions (run2-D32; the always-ask list is proposed, from the Delegator's
-  rules). A Chat's and side chat's own grilling line points to the skill's: one question at a time, no
+  rules). A Chat's and side chat's own grilling line points to the skill's: all at once on one card, no
   numbered rounds (run2-D32).
 - After a block of work it replies in at most 3–5 short lines: what changed, what's next, what needs the user;
   workers keep full reports, which only the session reads (run2-D27).

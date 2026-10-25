@@ -564,13 +564,20 @@ fn sample(request: &CliRequest) -> CliReply {
                     .collect(),
             })
         }
-        CliRequest::Ask { options, .. } => CliReply::ok(&AskOutput {
-            answer: options
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "In my words".into()),
-            option: (!options.is_empty()).then_some(0),
-        }),
+        CliRequest::Ask { questions, .. } => CliReply::ok(&AskOutput::of(
+            questions
+                .iter()
+                .map(|item| AskAnswer {
+                    question: item.question.clone(),
+                    answer: item
+                        .options
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "In my words".into()),
+                    option: (!item.options.is_empty()).then_some(0),
+                })
+                .collect(),
+        )),
     }
 }
 
@@ -691,6 +698,18 @@ fn every_subcommands_json_output_fits_its_schema() {
             "ask", "--option", "Yes", "--option", "No", "--json", "Ship it?",
         ],
         &["ask", "--json", "What", "name?"],
+        &[
+            "ask",
+            "--question",
+            "Ship it?",
+            "--option",
+            "Yes",
+            "--option",
+            "No",
+            "--question",
+            "What name?",
+            "--json",
+        ],
         &["app", "state", "--json"],
         &[
             "app",
@@ -829,7 +848,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 15, sample);
+    let daemon = stand_in_daemon(&dir.0, 16, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -948,6 +967,26 @@ fn text_output_reads_well() {
         &["ask", "--option", "Yes", "--option", "No", "Ship", "it?"],
     ));
     assert_eq!(asked, "Yes\n");
+    // A round: each question numbered, its answer under it.
+    let round = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &[
+            "ask",
+            "--question",
+            "Ship it?",
+            "--option",
+            "Yes",
+            "--option",
+            "No",
+            "--question",
+            "What name?",
+        ],
+    ));
+    assert_eq!(
+        round,
+        "1. Ship it?\n   Yes\n2. What name?\n   In my words\n"
+    );
     let heard = daemon.join().unwrap();
     assert!(
         heard.contains(&serde_json::json!({"heard": true})),

@@ -248,7 +248,7 @@ pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
 
 /// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then one
 /// question at a time on a card, the shared understanding said back before it acts.
-const CHAT_GRILLING: &str = "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, grill them as the brigade skill says: first look up all you can, then ask one question at a time on a `brigadier ask` card, your recommended option first (never write \"Recommended\" yourself) with its why. Say the shared understanding back in a few lines before you act on it.";
+const CHAT_GRILLING: &str = "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, grill them as the brigade skill says: first look up all you can, then ask all you can at once on one `brigadier ask` card, each with your recommended option first (never write \"Recommended\" yourself) and its why; a next round only for questions that hang on those answers, never one card per question. Say the shared understanding back in a few lines before you act on it.";
 
 /// What a Chat can do as a thread (Q76, S28).
 const CHAT_THREAD: &str = chat_thread!();
@@ -530,11 +530,14 @@ mod tests {
         assert!(side.starts_with(&head));
         assert!(side.contains("Your shell runs only `brigadier` commands"));
         assert!(side.contains("starts no workers"));
-        // One way to grill, the brigade skill's: one question at a time, not numbered rounds
-        // (run2-D32).
+        // One way to grill, the brigade skill's (run2-D32): all it can ask at once on one card,
+        // a next round only for what hangs on those answers; never one question at a time, nor
+        // numbered rounds.
         for text in [&chat, &side] {
             assert!(text.contains("grill them as the brigade skill says"));
-            assert!(text.contains("one question at a time on a `brigadier ask` card"));
+            assert!(text.contains("ask all you can at once on one `brigadier ask` card"));
+            assert!(text.contains("never one card per question"));
+            assert!(!text.contains("one question at a time"));
             assert!(!text.contains("Round N"));
         }
         for target in [

@@ -6,7 +6,7 @@ use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::{
-    Agent, Answer, Capability, CliRequest, Judgment, Permission, StartRequest, Tool,
+    Agent, Answer, AskItem, Capability, CliRequest, Judgment, Permission, StartRequest, Tool,
 };
 
 /// What the command line asks for.
@@ -29,6 +29,8 @@ pub struct Parsed {
     pub positionals: BTreeMap<&'static str, Vec<String>>,
     /// Each flag's values (a switch: one empty value), by long name.
     pub flags: BTreeMap<&'static str, Vec<String>>,
+    /// Every flag as given, in order: where one flag's values fall among another's.
+    pub order: Vec<(&'static str, String)>,
 }
 
 impl Parsed {
@@ -110,6 +112,7 @@ where
     let mut json = false;
     let mut words_left: Vec<String> = Vec::new();
     let mut flags: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut order: Vec<(&'static str, String)> = Vec::new();
     let mut only_words = false;
     while let Some(word) = words.next() {
         if only_words || !word.starts_with("--") && word != "-h" {
@@ -164,7 +167,8 @@ where
         if !values.is_empty() && !repeat {
             return Err(error(format!("--{long} is given twice")));
         }
-        values.push(given);
+        values.push(given.clone());
+        order.push((long, given));
     }
 
     let mut positionals: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
@@ -206,7 +210,11 @@ where
     }
     Ok(Invocation::Run {
         command,
-        args: Parsed { positionals, flags },
+        args: Parsed {
+            positionals,
+            flags,
+            order,
+        },
         json,
     })
 }
@@ -428,31 +436,75 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             },
             after_turn: args.switch("after-turn"),
         },
-        "ask" => {
-            let question = args.text("question");
-            if question.trim().is_empty() {
-                return Err(error("missing <question>".into()));
-            }
-            let options: Vec<String> = args
-                .all("option")
-                .into_iter()
-                .map(|option| option.trim().to_owned())
-                .filter(|option| !option.is_empty())
-                .collect();
-            if options.len() == 1 || options.len() > 4 {
-                return Err(error(
-                    "give 2 to 4 options, or none for a free answer".into(),
-                ));
-            }
-            CliRequest::Ask {
-                question,
-                options,
-                title: args.flag("title").map(str::to_owned),
-            }
-        }
+        "ask" => CliRequest::Ask {
+            questions: ask_questions(args).map_err(error)?,
+            title: args.flag("title").map(str::to_owned),
+        },
         name if Tool::of_command(name).is_some() => tool_request(command, args)?,
         other => return Err(error(format!("{other} has no request yet"))),
     }))
+}
+
+/// The most questions one `brigadier ask` card holds, as the daemon's round takes them.
+const ASK_MAX: usize = 6;
+
+/// `ask`'s questions: the words as one question with every `--option`, or each `--question`
+/// with the `--option`s that follow it.
+fn ask_questions(args: &Parsed) -> Result<Vec<AskItem>, String> {
+    let words = args.text("question");
+    let mut questions: Vec<AskItem> = Vec::new();
+    if !words.trim().is_empty() {
+        questions.push(AskItem {
+            question: words,
+            options: Vec::new(),
+        });
+    }
+    let in_words = !questions.is_empty();
+    for (flag, value) in &args.order {
+        let value = value.trim();
+        match *flag {
+            "question" if in_words => {
+                return Err("give one question as words, or each with --question; not both".into());
+            }
+            "question" if value.is_empty() => return Err("a --question is empty".into()),
+            "question" => questions.push(AskItem {
+                question: value.to_owned(),
+                options: Vec::new(),
+            }),
+            "option" => {
+                let Some(question) = questions.last_mut() else {
+                    return Err("an --option comes before any --question; \
+                                each --question is followed by its own options"
+                        .into());
+                };
+                if !value.is_empty() {
+                    question.options.push(value.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    if questions.is_empty() {
+        return Err("missing <question>".into());
+    }
+    if questions.len() > ASK_MAX {
+        return Err(format!(
+            "one card holds at most {ASK_MAX} questions; ask the rest in the next round"
+        ));
+    }
+    for question in &questions {
+        if question.options.len() == 1 || question.options.len() > 4 {
+            let what = if questions.len() == 1 {
+                String::new()
+            } else {
+                format!("{:?}: ", question.question)
+            };
+            return Err(format!(
+                "{what}give 2 to 4 options, or none for a free answer"
+            ));
+        }
+    }
+    Ok(questions)
 }
 
 /// The kept tools' subcommands: the action, with the tool's own arguments.
@@ -1188,8 +1240,10 @@ mod tests {
         assert_eq!(
             run(&["ask", "--option", "Yes", "--option", "No", "Ship", "it?"]).0,
             CliRequest::Ask {
-                question: "Ship it?".into(),
-                options: vec!["Yes".into(), "No".into()],
+                questions: vec![AskItem {
+                    question: "Ship it?".into(),
+                    options: vec!["Yes".into(), "No".into()]
+                }],
                 title: None
             }
         );
@@ -1216,6 +1270,77 @@ mod tests {
         assert!(fails(&["checkpoint", "set", " "]).contains("checkpoint's text"));
         assert!(fails(&["checkpoint", "show", "extra"]).contains("unexpected argument"));
         assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 4 options"));
+    }
+
+    /// A round of questions on one card: each `--question` takes the `--option`s after it.
+    #[test]
+    fn ask_takes_several_questions_each_with_its_own_options() {
+        assert_eq!(
+            run(&[
+                "ask",
+                "--title",
+                "Round 1",
+                "--question",
+                "Ship it today?",
+                "--option",
+                "Yes",
+                "--option",
+                "Not yet",
+                "--question",
+                "Which colour?",
+                "--question",
+                "Which size?",
+                "--option",
+                "S",
+                "--option",
+                "M",
+                "--option",
+                "L",
+            ])
+            .0,
+            CliRequest::Ask {
+                questions: vec![
+                    AskItem {
+                        question: "Ship it today?".into(),
+                        options: vec!["Yes".into(), "Not yet".into()]
+                    },
+                    AskItem {
+                        question: "Which colour?".into(),
+                        options: Vec::new()
+                    },
+                    AskItem {
+                        question: "Which size?".into(),
+                        options: vec!["S".into(), "M".into(), "L".into()]
+                    },
+                ],
+                title: Some("Round 1".into())
+            }
+        );
+        // The single form keeps its options wherever they stand.
+        assert_eq!(
+            run(&["ask", "Go?", "--option", "Yes", "--option", "No"]).0,
+            run(&["ask", "--option", "Yes", "--option", "No", "Go?"]).0
+        );
+        assert!(
+            fails(&["ask", "--option", "x", "--question", "A?"]).contains("before any --question")
+        );
+        assert!(fails(&["ask", "--question", "A?", "B?"]).contains("not both"));
+        assert!(fails(&["ask", "--question", " "]).contains("--question is empty"));
+        assert!(fails(&["ask"]).contains("missing <question>"));
+        assert!(
+            fails(&[
+                "ask",
+                "--question",
+                "A?",
+                "--question",
+                "B?",
+                "--option",
+                "only"
+            ])
+            .contains("\"B?\": give 2 to 4 options")
+        );
+        let seven: Vec<&str> = (0..7).flat_map(|_| ["--question", "Q?"]).collect();
+        assert!(fails(&[&["ask"][..], &seven].concat()).contains("at most 6 questions"));
     }
 
     /// STRIP-DOWN-PLAN S16c: the thread's, Chat's and side chat's last MCP tools, with the
