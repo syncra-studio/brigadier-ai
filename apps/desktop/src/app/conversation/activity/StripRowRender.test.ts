@@ -27,6 +27,9 @@ test("a strip row says what its worker does while it works, shimmering, else its
     assert.deepEqual(line({ steps: [{ name: "shell", detail: "cd /w && pnpm build" }] }), ["shimmer", "Running pnpm build"]);
     assert.deepEqual(line({ steps: [{ name: "Edit", detail: "/w/src/foo.ts" }] }), ["shimmer", "Editing foo.ts"]);
     assert.deepEqual(line({}), ["shimmer", "Working"]);
+    // Between its calls, what it last did (D39).
+    assert.deepEqual(line({ doing: { type: "call", step: { name: "shell", detail: "pnpm build" } } }), ["shimmer", "Running pnpm build"]);
+    assert.deepEqual(line({ doing: { type: "thinking" } }), ["shimmer", "Thinking…"]);
     assert.deepEqual(line({ steps: [{ name: "shell", detail: "pnpm build" }], waiting: [{ kind: "question", what: "Which?", card: null }] }), ["text-foreground/60", "Needs you"]);
   } finally {
     await server.close();

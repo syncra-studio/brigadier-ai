@@ -1,5 +1,5 @@
-import { stepAtWork } from "@/app/conversation/activity/workerNow";
-import type { BackgroundTask, StepAtWork, ThreadView, WorkerRow } from "@/ipc/generated";
+import { doingOf, stepAtWork } from "@/app/conversation/activity/workerNow";
+import type { BackgroundTask, StepAtWork, ThreadView, WorkerDoing, WorkerRow } from "@/ipc/generated";
 
 /** Native agents share the Workers presentation, but never a Brigadier task's actions. */
 export type NativeWorker = WorkerRow & {
@@ -24,11 +24,15 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
   const lastChild = new Map<string, number>();
   // Each agent's calls at work, oldest first, as an engine worker's row lists its own.
   const atWork = new Map<string, StepAtWork[]>();
+  // What each agent last did, as an engine worker's row says it between its calls (D39).
+  const lastDone = new Map<string, WorkerDoing>();
   for (const entry of view.entries) {
     if (!entry.parent) continue;
     lastChild.set(entry.parent, entry.updatedAtMs ?? entry.atMs ?? 0);
     const step = stepAtWork(entry.event);
     if (step) atWork.set(entry.parent, [...(atWork.get(entry.parent) ?? []), step]);
+    const doing = doingOf(entry.event);
+    if (doing) lastDone.set(entry.parent, doing);
   }
   // A foreground agent works while its call does, in a turn still running: one its turn left
   // unfinished (the CLI ended or was stopped under it) is over.
@@ -41,6 +45,7 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
     const end = task ? task.status === "stopped" ? "stopped" : task.status === "failed" ? "failed" : "done"
       : status === "failed" || status === "declined" ? "failed" : "done";
     const steps = callId === null ? undefined : atWork.get(callId);
+    const doing = callId === null ? undefined : lastDone.get(callId);
     const row: NativeWorker = {
       id: `native:${conversationId}:${callId ?? task!.id}`, number: next++, title,
       agent: "claude", model, startedAtMs: task?.startedAtMs ?? at,
@@ -48,6 +53,7 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
       lastEventAtMs: task?.endedAtMs ?? ended, limit: null, freshContext: false,
       waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
       ...(working && steps && { steps }),
+      ...(working && doing && { doing }),
       native: { conversationId, callId, backgroundId: task?.id ?? null, prompt },
     };
     rows.push(row);

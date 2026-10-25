@@ -24,8 +24,8 @@ use super::thread_items::step_detail;
 use super::{SessionManager, blocking};
 use crate::model::ConversationId;
 use crate::thread_view::{
-    self, StepAtWork, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerTask, WorkerWait,
-    WorkerWaitKind,
+    self, StepAtWork, ThreadNews, TurnEnd, TurnRecord, WorkerDoing, WorkerRow, WorkerTask,
+    WorkerWait, WorkerWaitKind,
 };
 use crate::work::{ApprovalSubject, CardState, DiffStat, Task, TaskId, TaskState};
 use crate::{Result, now_ms};
@@ -52,6 +52,8 @@ pub(crate) struct WorkerCli {
     pub fresh_context: bool,
     /// The calls it has at work in the open turn, by item id, oldest first.
     steps: Vec<(String, StepAtWork)>,
+    /// What it last did in the open turn, by the item id of a call (D39).
+    doing: Option<(Option<String>, WorkerDoing)>,
     /// Its background tasks, as its CLI says them, and those that ended lately.
     background: Vec<BackgroundTask>,
     /// The commands of its latest calls that may start a background task, by item id: a Claude
@@ -109,6 +111,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.errored = false;
                 cli.user_message = None;
                 cli.steps.clear();
+                cli.doing = None;
             }
         }
         // A turn's own message (Codex says it once its turn started); a steer's adds nothing.
@@ -141,6 +144,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         ProviderEvent::TurnCompleted { status, .. } if cli.open => {
             cli.open = false;
             cli.steps.clear();
+            cli.doing = None;
             cli.last_end = Some(match status {
                 TurnStatus::Completed if cli.errored => TurnEnd::Failed,
                 TurnStatus::Completed => TurnEnd::Done,
@@ -156,6 +160,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
             if cli.open {
                 cli.open = false;
                 cli.steps.clear();
+                cli.doing = None;
                 cli.last_end = Some(TurnEnd::Interrupted);
                 cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
             }
@@ -168,7 +173,10 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 note_command(cli, item_id, command);
             }
             if let Some((item_id, status, step)) = step_of(event) {
+                follow_doing(&mut cli.doing, item_id, status, step.as_ref());
                 follow_step(&mut cli.steps, item_id, status, step);
+            } else if let Some(doing) = doing_of(event) {
+                cli.doing = Some((None, doing));
             }
         }
     }
@@ -302,6 +310,49 @@ fn step_of(event: &ProviderEvent) -> Option<(&str, ItemStatus, Option<StepAtWork
     })
 }
 
+/// What a worker's reasoning or reply says it does: thinking, writing, or the first line of
+/// what it wrote (D39). Its user's messages and anything else say nothing.
+fn doing_of(event: &ProviderEvent) -> Option<WorkerDoing> {
+    match event {
+        ProviderEvent::Reasoning { .. } | ProviderEvent::ReasoningDelta { .. } => {
+            Some(WorkerDoing::Thinking)
+        }
+        ProviderEvent::MessageDelta { .. } => Some(WorkerDoing::Writing),
+        ProviderEvent::Message {
+            role: Role::Assistant,
+            text,
+            ..
+        } => {
+            let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+            Some(WorkerDoing::Said {
+                line: line.chars().take(240).collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Keeps `doing` to the newest call started: one that starts takes it, or says more of it (a
+/// detail said once is kept); one that ends keeps it until something else is done (D39).
+fn follow_doing(
+    doing: &mut Option<(Option<String>, WorkerDoing)>,
+    item_id: &str,
+    status: ItemStatus,
+    step: Option<&StepAtWork>,
+) {
+    let (ItemStatus::InProgress, Some(step)) = (status, step) else {
+        return;
+    };
+    let mut step = step.clone();
+    if let Some((Some(id), WorkerDoing::Call { step: held })) = doing.as_ref()
+        && id == item_id
+        && step.detail.is_none()
+    {
+        step.detail.clone_from(&held.detail);
+    }
+    *doing = Some((Some(item_id.to_owned()), WorkerDoing::Call { step }));
+}
+
 /// Keeps `steps` to the calls at work: one in progress joins them, or takes its own place with
 /// what more it says (a detail said once is kept); one that ended leaves.
 fn follow_step(
@@ -396,6 +447,11 @@ pub(crate) fn row(
         } else {
             Vec::new()
         },
+        doing: cli
+            .doing
+            .as_ref()
+            .filter(|_| cli.open && !gone)
+            .map(|(_, doing)| doing.clone()),
         background,
     }
 }
@@ -994,6 +1050,68 @@ mod tests {
             5,
         );
         assert!(background_of(&cli).is_empty());
+    }
+
+    /// Between its calls a worker still says what it does: its last call, its thinking, its
+    /// writing, then the first line of what it wrote; its turn's end clears it (D39).
+    #[test]
+    fn a_worker_says_what_it_last_did_until_its_turn_ends() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        assert_eq!(cli.doing, None);
+        let build = |status| ProviderEvent::Command {
+            item_id: "c1".into(),
+            command: "pnpm build".into(),
+            cwd: None,
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        let doing = |cli: &WorkerCli| cli.doing.as_ref().map(|(_, doing)| doing.clone());
+        let call = Some(WorkerDoing::Call {
+            step: StepAtWork {
+                name: "shell".into(),
+                detail: Some("pnpm build".into()),
+            },
+        });
+        follow(&mut cli, &build(ItemStatus::InProgress), 2);
+        assert_eq!(doing(&cli), call);
+        assert!(follow(&mut cli, &build(ItemStatus::Completed), 3));
+        assert_eq!(doing(&cli), call, "an ended call stays its line");
+        assert!(cli.steps.is_empty());
+        let think = ProviderEvent::ReasoningDelta {
+            item_id: "r1".into(),
+            text: "Hmm".into(),
+        };
+        assert!(follow(&mut cli, &think, 4));
+        assert_eq!(doing(&cli), Some(WorkerDoing::Thinking));
+        assert!(!follow(&mut cli, &think, 5), "more thinking is no news");
+        let write = ProviderEvent::MessageDelta {
+            item_id: "m1".into(),
+            text: "Now".into(),
+            phase: None,
+        };
+        follow(&mut cli, &write, 6);
+        assert_eq!(doing(&cli), Some(WorkerDoing::Writing));
+        follow(
+            &mut cli,
+            &ProviderEvent::Message {
+                item_id: "m1".into(),
+                role: Role::Assistant,
+                text: "\nNow wiring the exporter.\nThen the tests.".into(),
+            },
+            7,
+        );
+        let line = Some(WorkerDoing::Said {
+            line: "Now wiring the exporter.".into(),
+        });
+        assert_eq!(doing(&cli), line);
+        follow(&mut cli, &said("u2"), 8);
+        assert_eq!(doing(&cli), line, "a steer says nothing of it");
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 9);
+        assert_eq!(cli.doing, None);
     }
 
     /// Claude's background `Bash` is a `Command` item, its task labelled with its description:

@@ -154,6 +154,11 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<StepAtWork>>", optional)]
     pub steps: Vec<StepAtWork>,
+    /// What its CLI last did in its open turn, kept until it does something else: the line the
+    /// rail and the context card show between its calls (D39). None outside a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub doing: Option<WorkerDoing>,
     /// Its CLI's background tasks, as the CLI says them, and those that ended lately; none once
     /// it ended or was closed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -178,6 +183,20 @@ pub struct WorkerTask {
 pub struct StepAtWork {
     pub name: String,
     pub detail: Option<String>,
+}
+
+/// What a worker's CLI last did in its open turn, as its own events say it (D39).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WorkerDoing {
+    /// A call it started, at work or ended since.
+    Call { step: StepAtWork },
+    /// It thinks.
+    Thinking,
+    /// It writes a reply.
+    Writing,
+    /// The first line of the reply it last wrote.
+    Said { line: String },
 }
 
 /// Something a worker's CLI waits on the user for: the session relays the answer (G19.Q6).

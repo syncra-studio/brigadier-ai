@@ -39,3 +39,13 @@ test("a working agent's row lists its calls at work, from its own items", () => 
   const over = workersOf("c-steps-2", { entries: [user("u2", 2000), agentCall("live", 2010), read("b", "inProgress")], turns: [turn("u2", 2000, "stopped")] });
   assert.equal(over[0]?.steps, undefined);
 });
+
+test("between its calls a working agent says what it last did, from its own items (D39)", () => {
+  const said: FileEntry = { event: { type: "message", itemId: "m", role: "assistant", text: "Found the config." }, atMs: 2030, parent: "live" };
+  const rows = workersOf("c-doing", { entries: [user("u2", 2000), agentCall("live", 2010), read("a", "completed")], turns: [turn("u2", 2000, null)] });
+  assert.deepEqual(rows[0]?.doing, { type: "call", step: { name: "Read", detail: "/w/a.ts" } });
+  const after = workersOf("c-doing-2", { entries: [user("u2", 2000), agentCall("live", 2010), read("a", "completed"), said], turns: [turn("u2", 2000, null)] });
+  assert.deepEqual(after[0]?.doing, { type: "said", line: "Found the config." });
+  const over = workersOf("c-doing-3", { entries: [user("u2", 2000), agentCall("live", 2010), said], turns: [turn("u2", 2000, "stopped")] });
+  assert.equal(over[0]?.doing, undefined);
+});

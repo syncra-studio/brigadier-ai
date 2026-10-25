@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { nowInLine, stepAtWork, workerNow } from "@/app/conversation/activity/workerNow";
+import { doingOf, nowInLine, stepAtWork, workerNow } from "@/app/conversation/activity/workerNow";
 import type { WorkerRow } from "@/ipc/generated";
 
 const NOW = 1_000_000;
@@ -40,4 +40,29 @@ test("a thread's item is a call at work while it runs, named as the engine names
   assert.deepEqual(stepAtWork({ type: "toolCall", itemId: "t", name: "Read", input: '{"file_path":"/w/a.ts"}', status: "inProgress", output: null }), { name: "Read", detail: "/w/a.ts" });
   assert.equal(stepAtWork({ type: "toolCall", itemId: "t", name: "Read", input: null, status: "completed", output: "…" }), null);
   assert.equal(stepAtWork({ type: "message", itemId: "m", role: "assistant", text: "hi" }), null);
+});
+
+test("between its calls a worker says what it last did, its call at work first (D39)", () => {
+  const call = { type: "call", step: { name: "shell", detail: "cd /w && pnpm build" } } as const;
+  assert.deepEqual(workerNow(row({ doing: call }), NOW), { kind: "working", word: "Running pnpm build", step: true });
+  assert.equal(workerNow(row({ doing: { type: "thinking" } }), NOW).word, "Thinking…");
+  assert.equal(workerNow(row({ doing: { type: "writing" } }), NOW).word, "Writing…");
+  assert.deepEqual(workerNow(row({ doing: { type: "said", line: "Now wiring the exporter." } }), NOW),
+    { kind: "working", word: "Now wiring the exporter.", step: true });
+  assert.equal(nowInLine(workerNow(row({ doing: { type: "said", line: "Now wiring the exporter." } }), NOW)), "Now wiring the exporter.");
+  assert.equal(nowInLine(workerNow(row({ doing: { type: "thinking" } }), NOW)), "thinking…");
+  // A call at work wins; plumbing says no more than its state; a state before work still wins.
+  assert.equal(workerNow(row({ doing: { type: "thinking" }, steps: [{ name: "Edit", detail: "/w/a.ts" }] }), NOW).word, "Editing a.ts");
+  assert.equal(workerNow(row({ doing: { type: "call", step: { name: "ToolSearch", detail: "select:Read" } } }), NOW).word, "Working");
+  assert.equal(workerNow(row({ doing: call, waiting: [{ kind: "question", what: "Which?", card: null }] }), NOW).word, "Needs you");
+  assert.equal(workerNow(row({ doing: call, working: false, lastEnd: "done" }), NOW).word, "Done");
+});
+
+test("a thread's item says what its agent last did, as the engine says a worker's (D39)", () => {
+  assert.deepEqual(doingOf({ type: "command", itemId: "c", command: "pnpm build", cwd: null, status: "completed", exitCode: 0, output: null, durationMs: null }),
+    { type: "call", step: { name: "shell", detail: "pnpm build" } });
+  assert.deepEqual(doingOf({ type: "reasoningDelta", itemId: "r", text: "…" }), { type: "thinking" });
+  assert.deepEqual(doingOf({ type: "messageDelta", itemId: "m", text: "No" }), { type: "writing" });
+  assert.deepEqual(doingOf({ type: "message", itemId: "m", role: "assistant", text: "\n  Now the tests.\nMore." }), { type: "said", line: "Now the tests." });
+  assert.equal(doingOf({ type: "message", itemId: "u", role: "user", text: "Look" }), null);
 });

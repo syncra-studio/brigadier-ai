@@ -6,6 +6,7 @@ import type { ProviderKind } from "./ProviderKind";
 import type { StepAtWork } from "./StepAtWork";
 import type { TaskId } from "./TaskId";
 import type { TurnEnd } from "./TurnEnd";
+import type { WorkerDoing } from "./WorkerDoing";
 import type { WorkerTask } from "./WorkerTask";
 import type { WorkerWait } from "./WorkerWait";
 
@@ -70,6 +71,11 @@ merged: boolean,
  * What its CLI has at work in its open turn, oldest first; none between its steps.
  */
 steps?: Array<StepAtWork>, 
+/**
+ * What its CLI last did in its open turn, kept until it does something else: the line the
+ * rail and the context card show between its calls (D39). None outside a turn.
+ */
+doing?: WorkerDoing, 
 /**
  * Its CLI's background tasks, as the CLI says them, and those that ended lately; none once
  * it ended or was closed.

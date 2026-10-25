@@ -38,6 +38,9 @@ test("the context card's Workers row names each worker at work by its row, with 
     };
     const busy = html([row("t1", "Demo of the fixes", { steps: [{ name: "shell", detail: "pnpm build" }] })]);
     assert.match(busy, /<span class="[^"]*shimmer[^"]*"> running pnpm build<\/span>/);
+    // Between its calls: what it last did, still shimmering (D39).
+    const between = html([row("t1", "Demo of the fixes", { doing: { type: "said", line: "Now wiring the exporter." } })]);
+    assert.match(between, /<span class="[^"]*shimmer[^"]*"> Now wiring the exporter\.<\/span>/);
 
     // A few: a line each with its state; the finished ones in the outcome line, not lines of their own.
     const few = text([

@@ -478,6 +478,7 @@ export type { WindowView } from "./WindowView";
 export type { WorkSpan } from "./WorkSpan";
 export type { WorkerAccess } from "./WorkerAccess";
 export type { WorkerDiff } from "./WorkerDiff";
+export type { WorkerDoing } from "./WorkerDoing";
 export type { WorkerPage } from "./WorkerPage";
 export type { WorkerRef } from "./WorkerRef";
 export type { WorkerRole } from "./WorkerRole";
