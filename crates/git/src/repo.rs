@@ -292,7 +292,7 @@ impl Repo {
     }
 
     /// Delete a branch only while it still points at `expected`, refusing any branch a
-    /// worktree holds.
+    /// worktree holds; its `branch.<name>.*` config goes with it.
     pub fn delete_branch_at(&self, name: &str, expected: &Oid) -> Result<()> {
         self.validate_branch(name)?;
         valid_oid(expected)?;
@@ -316,7 +316,8 @@ impl Repo {
             ],
             false,
         )?;
-        Ok(())
+        // `git branch -d` drops the branch's config section; `update-ref` doesn't.
+        self.remove_branch_config(name)
     }
 
     /// Create the new branch `name` at one commit of `patch` on `start` (three-way where the

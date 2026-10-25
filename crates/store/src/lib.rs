@@ -372,7 +372,14 @@ impl Store {
     /// (the feed only carries appends). Blobs the events referenced stay until
     /// [`Store::gc_blobs`]; [`Store::delete_streams_and_blobs`] takes them too.
     pub async fn delete_streams(&self, streams: Vec<String>) -> Result<u64> {
-        self.delete(streams, Vec::new()).await
+        self.delete(streams, Vec::new(), Vec::new()).await
+    }
+
+    /// Deletes single events, by their global sequence numbers (what a deleted session left in
+    /// a shared stream), as [`Store::delete_streams`] deletes whole streams. Returns how many
+    /// went.
+    pub async fn delete_events(&self, seqs: Vec<i64>) -> Result<u64> {
+        self.delete(Vec::new(), Vec::new(), seqs).await
     }
 
     /// [`Store::delete_streams`], then deletes right away each blob those events referenced that
@@ -414,19 +421,25 @@ impl Store {
         if prefixes.iter().any(String::is_empty) {
             return Err(Error::Invalid("an empty prefix would delete every stream"));
         }
-        self.delete(Vec::new(), prefixes).await
+        self.delete(Vec::new(), prefixes, Vec::new()).await
     }
 
-    async fn delete(&self, streams: Vec<String>, prefixes: Vec<String>) -> Result<u64> {
+    async fn delete(
+        &self,
+        streams: Vec<String>,
+        prefixes: Vec<String>,
+        seqs: Vec<i64>,
+    ) -> Result<u64> {
         if !self.admitting.load(Ordering::Acquire) {
             return Err(Error::ShuttingDown);
         }
-        if streams.is_empty() && prefixes.is_empty() {
+        if streams.is_empty() && prefixes.is_empty() && seqs.is_empty() {
             return Ok(0);
         }
         self.write(|reply| WriteOp::Delete {
             streams,
             prefixes,
+            seqs,
             reply,
         })
         .await?
@@ -817,6 +830,54 @@ mod tests {
         assert_eq!(body, "second");
         assert!(at_ms > 0);
         assert!(store.check_result("other".into()).await.unwrap().is_none());
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn single_events_go_and_their_stream_never_reuses_their_numbers() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-store-{}", uuid::Uuid::new_v4())));
+        let store = Store::open(StoreConfig {
+            db_path: dir.join("db.sqlite"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .expect("a store");
+        let event = |text: &str| {
+            NewEvent::new(
+                "catalog",
+                "note",
+                now_ms(),
+                &serde_json::json!({ "text": text }),
+            )
+            .unwrap()
+        };
+        let stored = store
+            .append(vec![event("keep"), event("gone"), event("gone too")])
+            .await
+            .unwrap();
+        let removed = store
+            .delete_events(vec![stored[1].seq, stored[2].seq])
+            .await
+            .unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(store.delete_events(Vec::new()).await.unwrap(), 0);
+        let next = store.append(vec![event("next")]).await.unwrap();
+        assert_eq!(next[0].stream_seq, 4);
+        let page = StreamPage {
+            before: None,
+            kinds: Vec::new(),
+            limit: 10,
+        };
+        let left: Vec<String> = store
+            .read_stream("catalog".into(), page)
+            .await
+            .unwrap()
+            .iter()
+            .map(|event| event.payload.get().to_owned())
+            .collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.iter().all(|payload| !payload.contains("gone")));
         store.shutdown().await.unwrap();
     }
 

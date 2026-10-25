@@ -30,8 +30,15 @@ const PAGE: u32 = 1_000;
 /// The owner of a tab's chat ([`crate::model::TabChat`]) starts so. Its records are kept in a
 /// stream of their own, which goes once everything it recorded is gone: nothing of it stays.
 pub const TAB_CHAT_OWNER: &str = "tabchat:";
+/// The owner of what deleted conversation `id` left in Brigadier's own records.
+pub fn traces_owner(id: &str) -> String {
+    format!("{TRACES_OWNER}{id}")
+}
+
 /// A session's or Chat's CLI session files ([`lineage_owner`]).
 pub const LINEAGE_OWNER: &str = "lineage:";
+/// What a deleted conversation left in Brigadier's own records ([`traces_owner`]).
+pub const TRACES_OWNER: &str = "traces:";
 /// Where tab chats' owners keep their records: this, then the owner.
 const TAB_CHAT_STREAMS: &str = "cleanup:tabchat:";
 
@@ -180,6 +187,18 @@ impl Leftovers {
 /// The adapter of the extra account whose CLI home is the given folder, while it is set up.
 pub type AccountResolver = Arc<dyn Fn(&str) -> Option<Arc<dyn Provider>> + Send + Sync>;
 
+/// Removes a session's branch namespace or a Local checkout's file it made
+/// ([`Artifact::GitBranches`], [`Artifact::CheckoutFile`]) through the git engine: `Ok(None)`
+/// when it is gone, `Ok(Some(why))` when it is left in place on purpose.
+pub type GitRemover = Arc<
+    dyn Fn(
+            Artifact,
+        )
+            -> brigadier_providers::BoxFuture<'static, std::result::Result<Option<String>, String>>
+        + Send
+        + Sync,
+>;
+
 /// Removes a session's owned git namespace through the configured git engine.
 pub type RefRemover = Arc<
     dyn Fn(
@@ -200,6 +219,7 @@ pub struct CleanupLedger {
     tab_chats: tokio::sync::Mutex<()>,
     worktrees: Mutex<Option<WorktreeRemover>>,
     refs: Mutex<Option<RefRemover>>,
+    git: Mutex<Option<GitRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
     test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
@@ -287,6 +307,7 @@ impl CleanupLedger {
             tab_chats: tokio::sync::Mutex::new(()),
             worktrees: Mutex::new(None),
             refs: Mutex::new(None),
+            git: Mutex::new(None),
             accounts: Mutex::new(None),
             #[cfg(test)]
             test_providers: Mutex::new(None),
@@ -304,6 +325,11 @@ impl CleanupLedger {
     /// Wires removal of git refs owned by session records (Delete only).
     pub fn set_ref_remover(&self, remover: RefRemover) {
         *self.refs.lock().unwrap_or_else(|p| p.into_inner()) = Some(remover);
+    }
+
+    /// Wires in removing session branch namespaces and Local checkout files (Delete only).
+    pub fn set_git_remover(&self, remover: GitRemover) {
+        *self.git.lock().unwrap_or_else(|p| p.into_inner()) = Some(remover);
     }
 
     /// Wires in the extra accounts: a session's files go with the adapter of the home it ran
@@ -536,6 +562,9 @@ impl CleanupLedger {
         {
             // A tab's chat leaves no record: with all of it gone, its records go too.
             self.forget_owner(owner).await;
+        } else if leftovers.is_clean() && owner.starts_with(TRACES_OWNER) {
+            // Its records went with what it scrubbed: a finished one would name it again.
+            self.state().disposing.remove(owner);
         } else if leftovers.is_clean() {
             // Everything in the snapshot is gone. Artifacts recorded meanwhile stay, both here
             // and on replay. Always end the request durably: a record's event can be stored
@@ -699,10 +728,14 @@ impl CleanupLedger {
             .is_some();
         for owner in disposing {
             if !git_engine
-                && self
-                    .artifacts(&owner)
-                    .iter()
-                    .any(|artifact| matches!(artifact, Artifact::Worktree { .. }))
+                && self.artifacts(&owner).iter().any(|artifact| {
+                    matches!(
+                        artifact,
+                        Artifact::Worktree { .. }
+                            | Artifact::GitBranches { .. }
+                            | Artifact::CheckoutFile { .. }
+                    )
+                })
             {
                 // Worktrees need the git engine; the session manager sweeps again once it is in.
                 continue;
@@ -863,6 +896,8 @@ impl CleanupLedger {
             return leftovers;
         }
         let mut removed = Vec::new();
+        // Scrubbed last, once everything else here is gone.
+        let mut traces = Vec::new();
         // The CLIs' own files, by the home of the session that made them.
         let mut cli_files: Vec<(ProviderKind, Option<String>, Vec<Artifact>)> = Vec::new();
         let mut add = |kind: ProviderKind, home: Option<String>, artifact: Artifact| match cli_files
@@ -946,6 +981,23 @@ impl CleanupLedger {
                         Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
+                Artifact::GitBranches { .. } | Artifact::CheckoutFile { .. } => {
+                    let remover = self.git.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    let result = match remover {
+                        Some(remove) => remove(artifact.clone()).await,
+                        None => Err("the git engine is not running".into()),
+                    };
+                    match result {
+                        Ok(None) => removed.push(artifact),
+                        Ok(Some(why)) => {
+                            crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), info, "left a git leftover in place"; owner, why);
+                            leftovers.kept.push(why);
+                            removed.push(artifact);
+                        }
+                        Err(err) => leftovers.failures.push(err),
+                    }
+                }
+                Artifact::Traces { .. } => traces.push(artifact),
                 Artifact::GitRefs { repo, namespace } => {
                     let remover = self.refs.lock().unwrap_or_else(|p| p.into_inner()).clone();
                     let result = match remover {
@@ -1058,6 +1110,25 @@ impl CleanupLedger {
                     .push(format!("{} files: {err}", provider.kind().label())),
             }
         }
+        for artifact in traces {
+            let Artifact::Traces { ids, needles, .. } = &artifact else {
+                continue;
+            };
+            if !leftovers.is_clean() {
+                leftovers
+                    .failures
+                    .push("its records stay until the rest of it is gone".into());
+                continue;
+            }
+            match self.scrub_traces(owner, ids, needles).await {
+                // Its own records went with the rest: nothing is acknowledged.
+                Ok(()) => {
+                    let mut state = self.state();
+                    state.artifacts.remove(owner);
+                }
+                Err(err) => leftovers.failures.push(err),
+            }
+        }
         if !removed.is_empty() {
             match self
                 .append(DomainEvent::CleanupRemoved {
@@ -1086,6 +1157,113 @@ impl CleanupLedger {
             crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "some artifacts were not removed"; owner, failures = ?leftovers.failures);
         }
         leftovers
+    }
+
+    /// Removes what a deleted conversation left in Brigadier's own records: the ledger's events
+    /// of every owner named by one of `ids` (this one's too) and of the branches it made in a
+    /// namespace among `needles`, its catalog events, what memory keeps of them, and the log
+    /// lines naming any of `ids` or `needles`. Refused while another owner it names still holds
+    /// something, so a retry finds the rest recorded.
+    async fn scrub_traces(
+        &self,
+        owner: &str,
+        ids: &[String],
+        needles: &[String],
+    ) -> std::result::Result<(), String> {
+        let names_one = |name: &str| {
+            ids.iter()
+                .any(|id| !id.is_empty() && name.contains(id.as_str()))
+        };
+        let in_space = |branch: &str| {
+            needles
+                .iter()
+                .any(|space| space.ends_with('/') && branch.starts_with(space.as_str()))
+        };
+        {
+            let state = self.state();
+            let busy = state
+                .artifacts
+                .iter()
+                .filter(|(other, held)| *other != owner && !held.is_empty())
+                .map(|(other, _)| other)
+                .chain(state.disposing.iter().filter(|other| *other != owner))
+                .find(|other| names_one(other));
+            if let Some(busy) = busy {
+                return Err(format!("its records wait for {busy}"));
+            }
+        }
+        let mut seqs = Vec::new();
+        let cleanup = read_stream(&self.core, streams::CLEANUP.into())
+            .await
+            .map_err(|err| err.to_string())?;
+        for event in &cleanup {
+            let Ok(decoded) = crate::sessions::decode(event) else {
+                continue;
+            };
+            let named = match &decoded {
+                DomainEvent::CleanupRecorded { owner, .. }
+                | DomainEvent::CleanupRemoved { owner, .. }
+                | DomainEvent::CleanupRequested { owner, .. }
+                | DomainEvent::CleanupFinished { owner }
+                | DomainEvent::CleanupCompleted { owner, .. } => names_one(owner),
+                DomainEvent::BranchMade { branch, .. } => in_space(branch),
+                DomainEvent::BranchesKept { branches, .. } => {
+                    !branches.is_empty() && branches.iter().all(|kept| in_space(&kept.name))
+                }
+                _ => false,
+            };
+            if named {
+                seqs.push(event.seq);
+            }
+        }
+        let catalog = read_stream(&self.core, streams::CATALOG.into())
+            .await
+            .map_err(|err| err.to_string())?;
+        for event in &catalog {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload.get()) else {
+                continue;
+            };
+            let id = value
+                .get("id")
+                .or_else(|| value.get("conversation").and_then(|c| c.get("id")))
+                .and_then(serde_json::Value::as_str);
+            if id.is_some_and(|id| ids.iter().any(|own| own == id)) {
+                seqs.push(event.seq);
+            }
+        }
+        self.core
+            .store()
+            .delete_events(seqs)
+            .await
+            .map_err(|err| err.to_string())?;
+        {
+            let mut state = self.state();
+            for id in ids {
+                state.native.remove(id);
+            }
+            state.made.retain(|(_, branch)| !in_space(branch));
+            state
+                .artifacts
+                .retain(|other, _| other == owner || !names_one(other));
+            state
+                .disposing
+                .retain(|other| other == owner || !names_one(other));
+            state.closing.retain(|other| !names_one(other));
+        }
+        // What was logged just before is written by now.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let logs = self.platform.paths().logs_dir.clone();
+        let names: Vec<String> = ids.iter().chain(needles).cloned().collect();
+        tokio::task::spawn_blocking(move || crate::traces::scrub_logs(&logs, &names))
+            .await
+            .map_err(|err| err.to_string())?
+            .map_err(|err| format!("log files: {err}"))?;
+        // Nor a copy in the store's write-ahead log.
+        self.core
+            .store()
+            .scrub()
+            .await
+            .map_err(|err| err.to_string())
     }
 
     async fn append(&self, event: DomainEvent) -> Result<()> {

@@ -26,6 +26,7 @@ mod sessions;
 pub mod storage;
 pub mod thread_view;
 pub mod tools;
+mod traces;
 pub mod work;
 
 pub use app_call::*;

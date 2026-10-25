@@ -32,6 +32,8 @@ pub(crate) enum WriteOp {
     Delete {
         streams: Vec<String>,
         prefixes: Vec<String>,
+        /// Single events, by their global sequence number.
+        seqs: Vec<i64>,
         reply: oneshot::Sender<Result<u64>>,
     },
     /// Stores (or replaces) a check result.
@@ -76,6 +78,7 @@ enum Mutation {
     Delete {
         streams: Vec<String>,
         prefixes: Vec<String>,
+        seqs: Vec<i64>,
         reply: oneshot::Sender<Result<u64>>,
     },
     PutCheck {
@@ -127,10 +130,12 @@ impl Sorted {
             WriteOp::Delete {
                 streams,
                 prefixes,
+                seqs,
                 reply,
             } => self.mutations.push(Mutation::Delete {
                 streams,
                 prefixes,
+                seqs,
                 reply,
             }),
             WriteOp::PutCheck {
@@ -358,10 +363,11 @@ impl Writer {
                 Mutation::Delete {
                     streams,
                     prefixes,
+                    seqs,
                     reply,
                 } => Outcome::Delete(
                     reply,
-                    delete(&savepoint, &mut self.heads, &streams, &prefixes),
+                    delete(&savepoint, &mut self.heads, &streams, &prefixes, &seqs),
                 ),
                 Mutation::PutCheck {
                     key,
@@ -587,8 +593,15 @@ fn delete(
     heads: &mut HashMap<String, i64>,
     streams: &[String],
     prefixes: &[String],
+    seqs: &[i64],
 ) -> Result<u64> {
     let mut removed = 0u64;
+    // A stream's head stays where it was: while the store is open, a later append never
+    // takes a deleted event's number.
+    let mut single = conn.prepare_cached("DELETE FROM events WHERE seq = ?1")?;
+    for seq in seqs {
+        removed += single.execute([seq])? as u64;
+    }
     let mut exact = conn.prepare_cached("DELETE FROM events WHERE stream = ?1")?;
     for stream in streams {
         removed += exact.execute([stream])? as u64;
