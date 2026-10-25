@@ -11,6 +11,7 @@ import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
 import type { ProviderKind } from "@/ipc/generated";
+import { highlight } from "@/lib/highlight";
 import { useApp } from "@/state/store";
 import { openSettings, stepHistory } from "@/state/actions";
 import { useHistory } from "@/state/history";
@@ -230,10 +231,28 @@ const adapter: PluginsAdapter = {
 connectPlugins(adapter);
 
 const pause = (ms = 60) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-/** Waits until `ready` says so, for at most `ms`. */
-async function until(ready: () => boolean, ms = 10000) {
-  for (const end = Date.now() + ms; !ready() && Date.now() < end;) await pause(50);
+/**
+ * Resolves once `selector` matches. A DOM change wakes it, never a timer: the page runs on
+ * Chrome's virtual clock, which races through timers while work runs off the main thread (the
+ * highlighter's engine compiling under load), so a timed wait could run out before the work did.
+ */
+function appear(selector: string): Promise<void> {
+  if (document.querySelector(selector)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const watch = new MutationObserver(() => {
+      if (!document.querySelector(selector)) return;
+      watch.disconnect();
+      resolve();
+    });
+    watch.observe(document.body, { childList: true, subtree: true, attributes: true });
+  });
 }
+/**
+ * The highlighter's engine and the JSON grammar, loaded before any state opens: a server's
+ * settings then show their colours as they open, not after a load whose length the page can't
+ * know. Awaited, not timed, for the reason above.
+ */
+const ready = highlight('{"a": 1}', "json");
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [...root.querySelectorAll<T>(selector)];
 const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
 const main = () => document.querySelector("main")!;
@@ -383,8 +402,8 @@ const OPENERS: Record<string, () => Promise<void>> = {
     click("Open GitHub");
     await pause();
     click("Open");
-    // Colours come once the highlighter has loaded.
-    await until(() => !!document.querySelector('[data-slot="code-editor"] [data-line] span[style]'));
+    // Colours come once the highlighter has run: the engine and the grammar load before any state opens (`ready`).
+    await appear('[data-slot="code-editor"] [data-line] span[style]');
   },
   R1: async () => {
     click("Open GitHub");
@@ -564,10 +583,10 @@ function Fixture() {
     const done = (value: unknown) => setResult(JSON.stringify(value));
     const failed = (cause: unknown) => setResult(JSON.stringify({ error: String(cause) }));
     if (params.has("drive")) {
-      void (deferredRemoval ? driveRemoval(setKey) : drive(setKey)).then(done, failed);
+      void ready.then(() => (deferredRemoval ? driveRemoval(setKey) : drive(setKey))).then(done, failed);
     } else {
       const state = params.get("state");
-      if (state && OPENERS[state]) void reset(setKey).then(() => OPENERS[state]!()).then(() => pause(150)).then(() => done(read()), failed);
+      if (state && OPENERS[state]) void ready.then(() => reset(setKey)).then(() => OPENERS[state]!()).then(() => pause(150)).then(() => done(read()), failed);
     }
   }, []);
   return (
