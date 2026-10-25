@@ -8,7 +8,7 @@ import { rowName } from "@/app/conversation/activity/workerState";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import { Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
-import type { BackgroundTask, Preview } from "@/ipc/generated";
+import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
@@ -36,23 +36,27 @@ const label = (activity: Activity) =>
 
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
+/** No thread entries. */
+const NO_ENTRIES: readonly FileEntry[] = [];
 /** No previews. */
 const NO_PREVIEWS: readonly Preview[] = [];
 
 /**
  * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews (`brigadier preview`) and its CLI's own background tasks (by the CLI's
- * rules, `taskShown`), each with its state in a word and an icon (a worker's copy of an app or a
- * browser at it is a state of the app's row), how long it has gone, and Stop on hover. A click on
- * a web preview that is up opens its page in the browser (Brigadier's, by Settings › Browser),
+ * and the workers' previews (`brigadier preview`) and its CLI's running background tasks, except
+ * `brigadier wait` (the workers have their own card), each with its state in a word and an icon
+ * (a worker's copy of an app or a browser at it is a state of the app's row), how long it has gone,
+ * and Stop on hover. A click on a web preview that is up opens its page in the browser
+ * (Brigadier's, by Settings › Browser),
  * with what it prints one button away; any other preview opens what it prints in a tab. A row
- * leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
+ * leaves immediately when its thing completes, fails or stops (the thread's fold keeps the
  * history).
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
   const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
+  const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
@@ -61,7 +65,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), clock.now)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;

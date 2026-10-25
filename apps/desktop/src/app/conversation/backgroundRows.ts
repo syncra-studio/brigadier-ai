@@ -1,6 +1,7 @@
 import { taskShown } from "@/app/conversation/backgroundTasks";
+import { unwrapCommand } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
-import type { BackgroundTask, Preview } from "@/ipc/generated";
+import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 
 /**
  * The context card's Background rows (Q91, S12): one row per thing the session has going in the
@@ -44,10 +45,40 @@ function portOf(preview: Preview): string | null {
   );
 }
 
-/** The rows for the CLI's own background tasks that still have one at `now` (`taskShown`). */
-export function taskRows(tasks: readonly BackgroundTask[], now: number): BackgroundRow[] {
-  return tasks.filter((task) => taskShown(task, now)).map((task) => ({
-    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: task.status === "running" ? "running" : "done",
+/** A wait invoked as a command, including after `start &&`, never words inside an argument. */
+function runsBrigadierWait(command: string): boolean {
+  const tokens = unwrapCommand(command).match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n]|[^\s;&|()'"\\])+|[;&|()\n]/g) ?? [];
+  let start = true;
+  for (const [index, token] of tokens.entries()) {
+    if (/^[;&|()\n]$/.test(token)) {
+      start = true;
+    } else if (start) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+      if (/^(?:\S*\/)?brigadier$/.test(token) && tokens[index + 1] === "wait") return true;
+      start = false;
+    }
+  }
+  return false;
+}
+
+/** Claude labels a Bash task with its description; only its originating call has the command. */
+function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
+  if (task.kind === "terminal") return task.label;
+  if (task.kind !== "shell" || task.itemId === null) return null;
+  const call = entries.find(({ event, parent }) => !parent && event.type === "toolCall" && event.itemId === task.itemId)?.event;
+  if (call?.type !== "toolCall") return null;
+  try {
+    const input = JSON.parse(call.input ?? "null") as { command?: unknown } | null;
+    return typeof input?.command === "string" ? input.command : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Running CLI tasks, excluding the session's worker wait already covered by the workers card. */
+export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
+  return tasks.filter((task) => taskShown(task) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
+    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running",
   }));
 }
 
