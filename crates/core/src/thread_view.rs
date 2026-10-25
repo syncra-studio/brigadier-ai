@@ -257,6 +257,10 @@ pub(crate) struct LiveTurn {
     pub user_message: Option<String>,
     /// Its CLI's turn started and its user message is still to come (Codex says it after).
     pub awaiting_user: bool,
+    /// It goes on with the turn before it: its CLI began it on its own for a background job's
+    /// end (its notice), with no user message of its own. That turn reads as open until it
+    /// ends, and its end is that turn's (`user_message` is that turn's).
+    pub continues: bool,
     pub open: bool,
     pub error: Option<String>,
     /// The limit its CLI hit in it.
@@ -363,6 +367,12 @@ pub(crate) fn view(
         && let Some(live) = live
         && let Some(turn) = turns.last_mut()
     {
+        // The turn it goes on with ended before: it runs again, until this one ends.
+        if live.continues && live.user_message.as_deref() == Some(turn.user_message.as_str()) {
+            turn.end = None;
+            turn.ended_at_ms = None;
+            turn.error = None;
+        }
         if turn.error.is_none() {
             turn.error.clone_from(&live.error);
         }
@@ -537,6 +547,14 @@ fn user_message(entry: &FileEntry) -> Option<&str> {
     }
 }
 
+/// The user message of the last turn `record/turns.jsonl` names, if any.
+pub(crate) fn last_user_message(record: &Path) -> Option<String> {
+    read_turns(record)
+        .into_iter()
+        .rev()
+        .find_map(|turn| turn.user_message)
+}
+
 /// `record/turns.jsonl`'s turns; none when it is missing.
 pub(crate) fn read_turns(record: &Path) -> Vec<TurnRecord> {
     std::fs::read_to_string(record.join("turns.jsonl"))
@@ -667,5 +685,56 @@ mod tests {
         let view = view(vec![Arc::new(file)], Some(&live), &[]);
         assert_eq!(ids(&view), ["u1", "a1", "c1", "c2", "a2", "end"]);
         assert_eq!(view.turns.len(), 1);
+    }
+
+    /// A turn the CLI began on its own for a background job's end goes on with the turn before
+    /// it: that turn reads as open while it runs, and ends when it does.
+    #[test]
+    fn a_turn_the_cli_began_for_a_background_jobs_end_keeps_the_turn_before_it_open() {
+        let notice = entry(ProviderEvent::TaskNotice {
+            item_id: "n1".into(),
+            text: r#"Background command "brigadier wait" completed (exit code 0)"#.into(),
+        });
+        let file = vec![message("u1", Role::User), message("a1", Role::Assistant)];
+        let ended = |at: i64| TurnRecord {
+            user_message: Some("u1".into()),
+            end: Some(TurnEnd::Done),
+            error: None,
+            ended_at_ms: Some(at),
+            requests: Vec::new(),
+            limit: None,
+        };
+        let live = LiveTurn {
+            entries: vec![notice.clone(), message("a2", Role::Assistant)],
+            user_message: Some("u1".into()),
+            continues: true,
+            open: true,
+            ..LiveTurn::default()
+        };
+        let running = view(vec![Arc::new(file.clone())], Some(&live), &[ended(10)]);
+        assert_eq!(ids(&running), ["u1", "a1", "n1", "a2"]);
+        assert_eq!(running.turns.len(), 1);
+        assert_eq!(running.turns[0].end, None);
+        assert_eq!(running.turns[0].ended_at_ms, None);
+        // Ended: its end is the turn's, the later of the two.
+        let mut all = file;
+        all.extend([notice, message("a2", Role::Assistant)]);
+        let done = view(vec![Arc::new(all)], None, &[ended(10), ended(30)]);
+        assert_eq!(done.turns.len(), 1);
+        assert_eq!(done.turns[0].end, Some(TurnEnd::Done));
+        assert_eq!(done.turns[0].ended_at_ms, Some(30));
+        // A turn of a new user message still to come never reopens the one before it.
+        let starting = LiveTurn {
+            user_message: Some("u1".into()),
+            awaiting_user: true,
+            open: true,
+            ..LiveTurn::default()
+        };
+        let next = view(
+            vec![Arc::new(vec![message("u1", Role::User)])],
+            Some(&starting),
+            &[ended(10)],
+        );
+        assert_eq!(next.turns[0].end, Some(TurnEnd::Done));
     }
 }

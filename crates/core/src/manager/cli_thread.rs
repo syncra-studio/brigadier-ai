@@ -79,6 +79,9 @@ impl SessionManager {
                         *live = LiveTurn {
                             open: true,
                             awaiting_user: true,
+                            // The turn before's, until its own user message comes: a turn with
+                            // none goes on with that turn, as the thread reads it.
+                            user_message: live.user_message.take(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             reading_output: live.reading_output,
@@ -122,6 +125,19 @@ impl SessionManager {
                         ..entry(event.cloned(), at)
                     };
                     news.push(entry);
+                }
+                // A turn the CLI began on its own for a background job's end: it goes on with
+                // the turn before, which reads as open until it ends, and its end is that turn's.
+                Some(ProviderEvent::TaskNotice { .. }) if live.open && live.awaiting_user => {
+                    live.awaiting_user = false;
+                    live.continues = true;
+                    // The thread reads its turns again: that turn is open once more.
+                    opened = true;
+                    if live.user_message.is_none() {
+                        live.user_message =
+                            thread_view::last_user_message(&self.session_dir(&conv.id).record());
+                    }
+                    news.push(entry(event.cloned(), at));
                 }
                 Some(ProviderEvent::Error { error }) if live.open => {
                     live.error = Some(error.message.clone());
