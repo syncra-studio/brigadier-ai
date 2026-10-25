@@ -15,7 +15,7 @@ export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
   ) : null;
 };
 
-/** The CLI's line for a background job's end ("Background command … completed"), a quiet line before its reply. */
+/** A quiet line of what a worker did ("Worker "…" finished · …"). */
 export const TaskNoticeRow: FC<{ text: string }> = ({ text }) => (
   <div data-slot="task-notice" className={ROW} title={text}>
     <span className="min-w-0 truncate">{text}</span>

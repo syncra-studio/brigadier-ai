@@ -7,7 +7,7 @@ import { foldsAway, type SequenceEntry as Entry } from "@/app/conversation/block
  */
 export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry } | { type: "between"; entry: Entry };
 
-/** Whether an entry cuts the work: a follow-up steered in, or the CLI's notice of a background job's end it took up. */
+/** Whether an entry cuts the work: a follow-up steered in, or a line of what a worker did. */
 function cuts(entry: Entry): boolean {
   return entry.kind === "steer" || entry.kind === "taskNotice";
 }
