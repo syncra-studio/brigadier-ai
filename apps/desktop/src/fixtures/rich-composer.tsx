@@ -142,7 +142,7 @@ async function drive() {
   try {
     await until("the field", () => field() !== null);
     // A draft comes back formatted, its mention (with Markdown in its name) a chip.
-    await until("the draft", () => has("h2"));
+    await until("the draft", () => has("h2") && field()!.querySelector("[data-slot=composer-chip]") !== null);
     seen.draft = {
       heading: has("h2", "Draft title"),
       italic: has("h2 .italic", "title"),
