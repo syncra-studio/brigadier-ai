@@ -16,9 +16,6 @@
             },
             {
               "item": "text"
-            },
-            {
-              "item": "taskNotice"
             }
           ]
         }
@@ -42,9 +39,6 @@
             },
             {
               "item": "text"
-            },
-            {
-              "item": "taskNotice"
             }
           ]
         }

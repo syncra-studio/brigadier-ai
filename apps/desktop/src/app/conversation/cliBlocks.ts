@@ -271,11 +271,29 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
  * its turn ended (the call itself answered at once), then as the task ended. Any other call
  * still running when its turn ended was cut off with it: it reads stopped, never running for good.
  */
+/** Claude's own plan file, which its plan mode writes the plan to. */
+const PLAN_FILE = /(?:^|\/)\.claude\/plans\/[^/]+\.md$/;
+
+/**
+ * Whether a CLI's line that its agent ended says what that agent's own row in `block` already
+ * does ("Agent "Find the parser" finished"): no line then, as a Codex agent's end is none (D57).
+ */
+function agentRowSays(text: string, block: Block): boolean {
+  const name = /^Agent "([\s\S]*)" (?:finished|completed|failed|was stopped|stopped|was killed|killed)\b/.exec(text.trim())?.[1];
+  return (
+    name !== undefined &&
+    block.orchestratorSteps.some((step) => step.kind.type === "tool" && ["Agent", "Task"].includes(toolName(step.kind.name)) && step.kind.detail === name)
+  );
+}
+
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
   if (!step) return null;
   // The thread's own `brigadier wait` and `start` are no rows (D47): the block's "Waiting for a
   // worker" line and the worker's own row say them.
   if (step.item === "command" && step.detail !== null && brigadierUnshown(step.detail)) return null;
+  // Claude's plan, written to its own plan file in plan mode, is the plan card's, as Codex's
+  // plan is: no "Edited …" row (harness D7, D57).
+  if (step.item === "files" && (step.files?.length ?? 0) > 0 && step.files?.every((file) => PLAN_FILE.test(file.path))) return null;
   const ended = turn?.end != null;
   const { endedAtMs: _endedAtMs, exit: _exit, stopped: _stopped, ...running } = step;
   if (task?.status === "running") return { ...running, status: "inProgress", ...(ended && { background: true }) };
@@ -763,7 +781,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice":
-        if (waitEnded(event.text, view)) return;
+        if (waitEnded(event.text, view) || agentRowSays(event.text, current)) return;
         current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
       case "compactionEnded": {

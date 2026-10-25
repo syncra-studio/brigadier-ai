@@ -190,6 +190,37 @@ test("Claude's background end told in Brigadier's own /compact is one more turn 
   }
 });
 
+test("Claude's plan written to its own plan file is the plan card's, no row; a file of the work still is (D57)", () => {
+  const fixture = load("claude-2.1.310", "plan");
+  for (const source of ["live", "persisted"] as const) {
+    const view = fixture[source];
+    const plan = view.entries.find((entry) => entry.event.type === "fileChanges");
+    assert.ok(plan?.event.type === "fileChanges" && plan.event.changes.every((change) => change.path.includes(".claude/plans/")), source);
+    const files = (each: ThreadView) => cliBlocks(each, "recorded-thread").flatMap(toolSteps).filter((kind) => kind.item === "files");
+    assert.deepEqual(files(view), [], source);
+    // The same recorded write to a file of the project is a row.
+    const event = { ...plan.event, changes: plan.event.changes.map((change) => ({ ...change, path: "ok.txt" })) };
+    const entries = view.entries.map((entry) => (entry === plan ? { ...entry, event } : entry));
+    assert.equal(files({ ...view, entries }).length, 1, source);
+  }
+});
+
+test("Claude's line that its agent ended is no line where the agent's own row says it, as Codex's is none (D57)", () => {
+  const fixture = load("claude-2.1.310", "subagent");
+  for (const source of ["live", "persisted"] as const) {
+    const view = fixture[source];
+    const [block] = cliBlocks(view, "recorded-thread");
+    assert.deepEqual(block?.taskNotices, [], source);
+    assert.ok(block && toolSteps(block).some((kind) => kind.name === "Agent"), source);
+    // A line about an agent with no row here still shows.
+    const notice = view.entries.find((entry) => entry.event.type === "taskNotice");
+    assert.ok(notice?.event.type === "taskNotice", source);
+    const event = { ...notice.event, text: notice.event.text.replace(/"[^"]*"/, '"Another agent"') };
+    const entries = view.entries.map((entry) => (entry === notice ? { ...entry, event } : entry));
+    assert.equal(cliBlocks({ ...view, entries }, "recorded-thread")[0]?.taskNotices.length, 1, source);
+  }
+});
+
 /** The recorded `sleep 30` call, as the CLI's file keeps it when the turn ends before its result. */
 function cutOff(end: "interrupted" | "failed"): { view: ThreadView; itemId: string } {
   const fixture = load("claude-2.1.310", "interrupt");

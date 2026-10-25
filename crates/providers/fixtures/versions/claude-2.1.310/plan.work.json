@@ -3,40 +3,16 @@
     {
       "key": "11ab1104-a1c7-4b6c-8b88-054d82e9e152",
       "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_01BMgjpwX5SbWZ8LFBKzpQku",
-              "summary": "Edited a file",
-              "rows": [
-                "Edited use-askuserquestion-to-ask-wobbly-cat.md"
-              ]
-            }
-          ]
-        }
-      ]
+      "folded": false,
+      "parts": []
     }
   ],
   "persisted": [
     {
       "key": "11ab1104-a1c7-4b6c-8b88-054d82e9e152",
       "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_01BMgjpwX5SbWZ8LFBKzpQku",
-              "summary": "Edited a file",
-              "rows": [
-                "Edited use-askuserquestion-to-ask-wobbly-cat.md"
-              ]
-            }
-          ]
-        }
-      ]
+      "folded": false,
+      "parts": []
     }
   ]
 }

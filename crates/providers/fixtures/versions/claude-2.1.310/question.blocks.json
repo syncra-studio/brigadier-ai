@@ -10,27 +10,7 @@
           "text": "Plan: create `ok.txt` in the working directory. I haven't created it yet."
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "toolu_01BMgjpwX5SbWZ8LFBKzpQku",
-          "name": "apply_patch",
-          "detail": "~/.claude/plans/use-askuserquestion-to-ask-wobbly-cat.md",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943192550,
-          "item": "files",
-          "files": [
-            {
-              "path": "~/.claude/plans/use-askuserquestion-to-ask-wobbly-cat.md",
-              "insertions": 3,
-              "deletions": 0,
-              "binary": false,
-              "change": "add"
-            }
-          ]
-        }
-      ]
+      "steps": []
     }
   ],
   "persisted": [
@@ -44,27 +24,7 @@
           "text": "Plan: create `ok.txt` in the working directory. I haven't created it yet."
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "toolu_01BMgjpwX5SbWZ8LFBKzpQku",
-          "name": "apply_patch",
-          "detail": "~/.claude/plans/use-askuserquestion-to-ask-wobbly-cat.md",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943192550,
-          "item": "files",
-          "files": [
-            {
-              "path": "~/.claude/plans/use-askuserquestion-to-ask-wobbly-cat.md",
-              "insertions": 3,
-              "deletions": 0,
-              "binary": false,
-              "change": "add"
-            }
-          ]
-        }
-      ]
+      "steps": []
     }
   ]
 }
