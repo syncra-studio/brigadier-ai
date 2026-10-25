@@ -1098,7 +1098,6 @@ impl SessionManager {
                     start.clone(),
                 );
                 let branch_name = branch.clone();
-                let platform = self.runtime.platform().clone();
                 // A new branch starts from the newest base: its remote is fetched first.
                 let fresh = match &start {
                     None => Some(self.fresh_tip(repo, base).await?),
@@ -1111,7 +1110,7 @@ impl SessionManager {
                     .and_then(|id| self.core.project(id).ok())
                     .map(|project| project.prefs.secret_files)
                     .unwrap_or_default();
-                let (made, warmed, copied, setup) = blocking(move || {
+                let (made, copied, setup) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
@@ -1154,48 +1153,16 @@ impl SessionManager {
                         None => Vec::new(),
                     };
                     let setup = made.is_some() && has_setup(&git, &path);
-                    // The thread builds and tests here as a worker does in its own worktree,
-                    // so it starts from the same copies of the checkout's dependency installs
-                    // and build caches (best effort; see `warm`): without them its first check
-                    // fails and it reinstalls them (BUILD-PLAN C7).
-                    let started = std::time::Instant::now();
-                    let warmed = match git.open(&path) {
-                        Ok(worktree) => {
-                            let installing = || warm::install_running(&*platform, repo.root());
-                            let warmed =
-                                warm::warm_worktree(&repo, &[repo_path], &worktree, &installing);
-                            tracing::info!(
-                                worktree = %path.display(),
-                                copied = ?warmed.copied,
-                                skipped = ?warmed.skipped,
-                                ms = started.elapsed().as_millis() as u64,
-                                "warmed the session's worktree"
-                            );
-                            warmed.copied
-                        }
-                        Err(err) => {
-                            tracing::warn!(worktree = %path.display(), %err, "couldn't open the session's worktree to warm it");
-                            Vec::new()
-                        }
-                    };
-                    Ok((made, warmed, copied, setup))
+                    Ok((made, copied, setup))
                 })
                 .await?;
+                self.warm_session_worktree(conversation_id, repo, &worktree);
                 if !copied.is_empty()
                     && let Ok(conv) = self.conv(conversation_id)
                 {
                     conv.note(format!(
                         "[setup] {}",
                         super::prompts::copied_files_line(&copied)
-                    ))
-                    .await;
-                }
-                if !warmed.is_empty()
-                    && let Ok(conv) = self.conv(conversation_id)
-                {
-                    conv.note(format!(
-                        "[workspace] {}",
-                        super::prompts::copied_in_line(&warmed)
                     ))
                     .await;
                 }
@@ -1275,6 +1242,61 @@ impl SessionManager {
                 Ok(branch.clone())
             }
         }
+    }
+
+    /// Copies the checkout's dependency installs and build caches into the session's new
+    /// `worktree` (best effort; see `warm`), so the thread builds and tests there as a worker
+    /// does in its own, instead of failing its first check and reinstalling them (BUILD-PLAN
+    /// C7). It goes on behind the thread's first turn, which never waits for it (it took 30 to
+    /// 40 s in a big checkout); the thread hears what came once it is in. A copy is moved in
+    /// only where nothing is yet, so an install the thread started meanwhile wins. The
+    /// session's cleanup waits for it.
+    fn warm_session_worktree(
+        &self,
+        conversation_id: &ConversationId,
+        repo: &Path,
+        worktree: &Path,
+    ) {
+        let Ok(guard) = self.enter(conversation_id) else {
+            return;
+        };
+        let (manager, id) = (self.arc(), conversation_id.clone());
+        let (git, repo, path) = (self.git.clone(), repo.to_owned(), worktree.to_owned());
+        let platform = self.runtime.platform().clone();
+        self.spawn(async move {
+            let warmed = blocking(move || {
+                let alias = repo.clone();
+                let repo = git.open(&repo).map_err(git_error)?;
+                let worktree = git.open(&path).map_err(git_error)?;
+                let started = std::time::Instant::now();
+                let installing = || warm::install_running(&*platform, repo.root());
+                let warmed = warm::warm_worktree(&repo, &[alias], &worktree, &installing);
+                tracing::info!(
+                    worktree = %path.display(),
+                    copied = ?warmed.copied,
+                    skipped = ?warmed.skipped,
+                    ms = started.elapsed().as_millis() as u64,
+                    "warmed the session's worktree"
+                );
+                Ok(warmed.copied)
+            })
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(conversation = %id, %err, "couldn't warm the session's worktree");
+                Vec::new()
+            });
+            if !warmed.is_empty()
+                && !guard.cut_off()
+                && let Ok(conv) = manager.conv(&id)
+            {
+                conv.note(format!(
+                    "[workspace] {}",
+                    super::prompts::copied_in_line(&warmed)
+                ))
+                .await;
+            }
+            drop(guard);
+        });
     }
 
     /// Runs the setup script in the thread's new `worktree`.

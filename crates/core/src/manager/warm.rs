@@ -35,9 +35,10 @@
 //!     read either (their debug information always names the folder they were built in); the
 //!     ones in a profile folder (`target/debug/app`, the ones people run by hand) are removed
 //!     instead, and Cargo rebuilds the workspace's own crates in a new worktree anyway.
-//! - **Atomic:** each folder is copied into a temp folder beside its destination, checked and
-//!   rewritten there, then renamed into place; on any failure the temp folder is removed. A
-//!   destination that already exists is never touched.
+//! - **Atomic:** each folder is copied into a temp folder beside the worktree (out of git's
+//!   sight, as the session or worker may already work there), checked and rewritten there,
+//!   then moved into place; on any failure the temp folder is removed. A destination that
+//!   already exists is never touched.
 //! - **Not mid-write:** a `target` is copied only while every profile's `.cargo-lock` can be
 //!   held (and it is held for the whole copy). Other caches are skipped while an install runs in
 //!   the checkout or anything at their top (or their package manager's state) changed in the
@@ -119,7 +120,8 @@ const DEPENDENCY_FILES: &[(&str, &[&str])] = &[
 /// How deep a package folder may sit below the root.
 const MAX_DEPTH: usize = 3;
 
-/// Marks a copy in progress: `<name>.brigadier-warming-<12 hex digits>` beside its destination.
+/// Marks a copy in progress: `<name>.brigadier-warming-<12 hex digits>` beside the worktree
+/// (older ones: beside its destination).
 const IN_PROGRESS: &str = ".brigadier-warming-";
 
 /// A cache written to this recently may be mid-install or mid-build.
@@ -207,6 +209,9 @@ fn warm_until(
         installing,
         deadline,
     };
+    if let Some(stage) = paths.worktree.parent() {
+        clear_leftovers(stage, Path::new(""), &BTreeSet::new());
+    }
     let mut cleared = BTreeSet::new();
     for rel in candidates(&package_dirs(&tracked)) {
         // Only real folders: a link would be copied as a link back into the checkout.
@@ -290,11 +295,20 @@ impl Warm<'_> {
             .map_err(|_| "the worktree has no such package folder")?;
         let dst = Folder::open(&self.paths.worktree, parent, true)
             .map_err(|err| format!("the worktree's folder: {err}"))?;
+        // The copy is made beside the worktree, where git can't see it (nor `git add` take it)
+        // while the session or worker already works there, then moved in.
+        let stage = self
+            .paths
+            .worktree
+            .parent()
+            .ok_or("the worktree has no parent folder")?;
+        let stage = Folder::open(stage, Path::new(""), false)
+            .map_err(|err| format!("the worktree's parent folder: {err}"))?;
         let temp = format!(
             "{name}{IN_PROGRESS}{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         );
-        let copy = dst.path().join(&temp);
+        let copy = stage.path().join(&temp);
         let result = (|| {
             {
                 // Held for the whole copy: a build can't start writing halfway through.
@@ -303,7 +317,8 @@ impl Warm<'_> {
                 } else {
                     None
                 };
-                dst.clone_in(&src, OsStr::new(name), OsStr::new(&temp), self.deadline)
+                stage
+                    .clone_in(&src, OsStr::new(name), OsStr::new(&temp), self.deadline)
                     .map_err(|err| format!("copy failed: {err}"))?;
                 // A build of a profile that had no lock yet may have started meanwhile.
                 if let Some(locks) = &locks
@@ -328,7 +343,8 @@ impl Warm<'_> {
             if Instant::now() >= self.deadline {
                 return Err("out of time".into());
             }
-            dst.rename_new(OsStr::new(&temp), OsStr::new(name))
+            stage
+                .move_new(OsStr::new(&temp), &dst, OsStr::new(name))
                 .map_err(|err| format!("publishing failed: {err}"))
         })();
         if result.is_err() {
@@ -419,8 +435,9 @@ fn is_leftover(name: &str) -> bool {
     })
 }
 
-/// Removes copies a crash left half done in the worktree's folder `rel`: only folders named as
-/// Brigadier names them that git doesn't track.
+/// Removes copies a crash left half done in `worktree`'s folder `rel` (or beside the worktree:
+/// `rel` empty, nothing tracked): only folders named as Brigadier names them that git doesn't
+/// track.
 fn clear_leftovers(worktree: &Path, rel: &Path, tracked: &BTreeSet<String>) {
     let Ok(folder) = Folder::open(worktree, rel, false) else {
         return;
@@ -1666,9 +1683,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("{rel} wasn't skipped: {warmed:?}"))
         }
 
+        /// Copies in progress in the worktree, or beside it.
         fn leftovers(&self) -> Vec<String> {
             fs::read_dir(&self.worktree)
                 .unwrap()
+                .chain(fs::read_dir(self.worktree.parent().unwrap()).unwrap())
                 .flatten()
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
                 .filter(|name| name.contains(IN_PROGRESS))
@@ -1793,10 +1812,17 @@ mod tests {
         );
         fx.write(".venv/pyvenv.cfg", b"home = /usr/bin");
         fx.age("node_modules");
-        // A copy a crash left behind is cleared too.
+        // Copies a crash left behind, in the worktree or beside it, are cleared too.
         fs::create_dir_all(
             fx.worktree
                 .join(format!("node_modules{IN_PROGRESS}0123456789ab/a")),
+        )
+        .unwrap();
+        fs::create_dir_all(
+            fx.worktree
+                .parent()
+                .unwrap()
+                .join(format!("target{IN_PROGRESS}abcdef012345/debug")),
         )
         .unwrap();
         let warmed = fx.warm();
