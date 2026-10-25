@@ -7,10 +7,10 @@
  * With `ended=1` it runs processes, then ends them (failed, finished, stopped) and writes that
  * their rows left. With `tasks=1` the CLI's own background tasks come as its live stream says
  * them (a `run_in_background` command and a background subagent): their rows, Stop, the command's
- * output, and each row dropping as soon as it ends; it writes what it saw. With `workerTasks=1` a
- * worker's CLI's background tasks come on its row (its dev app and a `brigadier wait`): the dev
- * app's row with the worker's name, its Stop and output reaching the worker, and the row leaving
- * as the task ends. With `names=1` it measures long and short names beside state words at wide
+ * output, and each command's row saying how it ended for about 5 min, then leaving (D21); it
+ * writes what it saw. With `workerTasks=1` a worker's CLI's background tasks come on its row (its
+ * dev app and a `brigadier wait`): the dev app's row with the worker's name, its Stop and output
+ * reaching the worker, and the row saying it stopped, then leaving. With `names=1` it measures long and short names beside state words at wide
  * and narrow card widths.
  * Synthetic IPC; no daemon.
  */
@@ -258,13 +258,19 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   stop("task:bdza4j3ng")?.click();
   await until(() => calls.length > 0, 3000);
   seen.calls = calls.toSorted();
-  // A command that just completed leaves immediately. Native agents stay in Workers.
-  tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now() }, { ...helper, status: "completed", endedAtMs: Date.now(), summary: "hi" });
+  // A command that just completed says how, with no Stop, for about 5 min. Native agents stay in Workers.
+  tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now(), summary: 'Background command "sleep 20; echo marker" completed (exit code 0)' },
+    { ...helper, status: "completed", endedAtMs: Date.now(), summary: "hi" });
   await frame();
-  seen.completed = ids();
-  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });
+  seen.completed = ids().map((activity) => [activity, read(activity!)?.state ?? null, !!stop(activity!)]);
+  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...sleep, id: "b3", startedAtMs: now - 6_000, status: "failed", endedAtMs: Date.now() },
+    { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });
   await frame();
-  seen.stoppedOrFailed = ids();
+  seen.stoppedOrFailed = ids().map((activity) => [activity, read(activity!)?.state ?? null]);
+  // Five minutes on, they are gone.
+  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() - 5 * MIN - 1000 }, { ...sleep, id: "b3", status: "failed", endedAtMs: Date.now() - 5 * MIN - 1000 });
+  await frame();
+  seen.later = ids();
   seen.section = !!section();
   return seen;
 }
@@ -292,7 +298,10 @@ async function driveWorkerTasks(): Promise<Record<string, unknown>> {
   seen.calls = calls.toSorted();
   workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() }, command: "pnpm tauri:dev" });
   await frame();
-  seen.ended = ids();
+  seen.ended = ids().map((activity) => [activity, read(activity!)?.state ?? null]);
+  workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() - 5 * MIN - 1000 }, command: "pnpm tauri:dev" });
+  await frame();
+  seen.later = ids();
   return seen;
 }
 

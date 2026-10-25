@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
@@ -253,7 +253,7 @@ test("what the user sent shows as ever, /compact and Brigadier's marks too; so d
   assert.deepEqual(chat.map((block) => [block.key, block.user?.kind ?? null]), [["u1", "message"]]);
 });
 
-test("a background job's end Claude took up draws no notice line: its turn goes on in the same work, live and after a restart", () => {
+test("a background job's end Claude took up is one plain line in the same work, live and after a restart (D21)", () => {
   const thread = {
     entries: [
       user("u1", "Start it in the background", 1000),
@@ -268,12 +268,17 @@ test("a background job's end Claude took up draws no notice line: its turn goes 
   const [block] = blocks;
   assert.ok(block);
   assert.equal(block.user?.kind, "message");
-  // No bubble, no line, nothing between the two replies.
+  // No bubble; one plain line between the two replies, the CLI's own words on hover.
   assert.deepEqual(block.steers, []);
-  assert.deepEqual(block.taskNotices, []);
+  assert.deepEqual(block.taskNotices, [{
+    position: 2,
+    text: "Background command finished · exit 0",
+    detail: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)',
+    inWork: true,
+  }]);
   const sequence = blockSequence({ ...block, steers: [] });
-  assert.deepEqual(sequence.map((entry) => entry.kind), ["text", "text"]);
-  // Done, the last reply is the answer and the one before it folds into the work, with no part cut out.
+  assert.deepEqual(sequence.map((entry) => entry.kind), ["text", "taskNotice", "text"]);
+  // Done, the last reply is the answer and the one before it folds into the work with the line, with no part cut out.
   const answer = answerIndex(block.texts, true);
   assert.equal(answer, 1);
   const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
@@ -282,7 +287,7 @@ test("a background job's end Claude took up draws no notice line: its turn goes 
   assert.equal(foldsAway(sequence[0]!, answer), true);
 });
 
-test("a background job's end Claude took up mid-work keeps the work one run, its command and first reply folded", () => {
+test("a background job's end Claude took up mid-work keeps the work one run, its command, line and first reply folded", () => {
   const [block] = cliBlocks(
     {
       entries: [
@@ -298,12 +303,27 @@ test("a background job's end Claude took up mid-work keeps the work one run, its
   );
   assert.ok(block);
   const sequence = blockSequence({ ...block, steers: [] });
-  assert.equal(sequence.some((entry) => entry.kind === "taskNotice"), false);
+  assert.deepEqual(sequence.filter((entry) => entry.kind === "taskNotice").map((entry) => entry.kind === "taskNotice" && entry.text), ["Background command finished · exit 0"]);
   const answer = answerIndex(block.texts, true);
   assert.equal(answer, 1);
   const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true);
   assert.equal(parts.length, 1);
   assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
+});
+
+test("the CLI's words of a background job's end read in a few plain ones (D21)", () => {
+  for (const [said, words] of [
+    ['Background command "pnpm test" completed (exit code 0)', "Background command finished · exit 0"],
+    ['Background command "pnpm test" completed (exit code 2)', "Background command failed · exit 2"],
+    ['Background command "pnpm test" failed with exit code 1', "Background command failed · exit 1"],
+    ['Background command "gh run watch 12 --exit-status" was stopped', "Background command stopped"],
+    ['Background command "sleep 5" was killed', "Background command stopped"],
+    ['Monitor "CI run 12" completed', "Monitor finished"],
+    ["[your background command `gh run watch 12` finished after your turn · exit 0]\nok", "Background command finished · exit 0"],
+    ["[your background command `pnpm test` finished after your turn · exit 1]\nFAIL", "Background command failed · exit 1"],
+    ["[your background command `pnpm test` finished after your turn · completed]\n", "Background command finished"],
+    ["Something new the CLI says", "Something new the CLI says"],
+  ] as const) assert.equal(wakeWords(said), words, said);
 });
 
 test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {

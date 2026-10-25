@@ -204,10 +204,15 @@ export function anchorMessage(block: Pick<Block, "user">): Message | null {
 
 export type BlockState = RequestState["type"];
 
-/** A quiet line of what a worker did (Brigadier's message of the workers' news), where it came. */
+/**
+ * A quiet line of what a worker did (Brigadier's message of the workers' news), or of a
+ * background job's end the CLI took up, where it came.
+ */
 export type BlockTaskNotice = {
   position: number;
   text: string;
+  /** The CLI's own words of it, on hover, when the line says them shorter. */
+  detail?: string;
   /** It came with a turn that joined the block that started its worker: a line in the work, folding with it. */
   inWork?: boolean;
 };
@@ -537,7 +542,7 @@ export type SequenceEntry =
   /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
   | { kind: "nudge"; position: number }
   /** A quiet line of what a worker did ("Worker "…" finished · …"). */
-  | { kind: "taskNotice"; text: string; position: number; inWork?: boolean }
+  | { kind: "taskNotice"; text: string; position: number; inWork?: boolean; detail?: string }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
   | { kind: "gap"; atMs: number; position: number };

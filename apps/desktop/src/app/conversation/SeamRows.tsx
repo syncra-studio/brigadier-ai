@@ -15,9 +15,12 @@ export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
   ) : null;
 };
 
-/** A quiet line of what a worker did ("Worker "…" finished · …"). */
-export const TaskNoticeRow: FC<{ text: string }> = ({ text }) => (
-  <div data-slot="task-notice" className={ROW} title={text}>
+/**
+ * A quiet line of what a worker did ("Worker "…" finished · …"), or of a background job's end
+ * ("Background command finished · exit 0", the CLI's own words on hover).
+ */
+export const TaskNoticeRow: FC<{ text: string; detail?: string | undefined }> = ({ text, detail }) => (
+  <div data-slot="task-notice" className={ROW} title={detail ?? text}>
     <span className="min-w-0 truncate">{text}</span>
   </div>
 );

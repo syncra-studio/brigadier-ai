@@ -383,6 +383,27 @@ export function workerNotices(text: string): string[] | null {
   return body.split(/; (?=Worker ")/).map((line) => line.replace(/^Worker "(.*?)" \([^)]*\): /, (_, title: string) => (title ? `Worker "${title}" ` : "A worker ")));
 }
 
+/**
+ * The CLI's words of a background job's end in a few plain ones: Claude's `Background command
+ * "pnpm test" completed (exit code 0)` and Brigadier's `[your background command `…` finished
+ * after your turn · exit 0]` read "Background command finished · exit 0" (D21). Words it doesn't
+ * know stand as they are.
+ */
+export function wakeWords(text: string): string {
+  const codex = /^\[your background command `[\s\S]*` finished after your turn · ([^\]\n]+)\]/.exec(text);
+  if (codex) {
+    const how = codex[1]!.trim();
+    const exit = /^exit (-?\d+)$/.exec(how)?.[1];
+    if (exit !== undefined) return `Background command ${exit === "0" ? "finished" : "failed"} · exit ${exit}`;
+    return `Background command ${how === "completed" ? "finished" : how}`;
+  }
+  const said = /^(.+?) "[\s\S]*" (completed|failed|was stopped|was killed|stopped|killed)\b(?:[^\n]*?exit code (-?\d+))?/.exec(text.trim());
+  if (!said) return text;
+  const [, what, how, exit] = said;
+  const word = how === "completed" ? (exit !== undefined && exit !== "0" ? "failed" : "finished") : how === "failed" ? "failed" : "stopped";
+  return exit === undefined ? `${what} ${word}` : `${what} ${word} · exit ${exit}`;
+}
+
 /** Whether an entry starts a turn: the user's own message in the session's thread. */
 function startsTurn(entry: FileEntry): boolean {
   return entry.event.type === "message" && entry.event.role === "user" && !entry.parent && !entry.steer;
@@ -648,9 +669,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         });
         return;
       }
-      // The CLI's line for a background job's end ("Background command … completed") is never
-      // drawn: the turn it starts goes on in the same work, its reply the turn's.
+      // The CLI's line for a background job's end: one plain line in the work the turn it starts
+      // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice":
+        current.taskNotices.push({ position, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
       case "compactionEnded": {
         const atMs = entry.atMs ?? current.startedAtMs;

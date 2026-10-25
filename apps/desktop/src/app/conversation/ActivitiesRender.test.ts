@@ -69,7 +69,7 @@ test("Background rows: a spinner while a process is on its way, a green live dot
 test("Background shows CLI commands with Stop and output; native agents appear in Workers", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?tasks=1", "activities-result", 60000)) as {
     running: string[]; nativeWorkers: string[]; rows: Record<string, Row>; stops: string[]; buttons: string[]; opened: string; output: boolean; calls: string[];
-    completed: string[]; stoppedOrFailed: string[]; section: boolean;
+    completed: [string, string | null, boolean][]; stoppedOrFailed: [string, string | null][]; later: string[]; section: boolean;
   };
   // Newest first, each named as the CLI names it.
   assert.deepEqual(seen.running, ["task:bdza4j3ng"]);
@@ -80,14 +80,16 @@ test("Background shows CLI commands with Stop and output; native agents appear i
   assert.equal(seen.opened, "panel:output:task:bdza4j3ng");
   assert.equal(seen.output, true, "its output tab reads the CLI's output file");
   assert.deepEqual(seen.calls, ["stopBackgroundTask bdza4j3ng"]);
-  assert.deepEqual(seen.completed, [], "a command leaves as soon as it completes");
-  assert.deepEqual(seen.stoppedOrFailed, [], "stopped and failed tasks leave at once");
+  // As Claude Code's own list: a command that ended says how for about 5 min, then goes (D21).
+  assert.deepEqual(seen.completed, [["task:bdza4j3ng", "finished · exit 0", false]], "a command that completed says so, with no Stop");
+  assert.deepEqual(seen.stoppedOrFailed, [["task:b3", "failed"], ["task:b2", "stopped"]], "stopped and failed commands say so too");
+  assert.deepEqual(seen.later, [], "five minutes on, they are gone");
   assert.equal(seen.section, false);
 });
 
-test("Background lists a worker's running background commands under its name, with Stop and output reaching its CLI; a worker's brigadier wait has no row", { timeout: 90000 }, async (t) => {
+test("Background lists a worker's background commands under its name, with Stop and output reaching its CLI; a worker's brigadier wait has no row", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?workerTasks=1", "activities-result", 60000)) as {
-    running: string[]; row: Row; worker: string | null; opened: string; output: boolean; calls: string[]; ended: string[];
+    running: string[]; row: Row; worker: string | null; opened: string; output: boolean; calls: string[]; ended: [string, string | null][]; later: string[];
   };
   assert.deepEqual(seen.running, ["task:task-2:b7dev"], "the wait has no row");
   assert.deepEqual(seen.row, { label: "Run the dev app", state: null, moving: false, elapsed: "30s", tip: "VITE ready\nFrom Demo of the fixes" });
@@ -95,7 +97,8 @@ test("Background lists a worker's running background commands under its name, wi
   assert.equal(seen.opened, "panel:output:task:task-2:b7dev");
   assert.equal(seen.output, true, "its output tab reads the worker's CLI's output file");
   assert.deepEqual(seen.calls, ["stopBackgroundTask b7dev of task-2"]);
-  assert.deepEqual(seen.ended, [], "it leaves as soon as it ends");
+  assert.deepEqual(seen.ended, [["task:task-2:b7dev", "stopped"]], "it says it stopped");
+  assert.deepEqual(seen.later, [], "then leaves");
 });
 
 test("only Background names truncate: building stays whole and shimmering, running needs only its dot, and short names keep the word beside them", { timeout: 90000 }, async (t) => {

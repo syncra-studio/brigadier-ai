@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
+import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { rowName } from "@/app/conversation/activity/workerState";
@@ -24,7 +25,7 @@ import { cn } from "@/lib/utils";
 type Activity = BackgroundRow;
 
 /** A process at work: its word shimmers. Paused or done, it rests. */
-const live = (state: BackgroundState) => state !== "paused" && state !== "done";
+const live = (state: BackgroundState) => !["paused", "done", "finished", "failed", "stopped"].includes(state);
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
@@ -49,9 +50,9 @@ const NO_PREVIEWS: readonly Preview[] = [];
  * (a worker's copy of an app or a browser at it is a state of the app's row), how long it has gone,
  * and Stop on hover. A click on a web preview that is up opens its page in the browser
  * (Brigadier's, by Settings › Browser),
- * with what it prints one button away; any other preview opens what it prints in a tab. A row
- * leaves immediately when its thing completes, fails or stops (the thread's fold keeps the
- * history).
+ * with what it prints one button away; any other preview opens what it prints in a tab. A
+ * preview's row leaves when it ends; a CLI task's that ended stays a while saying how
+ * ("finished · exit 0"), as the CLI's own list does (D21).
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
@@ -59,15 +60,16 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
-  const workerTasks = workerTaskRows(workers, (taskId) => rowName(workers, taskId));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
-  const since = [...rows, ...cliTasks, ...workerTasks].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
+  const since = [...rows, ...cliTasks, ...workers.flatMap((worker) => (worker.background ?? []).map(({ task }) => ({ ...task, id: `${worker.id}:${task.id}` })))].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
   // eslint-disable-next-line react/purity
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries), ...workerTasks].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  // A task that ended keeps its row a while, read against the card's clock.
+  const workerTasks = workerTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now);
+  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries, clock.now), ...workerTasks].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
@@ -88,14 +90,14 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
  * Only the name truncates; a live dot needs no word, and every other state, and the worker whose
  * it is, keeps its room.
  */
-function ActivityLabel({ name, state, worker }: { name: string; state: BackgroundState; worker?: string | null | undefined }) {
+function ActivityLabel({ name, state, worker, word = state }: { name: string; state: BackgroundState; worker?: string | null | undefined; word?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
       <span data-activity-name className="truncate">{name}</span>
       {worker && <span data-activity-worker className="text-muted-foreground shrink-0 whitespace-nowrap">{worker}</span>}
       {state !== "running" && (
         <span data-state={state} className={cn("text-muted-foreground shrink-0 whitespace-nowrap", live(state) && "shimmer")}>
-          {state}
+          {word}
         </span>
       )}
     </span>
@@ -161,7 +163,8 @@ function TaskRow({ conversationId, task, worker, name, meta, state }: {
     meta,
     action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id)} /> : undefined,
   };
-  const words = <ActivityLabel name={name} state={state} worker={worker?.name} />;
+  const end = taskEnd(task);
+  const words = <ActivityLabel name={name} state={state} worker={worker?.name} {...(end && { word: endWords(end) })} />;
   if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
   return (
     <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, ...(worker && { worker: worker.id }) }, name)}>

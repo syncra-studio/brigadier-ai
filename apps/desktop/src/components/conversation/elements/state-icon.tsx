@@ -1,11 +1,11 @@
 import type { BackgroundState } from "@/app/conversation/backgroundRows";
-import { Check, Pause, Spinner } from "@/components/icons";
+import { Check, Pause, Spinner, StopCircle, Warning } from "@/components/icons";
 
 /**
  * A row's icon for its state: a spinner while the process is on its way somewhere (building,
  * starting, a smoke test or a check of it) and while an event runs or waits (a review, CI, a
  * merge), a steady green dot once a process is up, a pause sign while it is held, a tick once a
- * CLI's background task is done. With less
+ * CLI's background task is done or finished, a warning once it failed, a stop sign once stopped. With less
  * motion, nothing spins or pulses.
  */
 export function StateIcon({ state }: { state: BackgroundState }) {
@@ -17,6 +17,8 @@ export function StateIcon({ state }: { state: BackgroundState }) {
     );
   }
   if (state === "paused") return <Pause data-icon="paused" />;
-  if (state === "done") return <Check data-icon="done" />;
+  if (state === "done" || state === "finished") return <Check data-icon="done" />;
+  if (state === "failed") return <Warning data-icon="failed" />;
+  if (state === "stopped") return <StopCircle data-icon="stopped" />;
   return <Spinner data-icon="spinner" className="motion-safe:animate-spin" />;
 }

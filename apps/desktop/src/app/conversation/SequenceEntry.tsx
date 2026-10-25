@@ -85,7 +85,7 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
     case "nudge":
       return null;
     case "taskNotice":
-      return <TaskNoticeRow text={entry.text} />;
+      return <TaskNoticeRow text={entry.text} detail={entry.detail} />;
     case "row":
       return <TeamSentence row={entry.row} />;
     case "gap":

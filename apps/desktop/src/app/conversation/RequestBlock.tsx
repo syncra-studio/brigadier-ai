@@ -84,7 +84,7 @@ export type BlockMeta = {
   seams: BlockSeam[];
   /** Brigadier's seam message in its turn, by position. */
   nudges: number[];
-  /** Quiet lines of what its workers did, by position. */
+  /** Quiet lines of what its workers did, and of background jobs' ends its CLI took up, by position. */
   taskNotices: BlockTaskNotice[];
   state: BlockState;
   startedAtMs: number;

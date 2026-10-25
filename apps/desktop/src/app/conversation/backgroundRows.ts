@@ -1,4 +1,4 @@
-import { taskShown } from "@/app/conversation/backgroundTasks";
+import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
 import { unwrapCommand } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/generated";
@@ -10,11 +10,13 @@ import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/genera
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
- * A row leaves as soon as its thing ends, finished, failed or stopped: the thread's fold keeps
- * the history.
+ * A preview's row leaves as soon as it ends. A CLI's task that ended keeps its row a while by the
+ * CLI's own rules (`taskShown`), saying how it ended (D21).
  */
 
-export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging" | "done";
+export type BackgroundState =
+  | "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging" | "done"
+  | "finished" | "failed" | "stopped";
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
@@ -23,6 +25,11 @@ export type BackgroundRow =
    * CLI (`worker`: its id and name).
    */
   | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState; worker: { id: string; name: string | null } | null };
+
+/** A CLI task's row state: running, or how it ended. */
+function taskState(task: BackgroundTask): BackgroundState {
+  return taskEnd(task)?.word ?? "running";
+}
 
 /** Leading `NAME=value` assignments, as a shell reads them before the command. */
 const ASSIGNMENTS = /^(?:\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/;
@@ -50,6 +57,14 @@ function portOf(preview: Preview): string | null {
 
 /** A wait invoked as a command, including after `start &&`, never words inside an argument. */
 function runsBrigadierWait(command: string): boolean {
+  return runsBrigadier(command, "wait");
+}
+
+/**
+ * Whether `command` runs `brigadier <sub>` as a command of its own (after `start &&` too), never
+ * words inside an argument (`core::manager::cli_jobs::runs_brigadier` reads it the same).
+ */
+export function runsBrigadier(command: string, sub: string): boolean {
   const tokens = unwrapCommand(command).match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n]|[^\s;&|()'"\\])+|[;&|()\n]/g) ?? [];
   let start = true;
   for (const [index, token] of tokens.entries()) {
@@ -57,7 +72,7 @@ function runsBrigadierWait(command: string): boolean {
       start = true;
     } else if (start) {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
-      if (/^(?:\S*\/)?brigadier$/.test(token) && tokens[index + 1] === "wait") return true;
+      if (/^(?:\S*\/)?brigadier$/.test(token) && tokens[index + 1] === sub) return true;
       start = false;
     }
   }
@@ -65,7 +80,7 @@ function runsBrigadierWait(command: string): boolean {
 }
 
 /** Claude labels a Bash task with its description; only its originating call has the command. */
-function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
+export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
   if (task.kind === "terminal") return task.label;
   if (task.kind !== "shell" || task.itemId === null) return null;
   const call = entries.find(({ event, parent }) => !parent && event.type === "toolCall" && event.itemId === task.itemId)?.event;
@@ -78,23 +93,26 @@ function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): strin
   }
 }
 
-/** Running CLI tasks, excluding the session's worker wait already covered by the workers card. */
-export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
-  return tasks.filter((task) => taskShown(task) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
-    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running", worker: null,
+/**
+ * The CLI's tasks that still have a row at `now` (`taskShown`), excluding the session's worker
+ * wait already covered by the workers card.
+ */
+export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
+  return tasks.filter((task) => taskShown(task, now) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
+    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
   }));
 }
 
 /**
- * The workers' CLIs' running background tasks, by the same rules as the session's own: no row
- * for a subagent or a `brigadier wait`, each named by its worker.
+ * The workers' CLIs' background tasks, by the same rules as the session's own: no row for a
+ * subagent or a `brigadier wait`, each named by its worker.
  */
-export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null): BackgroundRow[] {
+export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null, now: number): BackgroundRow[] {
   return workers.flatMap((worker) => (worker.background ?? [])
-    .filter(({ task, command }) => taskShown(task) && task.kind !== "agent"
+    .filter(({ task, command }) => taskShown(task, now) && task.kind !== "agent"
       && !runsBrigadierWait(command ?? (task.kind === "terminal" ? task.label : "")))
     .map(({ task }): BackgroundRow => ({
-      type: "task", id: `task:${worker.id}:${task.id}`, startedAtMs: task.startedAtMs, task, state: "running",
+      type: "task", id: `task:${worker.id}:${task.id}`, startedAtMs: task.startedAtMs, task, state: taskState(task),
       worker: { id: worker.id, name: workerName(worker.id) },
     })));
 }
