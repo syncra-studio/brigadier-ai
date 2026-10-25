@@ -914,3 +914,36 @@ async fn archive_keeps_record_and_transcripts_and_removes_the_rest() {
     assert!(homes.rollout().is_file(), "its Codex rollout stays");
     flow.stop().await;
 }
+
+/// The sweep keeps a deleted session's worktree with uncommitted work, and its folder around
+/// it, for Storage's ask (D10).
+#[tokio::test]
+async fn the_orphan_sweep_keeps_a_deleted_sessions_uncommitted_work() {
+    let mut flow = Flow::start(
+        "20261025-1221-cleanup-on-delete-w04-dirty",
+        options(),
+        script(),
+    )
+    .await;
+    let old = flow.add_session("Old", None, ProviderKind::Claude).await;
+    flow.conversation = old.clone();
+    flow.say("Hello").await;
+    flow.settled().await;
+    let dir = flow.manager.session_dir(&old);
+    let work = dir.work();
+    assert!(work.join(".git").is_file());
+    std::fs::write(work.join("draft.md"), "unsaved\n").unwrap();
+    flow.manager.archive(old.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&old).await;
+    assert!(work.join("draft.md").is_file());
+    flow.core.forget_conversation(old.clone()).await.unwrap();
+    flow.crash().await;
+    let swept = flow.manager.sweep_orphans().await;
+    assert!(!swept.failures.is_empty(), "{swept:?}");
+    assert_eq!(
+        std::fs::read_to_string(work.join("draft.md")).unwrap(),
+        "unsaved\n"
+    );
+    assert!(dir.root().is_dir());
+    flow.stop().await;
+}

@@ -33,6 +33,9 @@ struct Deleted {
     /// The branch its work landed on.
     target: Option<String>,
     project: Option<ProjectId>,
+    /// Its records say it was deleted: a conversation merely missing from a catalog read a
+    /// moment earlier may be one being created.
+    proven: bool,
 }
 
 /// What the sweep did.
@@ -50,11 +53,6 @@ impl SessionManager {
     pub(crate) async fn sweep_orphans(&self) -> OrphanSweep {
         let mut sweep = OrphanSweep::default();
         let catalog = self.core.catalog();
-        let live: HashSet<String> = catalog
-            .conversations
-            .iter()
-            .map(|c| c.id.short().to_owned())
-            .collect();
         let mut deleted: BTreeMap<String, Deleted> = BTreeMap::new();
         // Deleted conversations the catalog's records still name.
         match crate::ledger::read_stream(&self.core, streams::CATALOG.into()).await {
@@ -63,20 +61,24 @@ impl SessionManager {
                     let Ok(decoded) = crate::sessions::decode(&event) else {
                         continue;
                     };
-                    let (id, setup, project) = match decoded {
+                    let (id, setup, project, decoded_kind) = match decoded {
                         DomainEvent::ConversationCreated { conversation } => (
                             conversation.id.clone(),
                             conversation.setup.clone(),
                             conversation.project_id.clone(),
+                            Kind::Other,
                         ),
-                        DomainEvent::ConversationSetUp { id, setup } => (id, Some(setup), None),
-                        DomainEvent::ConversationDeleted { id } => (id, None, None),
+                        DomainEvent::ConversationSetUp { id, setup } => {
+                            (id, Some(setup), None, Kind::Other)
+                        }
+                        DomainEvent::ConversationDeleted { id } => (id, None, None, Kind::Deleted),
                         _ => continue,
                     };
                     if catalog.conversations.iter().any(|c| c.id == id) {
                         continue;
                     }
                     let entry = deleted.entry(id.short().to_owned()).or_default();
+                    entry.proven |= matches!(decoded_kind, Kind::Deleted);
                     entry.short = id.short().to_owned();
                     entry.id = Some(id);
                     entry.project = entry.project.take().or(project);
@@ -111,7 +113,11 @@ impl SessionManager {
                 found.repos.extend(worktree_repos(&entry.path()));
             }
         }
-        deleted.retain(|short, _| !live.contains(short));
+        // Read again after its folders: a session made meanwhile is in the catalog before its
+        // folder exists. One its records name is swept only once they say it was deleted.
+        let live = self.live_shorts();
+        deleted
+            .retain(|short, found| !live.contains(short) && (found.id.is_none() || found.proven));
         if deleted.is_empty() {
             return sweep;
         }
@@ -232,6 +238,10 @@ impl SessionManager {
         let mut gone = Vec::new();
         let mut needles = Vec::new();
         for (short, found) in &deleted {
+            // Never one that is in the catalog now (a short id a new session shares).
+            if self.live_shorts().contains(short) {
+                continue;
+            }
             let folder = sessions_dir.join(short);
             let owner = format!("orphan:{short}");
             // The CLI sessions that ran in its folder, through their CLIs' own removal.
@@ -299,11 +309,13 @@ impl SessionManager {
                             sweep.failures.push(err.to_string());
                         }
                     }
-                    // A worktree is Storage's to offer, with its work kept.
-                    if artifacts
-                        .iter()
-                        .any(|a| matches!(a, Artifact::Worktree { .. }))
-                    {
+                    // A worktree is Storage's to offer, with its work kept; so is its folder
+                    // while a worktree the sweep kept (uncommitted work) is still in it.
+                    if artifacts.iter().any(|a| match a {
+                        Artifact::Worktree { .. } => true,
+                        Artifact::ScratchDir { .. } => !worktree_repos(&folder).is_empty(),
+                        _ => false,
+                    }) {
                         clean = false;
                         continue;
                     }
@@ -383,6 +395,16 @@ impl SessionManager {
         sweep
     }
 
+    /// The short ids of the conversations in the catalog right now.
+    fn live_shorts(&self) -> HashSet<String> {
+        self.core
+            .catalog()
+            .conversations
+            .iter()
+            .map(|c| c.id.short().to_owned())
+            .collect()
+    }
+
     /// Removes what a deleted conversation left in Brigadier's database, as Delete does: its
     /// and its tasks' streams, Brain entries, routing rows, snapshots and images. Returns its
     /// tasks' ids.
@@ -415,6 +437,12 @@ impl SessionManager {
         store.delete_streams_and_blobs(purge).await?;
         Ok(tasks.into_iter().map(|task| task.id.0).collect())
     }
+}
+
+/// Which catalog event names a conversation.
+enum Kind {
+    Deleted,
+    Other,
 }
 
 /// A deleted session as [`sweep_repo`] looks for it.

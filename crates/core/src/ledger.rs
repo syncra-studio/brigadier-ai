@@ -1241,6 +1241,15 @@ impl CleanupLedger {
                 return Err(format!("its records wait for {busy}"));
             }
         }
+        // The log lines first: until they are gone, its records stay for a retry. What was
+        // logged just before is written by now.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let logs = self.platform.paths().logs_dir.clone();
+        let names: Vec<String> = ids.iter().chain(needles).cloned().collect();
+        tokio::task::spawn_blocking(move || crate::traces::scrub_logs(&logs, &names))
+            .await
+            .map_err(|err| err.to_string())?
+            .map_err(|err| format!("log files: {err}"))?;
         let mut seqs = Vec::new();
         let cleanup = read_stream(&self.core, streams::CLEANUP.into())
             .await
@@ -1302,14 +1311,6 @@ impl CleanupLedger {
                 .retain(|other| other == owner || !names_one(other));
             state.closing.retain(|other| !names_one(other));
         }
-        // What was logged just before is written by now.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let logs = self.platform.paths().logs_dir.clone();
-        let names: Vec<String> = ids.iter().chain(needles).cloned().collect();
-        tokio::task::spawn_blocking(move || crate::traces::scrub_logs(&logs, &names))
-            .await
-            .map_err(|err| err.to_string())?
-            .map_err(|err| format!("log files: {err}"))?;
         // Nor a copy in the store's write-ahead log.
         self.core
             .store()

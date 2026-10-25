@@ -3,15 +3,21 @@
 
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
 /// The shortest needle used: anything shorter could match lines that don't name the session.
 const SHORTEST: usize = 8;
+
+/// One scrub at a time: two deletes' scrubs of one file would each write back what the other
+/// took out.
+static SCRUBBING: Mutex<()> = Mutex::new(());
 
 /// Removes, from every `.log` file directly in `dir`, the lines that contain one of `needles`.
 /// A file is rewritten in place, so the daemon's writer, which appends to it, goes on writing
 /// to the same file; a line it appends while the file is read is kept. Returns how many lines
 /// went.
 pub(crate) fn scrub_logs(dir: &Path, needles: &[String]) -> io::Result<usize> {
+    let _scrubbing = SCRUBBING.lock().unwrap_or_else(|e| e.into_inner());
     let needles: Vec<&[u8]> = needles
         .iter()
         .filter(|needle| needle.len() >= SHORTEST)
@@ -110,6 +116,35 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&other).unwrap(), id);
         assert_eq!(scrub_logs(&dir, &needles).unwrap(), 0);
         assert_eq!(scrub_logs(&dir.join("missing"), &needles).unwrap(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_scrubs_at_once_both_take_their_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-20261025-1221-cleanup-on-delete-w04-logs-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("brigadierd.log");
+        let (a, b) = ("aaaaaaaa-session", "bbbbbbbb-session");
+        let mut text = String::new();
+        for n in 0..20_000 {
+            text.push_str(&format!(
+                "{{\"n\":{n},\"id\":\"{}\"}}\n",
+                [a, b, "kept"][n % 3]
+            ));
+        }
+        std::fs::write(&log, text).unwrap();
+        std::thread::scope(|scope| {
+            for id in [a, b] {
+                let dir = &dir;
+                scope.spawn(move || scrub_logs(dir, &[id.to_owned()]).unwrap());
+            }
+        });
+        let left = std::fs::read_to_string(&log).unwrap();
+        assert!(!left.contains(a) && !left.contains(b));
+        assert_eq!(left.lines().count(), 6_666);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
