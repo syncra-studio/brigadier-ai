@@ -426,6 +426,27 @@ test("the tree chains the turns, then the messages on their way", () => {
   ]);
 });
 
+/** A tree's nodes as drawn: each user bubble's text, each block's requests. */
+const bubbles = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user?.kind === "message" ? node.block.user.text : node.block.requestIds]);
+
+test("a sent message keeps its bubble when the CLI says it before the view reads its turns again", () => {
+  const before = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
+  const sent = { ...stored("m1", 5000), text: "Next" };
+  const kept = [stored("m0", 900), sent];
+  const said = user("cli-m1", "Next", 5100);
+  const run = { state: "running", error: null } as const;
+  // On its way, then said by the CLI with its turn not read yet, then read: one bubble, one id.
+  const onItsWay = bubbles(cliThreadTree(before, "conv", kept, {}, [], NO_BOARD, run));
+  const unread = bubbles(cliThreadTree({ ...before, entries: [...before.entries, said] }, "conv", kept, {}, [], NO_BOARD, run));
+  const read = bubbles(
+    cliThreadTree({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 5100, null, null), requests: ["m1"] }] }, "conv", kept, {}, [], NO_BOARD, run),
+  );
+  assert.deepEqual(onItsWay.slice(2), [["m1", "user", "Next"], ["request:m1", "block", ["m1"]]]);
+  assert.deepEqual(unread.slice(2), [["m1", "user", "Next"], ["request:cli-m1", "block", ["m1"]]]);
+  assert.deepEqual(read.slice(2), unread.slice(2));
+});
+
 test("a turn's user message and its steers take the Brigadier requests the turn names", () => {
   const blocks = cliBlocks({ entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["r1", "r2"] }] }, "conv");
   const [block] = blocks;
