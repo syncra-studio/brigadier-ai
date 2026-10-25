@@ -3,9 +3,10 @@
 use base64::Engine as _;
 
 use crate::protocol::{
-    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, LibraryOutput, QueueOutput,
-    QueueState, ReadOutput, SendOutput, SessionsOutput, ShowOutput, StartOutput, ToolOutput,
-    WaitOutput, WhyBy, WhyOutput, WorkerRow, WorkersOutput,
+    Answer, AskOutput, Changes, CloseOutput, CommandFact, CommandStatus, GitFacts, Item, ItemKind,
+    LibraryOutput, MergeWord, QueueOutput, QueueState, ReadOutput, SendOutput, SessionsOutput,
+    ShowOutput, StartOutput, ToolOutput, TurnCommands, WaitOutput, WhyBy, WhyOutput, WorkerRow,
+    WorkerState, WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -113,6 +114,191 @@ fn context(context: Option<crate::protocol::ContextSize>) -> String {
     }
 }
 
+/// `n thing` or `n things`.
+fn count(n: u32, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
+    }
+}
+
+/// A short commit hash.
+fn short_hash(hash: &str) -> &str {
+    &hash[..hash.len().min(8)]
+}
+
+/// A worker row's git, in a few words: "clean · 2 commits · 3 uncommitted".
+fn git_cell(git: Option<&GitFacts>) -> String {
+    let Some(git) = git else {
+        return "-".into();
+    };
+    let mut parts = Vec::new();
+    if let Some(merge) = git.merge {
+        parts.push(merge.word().to_owned());
+    }
+    if git.ahead > 0 {
+        parts.push(count(git.ahead, "commit"));
+    }
+    if let Some(n) = git.uncommitted.filter(|n| *n > 0) {
+        parts.push(format!("{n} uncommitted"));
+    }
+    if parts.is_empty() {
+        "-".into()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// A worker row's commands, counted: "5", "5, 1 failed".
+fn ran_cell(commands: Option<&TurnCommands>) -> String {
+    let Some(commands) = commands else {
+        return "-".into();
+    };
+    let failed = commands
+        .commands
+        .iter()
+        .filter(|c| c.status == CommandStatus::Failed)
+        .count();
+    if failed > 0 {
+        format!("{}, {failed} failed", commands.total)
+    } else {
+        commands.total.to_string()
+    }
+}
+
+/// What git shows of a worker's work, as a line and its commits.
+fn git_text(git: &GitFacts) -> String {
+    let base = git.base.as_deref().unwrap_or("its base");
+    let mut parts = Vec::new();
+    match git.merge {
+        Some(MergeWord::Nothing) => parts.push("no commits".to_owned()),
+        Some(MergeWord::Merged) => parts.push(format!("merged into {base}")),
+        Some(merge) => {
+            parts.push(format!("{} not in {base}", count(git.ahead, "commit")));
+            match merge {
+                MergeWord::Conflicts => parts.push(format!(
+                    "merge would conflict in {}",
+                    git.conflicts.join(", ")
+                )),
+                MergeWord::Behind => parts.push(format!(
+                    "merge clean, {base} is {} ahead",
+                    count(git.behind, "commit")
+                )),
+                _ => parts.push("merge clean".into()),
+            }
+        }
+        // `--local`: it works on the session's own branch.
+        None => {
+            if let Some(branch) = &git.branch {
+                parts.push(format!("on {branch}"));
+            }
+        }
+    }
+    match git.uncommitted {
+        Some(0) => parts.push("nothing uncommitted".into()),
+        Some(n) => parts.push(count(n, "uncommitted file")),
+        None => {}
+    }
+    if git.base_checkout_clean == Some(false) {
+        parts.push(format!("the checkout of {base} has uncommitted files"));
+    }
+    let mut out = format!("git: {}\n", parts.join(" · "));
+    const SHOWN: usize = 5;
+    for commit in git.commits.iter().take(SHOWN) {
+        out.push_str(&format!(
+            "  {} {}\n",
+            short_hash(&commit.hash),
+            commit.subject
+        ));
+    }
+    let more = (git.ahead as usize).saturating_sub(git.commits.len().min(SHOWN));
+    if more > 0 {
+        out.push_str(&format!("  (+{more} more)\n"));
+    }
+    out
+}
+
+/// A command's invocation on one line: its first line, cut long; `brigadier show` has it whole.
+fn command_line(command: &str) -> String {
+    const MAX: usize = 100;
+    let first = command.lines().next().unwrap_or_default().trim_end();
+    let cut: String = first.chars().take(MAX).collect();
+    if cut.len() < command.trim_end().len() {
+        format!("{cut}…")
+    } else {
+        cut
+    }
+}
+
+/// What happened to a command, as its CLI reported it.
+fn command_outcome(command: &CommandFact) -> String {
+    let exit = match command.exit {
+        Some(code) => format!("exit {code}"),
+        None => "exit unknown".into(),
+    };
+    let what = match command.status {
+        CommandStatus::Running => "no end seen".to_owned(),
+        CommandStatus::Background => format!("in the background, {exit}"),
+        CommandStatus::Declined => "declined".to_owned(),
+        CommandStatus::Stopped => format!("stopped, {exit}"),
+        CommandStatus::Done | CommandStatus::Failed => exit,
+    };
+    match &command.head {
+        Some(head) => format!("{what} · at {}", short_hash(head)),
+        None => format!("{what} · at unknown commit"),
+    }
+}
+
+/// The commands a turn ran, the last `shown` of them.
+fn commands_text(commands: &TurnCommands, shown: usize, id: &str) -> String {
+    let turn = commands
+        .turn
+        .map_or("its latest turn".to_owned(), |turn| format!("turn {turn}"));
+    let mut out = format!("ran in {turn}: {}\n", count(commands.total, "command"));
+    let skip = commands.commands.len().saturating_sub(shown);
+    for command in &commands.commands[skip..] {
+        let earlier = match (command.turn, commands.turn) {
+            (Some(from), Some(turn)) if from != turn => format!(" (from turn {from})"),
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "  $ {} → {}{earlier}\n",
+            command_line(&command.command),
+            command_outcome(command)
+        ));
+    }
+    let more = (commands.total as usize).saturating_sub(commands.commands.len() - skip);
+    if more > 0 {
+        out.push_str(&format!(
+            "  (+{more} earlier; `brigadier show {id}` lists more)\n"
+        ));
+    }
+    out
+}
+
+/// One plain next step when a fact calls for one (harness P3).
+fn next_step(git: &GitFacts) -> Option<String> {
+    let base = git.base.as_deref().unwrap_or("its base");
+    let mut steps = Vec::new();
+    if git.merge == Some(MergeWord::Conflicts) {
+        steps.push(format!("merge into {base} would conflict"));
+    }
+    if git.uncommitted.is_some_and(|n| n > 0) {
+        steps.push("it left uncommitted files".to_owned());
+    }
+    if matches!(
+        git.merge,
+        Some(MergeWord::Clean | MergeWord::Behind | MergeWord::Conflicts)
+    ) {
+        steps.push(format!("not merged into {base} yet"));
+    }
+    if git.base_checkout_clean == Some(false) {
+        steps.push(format!("the checkout of {base} has uncommitted files"));
+    }
+    (!steps.is_empty()).then(|| format!("Next: {}.\n", steps.join("; ")))
+}
+
 fn worker_rows(workers: &[WorkerRow]) -> String {
     let mut rows = vec![vec![
         "ID".into(),
@@ -121,6 +307,8 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
         "AGENT".into(),
         "MODEL".into(),
         "CHANGES".into(),
+        "GIT".into(),
+        "RAN".into(),
         "CONTEXT".into(),
         "TITLE".into(),
     ]];
@@ -138,6 +326,8 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
             worker.agent.word().into(),
             model,
             changes(worker.changes),
+            git_cell(worker.git.as_ref()),
+            ran_cell(worker.commands.as_ref()),
             context(worker.context),
             worker.title.clone(),
         ]);
@@ -149,7 +339,33 @@ pub fn workers(output: &WorkersOutput) -> String {
     if output.workers.is_empty() {
         return "This session has no workers.\n".into();
     }
-    worker_rows(&output.workers)
+    let mut out = worker_rows(&output.workers);
+    let working: Vec<String> = output
+        .workers
+        .iter()
+        .filter(|worker| {
+            matches!(
+                worker.state,
+                WorkerState::Starting | WorkerState::Working | WorkerState::Asking
+            )
+        })
+        .map(|worker| worker.number.to_string())
+        .collect();
+    if !output.wait_running && !working.is_empty() {
+        out.push_str(&format!(
+            "\nNo `brigadier wait` is running while {} {} {} at work: start one in the \
+             background to hear {}.\n",
+            if working.len() == 1 {
+                "worker"
+            } else {
+                "workers"
+            },
+            working.join(", "),
+            if working.len() == 1 { "is" } else { "are" },
+            if working.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    out
 }
 
 pub fn show(output: &ShowOutput) -> String {
@@ -212,6 +428,18 @@ pub fn show(output: &ShowOutput) -> String {
     }
     if let Some(report) = &output.report {
         out.push_str(&format!("\nReport:\n{}\n", report.trim_end()));
+    }
+    if let Some(git) = &output.git {
+        out.push('\n');
+        out.push_str(&git_text(git));
+    }
+    if let Some(commands) = &output.commands {
+        out.push('\n');
+        out.push_str(&commands_text(
+            commands,
+            commands.commands.len(),
+            &output.id,
+        ));
     }
     if let Some(workers) = &output.workers
         && !workers.is_empty()
@@ -353,6 +581,16 @@ pub fn wait(output: &WaitOutput) -> String {
         if let Some(message) = &event.message {
             out.push_str(message.trim_end());
             out.push('\n');
+        }
+        // What Brigadier saw, after what the worker said (harness P1).
+        if let Some(git) = &event.git {
+            out.push_str(&git_text(git));
+        }
+        if let Some(commands) = &event.commands {
+            out.push_str(&commands_text(commands, 6, &event.id));
+        }
+        if let Some(step) = event.git.as_ref().and_then(next_step) {
+            out.push_str(&step);
         }
     }
     out

@@ -109,6 +109,7 @@ mod usage_view;
 mod user_rebase;
 pub mod warm;
 mod watchdog;
+mod work_facts;
 mod worker_events;
 mod worker_rows;
 mod workers;
@@ -179,6 +180,8 @@ pub struct SessionManager {
     worker_events: worker_events::WorkerEvents,
     /// When each working worker's CLI last said anything, for its `quiet` event.
     worker_quiet: Arc<worker_events::Quiet>,
+    /// What each worker's CLI ran (harness P1).
+    command_logs: work_facts::CommandLogs,
     /// Wakes a `brigadier wait <session>` at a turn end or a message seen (S30).
     session_turns: tokio::sync::Notify,
     /// One writer at a time for the sessions' messages' files (S30).
@@ -387,6 +390,7 @@ impl SessionManager {
             cli_command_probes: Default::default(),
             worker_events: Default::default(),
             worker_quiet: Default::default(),
+            command_logs: Default::default(),
             session_turns: tokio::sync::Notify::new(),
             session_mail: std::sync::Mutex::new(()),
             worker_rows: Default::default(),

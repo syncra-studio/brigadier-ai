@@ -63,6 +63,8 @@ pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
         asks: None,
         resets_at_ms: None,
         at_ms: now_ms(),
+        git: None,
+        commands: None,
     }
 }
 
@@ -584,6 +586,8 @@ impl SessionManager {
             }
             _ => event.message = error.or(message),
         }
+        // What git and its CLI showed as the turn ended, beside its own words (harness P1).
+        self.with_facts(task, &mut event).await;
         self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 
@@ -617,11 +621,13 @@ impl SessionManager {
         );
     }
 
-    /// A plain worker's CLI was working when Brigadier quit: its session hears it stopped.
-    pub(super) fn plain_cut_off(&self, task: &Task) {
+    /// A plain worker's CLI was working when Brigadier quit: its session hears it stopped,
+    /// with what git and its CLI showed of the cut-off turn (harness P1).
+    pub(super) async fn plain_cut_off(&self, task: &Task) {
         let mut event = event(&task.id, EventKind::Interrupted);
         event.message =
             Some("Brigadier restarted while it worked. Send it a message to carry on.".into());
+        self.with_facts(task, &mut event).await;
         self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 

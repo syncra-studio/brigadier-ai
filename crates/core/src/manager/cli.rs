@@ -138,6 +138,8 @@ pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> Worke
             .and_then(|workspace| workspace.branch.clone()),
         changes: diffs.get(&task.id).copied(),
         context: None,
+        git: None,
+        commands: None,
     }
 }
 
@@ -620,22 +622,37 @@ impl SessionManager {
             return Ok(WorkersOutput {
                 session,
                 workers: Vec::new(),
+                wait_running: false,
             });
         }
         let diffs = self.cli_worker_changes(&caller.conversation_id).await;
-        let workers = self
-            .core
-            .tasks(&caller.conversation_id)
-            .await?
-            .iter()
+        let mut workers = Vec::new();
+        for task in self.core.tasks(&caller.conversation_id).await? {
             // A closed worker is gone from its session.
-            .filter(|task| !task.plain.as_ref().is_some_and(|plain| plain.closed))
-            .map(|task| WorkerRow {
-                context: self.worker_context(task),
-                ..worker_row(task, &diffs)
-            })
-            .collect();
-        Ok(WorkersOutput { session, workers })
+            if task.plain.as_ref().is_some_and(|plain| plain.closed) {
+                continue;
+            }
+            workers.push(WorkerRow {
+                context: self.worker_context(&task),
+                ..self.cli_worker_row(&task, &diffs).await
+            });
+        }
+        let record = self.session_dir(&caller.conversation_id).record();
+        Ok(WorkersOutput {
+            session,
+            workers,
+            wait_running: self.worker_events.waiting(&caller.conversation_id, &record),
+        })
+    }
+
+    /// A worker's row with the facts git and its CLI show (harness P1), read now.
+    async fn cli_worker_row(&self, task: &Task, diffs: &HashMap<TaskId, Changes>) -> WorkerRow {
+        let (git, commands) = self.worker_facts(task).await;
+        WorkerRow {
+            git,
+            commands,
+            ..worker_row(task, diffs)
+        }
     }
 
     /// The session or worker that `id` names: of any project, or a Chat (S30).
@@ -706,13 +723,10 @@ impl SessionManager {
                     None => None,
                 };
                 let diffs = self.cli_worker_changes(&conversation.id).await;
-                let workers = self
-                    .core
-                    .tasks(&conversation.id)
-                    .await?
-                    .iter()
-                    .map(|task| worker_row(task, &diffs))
-                    .collect();
+                let mut workers = Vec::new();
+                for task in self.core.tasks(&conversation.id).await? {
+                    workers.push(self.cli_worker_row(&task, &diffs).await);
+                }
                 ShowOutput {
                     kind: Kind::Session,
                     id: short(&conversation.id.0),
@@ -738,11 +752,13 @@ impl SessionManager {
                     task: None,
                     report: None,
                     error: None,
+                    git: None,
+                    commands: None,
                 }
             }
             Target::Worker(task) => {
                 let diffs = self.cli_worker_changes(&task.conversation_id).await;
-                let row = worker_row(&task, &diffs);
+                let row = self.cli_worker_row(&task, &diffs).await;
                 ShowOutput {
                     kind: Kind::Worker,
                     id: row.id,
@@ -763,6 +779,8 @@ impl SessionManager {
                     task: Some(task.spec.clone()),
                     report: task.report.as_ref().map(|report| report.summary.clone()),
                     error: task.error.clone().or_else(|| task.blocked_reason.clone()),
+                    git: row.git,
+                    commands: row.commands,
                 }
             }
         };

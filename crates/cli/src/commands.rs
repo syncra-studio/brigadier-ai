@@ -184,7 +184,9 @@ pub const COMMANDS: &[Command] = &[
         name: "workers",
         summary: "List this session's own workers.",
         details: "Each row: id, number, state, agent, model, title, branch, lines added and \
-                  removed, and how full its context is. These are the ids `send`, `wait` and \
+                  removed, how full its context is, what git shows of its work (its commits, \
+                  merged or not, behind, conflicts, uncommitted files) and the commands its \
+                  latest turn ran with their exit codes. These are the ids `send`, `wait` and \
                   `close` take.",
         args: &[],
         available: true,
@@ -326,7 +328,9 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "wait",
         summary: "Wait for an event from this session's workers.",
-        details: "Returns at the first: a turn ended (with its last message), needs input, \
+        details: "Returns at the first: a turn ended (with its last message, and what git and \
+                  its CLI showed: its commits, merged or not, uncommitted files, the commands \
+                  it ran and how each exited), needs input, \
                   failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
                   without a word while it works). Without ids, any of them. Each event is \
                   heard once, kept across a restart. Keep one running in the background while \

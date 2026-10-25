@@ -162,6 +162,29 @@ async fn worker(turn: &Turn, seen: &Seen) -> Reply {
         }
         return Reply::text("Released.");
     }
+    if said.contains("Commit-and-test.") {
+        turn.write("feature.txt", "done\n");
+        turn.git(&["add", "feature.txt"]);
+        turn.git(&["commit", "-q", "-m", "Add the feature"]);
+        turn.write("scratch.txt", "left behind\n");
+        for (status, exit) in [
+            (ItemStatus::InProgress, None),
+            (ItemStatus::Failed, Some(101)),
+        ] {
+            turn.emit(ProviderEvent::Command {
+                item_id: "test".into(),
+                command: "cargo test -p demo".into(),
+                cwd: None,
+                status,
+                exit_code: exit,
+                output: exit.map(|_| "error: test failed".to_owned()),
+                duration_ms: None,
+                kept: None,
+            })
+            .await;
+        }
+        return Reply::text("All green, done.");
+    }
     if said.contains("Soon.") {
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
@@ -740,6 +763,16 @@ async fn a_worker_cut_off_by_a_restart_goes_on_when_its_session_sends_it_more() 
             .any(|(_, input)| input.contains("Send it a message to carry on.")),
         "{nets:#?}"
     );
+    // The cut-off turn's command, as kept before the restart: never seen ending, at the commit
+    // it started at (harness P1).
+    let worktree = task.workspace.as_ref().unwrap().worktree.clone().unwrap();
+    let head = super::git(std::path::Path::new(&worktree), &["rev-parse", "HEAD"]);
+    let ran = format!("`sleep 600` no end seen (turn 1, at {})", &head.trim()[..8]);
+    assert!(
+        nets.iter().any(|(_, input)| input.contains(&ran)
+            && input.contains("full facts: `brigadier show")),
+        "{ran}: {nets:#?}"
+    );
 
     flow.manager
         .message_worker(&flow.conversation, &task, "Go on.".into())
@@ -830,5 +863,65 @@ async fn a_codex_parents_background_wait_starts_its_next_turn() {
     assert_eq!(woke.len(), 1, "{after:#?}");
     assert!(woke[0].1.contains(&seen.waited_ids()[0]), "{after:#?}");
     assert!(seen.nets().is_empty(), "{after:#?}");
+    flow.stop().await;
+}
+
+/// A turn's end carries what git and the worker's CLI showed, beside its own words (harness
+/// P1, D1): its commit not merged yet, the file it left uncommitted, the test run that failed
+/// at that commit; `brigadier workers` shows the same and that no wait runs.
+#[tokio::test]
+async fn a_turns_end_carries_the_facts_git_and_the_cli_showed() {
+    let (flow, seen) = flow("events-facts", PermissionLevel::Full).await;
+    flow.say("Start Commit-and-test. then wait").await;
+    super::eventually("the background wait to end", || {
+        !seen.waited.lock().unwrap().is_empty()
+    })
+    .await;
+    flow.settled().await;
+
+    let waited = seen.waited.lock().unwrap().clone();
+    let event = &waited[0]["events"][0];
+    assert_eq!(event["message"], "All green, done.");
+    let git = &event["git"];
+    assert_eq!(git["merge"], "clean", "{event:#}");
+    assert_eq!(
+        (git["ahead"].as_u64(), git["behind"].as_u64()),
+        (Some(1), Some(0))
+    );
+    assert_eq!(git["commits"][0]["subject"], "Add the feature");
+    assert_eq!(git["uncommitted"], 1);
+    assert_eq!(git["baseCheckoutClean"], true);
+    let commands = &event["commands"];
+    assert_eq!(
+        (commands["turn"].as_u64(), commands["total"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let ran = &commands["commands"][0];
+    assert_eq!(ran["command"], "cargo test -p demo");
+    assert_eq!(ran["status"], "failed");
+    assert_eq!(ran["exit"], 101);
+    assert_eq!(
+        ran["head"], git["commits"][0]["hash"],
+        "it ran at the worker's commit"
+    );
+
+    let (session, grant) = seen.caller.lock().unwrap().clone().unwrap();
+    let caller = flow.manager.cli_caller(&session, &grant).unwrap();
+    let (reply, _) = flow
+        .manager
+        .cli_call_held(
+            &caller,
+            CliCall {
+                protocol: PROTOCOL,
+                request: brigadier_cli::protocol::CliRequest::Workers,
+            },
+        )
+        .await;
+    let CliReply::Ok { output } = reply else {
+        panic!("workers: {reply:?}");
+    };
+    assert_eq!(output["waitRunning"], false);
+    assert_eq!(output["workers"][0]["git"], *git);
+    assert_eq!(output["workers"][0]["commands"], *commands);
     flow.stop().await;
 }

@@ -137,6 +137,11 @@ impl TaskLive {
         self.state.lock().await.cutoff.take()
     }
 
+    /// Where its CLI runs.
+    pub(crate) async fn cwd(&self) -> Option<PathBuf> {
+        self.state.lock().await.cwd.clone()
+    }
+
     /// What its CLI last said.
     pub(crate) async fn last_message(&self) -> Option<String> {
         self.state.lock().await.last_message.clone()
@@ -1471,6 +1476,9 @@ impl SessionManager {
     }
 
     async fn on_worker_event(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, event: ProviderEvent) {
+        let cwd = live.cwd().await;
+        self.follow_worker_commands(&live.conversation_id, &live.id, cwd, &event)
+            .await;
         match &event {
             ProviderEvent::ApprovalRequested { request } => {
                 let request = request.clone();

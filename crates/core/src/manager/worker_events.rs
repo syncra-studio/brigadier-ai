@@ -72,7 +72,7 @@ enum Line {
         task: TaskId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card: Option<CardId>,
-        event: WaitEvent,
+        event: Box<WaitEvent>,
     },
     Held {
         ids: Vec<String>,
@@ -122,7 +122,7 @@ impl Fold {
                         id,
                         task,
                         card,
-                        event,
+                        event: *event,
                         held: None,
                     });
                 }
@@ -297,7 +297,7 @@ impl WorkerEvents {
                     id: kept.id.clone(),
                     task: kept.task.clone(),
                     card: kept.card.clone(),
-                    event: kept.event.clone(),
+                    event: Box::new(kept.event.clone()),
                 });
                 if let Some(by) = &kept.held {
                     lines.push(Line::Held {
@@ -359,7 +359,7 @@ impl WorkerEvents {
                 id: id.clone(),
                 task: task.clone(),
                 card: card.clone(),
-                event: event.clone(),
+                event: Box::new(event.clone()),
             };
             parent.append(&mut fold, &[line]);
             fold.events.push(Kept {
@@ -707,9 +707,10 @@ fn net_text(message: &str, held: &[Kept], titles: &HashMap<TaskId, String>) -> S
                 })
                 .unwrap_or_default();
             format!(
-                "Worker \"{title}\" ({}): {}{what}",
+                "Worker \"{title}\" ({}): {}{what}{}",
                 kept.event.id,
-                net_word(kept.event.event)
+                net_word(kept.event.event),
+                super::work_facts::net_facts(&kept.event)
             )
         })
         .collect();
@@ -830,6 +831,7 @@ impl SessionManager {
         let record = self.events_record(conversation);
         self.worker_events.forget(conversation, &record, task);
         self.worker_quiet.forget(task);
+        self.forget_worker_commands(task);
     }
 
     /// The net looks at `conversation` soon: after its turn ends, an event comes, or a wait
@@ -1054,6 +1056,8 @@ mod tests {
             asks: None,
             resets_at_ms: None,
             at_ms: 1,
+            git: None,
+            commands: None,
         }
     }
 

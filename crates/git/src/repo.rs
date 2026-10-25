@@ -29,6 +29,30 @@ const SNAPSHOT: &str = "Brigadier snapshot of the checkout's files";
 /// A lock per repository (common git dir), each made on first use and dropped when unused.
 type RepoLocks = OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>>;
 
+/// The commits `git log -z --format=%H%x1f%ct%x1f%s` printed.
+pub(crate) fn commit_infos(out: &[u8]) -> Result<Vec<CommitInfo>> {
+    String::from_utf8_lossy(out)
+        .split('\0')
+        .filter(|entry| !entry.trim().is_empty())
+        .map(|entry| {
+            let mut fields = entry.trim_start_matches('\n').splitn(3, '\u{1f}');
+            let (Some(commit), Some(at), Some(subject)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                return Err(Error::Parse("invalid log entry".into()));
+            };
+            Ok(CommitInfo {
+                commit: Oid(commit.to_owned()),
+                subject: subject.to_owned(),
+                at_ms: at
+                    .parse::<i64>()
+                    .map_err(|_| Error::Parse("invalid commit time".into()))?
+                    * 1000,
+            })
+        })
+        .collect()
+}
+
 pub(crate) enum TreeMerge {
     Ready(Oid),
     Conflicts(Vec<String>),
@@ -1780,26 +1804,7 @@ impl Repo {
             ],
             true,
         )?;
-        String::from_utf8_lossy(&out)
-            .split('\0')
-            .filter(|entry| !entry.trim().is_empty())
-            .map(|entry| {
-                let mut fields = entry.trim_start_matches('\n').splitn(3, '\u{1f}');
-                let (Some(commit), Some(at), Some(subject)) =
-                    (fields.next(), fields.next(), fields.next())
-                else {
-                    return Err(Error::Parse("invalid log entry".into()));
-                };
-                Ok(CommitInfo {
-                    commit: Oid(commit.to_owned()),
-                    subject: subject.to_owned(),
-                    at_ms: at
-                        .parse::<i64>()
-                        .map_err(|_| Error::Parse("invalid commit time".into()))?
-                        * 1000,
-                })
-            })
-            .collect()
+        commit_infos(&out)
     }
 
     /// The repository's default branch: the one `origin/HEAD` names, else `main` or `master`.

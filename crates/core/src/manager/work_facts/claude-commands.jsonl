@@ -1,0 +1,13 @@
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_test","name":"Bash","input":{"command":"cargo test -p demo","description":"Run the demo tests"}}]}}
+{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_test","is_error":true,"content":"Exit code 101\nrunning 2 tests\ntest adds ... FAILED\nerror: test failed"}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m2","content":[{"type":"tool_use","id":"toolu_bg","name":"Bash","input":{"command":"pnpm dev","description":"Start the dev server","run_in_background":true}}]}}
+{"type":"system","subtype":"task_started","task_id":"bg1","tool_use_id":"toolu_bg","description":"Start the dev server","is_backgrounded":true,"task_type":"local_bash"}
+{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bg","content":"Command running in background with ID: bg1. Output is being written to: /private/tmp/claude-501/-w/s1/tasks/bg1.output. You will be notified when it completes."}]},"tool_use_result":{"stdout":"","stderr":"","backgroundTaskId":"bg1"}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m3","content":[{"type":"tool_use","id":"toolu_heredoc","name":"Bash","input":{"command":"cat <<'EOF' > notes.md\nfirst line\nEOF\ngit add notes.md && git commit -qm 'Add notes'","description":"Write and commit the notes"}}]}}
+{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_heredoc","is_error":false,"content":""}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Started the dev server; the tests fail."}
+
+{"type":"system","subtype":"task_notification","task_id":"bg1","status":"failed","output_file":"/private/tmp/claude-501/-w/s1/tasks/bg1.output","summary":"Background command \"Start the dev server\" failed with exit code 1"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m4","content":[{"type":"tool_use","id":"toolu_ls","name":"Bash","input":{"command":"ls","description":"List files"}}]}}
+{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ls","is_error":false,"content":"notes.md\nsrc"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Listed the files."}

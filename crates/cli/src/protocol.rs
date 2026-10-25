@@ -497,6 +497,9 @@ pub struct WorkersOutput {
     pub session: String,
     /// Oldest first.
     pub workers: Vec<WorkerRow>,
+    /// A `brigadier wait` of the calling session runs now.
+    #[serde(default)]
+    pub wait_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,6 +521,130 @@ pub struct WorkerRow {
     /// What the parent weighs before giving it more work instead of starting a new worker.
     #[serde(default)]
     pub context: Option<ContextSize>,
+    /// What git shows of its work (P1, O2); absent without git.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitFacts>,
+    /// The commands its CLI ran in its latest turn, as its CLI reported them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<TurnCommands>,
+}
+
+/// What git shows of a worker's work, read by Brigadier and never asked of the worker
+/// (harness P1, D1; STRIP-DOWN-PLAN §9.1 O2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFacts {
+    /// Its branch; with `--local`, the session's.
+    pub branch: Option<String>,
+    /// The branch it merges into, as recorded when it started; absent with `--local`.
+    pub base: Option<String>,
+    /// The commit it started from, as recorded.
+    pub base_commit: Option<String>,
+    /// Whether the checkout that has `base` checked out has no uncommitted files; absent when
+    /// no checkout has it.
+    pub base_checkout_clean: Option<bool>,
+    /// Its commits `base` lacks, newest first (at most 20; `ahead` counts them all).
+    pub commits: Vec<CommitFact>,
+    pub ahead: u32,
+    /// Commits `base` has that it lacks.
+    pub behind: u32,
+    /// Files changed in its checkout and not committed; absent when its worktree is gone.
+    pub uncommitted: Option<u32>,
+    /// Where its branch stands against `base`; absent with `--local`.
+    pub merge: Option<MergeWord>,
+    /// With `merge: conflicts`: the conflicted paths, as `git merge-tree` names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFact {
+    pub hash: String,
+    pub subject: String,
+}
+
+/// Where a worker's branch stands against its base (O2's states, and `nothing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeWord {
+    /// No commit of its own.
+    Nothing,
+    /// Every commit of its is in its base.
+    Merged,
+    /// Its commits merge cleanly, as a fast-forward.
+    Clean,
+    /// Its commits merge cleanly, but its base moved on since (`behind` counts it).
+    Behind,
+    /// `git merge-tree` reports conflicts.
+    Conflicts,
+}
+
+impl MergeWord {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Nothing => "nothing",
+            Self::Merged => "merged",
+            Self::Clean => "clean",
+            Self::Behind => "behind",
+            Self::Conflicts => "conflicts",
+        }
+    }
+}
+
+/// The shell commands a worker's CLI ran in one turn, raw as its CLI reported them: what
+/// happened, never a verdict on it (harness P1, REPORT §7.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCommands {
+    /// The worker's turn, counted from its first; absent when unknown.
+    pub turn: Option<u32>,
+    /// How many commands it ran in it, or that changed in it (a background one); `commands`
+    /// holds the last 30.
+    pub total: u32,
+    pub commands: Vec<CommandFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandFact {
+    /// The whole invocation, as its CLI reported it.
+    pub command: String,
+    /// The turn it started in.
+    pub turn: Option<u32>,
+    pub status: CommandStatus,
+    /// Its exit code, when its CLI reported one; absent: unknown.
+    pub exit: Option<i32>,
+    /// The commit HEAD was at when Brigadier saw it start; absent: unknown.
+    pub head: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandStatus {
+    /// No end seen yet (or none came: its turn or CLI was cut off).
+    Running,
+    /// Its CLI moved it to the background, where it still runs.
+    Background,
+    Done,
+    Failed,
+    /// The user or the CLI's permission mode refused it.
+    Declined,
+    /// A background command that was stopped.
+    Stopped,
+}
+
+impl CommandStatus {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Background => "background",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Declined => "declined",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 /// How much of a CLI's context is used.
@@ -658,6 +785,12 @@ pub struct ShowOutput {
     /// A worker's: why it failed or is blocked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A worker's: what git shows of its work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitFacts>,
+    /// A worker's: the commands its CLI ran in its latest turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<TurnCommands>,
 }
 
 /// What waits for the user in a session.
@@ -816,6 +949,12 @@ pub struct WaitEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at_ms: Option<i64>,
     pub at_ms: i64,
+    /// A turn's end: what git showed of its work as it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitFacts>,
+    /// A turn's end: the commands its CLI ran in that turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<TurnCommands>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

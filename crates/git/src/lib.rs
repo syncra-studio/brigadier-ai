@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 mod command;
+mod facts;
 pub mod litter;
 mod merging;
 mod parse;
@@ -22,6 +23,7 @@ mod worktree;
 use std::{ffi::OsString, path::PathBuf};
 
 pub use command::{FoundRepo, Git, GitRun};
+pub use facts::{BranchFacts, MergeStanding};
 pub use merging::{BranchRef, ConflictFile, MergeState, RebaseState};
 pub use refname::{branch_name_problem, branch_prefix_problem};
 pub use repo::Repo;

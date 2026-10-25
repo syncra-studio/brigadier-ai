@@ -376,6 +376,8 @@ impl SessionManager {
             asks: None,
             resets_at_ms: None,
             at_ms: ended,
+            git: None,
+            commands: None,
         })
     }
 

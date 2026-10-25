@@ -54,6 +54,189 @@
           },
           "atMs": {
             "type": "integer"
+          },
+          "git": {
+            "$ref": "#/$defs/git"
+          },
+          "commands": {
+            "$ref": "#/$defs/commands"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "git": {
+      "description": "What git shows of the worker's work, read by Brigadier, never the worker's words (O2).",
+      "type": "object",
+      "required": [
+        "branch",
+        "base",
+        "baseCommit",
+        "baseCheckoutClean",
+        "commits",
+        "ahead",
+        "behind",
+        "uncommitted",
+        "merge"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {
+          "description": "The branch it merges into, as recorded when it started; null with --local.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseCommit": {
+          "description": "The commit it started from, as recorded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseCheckoutClean": {
+          "description": "Whether the checkout that has the base checked out has no uncommitted files; null when none has it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "commits": {
+          "description": "Its commits the base lacks, newest first, at most 20.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "hash",
+              "subject"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "ahead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "behind": {
+          "description": "Commits the base has that it lacks.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncommitted": {
+          "description": "Files changed in its checkout and not committed; null when its worktree is gone.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "merge": {
+          "description": "nothing: no commits of its own; merged: all in the base; clean: fast-forward; behind: merges cleanly but the base moved on; conflicts: git merge-tree reports conflicts. Null with --local.",
+          "enum": [
+            "nothing",
+            "merged",
+            "clean",
+            "behind",
+            "conflicts",
+            null
+          ]
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "commands": {
+      "description": "The shell commands its CLI ran in one turn, whole and as its CLI reported them: what happened, not a verdict.",
+      "type": "object",
+      "required": [
+        "turn",
+        "total",
+        "commands"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "turn": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "total": {
+          "description": "Commands it ran in the turn or that changed in it; commands holds the last 30.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "command",
+              "turn",
+              "status",
+              "exit",
+              "head"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "description": "The whole invocation.",
+                "type": "string"
+              },
+              "turn": {
+                "description": "The turn it started in.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "background",
+                  "done",
+                  "failed",
+                  "declined",
+                  "stopped"
+                ]
+              },
+              "exit": {
+                "description": "Its exit code as its CLI reported it; null: unknown.",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "head": {
+                "description": "The commit HEAD was at when Brigadier saw it start; null: unknown.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         }
       }

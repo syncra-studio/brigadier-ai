@@ -142,6 +142,64 @@ fn worker_row() -> WorkerRow {
             used_tokens: 120_000,
             window_tokens: Some(1_000_000),
         }),
+        git: Some(git_facts()),
+        commands: Some(turn_commands()),
+    }
+}
+
+/// What git shows of a worker: 2 commits not merged, a conflict, a file left uncommitted.
+fn git_facts() -> GitFacts {
+    GitFacts {
+        branch: Some("brigadier/a1b2c3d4/task-2".into()),
+        base: Some("brigadier/0000c0de/session".into()),
+        base_commit: Some("1111111111111111111111111111111111111111".into()),
+        base_checkout_clean: Some(true),
+        commits: vec![
+            CommitFact {
+                hash: "abcdef0123456789abcdef0123456789abcdef01".into(),
+                subject: "Add --json".into(),
+            },
+            CommitFact {
+                hash: "0123456789abcdef0123456789abcdef01234567".into(),
+                subject: "Add the schema".into(),
+            },
+        ],
+        ahead: 2,
+        behind: 1,
+        uncommitted: Some(1),
+        merge: Some(MergeWord::Conflicts),
+        conflicts: vec!["src/render.rs".into()],
+    }
+}
+
+/// The commands a turn ran: a failed test run, one with no exit known, one in the background.
+fn turn_commands() -> TurnCommands {
+    TurnCommands {
+        turn: Some(3),
+        total: 3,
+        commands: vec![
+            CommandFact {
+                command: "cargo test -p brigadier-cli".into(),
+                turn: Some(3),
+                status: CommandStatus::Failed,
+                exit: Some(101),
+                head: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            },
+            CommandFact {
+                command: "pnpm dev".into(),
+                turn: Some(2),
+                status: CommandStatus::Background,
+                exit: None,
+                head: None,
+            },
+            CommandFact {
+                command: "cat <<'EOF' > notes.md\nline\nEOF".into(),
+                turn: Some(3),
+                status: CommandStatus::Done,
+                exit: Some(0),
+                head: Some("abcdef0123456789abcdef0123456789abcdef01".into()),
+            },
+        ],
     }
 }
 
@@ -230,9 +288,12 @@ fn sample(request: &CliRequest) -> CliReply {
                     changes: None,
                     context: None,
                     state: WorkerState::Done,
+                    git: None,
+                    commands: None,
                     ..worker_row()
                 },
             ],
+            wait_running: false,
         }),
         CliRequest::Show { id } if id == "a1b2" => CliReply::ok(&ShowOutput {
             kind: Kind::Worker,
@@ -254,6 +315,19 @@ fn sample(request: &CliRequest) -> CliReply {
             task: Some("Add --json.".into()),
             report: Some("Done.".into()),
             error: Some("none".into()),
+            git: Some(GitFacts {
+                base: None,
+                base_commit: None,
+                base_checkout_clean: None,
+                commits: Vec::new(),
+                ahead: 0,
+                behind: 0,
+                uncommitted: Some(0),
+                merge: None,
+                conflicts: Vec::new(),
+                ..git_facts()
+            }),
+            commands: Some(turn_commands()),
         }),
         CliRequest::Show { .. } => CliReply::ok(&ShowOutput {
             kind: Kind::Session,
@@ -282,6 +356,8 @@ fn sample(request: &CliRequest) -> CliReply {
             task: None,
             report: None,
             error: None,
+            git: None,
+            commands: None,
         }),
         CliRequest::Read { id, .. } if id == "gone" => CliReply::error(
             ErrorCode::NotFound,
@@ -324,6 +400,8 @@ fn sample(request: &CliRequest) -> CliReply {
                 state: WorkerState::Starting,
                 branch: None,
                 changes: None,
+                git: None,
+                commands: None,
                 ..worker_row()
             },
             permission: start.permission.unwrap_or(Permission::AcceptEdits),
@@ -357,6 +435,8 @@ fn sample(request: &CliRequest) -> CliReply {
                     asks: None,
                     resets_at_ms: None,
                     at_ms: 3,
+                    git: Some(git_facts()),
+                    commands: Some(turn_commands()),
                 },
                 WaitEvent {
                     id: "e5f6a7b8".into(),
@@ -366,6 +446,8 @@ fn sample(request: &CliRequest) -> CliReply {
                     asks: Some("rm -rf build".into()),
                     resets_at_ms: None,
                     at_ms: 4,
+                    git: None,
+                    commands: None,
                 },
                 WaitEvent {
                     id: "e5f6a7b8".into(),
@@ -375,6 +457,8 @@ fn sample(request: &CliRequest) -> CliReply {
                     asks: None,
                     resets_at_ms: Some(5),
                     at_ms: 5,
+                    git: None,
+                    commands: None,
                 },
             ],
             timed_out: false,
@@ -947,7 +1031,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 16, sample);
+    let daemon = stand_in_daemon(&dir.0, 17, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -978,6 +1062,15 @@ fn text_output_reads_well() {
     // How full each worker's context is, to weigh reusing it (run2-D42).
     assert!(workers.contains("CONTEXT"), "{workers}");
     assert!(workers.contains("120k of 1M"), "{workers}");
+    // What git and the CLI showed, in a few words, and no wait running while one works.
+    assert!(
+        workers.contains("conflicts · 2 commits · 1 uncommitted  3, 1 failed"),
+        "{workers}"
+    );
+    assert!(
+        workers.contains("No `brigadier wait` is running while worker 2 is at work"),
+        "{workers}"
+    );
     let read = stdout(&brigadier(
         Some(&dir.0),
         Some(GRANT),
@@ -1024,6 +1117,25 @@ fn text_output_reads_well() {
         wait.contains("e5f6a7b8 needs-input\nasks: rm -rf build\n"),
         "{wait}"
     );
+    // The facts Brigadier read, after the worker's words, and one next step (harness P1, P3).
+    assert!(
+        wait.contains(
+            "Wrote the file.\ngit: 2 commits not in brigadier/0000c0de/session · merge would \
+             conflict in src/render.rs · 1 uncommitted file\n  abcdef01 Add --json\n  \
+             01234567 Add the schema\nran in turn 3: 3 commands\n  $ cargo test -p \
+             brigadier-cli → exit 101 · at 01234567\n  $ pnpm dev → in the background, exit \
+             unknown · at unknown commit (from turn 2)\n  $ cat <<'EOF' > notes.md… → exit 0 · \
+             at abcdef01\nNext: merge into brigadier/0000c0de/session would conflict; it left \
+             uncommitted files; not merged into brigadier/0000c0de/session yet.\n"
+        ),
+        "{wait}"
+    );
+    let show = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["show", "a1b2"]));
+    assert!(
+        show.contains("\ngit: on brigadier/a1b2c3d4/task-2 · nothing uncommitted\n"),
+        "{show}"
+    );
+    assert!(show.contains("ran in turn 3: 3 commands\n"), "{show}");
     let send = stdout(&brigadier(
         Some(&dir.0),
         Some(GRANT),

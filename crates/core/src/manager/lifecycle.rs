@@ -188,7 +188,7 @@ impl SessionManager {
                             })
                             .await;
                         if plain {
-                            self.plain_cut_off(&task);
+                            self.plain_cut_off(&task).await;
                         }
                         continue;
                     }
