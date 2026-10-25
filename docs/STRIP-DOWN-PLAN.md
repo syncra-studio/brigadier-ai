@@ -1926,6 +1926,11 @@ Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `
 You orchestrate: talk, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; never build or test. Bigger work, builds, tests and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.
 ```
 
+Proposed (D1, D8, D11 of the cleanup-on-delete run): line 2 names the litter Delete must otherwise chase,
+"Scratch, including temporary screenshots and mockups, goes in $TMPDIR, never the repo." Not applied: the file
+is at 1,999 bytes against S17's under-2,000-byte test, so it waits on the user (a higher limit, or what to
+shorten). Screenshots and mockups a session was asked to deliver are its work and stay.
+
 **Seam text (not standing).** S22 sends the first part as the seam nudge; the successor's bootstrap carries the
 part after `---`. The check, take-over and "raise the oldest question" lines are S22b's (`research/CONTINUITY.md`
 §3.3–§3.4).
