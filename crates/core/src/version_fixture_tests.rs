@@ -488,3 +488,34 @@ fn every_cli_versions_session_file_says_the_context_its_stream_reported() {
         }
     }
 }
+
+/// Harness D49/D58: a Codex turn the Stop hook sent back once, then `brigadier ask`, ending in
+/// an empty reply, read back from its rollout as after a restart. Built from w30's live check
+/// (codex-cli 0.164.0's lines), not recorded. The desktop draws this view (`reloadedTurn`).
+#[test]
+fn a_codex_turn_the_stop_hook_sent_back_reads_back_after_a_restart() {
+    let native = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../providers/fixtures/session-files/codex-hook-sendback.jsonl");
+    let entries = session_file::read(ProviderKind::Codex, &native).unwrap();
+    let reloaded = view(vec![Arc::new(entries)], None, &[]);
+    let user: Vec<_> = reloaded
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.event,
+                ProviderEvent::Message {
+                    role: Role::User,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert_eq!(user.len(), 1, "the send-back is no message of the user's");
+    assert_eq!(reloaded.turns.len(), 1);
+    assert_eq!(reloaded.turns[0].end, Some(TurnEnd::Done));
+    snapshot(
+        &native.with_extension("view.json"),
+        &serde_json::to_value(&reloaded).unwrap(),
+    );
+}

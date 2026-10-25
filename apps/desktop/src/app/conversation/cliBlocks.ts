@@ -749,7 +749,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         // A reply still streaming shows its finished lines only, none until its first (D9 b).
         const streaming = event.type === "messageDelta";
         const text = shownText(event.text, streaming);
-        if (streaming && !text) return;
+        // A reply with no words is none: assistant-ui drops a blank part, and the turn's parts
+        // then count fewer than its texts (Codex's empty last reply after a send-back, D58).
+        if (!text.trim()) return;
         // What the reply is, as the stream said it, else as the file keeps it (Codex's `phase`).
         const phase = (event.type === "messageDelta" ? event.phase : undefined) ?? entry.phase;
         current.texts.push({

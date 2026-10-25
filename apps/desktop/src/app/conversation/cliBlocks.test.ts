@@ -834,3 +834,21 @@ test("a background command whose task completed reads completed, even when its i
   assert.equal(ended?.status, "completed");
   assert.equal(ended?.endedAtMs, 3000);
 });
+
+test("a reply with no words is no text of its turn, so the turn's parts and texts count the same (D58)", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Ask me three things", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "1. Colour?\n2. Size?" }, 1100, { phase: "answer" }),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "On the card." }, 1200, { phase: "commentary" }),
+        at({ type: "message", itemId: "a3", role: "assistant", text: "" }, 1300, { phase: "answer" }),
+        at({ type: "message", itemId: "a4", role: "assistant", text: " \n" }, 1350),
+        at({ type: "messageDelta", itemId: "a5", text: "  \n" }, 1360),
+      ],
+      turns: [turn("u1", 1000, 1400, "done")],
+    },
+    "c",
+  );
+  assert.deepEqual(blocks[0]!.texts.map((text) => text.messageId), ["a1", "a2"]);
+});
