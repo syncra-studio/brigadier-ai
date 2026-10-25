@@ -64,6 +64,7 @@ Assistant: text 262
 turn end Completed
 User: text 264
 Assistant: text 265
+tool agents/spawnAgent Completed
 command text 267 Completed
 command text 269 Completed
 tool agents/wait Completed
@@ -103,6 +104,7 @@ tool cua_repl/js Completed
 tool cua_repl/js Completed
 Assistant: text 378
 tool cua_repl/js Completed
+tool agents/spawnAgent Completed
 command text 380 Completed
 tool cua_repl/js Completed
 Assistant: text 383

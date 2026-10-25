@@ -244,6 +244,20 @@ fn item_event(item: &Value) -> Option<ProviderEvent> {
             output: None,
             kept: None,
         },
+        // A sub-agent's start and end: the row the live session shows (D56).
+        "SubAgentActivity" => {
+            let status = match str_of(item, "kind")? {
+                "started" => ItemStatus::InProgress,
+                "completed" => ItemStatus::Completed,
+                "interrupted" => ItemStatus::Failed,
+                _ => return None,
+            };
+            super::parse::agent_row(
+                str_of(item, "agent_thread_id")?.to_owned(),
+                super::parse::agent_name(str_of(item, "agent_path")?),
+                status,
+            )
+        }
         "WebSearch" => ProviderEvent::ToolCall {
             item_id: id,
             name: "web_search".into(),

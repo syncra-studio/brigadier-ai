@@ -122,6 +122,14 @@ pub struct Parser {
     /// A session reported its own start; `thread/started` is then not a start.
     started: bool,
     turn_id: Option<String>,
+    /// The session's own thread: the first a `thread/started` or `turn/started` names. Codex
+    /// sends its sub-agents' threads on the same connection; theirs are not the session's
+    /// turns, items or usage (D56, D44, D52).
+    thread_id: Option<String>,
+    /// The sub-agents started, by thread: the name their row says.
+    agents: HashMap<String, String>,
+    /// The sub-agents whose turn failed or was interrupted: their row ends failed.
+    failed_agents: HashSet<String>,
     /// An error was already reported for the running turn.
     turn_error: bool,
     /// Files of file-change items, which their approval requests do not repeat: each
@@ -140,6 +148,27 @@ pub struct Parser {
     /// Brigadier's own MCP servers, left out of the servers reported
     /// ([`ProviderEvent::McpServerChanged`]).
     pub(crate) own_mcp: HashSet<String>,
+}
+
+/// A sub-agent's name from its path (`/root/echo_hi` → `echo hi`), as its row says it.
+pub(super) fn agent_name(path: &str) -> String {
+    let last = path
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or(path);
+    last.replace('_', " ")
+}
+
+/// A sub-agent's row: the call that started it, by its thread, with the name it was given.
+pub(super) fn agent_row(thread: String, name: String, status: ItemStatus) -> ProviderEvent {
+    ProviderEvent::ToolCall {
+        item_id: thread,
+        name: "agents/spawnAgent".into(),
+        input: Some(name),
+        status,
+        output: None,
+        kept: None,
+    }
 }
 
 impl Parser {
@@ -209,6 +238,27 @@ impl Parser {
     }
 
     fn notification(&mut self, method: &str, params: Value, out: &mut Vec<Output>) {
+        let thread = params
+            .get("threadId")
+            .or_else(|| {
+                params
+                    .pointer("/thread/id")
+                    .filter(|_| method == "thread/started")
+            })
+            .and_then(Value::as_str);
+        if let Some(thread) = thread {
+            match &self.thread_id {
+                None if matches!(method, "thread/started" | "turn/started") => {
+                    self.thread_id = Some(thread.to_owned());
+                }
+                Some(own) if own != thread => {
+                    let thread = thread.to_owned();
+                    self.other_thread(method, thread, &params, out);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match method {
             "serverRequest/resolved" => {
                 if let Some(rpc_id) = params.get("requestId") {
@@ -445,6 +495,29 @@ impl Parser {
         }
     }
 
+    /// A sub-agent thread's own notification: none is the session's. Only how its turn ended
+    /// reaches its row, which a failed or interrupted turn ends failed (D56).
+    fn other_thread(
+        &mut self,
+        method: &str,
+        thread: String,
+        params: &Value,
+        out: &mut Vec<Output>,
+    ) {
+        if method != "turn/completed" {
+            return;
+        }
+        let status = params.pointer("/turn/status").and_then(Value::as_str);
+        if matches!(status, Some("completed" | "inProgress") | None) {
+            return;
+        }
+        let Some(name) = self.agents.get(&thread).cloned() else {
+            return;
+        };
+        self.failed_agents.insert(thread.clone());
+        out.push(Output::Event(agent_row(thread, name, ItemStatus::Failed)));
+    }
+
     fn item(&mut self, item: ThreadItem, completed: bool, out: &mut Vec<Output>) {
         if let ThreadItem::AgentMessage {
             id,
@@ -629,11 +702,36 @@ impl Parser {
                 output: None,
                 kept: None,
             },
+            // A sub-agent's start and end, as Codex 0.164 tells them on the session's thread:
+            // one row, "Ran agent: echo hi", by its thread (D56, B1). Its other news only shows
+            // the session is alive.
             ThreadItem::SubAgentActivity {
-                agent_thread_id, ..
-            } => ProviderEvent::Progress {
-                item_id: agent_thread_id,
-            },
+                agent_path,
+                agent_thread_id,
+                kind,
+                ..
+            } => {
+                let status = match kind {
+                    p::SubAgentActivityKind::Started => ItemStatus::InProgress,
+                    p::SubAgentActivityKind::Completed
+                        if !self.failed_agents.contains(&agent_thread_id) =>
+                    {
+                        ItemStatus::Completed
+                    }
+                    p::SubAgentActivityKind::Completed | p::SubAgentActivityKind::Interrupted => {
+                        ItemStatus::Failed
+                    }
+                    p::SubAgentActivityKind::Interacted => {
+                        out.push(Output::Event(ProviderEvent::Progress {
+                            item_id: agent_thread_id,
+                        }));
+                        return;
+                    }
+                };
+                let name = agent_name(&agent_path);
+                self.agents.insert(agent_thread_id.clone(), name.clone());
+                agent_row(agent_thread_id, name, status)
+            }
             ThreadItem::WebSearch {
                 id, query, action, ..
             } => ProviderEvent::ToolCall {
@@ -1986,6 +2084,119 @@ mod tests {
                 Output::Control(_) => None,
             })
             .collect()
+    }
+
+    /// The recorded Codex 0.164 run with one sub-agent, its output lines through the parser.
+    fn subagent_run(edit: impl Fn(&str) -> String) -> Vec<ProviderEvent> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/versions/codex-0.164.0/subagent.jsonl"
+        );
+        let recording =
+            crate::record::Recording::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut parser = Parser::replay();
+        recording
+            .lines
+            .iter()
+            .filter(|row| row.dir == crate::record::Direction::Out)
+            .flat_map(|row| parser.feed(&edit(&row.line)))
+            .filter_map(|output| match output {
+                Output::Event(event) => Some(event),
+                Output::Control(_) => None,
+            })
+            .collect()
+    }
+
+    /// Its sub-agent's row's states, in order.
+    fn agent_states(events: &[ProviderEvent]) -> Vec<(String, String, ItemStatus)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderEvent::ToolCall {
+                    item_id,
+                    name,
+                    input,
+                    status,
+                    ..
+                } if name == "agents/spawnAgent" => {
+                    Some((item_id.clone(), input.clone().unwrap_or_default(), *status))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_sub_agents_own_thread_is_not_the_sessions_and_its_start_and_end_are_one_row() {
+        let events = subagent_run(str::to_owned);
+        // One turn ended, the session's own, once its reply came: not when its sub-agent's did.
+        let ends: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderEvent::TurnCompleted { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends, [TurnStatus::Completed]);
+        let replies: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderEvent::Message {
+                    role: Role::Assistant,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replies, ["OK"]);
+        // The sub-agent's own `echo hi` is its, not the session's.
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::Command { .. }))
+        );
+        let states = agent_states(&events);
+        // Keyed by the sub-agent's thread, named by its path.
+        assert!(
+            states
+                .iter()
+                .all(|(id, _, _)| id == "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974")
+        );
+        assert_eq!(
+            states.first().map(|state| state.2),
+            Some(ItemStatus::InProgress)
+        );
+        assert_eq!(
+            states.last().map(|state| state.2),
+            Some(ItemStatus::Completed)
+        );
+        assert!(states.iter().all(|(_, name, _)| name == "echo hi"));
+    }
+
+    #[test]
+    fn a_sub_agent_whose_turn_failed_ends_its_row_failed() {
+        let events = subagent_run(|line| {
+            let mut value: Value = serde_json::from_str(line).unwrap();
+            let theirs = value["method"] == "turn/completed"
+                && value["params"]["threadId"]
+                    .as_str()
+                    .is_some_and(|id| id.ends_with("1f7974"));
+            if theirs {
+                value["params"]["turn"]["status"] = json!("failed");
+            }
+            value.to_string()
+        });
+        let states = agent_states(&events);
+        assert_eq!(states.last().map(|state| state.2), Some(ItemStatus::Failed));
+        // The session's own turn still ends as it did.
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderEvent::TurnCompleted {
+                status: TurnStatus::Completed,
+                ..
+            }
+        )));
     }
 
     #[test]
