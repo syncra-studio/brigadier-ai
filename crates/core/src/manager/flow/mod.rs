@@ -70,6 +70,7 @@ pub(crate) struct Turn {
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
+    questions: QuestionAnswers,
     steers: Steers,
     stops: Stops,
 }
@@ -84,6 +85,14 @@ type Steers = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>;
 /// The approvals a scripted CLI asked for and waits on, by request id.
 type Answers =
     Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>>>;
+
+/// The answers to the questions a turn asks with the CLI's own tool, by its id (`None`:
+/// declined).
+type QuestionAnswers = Arc<
+    Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<Option<Vec<Vec<String>>>>>,
+    >,
+>;
 
 /// What a scripted turn ends with.
 #[derive(Default)]
@@ -354,6 +363,25 @@ impl Turn {
         tokio::time::timeout(*PATIENCE, rx).await.ok()?.ok()
     }
 
+    /// Asks `questions` with the CLI's own question tool under `id`, and waits for the answer:
+    /// each question's picks, or `None` when declined (`None` outside: none came in time).
+    pub async fn ask_questions(
+        &self,
+        id: &str,
+        questions: Vec<brigadier_providers::CliQuestion>,
+    ) -> Option<Option<Vec<Vec<String>>>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.questions.lock().unwrap().insert(id.into(), tx);
+        self.events
+            .send(ProviderEvent::QuestionsAsked {
+                id: id.into(),
+                questions,
+            })
+            .await
+            .ok()?;
+        tokio::time::timeout(*PATIENCE, rx).await.ok()?.ok()
+    }
+
     /// Waits for the next message steered into this running turn (`None`: none came in time).
     pub async fn steered(&self) -> Option<String> {
         let mut steers = self.steers.lock().await;
@@ -598,6 +626,8 @@ pub(crate) struct FakeBehavior {
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
     pub compactions: Mutex<Vec<Option<String>>>,
+    /// Each thread turn's plan mode, as Brigadier set it on its CLI before the turn.
+    pub plan_modes: Mutex<Vec<bool>>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -860,6 +890,7 @@ impl Provider for FakeCli {
                 events: Mutex::new(Some(tx)),
                 turns: std::sync::atomic::AtomicU32::new(0),
                 answers: Answers::default(),
+                questions: QuestionAnswers::default(),
                 brief: Mutex::new(brief),
                 running: Arc::default(),
                 stops: Arc::default(),
@@ -1010,6 +1041,7 @@ struct FakeSession {
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
     turns: std::sync::atomic::AtomicU32,
     answers: Answers,
+    questions: QuestionAnswers,
     /// A worker's task, from its first message.
     brief: Mutex<Option<String>>,
     /// A turn is running: a steer joins it rather than starting another. Held while a steer
@@ -1116,6 +1148,7 @@ impl ProviderSession for FakeSession {
                 host,
                 events: tx.clone(),
                 answers: self.answers.clone(),
+                questions: self.questions.clone(),
                 steers: self.steers.clone(),
                 stops: self.stops.clone(),
             };
@@ -1395,6 +1428,26 @@ impl ProviderSession for FakeSession {
         if let Some(waiter) = self.answers.lock().unwrap().remove(&approval_id) {
             let _ = waiter.send(decision);
         }
+        Box::pin(async { Ok(()) })
+    }
+
+    fn answer_questions(
+        &self,
+        id: String,
+        answers: Option<Vec<Vec<String>>>,
+    ) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        let waiter = self.questions.lock().unwrap().remove(&id);
+        Box::pin(async move {
+            let waiter = waiter.ok_or_else(|| {
+                brigadier_providers::Error::Invalid(format!("no pending question {id}"))
+            })?;
+            let _ = waiter.send(answers);
+            Ok(())
+        })
+    }
+
+    fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, brigadier_providers::Result<()>> {
+        self.behavior.plan_modes.lock().unwrap().push(on);
         Box::pin(async { Ok(()) })
     }
 
@@ -2275,6 +2328,8 @@ mod chat_images_tests;
 mod chat_thread_tests;
 #[cfg(unix)]
 mod chat_workers_tests;
+#[cfg(unix)]
+mod cli_cards_tests;
 #[cfg(unix)]
 mod cli_moved_tools_tests;
 #[cfg(unix)]

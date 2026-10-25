@@ -142,8 +142,6 @@ pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
     matches!(state, RequestState::Failed { error }
         if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
-/// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search) or with your own subagents, ask only what only they can decide (`brigadier ask`), then answer with the plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. They turn plan mode off when they agree; build only then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -1266,6 +1264,8 @@ impl SessionManager {
         paused: bool,
     ) -> Result<SendOutcome> {
         let id = &conv.id;
+        // A reply instead of "Build it" closes the plan's card (harness D7).
+        self.plan_replied(id).await;
         let (busy, held) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
@@ -2376,6 +2376,12 @@ impl SessionManager {
             )
             .await;
         }
+        // Plan mode is the CLI's own (harness D7): set before the turn, never told in words.
+        if conv.kind == ConversationKind::Session
+            && let Err(err) = cli.session.set_plan_mode(self.plan_mode(&conv.id)).await
+        {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not set the CLI's plan mode"; conversation = %conv.id, error = %err);
+        }
         conv.state.lock().await.awaiting_start = true;
         if let Err(err) = cli.session.send(input).await {
             conv.state.lock().await.awaiting_start = false;
@@ -3071,9 +3077,6 @@ impl SessionManager {
             {
                 parts.push(self.side_chat_context(parent, &beside.title).await);
             }
-        }
-        if conv.kind == ConversationKind::Session && self.plan_mode(&conv.id) {
-            parts.push(PLAN_MODE_NOTE.into());
         }
         parts.extend(notes.iter().cloned());
         if !parts.is_empty() {
@@ -3939,6 +3942,18 @@ impl SessionManager {
                 {
                     crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
                 }
+            }
+            // The CLI's own question tool and plan: the user's cards, whatever the level
+            // (harness D7).
+            ProviderEvent::QuestionsAsked { id, questions } => {
+                self.cli_questions_asked(conv, cli, id.clone(), questions.clone())
+                    .await;
+            }
+            ProviderEvent::QuestionsWithdrawn { id } => {
+                self.cli_questions.withdraw(&conv.id, id);
+            }
+            ProviderEvent::PlanProposed { plan, .. } => {
+                self.plan_proposed(&conv.id, plan).await;
             }
             // A session's and a Chat's requests follow their permission level, as a worker's do
             // (S28): what the CLI asks is the user's card.

@@ -1166,6 +1166,9 @@ pub enum ApprovalSubject {
         /// The very call asked about: a yes holds for it alone.
         fingerprint: String,
     },
+    /// The plan the session's CLI proposed from its own plan mode (harness D7): "Build it"
+    /// takes the session out of plan mode and tells it to go ahead; the user may reply instead.
+    Plan { plan: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1234,6 +1237,11 @@ pub struct QuestionItem {
     /// The option the asker recommends, by its index in `options`.
     #[serde(default)]
     pub recommended: Option<u32>,
+    /// The user may pick several options: its answer names each, joined with ", " (a CLI's
+    /// own multi-select question, harness D7).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub multi_select: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1318,6 +1326,7 @@ impl Question {
             return self.items.clone();
         }
         vec![QuestionItem {
+            multi_select: false,
             text: self.text.clone(),
             options: self
                 .options

@@ -310,6 +310,12 @@ impl SessionManager {
             ApprovalSubject::Browser { .. } => {
                 self.answer_browser_card(&approval, &decision).await;
             }
+            // "Build it"; a plan card has no no: the user replies instead (harness D7).
+            ApprovalSubject::Plan { .. } => {
+                if matches!(decision, ApprovalDecision::Allow) {
+                    self.build_plan(&conversation_id).await?;
+                }
+            }
             // A message to another session from before sessions stopped messaging each other:
             // nothing sends it any more.
             ApprovalSubject::PeerMessage { .. }
@@ -646,6 +652,8 @@ impl SessionManager {
                 ApprovalSubject::PeerMessage { .. } => continue,
                 // Answering it tells the agent, which makes its call again on a yes.
                 ApprovalSubject::Browser { .. } => continue,
+                // "Build it" sends the user's message itself, after a restart too.
+                ApprovalSubject::Plan { .. } => continue,
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}

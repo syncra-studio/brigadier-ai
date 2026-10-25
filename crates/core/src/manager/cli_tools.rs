@@ -39,7 +39,7 @@ impl CliAsks {
             .contains(card)
     }
 
-    fn hold(&self, card: CardId) -> AskHold {
+    pub(super) fn hold(&self, card: CardId) -> AskHold {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -53,7 +53,7 @@ impl CliAsks {
 
 /// While it lives, its card's answer goes to the waiting `brigadier ask`. A caller that hung
 /// up drops it, and the answer reaches the thread as any answer does.
-struct AskHold {
+pub(super) struct AskHold {
     asks: CliAsks,
     card: CardId,
 }

@@ -1144,6 +1144,48 @@ mod staging_tests {
     }
 }
 
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    /// A plan file is the session's own only when it is new in the config's plans folder; it
+    /// goes with the session while it is still that file (harness D7).
+    #[test]
+    fn only_a_plan_file_a_session_wrote_goes_with_it() {
+        let config = std::env::temp_dir().join(format!("brigadier-plans-{}", uuid::Uuid::now_v7()));
+        let plans = config.join(PLANS_DIR);
+        std::fs::create_dir_all(&plans).unwrap();
+        std::fs::write(plans.join("old.md"), "theirs").unwrap();
+        let before = plan_files(&config);
+        std::fs::write(plans.join("new.md"), "ours").unwrap();
+        std::fs::write(config.join("elsewhere.md"), "not a plan").unwrap();
+
+        // Already there, or outside the plans folder: not the session's.
+        assert_eq!(
+            owned_plan_file(&config, &before, &plans.join("old.md")),
+            None
+        );
+        assert_eq!(
+            owned_plan_file(&config, &before, &config.join("elsewhere.md")),
+            None
+        );
+        let ours = owned_plan_file(&config, &before, &plans.join("new.md")).unwrap();
+        remove(&config, std::slice::from_ref(&ours)).unwrap();
+        assert!(!plans.join("new.md").exists());
+        assert!(plans.join("old.md").is_file());
+
+        // Replaced since (another file under the same name): left alone.
+        std::fs::write(plans.join("again.md"), "ours").unwrap();
+        let ours = owned_plan_file(&config, &before, &plans.join("again.md")).unwrap();
+        // Made while the first still exists, so never under its inode.
+        std::fs::write(plans.join("other.md"), "someone else's").unwrap();
+        std::fs::rename(plans.join("other.md"), plans.join("again.md")).unwrap();
+        remove(&config, &[ours]).unwrap();
+        assert!(plans.join("again.md").is_file());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+}
+
 #[cfg(all(test, unix))]
 mod link_tests {
     use super::*;

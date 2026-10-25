@@ -25,6 +25,7 @@ mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod cli;
+mod cli_cards;
 mod cli_commands;
 mod cli_context;
 mod cli_ledger;
@@ -189,6 +190,8 @@ pub struct SessionManager {
     worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
     cli_asks: cli_tools::CliAsks,
+    /// The questions a thread's CLI asked with its own tool, whose answers go back to it.
+    cli_questions: cli_cards::CliQuestions,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
@@ -394,6 +397,7 @@ impl SessionManager {
             session_mail: std::sync::Mutex::new(()),
             worker_rows: Default::default(),
             cli_asks: Default::default(),
+            cli_questions: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             local_checkouts: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),

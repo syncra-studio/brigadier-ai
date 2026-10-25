@@ -898,6 +898,7 @@ fn approval_text(subject: &ApprovalSubject) -> String {
         }
         ApprovalSubject::OutwardCommand { argv, .. } => format!("Run `{}`?", argv.join(" ")),
         ApprovalSubject::Outline { title, .. } => format!("Start {title}?"),
+        ApprovalSubject::Plan { .. } => "Build the plan?".into(),
     }
 }
 

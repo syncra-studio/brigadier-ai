@@ -401,6 +401,7 @@ pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec
                 text,
                 options,
                 recommended,
+                multi_select: false,
             })
         })
         .collect()
