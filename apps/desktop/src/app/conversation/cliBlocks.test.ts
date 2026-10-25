@@ -675,6 +675,62 @@ test("a queued message shows once, as the user's, its frame gone: in the rail wh
   assert.equal(second!.user?.kind === "message" && second!.user.message.id, id);
 });
 
+const message = (requestId: string, text: string, createdAtMs: number): Message => ({ ...stored(requestId, createdAtMs), text });
+/** A tree's nodes as drawn: each user bubble's text, each block's steers. */
+const shown = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user?.kind === "message" ? node.block.user.text : node.block.steers.map((steer) => steer.text)]);
+
+test("a queued message the CLI began its own turn with shows once, heading that turn, live, once joined and after the turn", () => {
+  // Session 82123c64's shape: "sure, do" (…2f334bc5) was steered into the turn before; the
+  // next message came queued as that turn ended, and the CLI began a turn with it, under its
+  // frame. The daemon kept it, as its request, only when the session joined it 5.6s later; the
+  // live turn still named only the request before it.
+  const before = "01a171d2-7c9f-7787-bd17-63a32f334bc5";
+  const id = "01a171d7-b9e5-7250-bc11-f6a7d9f90994";
+  const words = "Another issue is why does it keep giving me these questions one by one?";
+  const entries = [
+    user("07de44de", "Another issue is that in another session, i asked it to start the dev app", 10_000),
+    user("65ae8f04", "[queued message 2f334bc5 · judge it: brigadier queue 2f334bc5 join|wait|worker <id>|new-session; unjudged, it joins this work]\nsure, do", 69_000, { steer: true }),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "Pushed." }, 412_000),
+    user("5cf7b32d", `[queued message d9f90994 · judge it: brigadier queue d9f90994 join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`, 412_300),
+    at({ type: "command", itemId: "c1", command: "brigadier queue d9f90994 join", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 40 }, 417_900),
+  ];
+  const live: ThreadView = {
+    entries,
+    turns: [{ ...turn("07de44de", 10_000, 411_900, "done"), requests: ["01a171d1-959b-72d2-8538-5e80be977c2b"] }, { ...turn("5cf7b32d", 412_300, null, null), requests: [before] }],
+  };
+  const keptBefore = [message("01a171d1-959b-72d2-8538-5e80be977c2b", "Another issue is that in another session, i asked it to start the dev app", 9_900), message(before, "sure, do", 68_900)];
+  const queued = { id, text: words, attachments: [], mentions: [], queuedAtMs: 411_990, editedAtMs: null, deciding: true, delivered: true };
+  const running = { state: "running", error: null } as const;
+
+  // Still judged: the rail has it, the turn it began shows no bubble.
+  const judging = cliThreadTree(live, "conv", keptBefore, {}, [], { ...NO_BOARD, queueItems: [queued] }, running);
+  assert.deepEqual(shown(judging), [
+    ["01a171d1-959b-72d2-8538-5e80be977c2b", "user", "Another issue is that in another session, i asked it to start the dev app"],
+    ["request:07de44de", "block", ["sure, do"]],
+    ["request:5cf7b32d", "block", []],
+  ]);
+
+  // Joined, the turn still running: once, heading the turn it began, never on its way as well.
+  const kept = [...keptBefore, message(id, words, 417_936)];
+  const joined = cliThreadTree(live, "conv", kept, {}, [], NO_BOARD, running);
+  const once = [
+    ["01a171d1-959b-72d2-8538-5e80be977c2b", "user", "Another issue is that in another session, i asked it to start the dev app"],
+    ["request:07de44de", "block", ["sure, do"]],
+    [id, "user", words],
+    ["request:5cf7b32d", "block", []],
+  ];
+  assert.deepEqual(shown(joined), once);
+  assert.equal(joined.headId, "request:5cf7b32d");
+
+  // Over, its record naming the request before first (and after a restart, read back so): the same.
+  const over: ThreadView = { entries, turns: [live.turns[0]!, { ...turn("5cf7b32d", 412_300, 479_000, "done"), requests: [before, id] }] };
+  assert.deepEqual(shown(cliThreadTree(over, "conv", kept, {}, [], NO_BOARD, { state: "idle", error: null })), once);
+  // Its frame never shows, even before Brigadier's copy of it is read.
+  const [, bare] = cliBlocks(over, "conv", NO_BOARD);
+  assert.equal(bare!.user?.kind === "message" && bare!.user.text, words);
+});
+
 test("Brigadier's word that the user took a queued message back is never drawn", () => {
   const withdrawn = "[queued message feedbeef withdrawn: the user took it back; leave it]";
   const [block] = cliBlocks(
