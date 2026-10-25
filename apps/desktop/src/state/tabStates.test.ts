@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
 import { fromSnapshot, rowActivity } from "@/state/activity";
-import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, nothingToMerge, sessionStatus, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
+import { useApp } from "@/state/store";
+import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, nothingToMerge, sessionStatus, settledByTab, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, workers: 0 } as const;
 
@@ -42,18 +43,28 @@ test("git marks still refresh the context card but never choose a row word", () 
   assert.deepEqual(sessionStatus(quiet, null, false, true), { state: "done", reason: null });
 });
 
-test("D61: a ready session's turn end looks at git again, and merged leaves nothing to merge", () => {
-  // The thread pushed its work to the remote's main itself: no merge is recorded, so only a
-  // fresh look tells the card it is no longer ahead.
-  useSettledTabs.setState({ byTab: { s: { state: "ready", ahead: 9 } } });
+test("D61: a session's turn end looks at git again, and only work all on the base leaves nothing to merge", () => {
+  // The thread may have pushed its work to the remote's main itself: no merge is recorded, so
+  // only a fresh look tells the card. A worktree session never ready is looked at too.
   const idle = { stream: "conversation:s", event: { type: "runStateChanged", conversationId: "s", state: "idle", error: null, requestId: null } } as EventEnvelope;
-  assert.equal(applySettledTabEvents([idle]), true, "looked at again");
+  useSettledTabs.setState({ byTab: { s: { state: "ready", ahead: 9 } } });
+  assert.equal(applySettledTabEvents([idle]), true, "a ready one");
   useSettledTabs.setState({ byTab: {} });
-  assert.equal(applySettledTabEvents([idle]), false, "a session never ready or merged isn't");
-  assert.equal(nothingToMerge({ state: "ready", ahead: 9 }), false);
-  assert.equal(nothingToMerge({ state: "merged", ahead: 0 }), true);
-  assert.equal(nothingToMerge({ state: "merged" }), true, "just merged, before the fresh count");
-  assert.equal(nothingToMerge({ state: "reverted", ahead: 0 }), false);
+  useApp.setState({ conversations: { s: session({ setup: { type: "session", repo: "/r", environment: { type: "newWorktree", base: "main", branch: "b", path: "/w", start: null }, permission: "full", orchestrator: null, workersSeeUncommitted: null, planMode: null } as unknown as Conversation["setup"] }) } });
+  assert.equal(applySettledTabEvents([idle]), true, "a worktree session never ready");
+  useApp.setState({ conversations: { s: session({ kind: "chat", projectId: null }) } });
+  assert.equal(applySettledTabEvents([idle]), false, "a chat has no branch to look at");
+  useApp.setState({ conversations: {} });
+
+  assert.deepEqual(settledByTab([{ conversationId: "r", state: "ready", ahead: 2 }, { conversationId: "m", state: "merged", ahead: 0 }], ["m", "n"]), {
+    r: { state: "ready", ahead: 2, landed: false },
+    m: { state: "merged", ahead: 0, landed: true },
+    n: { landed: true },
+  });
+  assert.equal(nothingToMerge({ landed: true }), true, "committed and pushed in one turn, never ready");
+  assert.equal(nothingToMerge({ state: "merged", ahead: 0, landed: false }), false, "an uncommitted edit since");
+  assert.equal(nothingToMerge({ state: "merged" }), true, "just merged, before the fresh look");
+  assert.equal(nothingToMerge({ state: "ready", ahead: 9, landed: false }), false);
   assert.equal(nothingToMerge(undefined), false);
 });
 

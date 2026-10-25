@@ -1,19 +1,29 @@
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
-import type { Conversation, EventEnvelope } from "@/ipc/generated";
+import type { Conversation, EventEnvelope, SettledTab } from "@/ipc/generated";
 import { type RowActivity, rowActivity, stoppedOf, useActivity, useRowActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 
-/** Git marks retained for the context card's merge/undo refresh; never used as row words. */
-export type Settled = { state?: "ready" | "merged" | "reverted"; ahead?: number };
+/**
+ * Git marks retained for the context card's merge/undo refresh; never used as row words.
+ * `landed`: nothing left to merge, committed or not (D61); absent until git was asked.
+ */
+export type Settled = { state?: "ready" | "merged" | "reverted"; ahead?: number; landed?: boolean };
 export const useSettledTabs = create<{ byTab: Readonly<Record<string, Settled>> }>(() => ({ byTab: {} }));
 
+/** The marks by tab from the daemon's settled tabs and the sessions with nothing left to merge. */
+export function settledByTab(tabs: readonly SettledTab[], landed: readonly string[]): Record<string, Settled> {
+  const byTab: Record<string, Settled> = Object.fromEntries(tabs.flatMap(({ conversationId, state, ahead }) =>
+    state === "ready" || state === "merged" || state === "reverted" ? [[conversationId, { state, ...(ahead === undefined ? {} : { ahead }), landed: landed.includes(conversationId) }]] : [],
+  ));
+  for (const id of landed) byTab[id] ??= { landed: true };
+  return byTab;
+}
+
 export async function loadSettledTabs(): Promise<void> {
-  const { tabs } = await request({ method: "getSettledTabs" });
-  useSettledTabs.setState({ byTab: Object.fromEntries(tabs.flatMap(({ conversationId, state, ahead }) =>
-    state === "ready" || state === "merged" || state === "reverted" ? [[conversationId, { state, ...(ahead === undefined ? {} : { ahead }) }]] : [],
-  )) });
+  const { tabs, landed } = await request({ method: "getSettledTabs" });
+  useSettledTabs.setState({ byTab: settledByTab(tabs, landed) });
 }
 
 let refreshing: ReturnType<typeof setTimeout> | null = null;
@@ -23,17 +33,23 @@ export function refreshSettledTabsSoon(): void {
 }
 
 /**
- * Whether a session's work is on its base with nothing left to merge: it reads merged (its own
- * merge, or work the thread put on the base, or its remote's, by itself; D61).
+ * Whether a session's work is all on its base with nothing left to merge, as git last told (its
+ * own merge, or work its thread put on the base or its remote by itself, ready or not; D61); a
+ * merge just made counts until git is asked again.
  */
 export function nothingToMerge(settled: Settled | undefined): boolean {
-  return settled?.state === "merged";
+  return settled?.landed ?? settled?.state === "merged";
+}
+
+/** Whether `conversation` is a session on a branch of its own, which its thread may merge or push. */
+function onOwnBranch(conversation: Conversation | undefined): boolean {
+  return conversation?.setup?.type === "session" && conversation.setup.environment.type === "newWorktree";
 }
 
 /**
- * Keeps the git marks current with the events: a ready request or a merge marks its tab, and a
- * marked tab's turn end looks at git again (its thread may have merged or pushed its work
- * itself, D61). Whether it will look again.
+ * Keeps the git marks current with the events: a ready request or a merge marks its tab, and the
+ * turn end of a marked tab or of a session on a branch of its own looks at git again (its thread
+ * may have merged or pushed its work itself, D61). Whether it will look again.
  */
 export function applySettledTabEvents(batch: readonly EventEnvelope[]): boolean {
   let changed: Record<string, Settled> | null = null;
@@ -47,7 +63,7 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): boolean 
         changed = { ...all, [id]: state === "merged" ? { state } : { ...all[id], state } };
       }
       refresh = true;
-    } else if (id && event.type === "runStateChanged" && event.state === "idle" && all[id]?.state !== undefined) refresh = true;
+    } else if (id && event.type === "runStateChanged" && event.state === "idle" && (all[id] !== undefined || onOwnBranch(useApp.getState().conversations[id]))) refresh = true;
   }
   if (changed) useSettledTabs.setState({ byTab: changed });
   if (refresh) refreshSettledTabsSoon();

@@ -133,13 +133,24 @@ impl SessionManager {
     /// Every open tab that is ready or merged with nothing running
     /// ([`crate::board::Board::settled_state`]), its branch's commits ahead of base counted now.
     pub async fn settled_tabs(&self) -> Vec<SettledTab> {
+        self.tab_marks().await.0
+    }
+
+    /// [`Self::settled_tabs`], and the open sessions with nothing left to merge: no commit
+    /// beyond their base or its upstream, and nothing uncommitted in their worktree. Ready or
+    /// not, their thread may have put their work on the base itself (D61).
+    pub async fn tab_marks(&self) -> (Vec<SettledTab>, Vec<ConversationId>) {
         let tabs = self.core.visible_catalog().conversations;
         let mut settled = Vec::new();
+        let mut landed = Vec::new();
         for tab in tabs
             .iter()
             .filter(|tab| tab.is_tab() && tab.lifecycle != Lifecycle::Archived)
         {
             let ahead = self.tab_ahead(tab).await.map(|(_, ahead)| ahead);
+            if ahead == Some(0) && self.tab_worktree_clean(tab).await {
+                landed.push(tab.id.clone());
+            }
             let Ok(board) = self.core.board(&tab.id).await else {
                 continue;
             };
@@ -157,7 +168,32 @@ impl SessionManager {
                 });
             }
         }
-        settled
+        (settled, landed)
+    }
+
+    /// Whether `tab`'s session worktree has nothing uncommitted (or is gone); false when git
+    /// can't tell.
+    async fn tab_worktree_clean(&self, tab: &Conversation) -> bool {
+        let Some(Setup::Session {
+            environment: crate::model::Environment::NewWorktree { path, .. },
+            ..
+        }) = tab.setup.clone()
+        else {
+            return false;
+        };
+        let Some(path) = path.filter(|path| std::path::Path::new(path).exists()) else {
+            return true;
+        };
+        let git = self.git.clone();
+        super::blocking(move || {
+            let worktree = git
+                .open(std::path::Path::new(&path))
+                .map_err(super::git_error)?;
+            let state = worktree.state().map_err(super::git_error)?;
+            Ok(state.dirty_files.is_empty())
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// Whether `tab`'s latest recorded merge is reverted on its base now (asked of git only
