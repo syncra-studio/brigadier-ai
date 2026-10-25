@@ -5,6 +5,7 @@
  * daemon.
  * - `long`: a chat of 80 turns. Opening it brings the newest 40, only those near the view mounted.
  * - `short`: a chat of 3 turns.
+ * - `long-u47` is long enough to be cut until "Show more".
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
  * `window.messageRail` holds the steps for a browser probe.
@@ -19,11 +20,13 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
-import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
+import { applyToBoard, emptyBoard, type ShownApproval, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 300;
 const TURNS = 80;
+/** The turn whose message is cut until "Show more". */
+const LONG_TURN = 47;
 /** Turns the first load brings. */
 const FIRST_TURNS = 40;
 /** Narrow enough that the room beside the column is under 48px. */
@@ -43,8 +46,10 @@ function messages(id: string, turns: number): Message[] {
   for (let turn = 0; turn < turns; turn++) {
     const request = `${id}-r${turn}`;
     const at = start + turn * 60_000;
+    const asked = `Question ${turn + 1}: where does this turn sit in the thread?`;
+    const long = Array.from({ length: 30 }, (_, index) => `Line ${index + 1} of a long question, cut until Show more.`).join("\n\n");
     list.push({
-      id: `${id}-u${turn}`, conversationId: id, seq: list.length + 1, role: "user", text: `Question ${turn + 1}: where does this turn sit in the thread?`,
+      id: `${id}-u${turn}`, conversationId: id, seq: list.length + 1, role: "user", text: turn === LONG_TURN ? `${asked}\n\n${long}` : asked,
       blob: null, createdAtMs: at, attachments: [], mentions: [], model: null, requestId: request, parentId: list.at(-1)?.id ?? null,
     });
     const body = Array.from({ length: 1 + (turn % 3) }, (_, index) => `Answer ${turn + 1}, paragraph ${index + 1}. The rail marks each message the user sent, and a jump lands its turn at the top.`).join("\n\n");
@@ -151,6 +156,8 @@ const offsetOf = (id: string) => {
   const element = row(id);
   return element ? round(element.getBoundingClientRect().top - viewport().getBoundingClientRect().top) : null;
 };
+/** Whether an approval has the composer's place. */
+const slot = () => $('[data-slot="approval-slot"]') !== null;
 const landings = (id: string) => Number(row(id)?.dataset["railLanded"] ?? 0);
 
 function layoutNow(): string {
@@ -352,7 +359,44 @@ const steps = {
     const up = await stepTo("ArrowUp", ids[2]!);
     return { target, mountedBefore, clicked, up, markers: markers().length };
   },
-  /** Three messages: no rail. */
+  /** "Show more" opened in a message, scrolled away until it unmounts, and back: still open. */
+  async kept() {
+    const id = `long-u${LONG_TURN}`;
+    const toggle = () => row(id)?.querySelector<HTMLButtonElement>("button[aria-expanded]") ?? null;
+    const reached = await clickTo(id);
+    const before = toggle()?.getAttribute("aria-expanded") ?? null;
+    toggle()?.click();
+    await settle(100);
+    const opened = toggle()?.getAttribute("aria-expanded") ?? null;
+    const height = row(id)?.getBoundingClientRect().height ?? null;
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+    viewport().scrollTop = viewport().scrollHeight;
+    await settle(300);
+    const unmounted = row(id) === null;
+    const back = await clickTo(id);
+    return {
+      landed: reached.landed && back.landed, before, opened, unmounted,
+      after: toggle()?.getAttribute("aria-expanded") ?? null,
+      sameHeight: height !== null && Math.abs((row(id)?.getBoundingClientRect().height ?? 0) - height) <= 1,
+    };
+  },
+  /** An approval for a turn far from those mounted: it still waits in the composer's place. */
+  async farApproval() {
+    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+    viewport().scrollTop = viewport().scrollHeight;
+    await settle(300);
+    const approval: ShownApproval = {
+      id: "far-ap", conversationId: "long", taskId: null, requestId: "long-r41", position: 0, state: { type: "pending" }, createdAtMs: Date.now(), resolvedAtMs: null,
+      subject: { type: "cli", request: { id: "far-ap", kind: "command", tool: "Bash", command: "git push origin main", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: "git push" } },
+    };
+    const turnMounted = row("long-u41") !== null;
+    useBoard.setState(({ board }) => ({ board: board && { ...board, approvals: { ...board.approvals, [approval.id]: approval } } }));
+    const shown = await until(slot);
+    useBoard.setState(({ board }) => ({ board: board && { ...board, approvals: {} } }));
+    const gone = await until(() => !slot());
+    await settle(200);
+    return { turnMounted, shown, gone };
+  },
   /** A new turn whose answer is taller than the view, scrolled to its end: its message is the current one. */
   async longAnswer() {
     const list = stored["long"]!;
@@ -385,6 +429,34 @@ const steps = {
       inView: turnsInView(),
     };
   },
+  /** The thread is a feed of articles, each placed in the whole; Page Up from the first mounted one mounts the one before and focuses it. */
+  async feed() {
+    const group = $('[data-slot="aui_message-group"]')!;
+    const articles = () => [...group.querySelectorAll<HTMLElement>(":scope > [data-thread-row]")];
+    const at = (index: number) => group.querySelector<HTMLElement>(`:scope > [data-thread-row][data-index="${index}"]`);
+    const shown = articles();
+    const roles = {
+      feed: group.getAttribute("role"),
+      label: group.getAttribute("aria-label"),
+      articles: shown.every((element) => element.getAttribute("role") === "article"),
+      setsize: [...new Set(shown.map((element) => element.getAttribute("aria-setsize")))],
+      placed: shown.every((element) => Number(element.getAttribute("aria-posinset")) === Number(element.dataset["index"]) + 1),
+    };
+    const first = Number(shown[0]!.dataset["index"]);
+    const mountedBefore = at(first - 1) !== null;
+    const press = (key: "PageUp" | "PageDown") => {
+      const target = document.activeElement instanceof HTMLElement ? document.activeElement : group;
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true }));
+    };
+    at(first)!.focus({ preventScroll: true });
+    press("PageUp");
+    const up = await until(() => document.activeElement === at(first - 1));
+    press("PageDown");
+    const down = await until(() => document.activeElement === at(first));
+    await settle(100);
+    return { ...roles, total: Number(shown[0]!.getAttribute("aria-setsize")), first, mountedBefore, up, down };
+  },
+  /** Three messages: no rail. */
   async short() {
     await open("short");
     return { rail: rail() !== null, rows: userRows().length };

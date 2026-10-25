@@ -30,7 +30,10 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     scrub: { offset: number | null; flashed: boolean };
     narrow: { narrow: { rail: boolean; gutter: number }; wide: boolean };
     intoUnmounted: { target: string; mountedBefore: boolean; clicked: Landing; up: Landing; markers: number };
+    kept: { landed: boolean; before: string | null; opened: string | null; unmounted: boolean; after: string | null; sameHeight: boolean };
+    farApproval: { turnMounted: boolean; shown: boolean; gone: boolean };
     longAnswer: { messagesShown: number; current: string[]; inView: string[] };
+    feed: { feed: string | null; label: string | null; articles: boolean; setsize: (string | null)[]; placed: boolean; total: number; first: number; mountedBefore: boolean; up: boolean; down: boolean };
     short: { rail: boolean; rows: number };
   };
   assert.equal(seen.error, undefined);
@@ -97,8 +100,22 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
   landsAtTop(intoUnmounted.up, "⌥↑ from it");
   assert.equal(intoUnmounted.markers, 40);
 
+  // "Show more" opened, scrolled away until its message unmounts, and back: still open, the same height.
+  assert.deepEqual(seen.kept, { landed: true, before: "false", opened: "true", unmounted: true, after: "true", sameHeight: true });
+
+  // An approval for a turn that isn't mounted still takes the composer's place, and goes once decided.
+  assert.deepEqual(seen.farApproval, { turnMounted: false, shown: true, gone: true });
+
   // Only a long answer in view, its message scrolled away above: that message is the current one.
   assert.deepEqual(seen.longAnswer, { messagesShown: 0, current: ["long-tall-u"], inView: ["long-tall-u"] });
+
+  // A screen reader reads a feed of articles, each placed in the whole thread, mounted or not.
+  // Page Up from the first mounted message mounts the one before and moves the focus to it.
+  const { feed } = seen;
+  assert.deepEqual([feed.feed, feed.label, feed.articles, feed.placed], ["feed", "Conversation", true, true]);
+  assert.deepEqual(feed.setsize, [String(feed.total)]);
+  assert.ok(feed.first > 0 && !feed.mountedBefore, `first mounted article ${feed.first}`);
+  assert.deepEqual([feed.up, feed.down], [true, true]);
 
   // Three user messages: no rail.
   assert.deepEqual(seen.short, { rail: false, rows: 3 });
