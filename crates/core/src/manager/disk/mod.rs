@@ -1066,6 +1066,7 @@ fn project_streams(records: &Records, project: &Project) -> Vec<String> {
         .filter(|c| c.project_id.as_ref() == Some(&project.id))
     {
         list.push(streams::conversation(&conversation.id));
+        list.push(streams::legacy_orchestrator(&conversation.id));
         list.push(streams::draft(&conversation.id.to_string()));
         for task in records.tasks.get(&conversation.id).into_iter().flatten() {
             list.push(streams::task(&task.id));

@@ -329,9 +329,31 @@ async fn retention(delete_directly: bool) {
             record_before
         );
     }
+    // A session from before #540 still holds an orchestrator log: it goes with the session.
+    let legacy = crate::model::streams::legacy_orchestrator(&id);
+    flow.core
+        .store()
+        .append(vec![brigadier_store::NewEvent {
+            stream: legacy.clone(),
+            kind: "orchestratorLogged".into(),
+            at_ms: 1,
+            payload: serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+            key: None,
+        }])
+        .await
+        .unwrap();
     flow.manager.delete(id.clone()).await.unwrap();
     flow.manager.cleanup_finished(&id).await;
     assert!(flow.core.conversation(&id).is_err());
+    assert!(
+        flow.core
+            .store()
+            .read_stream(legacy, brigadier_store::StreamPage::default())
+            .await
+            .unwrap()
+            .is_empty(),
+        "Delete purges the old orchestrator log"
+    );
     for process in &mut processes {
         assert!(
             process.0.try_wait().unwrap().is_some(),

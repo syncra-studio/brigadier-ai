@@ -2714,6 +2714,12 @@ pub mod streams {
         format!("task:{id}")
     }
 
+    /// The orchestrator log the engine no longer writes (#540): a session from before it still
+    /// holds one, purged with the session.
+    pub fn legacy_orchestrator(id: &ConversationId) -> String {
+        format!("orch:{id}")
+    }
+
     /// What was queued for a thread's next turn: its inbox lives in memory (#210).
     pub fn inbox(id: &ConversationId) -> String {
         format!("inbox:{id}")
