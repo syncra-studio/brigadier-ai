@@ -2766,6 +2766,7 @@ impl SessionManager {
             stop_hook: None,
             lean_worker: false,
             native_compaction: self.native_compaction(conv, choice.provider),
+            temp_tag: None,
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);

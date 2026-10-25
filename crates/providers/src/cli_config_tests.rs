@@ -151,6 +151,7 @@ for line in sys.stdin:
             stop_hook: None,
             lean_worker: false,
             native_compaction: None,
+            temp_tag: None,
         }
     }
 }

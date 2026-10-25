@@ -1434,6 +1434,10 @@ pub struct SessionSpec {
     /// with its own compaction instead of the session moving to a fresh one at a size. `None`:
     /// as [`Self::auto_compact`] says.
     pub native_compaction: Option<NativeCompaction>,
+    /// Names the session's own temp folder after the Brigadier session it is for (Claude, a
+    /// session given a TMPDIR): 8 lowercase hex characters make `/tmp/brigadier-<tag>-<4 hex>`;
+    /// `None` or anything else, an untagged `/tmp/brigadier-<12 hex>`.
+    pub temp_tag: Option<String>,
 }
 
 /// How a session's CLI compacts natively ([`SessionSpec::native_compaction`]). Brigadier

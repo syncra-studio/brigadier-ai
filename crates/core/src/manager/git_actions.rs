@@ -593,6 +593,7 @@ impl SessionManager {
             stop_hook: None,
             lean_worker: false,
             native_compaction: None,
+            temp_tag: None,
         };
         let written = async {
             let Started {

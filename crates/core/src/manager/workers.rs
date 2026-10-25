@@ -743,6 +743,7 @@ impl SessionManager {
             stop_hook: None,
             lean_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
             native_compaction: None,
+            temp_tag: None,
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {

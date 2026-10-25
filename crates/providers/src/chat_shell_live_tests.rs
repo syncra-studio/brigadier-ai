@@ -154,6 +154,7 @@ impl Fake {
             stop_hook: None,
             lean_worker: false,
             native_compaction: None,
+            temp_tag: None,
         }
     }
 }

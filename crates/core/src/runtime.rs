@@ -1752,6 +1752,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         stop_hook: None,
         lean_worker: false,
         native_compaction: None,
+        temp_tag: None,
     }
 }
 

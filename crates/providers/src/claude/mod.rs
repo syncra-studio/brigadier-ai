@@ -1391,7 +1391,7 @@ impl Provider for Claude {
                     .iter()
                     .any(|(name, _)| name == "CLAUDE_CODE_TMPDIR")
             {
-                let dir = match files::temp_dir_path() {
+                let dir = match files::temp_dir_path(spec.temp_tag.as_deref()) {
                     Some(dir) => {
                         let path = dir.display().to_string();
                         ledger
@@ -2701,6 +2701,7 @@ for line in sys.stdin:
             stop_hook: None,
             lean_worker: false,
             native_compaction: None,
+            temp_tag: None,
         }
     }
 
@@ -3600,6 +3601,7 @@ for line in sys.stdin:
         // Off, as before: no backstop, and Claude's own compaction refused.
         let seam = SessionSpec {
             native_compaction: None,
+            temp_tag: None,
             ..long
         };
         assert_eq!(backstop(&seam, cwd.path(), None), None);

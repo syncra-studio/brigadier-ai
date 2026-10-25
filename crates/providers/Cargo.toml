@@ -16,6 +16,7 @@ aho-corasick = "1.1.5"
 base64.workspace = true
 brigadier-sandbox.workspace = true
 dirs.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Naming Claude Code's Keychain item after its config dir (`login_mark`).
@@ -32,6 +33,10 @@ prettyplease = { version = "0.3.0", optional = true }
 schemars = { version = "0.8.22", optional = true }
 syn = { version = "3.0.6", optional = true }
 typify = { version = "0.8.0", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# Whether a CLI's process still runs (`kill(pid, 0)`).
+nix.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # When Claude Code's Keychain item last changed: its attributes only, never its data.

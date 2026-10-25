@@ -3,7 +3,9 @@
 //! Everything is keyed by the session's UUID under Claude's configuration directory:
 //! `projects/<encoded cwd>/<id>.jsonl` (the transcript) and `projects/<encoded cwd>/<id>/`,
 //! plus `tasks/<id>`, `session-env/<id>`, `file-history/<id>`, `todos/<id>-*.json` and
-//! `debug/<id>.txt`. Nothing else is touched.
+//! `debug/<id>.txt`; the session's lines in the prompt history `history.jsonl`, and what a
+//! killed CLI of the session left registered in `sessions/` (its `<pid>.json`, `<pid>.*.key`
+//! and messaging socket). Nothing else is touched.
 //!
 //! In the working directory, Claude Code stages its writes in `.claude/.cc-writes`; the part of
 //! that path which did not exist before the session is removed with it, while it holds no files,
@@ -14,7 +16,9 @@
 //! (`<temp>` is `CLAUDE_CODE_TMPDIR`, else `/tmp` on macOS and the system temp directory
 //! elsewhere), and its sandbox gives commands `<temp>/claude-<uid>` as their TMPDIR. A session
 //! started with a TMPDIR of its own gets a short folder of its own as `<temp>`
-//! ([`create_temp_dir`]), removed with everything in it, and leaves nothing in the shared
+//! ([`create_temp_dir`]), named after the Brigadier session when it has a tag
+//! (`/tmp/brigadier-<tag>-<4 hex>`, else `/tmp/brigadier-<12 hex>`) and removed with everything
+//! in it, and leaves nothing in the shared
 //! location; for the others the session's folder is removed with it, and the per-cwd folder
 //! too when it is empty and belonged to a project directory the session created.
 
@@ -28,6 +32,11 @@ use crate::{Error, Result};
 
 /// Per-session directories and files directly under the config directory, by name.
 const SESSION_DIRS: &[&str] = &["tasks", "session-env", "file-history"];
+/// The prompt history (Up arrow in the CLI): one JSON object per line, each with its
+/// `sessionId`.
+const HISTORY: &str = "history.jsonl";
+/// A running CLI's registration in `sessions/` is a few hundred bytes.
+const REGISTRATION_LIMIT: usize = 64 * 1024;
 /// Where Claude Code stages atomic writes, under `<cwd>/.claude`.
 const STAGING_DIR: &str = ".cc-writes";
 /// Where a session's own temp folders live, and their name before the id.
@@ -633,6 +642,96 @@ fn remove_session(config: &Path, id: &str) -> Result<()> {
             }
         }
     }
+    let history = config.join(HISTORY);
+    crate::history_lines::remove_lines(&history, |line| {
+        line.get("sessionId").and_then(serde_json::Value::as_str) == Some(id)
+    })
+    .map_err(|err| {
+        Error::Io(io::Error::new(
+            err.kind(),
+            format!("{}: {err}", history.display()),
+        ))
+    })?;
+    remove_stale_registrations(config, id)
+}
+
+/// Removes what a killed CLI of session `id` left in `sessions/`: Claude Code registers each
+/// running CLI there as `<pid>.json` (naming the session, its messaging socket) with a
+/// `<pid>.<hash>.key` beside it, and removes both as it exits. A registration whose process
+/// still runs is the CLI's, and stays.
+fn remove_stale_registrations(config: &Path, id: &str) -> Result<()> {
+    let dir = config.join("sessions");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(());
+    };
+    let names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    for name in &names {
+        let Some(pid) = name
+            .strip_suffix(".json")
+            .filter(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let file = dir.join(name);
+        let Some(registration) = std::fs::read(&file)
+            .ok()
+            .filter(|bytes| bytes.len() <= REGISTRATION_LIMIT)
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let names_pid = registration
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|recorded| recorded.to_string() == pid);
+        let ours = registration
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            == Some(id);
+        let Ok(pid_number) = pid.parse::<u32>() else {
+            continue;
+        };
+        if !names_pid || !ours || crate::process::pid_alive(pid_number) {
+            continue;
+        }
+        if let Some(socket) = registration
+            .get("messagingSocketPath")
+            .and_then(serde_json::Value::as_str)
+        {
+            remove_stale_socket(Path::new(socket), pid)?;
+        }
+        let key = format!("{pid}.");
+        for other in &names {
+            let is_key = other
+                .strip_prefix(&key)
+                .and_then(|rest| rest.strip_suffix(".key"))
+                .is_some_and(|hash| {
+                    !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                });
+            if is_key {
+                remove_path(&dir.join(other))?;
+            }
+        }
+        remove_path(&file)?;
+    }
+    Ok(())
+}
+
+/// Removes a dead CLI's messaging socket, `<dir>/<pid>.sock`, when it is one.
+fn remove_stale_socket(socket: &Path, pid: &str) -> Result<()> {
+    if socket.file_name() != Some(format!("{pid}.sock").as_ref()) {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if std::fs::symlink_metadata(socket).is_ok_and(|meta| meta.file_type().is_socket()) {
+            remove_path(socket)?;
+        }
+    }
     Ok(())
 }
 
@@ -660,16 +759,43 @@ fn remove_project_dir(config: &Path, dir: &Path) -> Result<()> {
 /// TMPDIR only while its path fits them (about 30 characters for `<temp>` on macOS; a data
 /// directory's scratch folder never does). Otherwise their TMPDIR is the shared
 /// `/tmp/claude-<uid>`, which nothing cleans up. Returns `None` where Claude has no sandbox.
-pub(super) fn temp_dir_path() -> Option<PathBuf> {
+///
+/// `tag` names the Brigadier session it is for (8 lowercase hex characters), so the folder
+/// can be told by its name: `/tmp/brigadier-<tag>-<4 hex>`. Without one, or with any other,
+/// it is `/tmp/brigadier-<12 hex>`. Either is at most 28 bytes.
+pub(super) fn temp_dir_path(tag: Option<&str>) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         let id = uuid::Uuid::new_v4().simple().to_string();
-        Some(Path::new(TEMP_BASE).join(format!("{TEMP_PREFIX}{}", &id[..12])))
+        let name = match tag.filter(|tag| is_temp_tag(tag)) {
+            Some(tag) => format!("{TEMP_PREFIX}{tag}-{}", &id[..4]),
+            None => format!("{TEMP_PREFIX}{}", &id[..12]),
+        };
+        Some(Path::new(TEMP_BASE).join(name))
     }
     #[cfg(not(unix))]
     {
+        let _ = tag;
         None
     }
+}
+
+/// A session's tag in its temp folder's name: exactly 8 lowercase hex characters.
+fn is_temp_tag(tag: &str) -> bool {
+    tag.len() == 8 && tag.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Whether `name` is one [`temp_dir_path`] makes: `brigadier-<12 hex>` or
+/// `brigadier-<8 hex>-<4 hex>`.
+fn is_temp_dir_name(name: &str) -> bool {
+    let hex =
+        |part: &str, len: usize| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit());
+    name.strip_prefix(TEMP_PREFIX).is_some_and(|id| {
+        hex(id, 12)
+            || id
+                .split_once('-')
+                .is_some_and(|(tag, rest)| hex(tag, 8) && hex(rest, 4))
+    })
 }
 
 /// Creates the folder from [`temp_dir_path`], which must not exist yet, marked as `paths`'
@@ -710,10 +836,7 @@ fn remove_temp_dir(dir: &Path) -> Result<()> {
     let ours = dir
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name.strip_prefix(TEMP_PREFIX)
-                .is_some_and(|id| id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit()))
-        });
+        .is_some_and(is_temp_dir_name);
     #[cfg(unix)]
     let ours = ours && dir.parent() == Some(Path::new(TEMP_BASE));
     if !ours {
@@ -1039,6 +1162,146 @@ fn socket_data_dir(content: &str) -> Option<PathBuf> {
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from)
     })
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn scratch() -> PathBuf {
+        let short = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("bcs-{}", &short[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_sessions_prompt_history_lines_go_with_it() {
+        let config = scratch();
+        let (id, other) = (
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        let line = |session: &str, text: &str| {
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "display": text,
+                    "pastedContents": {},
+                    "timestamp": 1,
+                    "project": "/p",
+                    "sessionId": session,
+                })
+            )
+        };
+        let history = config.join(HISTORY);
+        std::fs::write(
+            &history,
+            line(&id, "a") + &line(&other, "b") + "garbage\n" + &line(&id, "c"),
+        )
+        .unwrap();
+        remove_session(&config, &id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&history).unwrap(),
+            line(&other, "b") + "garbage\n"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_clis_registration_goes_and_a_running_ones_stays() {
+        let config = scratch();
+        let sessions = config.join("sessions");
+        let socks = config.join("cc-socks");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&socks).unwrap();
+        let (id, other) = (
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let live = std::process::id();
+        let hash = "5ced3ea7d762e1c182327d61e2bcb6f25bf749e8c3056fdf3e45e9109118a3c1";
+        let register = |pid: u32, session: &str| {
+            let socket = socks.join(format!("{pid}.sock"));
+            let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+            std::fs::write(
+                sessions.join(format!("{pid}.json")),
+                serde_json::json!({
+                    "pid": pid,
+                    "sessionId": session,
+                    "cwd": "/p",
+                    "messagingSocketPath": socket,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(sessions.join(format!("{pid}.{hash}.key")), "k").unwrap();
+            listener
+        };
+        let _dead = register(dead, &id);
+        let _live = register(live, &id);
+        remove_session(&config, &id).unwrap();
+        assert!(!sessions.join(format!("{dead}.json")).exists());
+        assert!(!sessions.join(format!("{dead}.{hash}.key")).exists());
+        assert!(std::fs::symlink_metadata(socks.join(format!("{dead}.sock"))).is_err());
+        assert!(sessions.join(format!("{live}.json")).exists());
+        assert!(sessions.join(format!("{live}.{hash}.key")).exists());
+        assert!(socks.join(format!("{live}.sock")).exists());
+        // Another session's registration stays, though its CLI is gone.
+        std::fs::remove_dir_all(&sessions).unwrap();
+        std::fs::remove_dir_all(&socks).unwrap();
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&socks).unwrap();
+        let _other = register(dead, &other);
+        remove_session(&config, &id).unwrap();
+        assert!(sessions.join(format!("{dead}.json")).exists());
+        assert!(sessions.join(format!("{dead}.{hash}.key")).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temp_folder_is_named_after_its_session_when_tagged() {
+        let tagged = temp_dir_path(Some("40cf6d11")).unwrap();
+        let name = tagged.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("brigadier-40cf6d11-"), "{name}");
+        assert_eq!(tagged.as_os_str().len(), 28);
+        assert!(is_temp_dir_name(name));
+        for tag in [
+            None,
+            Some("40CF6D11"),
+            Some("40cf6d1"),
+            Some("40cf6d11a"),
+            Some("../x"),
+        ] {
+            let plain = temp_dir_path(tag).unwrap();
+            let name = plain.file_name().unwrap().to_str().unwrap();
+            assert_eq!(plain.parent(), Some(Path::new("/tmp")));
+            assert_eq!(name.len(), "brigadier-".len() + 12, "{name}");
+            assert!(is_temp_dir_name(name));
+            assert!(plain.as_os_str().len() <= 28);
+        }
+        for name in [
+            "brigadier-test-40cf6d11",
+            "brigadier-40cf6d11",
+            "brigadier-40cf6d11-12345",
+            "brigadier-40cf6d1-1234",
+            "brigadier-pv-0123456789ab",
+            "claude-501",
+        ] {
+            assert!(!is_temp_dir_name(name), "{name}");
+        }
+        assert!(remove_temp_dir(Path::new("/var/brigadier-40cf6d11-1234")).is_err());
+        assert!(remove_temp_dir(Path::new("/tmp/brigadier-test-40cf6d11")).is_err());
+        remove_temp_dir(Path::new("/tmp/brigadier-40cf6d11-zzzz")).unwrap_err();
+        // Both forms are removed, made or not.
+        remove_temp_dir(&temp_dir_path(Some("40cf6d11")).unwrap()).unwrap();
+        remove_temp_dir(&temp_dir_path(None).unwrap()).unwrap();
+    }
 }
 
 #[cfg(test)]
