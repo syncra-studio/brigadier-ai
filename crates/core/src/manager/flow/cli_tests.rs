@@ -1254,6 +1254,114 @@ async fn wait_hears_a_worker_gone_and_its_usage_limit() {
     flow.stop().await;
 }
 
+/// D44/D47: a failed or interrupted turn says so in the thread, while the plain worker
+/// remains available for another message. A usage limit still pauses it.
+#[tokio::test]
+async fn a_plain_workers_turn_end_step_keeps_the_turns_outcome() {
+    use crate::work::{AttemptEnd, TaskState, WorkerStepKind};
+    use brigadier_providers::{LimitHit, TurnStatus};
+
+    let script: Script = Arc::new(|turn| {
+        Box::pin(async move {
+            if turn.worker().is_some() {
+                turn.stopped().await;
+            } else if turn.input.contains("Start held worker.") {
+                turn.start_worker("Held", "Hold.").await;
+            }
+            Reply::text("Ready.")
+        })
+    });
+    let flow = Flow::start(
+        "20261025-1046-harness-research-w25-turn-steps",
+        Options::default(),
+        script,
+    )
+    .await;
+    let cases = [
+        (
+            TurnStatus::Completed,
+            None,
+            TaskState::Reported,
+            WorkerStepKind::Finished,
+        ),
+        (
+            TurnStatus::Failed,
+            None,
+            TaskState::Reported,
+            WorkerStepKind::Failed,
+        ),
+        (
+            TurnStatus::Interrupted,
+            None,
+            TaskState::Reported,
+            WorkerStepKind::Stopped,
+        ),
+        (
+            TurnStatus::Completed,
+            Some(AttemptEnd::Error {
+                message: "Cut off.".into(),
+                kind: brigadier_providers::ErrorKind::Other,
+            }),
+            TaskState::Reported,
+            WorkerStepKind::Failed,
+        ),
+        (
+            TurnStatus::Failed,
+            Some(AttemptEnd::Limit {
+                limit: LimitHit {
+                    window: None,
+                    resets_at_ms: None,
+                    kind: Default::default(),
+                },
+            }),
+            TaskState::Paused,
+            WorkerStepKind::Paused,
+        ),
+        (
+            TurnStatus::Interrupted,
+            Some(AttemptEnd::Limit {
+                limit: LimitHit {
+                    window: None,
+                    resets_at_ms: None,
+                    kind: Default::default(),
+                },
+            }),
+            TaskState::Paused,
+            WorkerStepKind::Paused,
+        ),
+    ];
+    flow.say("Start held worker.").await;
+    let board = flow
+        .until("worker running", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == TaskState::Running)
+        })
+        .await;
+    let id = Flow::task(&board, 1).id.clone();
+    for (status, cutoff, state, step) in cases {
+        let task = flow
+            .manager
+            .set_task_state(&flow.conversation, &id, TaskState::Running)
+            .await
+            .unwrap();
+        let live = flow.manager.task_live(&task);
+        if let Some(cutoff) = cutoff {
+            live.set_cutoff(cutoff).await;
+        }
+        let before = flow.board().await.worker_steps.len();
+        flow.manager.plain_turn_ended(&live, &task, status).await;
+        let board = flow.board().await;
+        assert_eq!(board.tasks[&id].state, state, "{status:?}");
+        let steps = &board.worker_steps[before..];
+        assert_eq!(steps.len(), 1, "{status:?}: {steps:?}");
+        assert_eq!(steps[0].task_id, id);
+        assert_eq!(steps[0].kind, step, "{status:?}");
+    }
+    flow.stop().await;
+}
+
 pub(super) fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Value) -> CliRequest {
     CliRequest::Tool {
         tool,

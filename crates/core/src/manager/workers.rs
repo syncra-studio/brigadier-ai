@@ -45,7 +45,7 @@ use crate::tools::Role;
 use crate::work::{
     ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, MockupPart,
     OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind, TaskState,
-    TaskWorkspace, WorkerAccess,
+    TaskWorkspace, WorkerAccess, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
 
@@ -280,6 +280,20 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
     }
 
+    /// D44/D47: a plain worker stays available after a failed or interrupted turn, but its
+    /// thread step records the turn's outcome rather than inferring success from Reported.
+    pub(super) async fn update_task_with_step(
+        &self,
+        conversation_id: &ConversationId,
+        id: &TaskId,
+        step: Option<WorkerStepKind>,
+        change: impl FnOnce(&mut Task),
+    ) -> Result<Task> {
+        self.update_task_if_with_step(conversation_id, id, |_| true, step, change)
+            .await?
+            .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
+    }
+
     /// [`Self::update_task`] when `still` holds for the task as it is now, checked and changed
     /// in one step (nothing else changes the task in between); `None`, and nothing recorded,
     /// when it no longer holds.
@@ -288,6 +302,18 @@ impl SessionManager {
         conversation_id: &ConversationId,
         id: &TaskId,
         still: impl FnOnce(&Task) -> bool,
+        change: impl FnOnce(&mut Task),
+    ) -> Result<Option<Task>> {
+        self.update_task_if_with_step(conversation_id, id, still, None, change)
+            .await
+    }
+
+    async fn update_task_if_with_step(
+        &self,
+        conversation_id: &ConversationId,
+        id: &TaskId,
+        still: impl FnOnce(&Task) -> bool,
+        step: Option<WorkerStepKind>,
         change: impl FnOnce(&mut Task),
     ) -> Result<Option<Task>> {
         let task = {
@@ -304,7 +330,7 @@ impl SessionManager {
             let mut events = vec![DomainEvent::TaskUpdated {
                 task: Box::new(task.clone()),
             }];
-            events.extend(worker_step(&task, Some(was), reported));
+            events.extend(worker_step(&task, Some(was), reported, step));
             self.core
                 .record_conversation(conversation_id, events)
                 .await?;
@@ -463,7 +489,7 @@ impl SessionManager {
         let mut events = vec![DomainEvent::TaskUpdated {
             task: Box::new(task.clone()),
         }];
-        events.extend(worker_step(&task, None, false));
+        events.extend(worker_step(&task, None, false, None));
         // A cleanup that stopped waiting for this has already passed the session's tasks (it
         // may have been restored since): the task isn't made.
         if fence.cut_off() {
@@ -2690,9 +2716,15 @@ pub(super) fn task_branch(
 }
 
 /// The step the thread shows when `task` just left `was` (absent: it was just created);
-/// `reported` tells whether it had reported before.
-fn worker_step(task: &Task, was: Option<TaskState>, reported: bool) -> Option<DomainEvent> {
-    let kind = crate::work::WorkerStepKind::between(was, task.state, reported)?;
+/// `reported` tells whether it had reported before. `kind` overrides the inferred step when
+/// the task stays available after a failed or interrupted turn (D44/D47).
+fn worker_step(
+    task: &Task,
+    was: Option<TaskState>,
+    reported: bool,
+    kind: Option<WorkerStepKind>,
+) -> Option<DomainEvent> {
+    let kind = kind.or_else(|| WorkerStepKind::between(was, task.state, reported))?;
     Some(DomainEvent::WorkerStepped {
         step: crate::work::WorkerStep {
             task_id: task.id.clone(),

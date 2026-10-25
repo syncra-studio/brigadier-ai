@@ -45,7 +45,7 @@ use crate::model::{
 };
 use crate::work::{
     Approval, ApprovalSubject, AttachmentRef, AttemptEnd, CardId, CardState, MockupPart,
-    PlainWorker, Task, TaskId, TaskState,
+    PlainWorker, Task, TaskId, TaskState, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
 
@@ -720,6 +720,12 @@ impl SessionManager {
             (_, TurnStatus::Interrupted) => (TaskState::Reported, None, EventKind::Interrupted),
             _ => (TaskState::Reported, None, EventKind::Failed),
         };
+        // D44/D47: Reported means it can take another message, not that this turn succeeded.
+        let step = match kind {
+            EventKind::Failed => Some(WorkerStepKind::Failed),
+            EventKind::Interrupted => Some(WorkerStepKind::Stopped),
+            _ => None,
+        };
         let error = match &cutoff {
             Some(AttemptEnd::Error { message, .. }) => Some(message.clone()),
             _ => None,
@@ -733,7 +739,7 @@ impl SessionManager {
         // interrupted one (a quit closing its CLI) is still the turn that was cut off (D9 a).
         let finished = status != TurnStatus::Interrupted;
         let updated = self
-            .update_task(&task.conversation_id, &task.id, |task| {
+            .update_task_with_step(&task.conversation_id, &task.id, step, |task| {
                 task.state = state;
                 task.blocked_reason = blocked.clone();
                 if finished && let Some(plain) = &mut task.plain {
