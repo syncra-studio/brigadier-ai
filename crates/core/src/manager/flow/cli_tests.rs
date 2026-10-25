@@ -2107,6 +2107,13 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                     ("unknown", by("Nothing like it")),
                     ("order", by("docs")),
                     (
+                        "agent's row",
+                        StartRequest {
+                            agent: Some(brigadier_cli::protocol::Agent::Codex),
+                            ..by("Docs")
+                        },
+                    ),
+                    (
                         "work rule",
                         StartRequest {
                             agent: Some(brigadier_cli::protocol::Agent::Claude),
@@ -2131,7 +2138,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     .unwrap();
     flow.say("Start by work.").await;
     flow.until("the started workers reported", |b| {
-        b.tasks.len() == 5
+        b.tasks.len() == 6
             && b.tasks
                 .values()
                 .all(|t| t.state == crate::work::TaskState::Reported)
@@ -2190,6 +2197,11 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
         (json!("codex"), json!("gpt-6-luna"), json!("low"))
     );
     assert_eq!(seen["order"]["row"]["work"], "Docs");
+    // `--agent` takes that agent's own row of the order, its model and effort (D34).
+    assert_eq!(
+        worker("agent's row"),
+        (json!("codex"), json!("gpt-6-luna"), json!("low"))
+    );
     assert_eq!(seen["order"]["row"]["source"], "user");
     // A rule for that work refuses the model a flag asks for; it holds for that work only.
     assert_eq!(seen["work rule"]["error"]["code"], "refused");

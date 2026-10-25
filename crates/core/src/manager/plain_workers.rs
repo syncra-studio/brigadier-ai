@@ -237,7 +237,13 @@ impl SessionManager {
                 if let Some(authors) = &review {
                     order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
                     order.sort_by_key(|row| authors.providers.contains(&provider_of(row.agent)));
+                } else if let Some(agent) = start.agent {
+                    // D34: `--agent` takes that agent's own row of the order first, its model
+                    // and effort, before another agent's.
+                    order.sort_by_key(|row| row.agent != agent);
                 }
+                // None fits now: the order's first, still the `--agent` one (D34).
+                let first = order.first().map(|row| (*row).clone());
                 let mut fit = None;
                 for row in order {
                     let provider = provider_of(row.agent);
@@ -269,7 +275,7 @@ impl SessionManager {
                         break;
                     }
                 }
-                match fit.or_else(|| rows.into_iter().next()) {
+                match fit.or(first).or_else(|| rows.into_iter().next()) {
                     Some(row) => Some(row),
                     None => {
                         return Ok(CliReply::error(
