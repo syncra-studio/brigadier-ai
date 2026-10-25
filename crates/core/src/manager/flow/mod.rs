@@ -227,6 +227,7 @@ impl Turn {
             model: None,
             effort: None,
             work: None,
+            reviewing: Vec::new(),
             local: false,
             repo: None,
             base: None,

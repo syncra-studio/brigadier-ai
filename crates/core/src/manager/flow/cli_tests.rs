@@ -544,6 +544,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         model: None,
         effort: None,
         work: None,
+        reviewing: Vec::new(),
         local: false,
         repo: None,
         base: None,
@@ -2086,6 +2087,217 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                 && spec.effort.as_deref() == Some("medium"))
     );
     flow.stop().await;
+}
+
+/// An independent review (harness D22): `--reviewing` names whose work it is (a worker, or
+/// `session`, the default for the work "Independent review"); the reviewer runs on another
+/// provider than the authors' whose row the rules allow and whose model is free now, else a
+/// fresh session of the authors' provider. Its brief ends with where the authors' facts are.
+#[tokio::test]
+async fn an_independent_review_runs_on_another_ready_provider_than_the_authors() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Done.");
+            }
+            let review = |reviewing: &[&str]| StartRequest {
+                reviewing: reviewing.iter().map(|id| (*id).to_owned()).collect(),
+                local: true,
+                ..start("Break it.")
+            };
+            let mut starts: Vec<(&str, StartRequest)> = Vec::new();
+            if turn.input.contains("Review A.") {
+                let author = StartRequest {
+                    agent: Some(Agent::Codex),
+                    local: true,
+                    ..start("Build it.")
+                };
+                let author = brigadier(&turn, CliRequest::Start(Box::new(author))).await;
+                let id = id_of(&author);
+                seen.lock().unwrap().insert("author".into(), author);
+                starts.push(("of a codex worker", review(&[&id])));
+                starts.push((
+                    "of the session by default",
+                    StartRequest {
+                        work: Some("independent review".into()),
+                        ..review(&[])
+                    },
+                ));
+                starts.push(("of both", review(&["session", &id])));
+                starts.push(("of a stranger", review(&["nobody"])));
+            } else if turn.input.contains("Review B.") {
+                starts.push(("model limited", review(&["session"])));
+            } else if turn.input.contains("Review C.") {
+                starts.push(("one provider", review(&["session"])));
+            }
+            for (name, request) in starts {
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert(name.into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start(
+        "cli-start-review",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                light_model: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let reported = |n: usize| {
+        move |b: &crate::board::Board| {
+            b.tasks.len() == n
+                && b.tasks
+                    .values()
+                    .all(|t| t.state == crate::work::TaskState::Reported)
+        }
+    };
+    flow.say("Review A.").await;
+    flow.until("the author and its reviewers reported", reported(4))
+        .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let author = id_of(&seen["author"]);
+    let session = seen["of the session by default"]["review"]["of"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let picked = |name: &str| picked_of(&seen[name]);
+    // A Codex worker's work: the Claude row.
+    assert_eq!(
+        picked("of a codex worker"),
+        (json!("claude"), json!("claude-opus-5-5"), json!("high")),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        seen["of a codex worker"]["review"],
+        json!({ "of": [author], "authors": ["codex"], "otherProvider": true })
+    );
+    assert_eq!(
+        seen["of a codex worker"]["row"]["work"],
+        "Independent review"
+    );
+    // The Claude session's own work, with no id: the Codex row, on Codex's default model.
+    assert_eq!(
+        picked("of the session by default"),
+        (json!("codex"), Value::Null, json!("high"))
+    );
+    assert_eq!(
+        seen["of the session by default"]["review"]["authors"],
+        json!(["claude"])
+    );
+    // Both providers wrote it: none other is left, so a fresh session of theirs.
+    assert_eq!(seen["of both"]["review"]["otherProvider"], false);
+    assert_eq!(
+        seen["of both"]["review"]["authors"],
+        json!(["claude", "codex"])
+    );
+    assert_eq!(
+        seen["of a stranger"]["error"]["code"], "not-found",
+        "{seen:#?}"
+    );
+    // The reviewer's brief says where its authors' facts are.
+    let board = flow.board().await;
+    let brief = &Flow::task(&board, 2).spec;
+    assert!(
+        brief.starts_with("Break it.\n\nYou review the work of worker 1 "),
+        "{brief}"
+    );
+    assert!(
+        brief.contains(&format!("`brigadier show <id>` for each ({author}:")),
+        "{brief}"
+    );
+    assert!(brief.contains("`brigadier context`"), "{brief}");
+    assert!(
+        Flow::task(&board, 3)
+            .spec
+            .contains(&format!("this session {session}")),
+        "{}",
+        Flow::task(&board, 3).spec
+    );
+
+    // A model's own window used up: the next row on another provider whose model is free.
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Independent review | codex | gpt-6-astra | high | One. |\n| Independent review | codex | gpt-6-luna | high | Two. |\n| Independent review | claude | opus | high | Three. |\n",
+    )
+    .unwrap();
+    let now = crate::now_ms();
+    flow.manager.runtime.monitor().note(
+        &crate::accounts::AccountRef::new(ProviderKind::Codex, None),
+        &brigadier_providers::QuotaSnapshot {
+            provider: ProviderKind::Codex,
+            windows: vec![brigadier_providers::QuotaWindow {
+                id: "astra_week".into(),
+                label: "astra_week".into(),
+                used_percent: 100.0,
+                resets_at_ms: Some(now + 3_600_000),
+                window_minutes: Some(7 * 24 * 60),
+                bucket: None,
+                model: Some("gpt-6-astra".into()),
+            }],
+            limit: None,
+            observed_at_ms: now,
+            source: brigadier_providers::QuotaSource::Read,
+        },
+        now,
+    );
+    flow.say("Review B.").await;
+    flow.until("the review on a free model reported", reported(5))
+        .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(
+        seen["model limited"]["worker"]["model"],
+        json!("gpt-6-luna"),
+        "{seen:#?}"
+    );
+    assert_eq!(seen["model limited"]["review"]["otherProvider"], true);
+
+    // Only one provider ready: a fresh session of the author's.
+    flow.behavior
+        .signed_out
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    flow.manager
+        .runtime
+        .refresh_providers(Some(ProviderKind::Codex));
+    flow.until("Codex is signed out", |_| {
+        !flow.manager.runtime.provider_signed_in(ProviderKind::Codex)
+    })
+    .await;
+    flow.say("Review C.").await;
+    flow.until("the one-provider review reported", reported(6))
+        .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(
+        picked_of(&seen["one provider"]),
+        (json!("claude"), json!("claude-opus-5-5"), json!("high")),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        seen["one provider"]["review"],
+        json!({ "of": [session], "authors": ["claude"], "otherProvider": false })
+    );
+    flow.stop().await;
+}
+
+fn picked_of(started: &Value) -> (Value, Value, Value) {
+    let w = &started["worker"];
+    (w["agent"].clone(), w["model"].clone(), w["effort"].clone())
 }
 
 /// The session's thread starts two workers: one asks permission, one commits a file.

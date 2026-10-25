@@ -412,6 +412,12 @@ fn sample(request: &CliRequest) -> CliReply {
                 source: "user".into(),
                 picked: vec!["agent".into(), "effort".into()],
             }),
+            // `--reviewing` answers with whose work and on which CLI (harness D22).
+            review: (!start.reviewing.is_empty()).then(|| StartReview {
+                of: start.reviewing.clone(),
+                authors: vec![Agent::Claude],
+                other_provider: true,
+            }),
         }),
         CliRequest::Send { id, answer, .. } => CliReply::ok(&SendOutput {
             id: id.clone(),
@@ -833,6 +839,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["start", "--json", "write", "a", "file"],
         &["start", "--local", "--permission", "ask", "--json", "go"],
         &["start", "--work", "Independent review", "--json", "go"],
+        &["start", "--reviewing", "a1b2", "--json", "go"],
         &["send", "a1b2", "keep", "going", "--json"],
         &["send", "a1b2", "--allow", "--json"],
         &["wait", "--json"],
@@ -1031,7 +1038,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 17, sample);
+    let daemon = stand_in_daemon(&dir.0, 18, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -1101,6 +1108,16 @@ fn text_output_reads_well() {
     assert!(
         by_work.contains("\nYour row \"Independent review\" picked its agent and effort.\n"),
         "{by_work}"
+    );
+    // `--reviewing` says whose work it reviews and on which CLI (harness D22).
+    let review = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &["start", "--reviewing", "a1b2", "go"],
+    ));
+    assert!(
+        review.contains("\nIt reviews the work of a1b2 (claude): on codex, another CLI.\n"),
+        "{review}"
     );
     let local = stdout(&brigadier(
         Some(&dir.0),

@@ -248,6 +248,16 @@ pub const COMMANDS: &[Command] = &[
                 "A kind of work from `brigadier models`: its row (the user's, else the shipped \
                  one) picks the agent, model and effort you don't give.",
             ),
+            Arg::Flag {
+                long: "reviewing",
+                value: Some("ID"),
+                help: "An independent review of a worker's work, or `session` for this \
+                       session's own (its plan): the work \"Independent review\" on another \
+                       ready CLI than the author's, else a fresh session of the author's. Its \
+                       brief is told to read `brigadier show <id>` and `brigadier context`.",
+                choices: &[],
+                repeat: true,
+            },
             switch(
                 "worktree",
                 "Work in a new worktree of its own (the default).",

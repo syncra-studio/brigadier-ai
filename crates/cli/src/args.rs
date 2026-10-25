@@ -364,6 +364,12 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 model: given("model"),
                 effort: given("effort"),
                 work: given("work"),
+                reviewing: args
+                    .all("reviewing")
+                    .iter()
+                    .map(|id| id.trim().to_owned())
+                    .filter(|id| !id.is_empty())
+                    .collect(),
                 local: args.switch("local"),
                 repo,
                 base: given("base"),
@@ -1032,6 +1038,7 @@ mod tests {
                 model: Some("m".into()),
                 effort: None,
                 work: None,
+                reviewing: Vec::new(),
                 local: false,
                 repo: None,
                 base: None,
@@ -1066,6 +1073,22 @@ mod tests {
             panic!("not a start");
         };
         assert_eq!(by_work.work.as_deref(), Some("Independent review"));
+        assert!(by_work.reviewing.is_empty());
+        // Whose work a review covers: workers by id, or the session's own (harness D22).
+        let CliRequest::Start(review) = run(&[
+            "start",
+            "--reviewing",
+            "ab12",
+            "--reviewing",
+            "session",
+            "go",
+        ])
+        .0
+        else {
+            panic!("not a start");
+        };
+        assert_eq!(review.reviewing, ["ab12", "session"]);
+        assert_eq!(review.work, None);
         assert_eq!(start.permission, Some(Permission::FullAccess));
         assert_eq!(start.title.as_deref(), Some("T"));
         let CliRequest::Start(start) = run(&["start", "--repo", "/src/app", "go"]).0 else {

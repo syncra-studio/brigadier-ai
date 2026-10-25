@@ -200,7 +200,7 @@ impl Policy {
     }
 }
 /// Whether two Work cells name the same kind of work, as `--work` finds a row.
-fn same_work(a: &str, b: &str) -> bool {
+pub(super) fn same_work(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 /// A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`,

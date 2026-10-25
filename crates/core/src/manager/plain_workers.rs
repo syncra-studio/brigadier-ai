@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use brigadier_cli::models::Guidance;
 use brigadier_cli::protocol::{
     self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput,
     StartOutput, StartRequest, WaitEvent, WaitOutput,
@@ -34,6 +35,7 @@ use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
 
 use super::cli::{CliCaller, Target, short, worker_row};
+use super::models::same_work;
 use super::session_dir::{WorkspaceRecord, write_atomic};
 use super::worker_events::HeldEvents;
 use super::workers::{TaskLive, Workspace, task_branch};
@@ -105,6 +107,50 @@ fn refused(message: impl Into<String>) -> CliReply {
     CliReply::error(ErrorCode::Refused, message)
 }
 
+/// The kind of work an independent review is (`models_guidance.md`).
+const REVIEW_WORK: &str = "Independent review";
+/// `--reviewing session`: the session's own work, such as the job's plan.
+const SESSION_AUTHOR: &str = "session";
+
+/// Whose work a review covers ([`SessionManager::review_authors`]).
+#[derive(Default)]
+struct ReviewAuthors {
+    /// Their shown ids.
+    ids: Vec<String>,
+    /// How the reviewer's brief names each.
+    names: Vec<String>,
+    /// The providers their work ran on.
+    providers: Vec<ProviderKind>,
+}
+
+impl ReviewAuthors {
+    /// The line a reviewer's brief ends with: where its authors' facts are, to pull
+    /// (harness D13, D22, P1).
+    fn brief_line(&self) -> String {
+        format!(
+            "You review the work of {}. Before you start, run `brigadier show <id>` for each \
+             ({}: its branch, commits and the commands it ran) and `brigadier context` (the \
+             decisions and open questions).",
+            self.names.join(" and "),
+            self.ids.join(", ")
+        )
+    }
+}
+
+fn provider_of(agent: cli::Agent) -> ProviderKind {
+    match agent {
+        cli::Agent::Claude => ProviderKind::Claude,
+        cli::Agent::Codex => ProviderKind::Codex,
+    }
+}
+
+fn agent_of(provider: ProviderKind) -> cli::Agent {
+    match provider {
+        ProviderKind::Claude => cli::Agent::Claude,
+        ProviderKind::Codex => cli::Agent::Codex,
+    }
+}
+
 impl SessionManager {
     /// `brigadier start`: a new plain worker of the calling session.
     pub(super) async fn cli_start(
@@ -152,19 +198,45 @@ impl SessionManager {
                 ));
             }
         };
+        // harness D22: an independent review knows whose work it covers (`--reviewing`, the
+        // session's own by default) and runs on another ready provider than theirs.
+        let reviewing = start.reviewing.clone();
+        let work = start
+            .work
+            .clone()
+            .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()));
+        let review = if !reviewing.is_empty()
+            || work
+                .as_deref()
+                .is_some_and(|work| same_work(work, REVIEW_WORK))
+        {
+            match self
+                .review_authors(caller, &conversation, own.provider, &reviewing)
+                .await
+            {
+                Ok(authors) => Some(authors),
+                Err(reply) => return Ok(reply),
+            }
+        } else {
+            None
+        };
         // S32: `--work` names a kind of work of the rules file, whose rows are an order: the
         // first the user's rules let start is the row. The flags given win field by field, the
-        // row fills in the rest, and only then do the user's rules judge the whole choice.
-        let row = match start.work.as_deref() {
+        // row fills in the rest, and only then do the user's rules judge the whole choice. A
+        // review's rows are each provider's model, not an order: a row on another provider
+        // than the authors' comes first, and its model must be free now (harness D22).
+        let row = match work.as_deref() {
             None => None,
             Some(work) => {
                 let rows = self.work_rows(work)?;
+                let mut order: Vec<&Guidance> = rows.iter().collect();
+                if let Some(authors) = &review {
+                    order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
+                    order.sort_by_key(|row| authors.providers.contains(&provider_of(row.agent)));
+                }
                 let mut fit = None;
-                for row in &rows {
-                    let provider = match row.agent {
-                        cli::Agent::Claude => ProviderKind::Claude,
-                        cli::Agent::Codex => ProviderKind::Codex,
-                    };
+                for row in order {
+                    let provider = provider_of(row.agent);
                     let model =
                         (row.model != "default").then(|| self.listed_model(provider, &row.model));
                     if self
@@ -174,8 +246,21 @@ impl SessionManager {
                             row.effort.as_deref(),
                             Some(work),
                         )?
-                        .is_none()
+                        .is_some()
                     {
+                        continue;
+                    }
+                    let free = review.is_none()
+                        || self
+                            .choice_available(&ModelChoice {
+                                provider,
+                                model,
+                                effort: row.effort.clone(),
+                                fast: None,
+                                account: None,
+                            })
+                            .await;
+                    if free {
                         fit = Some(row.clone());
                         break;
                     }
@@ -224,7 +309,7 @@ impl SessionManager {
             provider,
             model.as_deref(),
             effort.as_deref(),
-            start.work.as_deref(),
+            work.as_deref(),
         )? {
             return Ok(refused(rule));
         }
@@ -261,6 +346,10 @@ impl SessionManager {
             Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
         };
         let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
+        let prompt = match &review {
+            Some(authors) => format!("{}\n\n{}", start.prompt, authors.brief_line()),
+            None => start.prompt,
+        };
         let choice = ModelChoice {
             provider,
             model,
@@ -282,7 +371,7 @@ impl SessionManager {
             self.create_plain_task(
                 &caller.conversation_id,
                 title,
-                start.prompt,
+                prompt,
                 choice,
                 plain,
                 mockup,
@@ -305,7 +394,66 @@ impl SessionManager {
                 source: row.source,
                 picked,
             }),
+            review: review.map(|authors| cli::StartReview {
+                other_provider: !authors.providers.contains(&provider),
+                of: authors.ids,
+                authors: authors.providers.into_iter().map(agent_of).collect(),
+            }),
         }))
+    }
+
+    /// Whose work an independent review covers: each `--reviewing` id, a worker of this
+    /// session or `session` (this session itself, also when none is given), with the
+    /// provider it ran on (harness D22).
+    async fn review_authors(
+        &self,
+        caller: &CliCaller,
+        conversation: &Conversation,
+        own: ProviderKind,
+        ids: &[String],
+    ) -> std::result::Result<ReviewAuthors, CliReply> {
+        let mut authors = ReviewAuthors::default();
+        let session = |authors: &mut ReviewAuthors| {
+            authors.ids.push(short(&conversation.id.0));
+            authors
+                .names
+                .push(format!("this session {}", short(&conversation.id.0)));
+            authors.providers.push(own);
+        };
+        if ids.is_empty() {
+            session(&mut authors);
+        }
+        for id in ids {
+            if id.eq_ignore_ascii_case(SESSION_AUTHOR) {
+                session(&mut authors);
+                continue;
+            }
+            match self.cli_target(caller, id).await? {
+                Target::Worker(task) if task.conversation_id == caller.conversation_id => {
+                    authors.ids.push(short(&task.id.0));
+                    authors
+                        .names
+                        .push(format!("worker {} {}", task.number, short(&task.id.0)));
+                    authors.providers.push(task.route.choice.provider);
+                }
+                Target::Session(other) if other.id == caller.conversation_id => {
+                    session(&mut authors);
+                }
+                _ => {
+                    return Err(refused(format!(
+                        "refused: --reviewing takes this session's own workers, or `session`; \
+                         {id} is neither"
+                    )));
+                }
+            }
+        }
+        let mut seen = Vec::new();
+        authors.providers.retain(|provider| {
+            let new = !seen.contains(provider);
+            seen.push(*provider);
+            new
+        });
+        Ok(authors)
     }
 
     /// The top folder of the repository `path` is in, for a Chat's worker (`--repo`).

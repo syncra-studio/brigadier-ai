@@ -519,8 +519,24 @@ pub fn start(output: &StartOutput) -> String {
         };
         format!("{whose} \"{}\" picked {picked}.\n", row.work)
     });
+    let review = output.review.as_ref().map_or(String::new(), |review| {
+        let authors: Vec<&str> = review.authors.iter().map(|agent| agent.word()).collect();
+        let on = if review.other_provider {
+            format!("on {}, another CLI", worker.agent.word())
+        } else {
+            format!(
+                "no other CLI is ready and allowed, so a fresh {} session",
+                worker.agent.word()
+            )
+        };
+        format!(
+            "It reviews the work of {} ({}): {on}.\n",
+            review.of.join(", "),
+            authors.join(", ")
+        )
+    });
     format!(
-        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}Keep `brigadier wait` \
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}Keep `brigadier wait` \
          running in the background: it returns with its events and wakes you.\n",
         worker.id,
         worker.number,

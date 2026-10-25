@@ -270,6 +270,12 @@ pub struct StartRequest {
     /// the shipped one) picks the agent, model and effort the flags above leave out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work: Option<String>,
+    /// An independent review (`--reviewing`): whose work it reviews, by worker id, or
+    /// `session` for this session's own (its plan). With it, or with the work "Independent
+    /// review" (the session's then), the row is one on another ready provider than the
+    /// authors', else a fresh session of theirs (harness D22).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewing: Vec<String>,
     /// Works in the calling session's checkout (a Chat's: `repo`'s) rather than a worktree of
     /// its own.
     pub local: bool,
@@ -891,6 +897,22 @@ pub struct StartOutput {
     /// With `--work`: the row that picked what the flags left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row: Option<StartRow>,
+    /// An independent review's: whose work and which provider reviews it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<StartReview>,
+}
+
+/// Whose work an independent review covers, and on what (harness D22).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartReview {
+    /// The workers' ids, or the session's, whose work it reviews.
+    pub of: Vec<String>,
+    /// The CLIs that work ran on.
+    pub authors: Vec<Agent>,
+    /// It runs on another CLI than the authors'; false: none other was ready and allowed, so
+    /// a fresh session of theirs reviews.
+    pub other_provider: bool,
 }
 
 /// The rules-file row `brigadier start --work` followed (S32).

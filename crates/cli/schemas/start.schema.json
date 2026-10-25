@@ -57,6 +57,36 @@
           }
         }
       }
+    },
+    "review": {
+      "type": "object",
+      "description": "With --reviewing, or the work \"Independent review\": whose work it reviews and whether it runs on another CLI than theirs (else a fresh session of theirs).",
+      "required": [
+        "of",
+        "authors",
+        "otherProvider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          }
+        },
+        "otherProvider": {
+          "type": "boolean"
+        }
+      }
     }
   },
   "$defs": {
