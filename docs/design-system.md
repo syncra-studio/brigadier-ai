@@ -397,14 +397,8 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Settings · Storage & archived chats | `UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
 | Settings · Storage & archived chats | `UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
 | Settings · Inspector · Events & orchestrator | `SessionBar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
-| Settings · Inspector · Events & orchestrator | `OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
-| Settings · Inspector · Events & orchestrator | `LoadEarlierLine` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
 | Settings · Inspector · Events & orchestrator | `ListSwitchBar` | `app/inspector/ListSwitchBar.tsx` | `ListSwitchBar` | |
-| Settings · Inspector · Events & orchestrator | `Breaches` | `app/inspector/Breaches.tsx` | `Breaches` | |
-| Settings · Inspector · Events & orchestrator | `ContextMeter` | `app/inspector/ContextMeter.tsx` | `ContextMeter` | |
-| Settings · Inspector · Events & orchestrator | `InjectionRowView` | `app/inspector/InjectionRowView.tsx` | `InjectionRowView` | |
 | Settings · Inspector · Events & orchestrator | `GenerationHeader` | `app/inspector/GenerationHeader.tsx` | `GenerationHeader` | |
-| Settings · Inspector · Events & orchestrator | `InjectionList` | `app/inspector/InjectionList.tsx` | `InjectionList` | |
 | Settings · Inspector · Events & orchestrator | `BlobText` | `app/inspector/BlobText.tsx` | `BlobText` | |
 | Settings · Inspector · Events & orchestrator | `RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
 | Settings · Inspector · Events & orchestrator | `BriefingSectionsTable` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |

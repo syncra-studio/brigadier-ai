@@ -1,5 +1,5 @@
 //! Development builds only: a forced usage limit or provider error, to exercise fallback and the
-//! continuity battery's seams (`tools/ab/v2`) without spending real quota. Nothing here is
+//! continuity battery's seams (`tools/continuity-battery`) without spending real quota. Nothing here is
 //! compiled into a release build.
 //!
 //! A limit (or an error: a context window too small, a failed sign-in, credits run out) is
