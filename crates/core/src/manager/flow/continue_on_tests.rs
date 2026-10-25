@@ -454,6 +454,14 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         .2;
     assert!(input.contains("SECRET-ASSISTANT-DETAIL"));
     let record = flow.manager.session_dir(&flow.conversation).record();
+    // The seam is recorded as closed once the successor runs: settled can come first.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while read_seam(&record).seams.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the seam closed");
     let file = read_seam(&record);
     assert_eq!(file.seams[0].end.hot_tokens, Some(90_000));
     let lineage = crate::manager::session_dir::read_lineage(&record);
