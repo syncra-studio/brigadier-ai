@@ -2662,3 +2662,143 @@ async fn a_check_lists_the_models_of_the_account_in_use_while_the_own_login_is_s
     until_models(&flow, &["claude-opus-5-5", "acct-b-model"]).await;
     flow.stop().await;
 }
+
+/// The Claude model lists published after `after` in the providers' stream, oldest first.
+async fn models_published_after(flow: &Flow, after: i64) -> Vec<Vec<String>> {
+    let page = flow
+        .core
+        .store()
+        .read_stream(
+            crate::model::streams::PROVIDERS.into(),
+            brigadier_store::StreamPage {
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut lists: Vec<Vec<String>> = page
+        .iter()
+        .filter(|event| event.stream_seq > after)
+        .filter_map(|event| match crate::sessions::decode(event).ok()? {
+            DomainEvent::ProviderChecked { overview }
+                if overview.provider == ProviderKind::Claude =>
+            {
+                Some(
+                    overview
+                        .models
+                        .map(|catalog| catalog.models.into_iter().map(|model| model.id).collect())
+                        .unwrap_or_default(),
+                )
+            }
+            _ => None,
+        })
+        .collect();
+    // Newest first.
+    lists.reverse();
+    lists
+}
+
+/// The last event's place in the providers' stream.
+async fn providers_seq(flow: &Flow) -> i64 {
+    flow.core
+        .store()
+        .read_stream(
+            crate::model::streams::PROVIDERS.into(),
+            brigadier_store::StreamPage {
+                limit: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .first()
+        .map_or(0, |event| event.stream_seq)
+}
+
+/// Restarts with the next extra account's first check held until the returned release, and
+/// waits until the computer's own login's models were read meanwhile.
+async fn restart_holding_the_account_check(flow: &mut Flow) -> Arc<tokio::sync::Notify> {
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_status.lock().unwrap() = Some((reached.clone(), release.clone()));
+    flow.restart().await;
+    reached.notified().await;
+    flow.manager
+        .runtime
+        .check_provider(ProviderKind::Claude, *super::PATIENCE)
+        .await;
+    release
+}
+
+/// At startup the models listed are the account in use's from the first: the computer's own
+/// login, checked before that account, doesn't show its list in between. Once the account is
+/// checked, the list is the one in use's then, even where that is the own login.
+#[tokio::test]
+async fn at_startup_the_models_listed_are_the_account_in_uses_from_the_first() {
+    let behavior = Arc::new(super::FakeBehavior {
+        account_models: true,
+        ..Default::default()
+    });
+    let mut flow = Flow::start(
+        "accounts-models-startup",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        logging(&Log::default(), |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    // Automatic switching picks the account whose week ends first.
+    let acct_b_leads = async |flow: &Flow| {
+        report_weekly(flow, None, 7.0, 37).await;
+        report_weekly(flow, Some("acct-b"), 50.0, 4).await;
+        assert_eq!(in_use(flow).await.0, vec![Some("acct-b".into())]);
+    };
+    acct_b_leads(&flow).await;
+    let acct_b = ["claude-opus-5-5", "acct-b-model"];
+    until_models(&flow, &acct_b).await;
+
+    // Restarted, the own login is checked (its list read) while the account isn't yet, so
+    // which leads isn't known: the list stays the one cached.
+    let after = providers_seq(&flow).await;
+    let release = restart_holding_the_account_check(&mut flow).await;
+    let owned = |list: [&str; 2]| list.map(String::from).to_vec();
+    assert_eq!(models_listed(&flow).await, (owned(acct_b), owned(acct_b)));
+    let published = models_published_after(&flow, after).await;
+    assert!(!published.is_empty());
+    for list in published {
+        assert_eq!(
+            list, acct_b,
+            "a list published before the account was checked"
+        );
+    }
+    // Checked, the account in use's.
+    release.notify_one();
+    flow.until("the account checked", |_| {
+        flow.manager
+            .runtime
+            .accounts_view()
+            .accounts
+            .iter()
+            .all(|view| view.status.is_some() && !view.checking)
+    })
+    .await;
+    acct_b_leads(&flow).await;
+    until_models(&flow, &acct_b).await;
+
+    // Restarted with the account gone before its check: the own login's list, read meanwhile.
+    let release = restart_holding_the_account_check(&mut flow).await;
+    until_models(&flow, &acct_b).await;
+    let mut settings = flow.core.settings();
+    settings.accounts.clear();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    until_models(&flow, &["claude-opus-5-5"]).await;
+    release.notify_one();
+    flow.stop().await;
+}

@@ -97,6 +97,10 @@ struct State {
     checked_generation: HashMap<ProviderKind, u32>,
     /// Each account's model list as its CLI last gave it: the lead's is its provider's.
     account_models: HashMap<AccountRef, ModelCatalog>,
+    /// The extra account whose list, cached on disk, a provider's overview started with: it
+    /// was in use when Brigadier last ran, and stays shown until that account's first check
+    /// says whether it still is.
+    models_cached_for: HashMap<ProviderKind, String>,
 }
 
 pub struct Runtime {
@@ -659,15 +663,16 @@ impl Runtime {
         let mut state = self.state();
         state.sessions = sessions;
         for kind in ProviderKind::ALL {
+            let cached = cached.iter().find(|cached| cached.catalog.provider == kind);
+            if let Some(account) = cached.and_then(|cached| cached.account.clone()) {
+                state.models_cached_for.insert(kind, account);
+            }
             state.overviews.insert(
                 kind,
                 ProviderOverview {
                     provider: kind,
                     status: None,
-                    models: cached
-                        .iter()
-                        .find(|catalog| catalog.provider == kind)
-                        .cloned(),
+                    models: cached.map(|cached| cached.catalog.clone()),
                     quota: None,
                     usage: None,
                     error: None,
@@ -1002,25 +1007,40 @@ impl Runtime {
 
     /// Keeps `catalog` as `account`'s model list; while `account` leads its provider, the
     /// provider's overview (not yet recorded) and the list cached on disk are it. Answers
-    /// whether it leads.
+    /// whether it is the one shown.
     async fn adopt_models(&self, account: &AccountRef, catalog: ModelCatalog) -> bool {
         let kind = account.provider;
-        let leads = {
+        let held = self.models_held(kind);
+        let shown = {
             let mut state = self.state();
             state
                 .account_models
                 .insert(account.clone(), catalog.clone());
-            let leads = self.monitor.lead(kind) == *account;
-            if leads && let Some(overview) = state.overviews.get_mut(&kind) {
+            let shown = self.monitor.lead(kind) == *account && !held;
+            if shown && let Some(overview) = state.overviews.get_mut(&kind) {
                 overview.models = Some(catalog.clone());
             }
-            leads
+            shown
         };
-        if leads {
+        if shown {
             let dir = self.cache_dir.clone();
-            let _ = tokio::task::spawn_blocking(move || write_model_cache(&dir, &catalog)).await;
+            let account = account.account.clone();
+            let _ = tokio::task::spawn_blocking(move || write_model_cache(&dir, &catalog, account))
+                .await;
         }
-        leads
+        shown
+    }
+
+    /// Whether `kind`'s overview keeps the list it started with: the account that list is
+    /// cached for is still to have its first check, so which account is in use isn't known
+    /// yet, and the computer's own login's list would show for a moment before it.
+    fn models_held(&self, kind: ProviderKind) -> bool {
+        let Some(id) = self.state().models_cached_for.get(&kind).cloned() else {
+            return false;
+        };
+        self.accounts()
+            .get(&id)
+            .is_some_and(|live| live.status.is_none())
     }
 
     /// Reads the model list of `kind`'s lead account in the background, and records its
@@ -1803,20 +1823,34 @@ fn provider_error(err: brigadier_providers::Error) -> Error {
     Error::Provider(err.to_string())
 }
 
-fn read_model_cache(dir: &Path) -> Vec<ModelCatalog> {
+/// A provider's model list as cached on disk, with the extra account it is of (none for the
+/// computer's own login).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedModels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
+    #[serde(flatten)]
+    catalog: ModelCatalog,
+}
+
+fn read_model_cache(dir: &Path) -> Vec<CachedModels> {
     ProviderKind::ALL
         .iter()
         .filter_map(|kind| {
             let text = std::fs::read_to_string(dir.join(format!("models-{kind}.json"))).ok()?;
-            serde_json::from_str::<ModelCatalog>(&text).ok()
+            serde_json::from_str::<CachedModels>(&text).ok()
         })
         .collect()
 }
 
-fn write_model_cache(dir: &Path, catalog: &ModelCatalog) {
+fn write_model_cache(dir: &Path, catalog: &ModelCatalog, account: Option<String>) {
     let path = dir.join(format!("models-{}.json", catalog.provider));
+    let cached = CachedModels {
+        account,
+        catalog: catalog.clone(),
+    };
     let written = std::fs::create_dir_all(dir).and_then(|()| {
-        let text = serde_json::to_vec_pretty(catalog).map_err(std::io::Error::other)?;
+        let text = serde_json::to_vec_pretty(&cached).map_err(std::io::Error::other)?;
         let partial = path.with_extension("json.partial");
         std::fs::write(&partial, text)?;
         std::fs::rename(&partial, &path)

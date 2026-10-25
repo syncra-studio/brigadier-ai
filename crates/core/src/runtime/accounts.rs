@@ -451,12 +451,19 @@ impl Runtime {
         let mut moved = false;
         for kind in ProviderKind::ALL {
             let lead = self.launch_account(kind, None);
-            if !self.monitor.set_lead(lead.clone()) {
+            let changed = self.monitor.set_lead(lead.clone());
+            moved |= changed;
+            // The list cached at the last run stops being held once its account was checked:
+            // the list shown is the lead's from then on, even where the lead stayed the same.
+            let held = self.models_held(kind);
+            let released = !held && self.state().models_cached_for.remove(&kind).is_some();
+            if !changed && !released {
                 continue;
             }
-            moved = true;
             let known = self.state().account_models.get(&lead).cloned();
             let listed = match known {
+                // Held: the lead's list is taken once the list is released.
+                _ if held => true,
                 Some(catalog) => self.adopt_models(&lead, catalog).await,
                 None => false,
             };
