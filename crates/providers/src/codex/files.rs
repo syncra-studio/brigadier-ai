@@ -108,6 +108,23 @@ fn remove_log_rows(db: &Path, thread_id: &str) -> Result<()> {
             .map_err(sqlite)?;
         conn.execute("DELETE FROM logs WHERE thread_id = ?1", [thread_id])
             .map_err(sqlite)?;
+        // Rows of no thread that name it: the app-server's `thread/start` spans.
+        let has_body = conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('logs') WHERE name = 'feedback_log_body'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(sqlite)?
+            .is_some();
+        if has_body {
+            conn.execute(
+                "DELETE FROM logs WHERE thread_id IS NULL AND instr(feedback_log_body, ?1) > 0",
+                [thread_id],
+            )
+            .map_err(sqlite)?;
+        }
         // A Codex writing logs meanwhile keeps the log busy: its next checkpoint empties it.
         let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
     }
@@ -263,6 +280,7 @@ mod tests {
                 (Some(OTHER), "b"),
                 (None, "c"),
                 (Some(THREAD), "d"),
+                (None, format!("thread/start{{thread_id={THREAD}}}").as_str()),
             ] {
                 conn.execute(
                     "INSERT INTO logs (ts, thread_id, feedback_log_body) VALUES (1, ?1, ?2)",
