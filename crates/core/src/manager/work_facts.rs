@@ -607,7 +607,7 @@ pub(crate) fn net_facts(event: &WaitEvent) -> String {
 
 impl SessionManager {
     /// Worker `task`'s `record/` folder.
-    fn worker_record(&self, task: &Task) -> PathBuf {
+    pub(super) fn worker_record(&self, task: &Task) -> PathBuf {
         self.session_dir(&task.conversation_id)
             .worker(task)
             .join("record")

@@ -86,6 +86,8 @@ pub(crate) struct WorkerSession {
     pub grant: String,
 }
 
+mod seam;
+
 #[derive(Default)]
 struct TaskLiveState {
     cli: Option<Arc<Cli>>,
@@ -103,6 +105,10 @@ struct TaskLiveState {
     redactor: Option<Arc<brigadier_providers::redact::Redactor>>,
     /// Why the turn ended early, once it is over (a usage limit, or an error).
     cutoff: Option<AttemptEnd>,
+    /// Its hand-off to a fresh CLI session, under way (D14).
+    seam: Option<seam::SeamLive>,
+    /// What its session sent while it hands off: its successor's first input carries it.
+    seam_held: Vec<String>,
 }
 
 /// A task's live worker.
@@ -555,7 +561,7 @@ impl SessionManager {
         // Held until its CLI session is registered, where the session's cleanup finds it.
         let fence = self.enter(&task.conversation_id)?;
         let launched = self
-            .launch_admitted(live, task, origin, first, &fence)
+            .launch_admitted(live, task, origin, first, &fence, None)
             .await;
         // A cleanup that stopped waiting for it has already passed this task.
         if launched.is_ok() && fence.cut_off() {
@@ -789,6 +795,9 @@ impl SessionManager {
         origin: Origin,
         first: TurnInput,
         fence: &super::closing::WorkGuard,
+        // A hand-off's successor (D14): its worker's `record/`, whose `seam.json` is pointed
+        // at the id its CLI took before its first input goes.
+        successor_of: Option<&Path>,
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
@@ -882,6 +891,14 @@ impl SessionManager {
             self.grants.revoke(&cli.grants);
             return Err(stopped_as_it_started(task));
         }
+        if let Some(record) = successor_of {
+            let (record, native_id) = (record.to_owned(), cli.session.native_id());
+            let _ = blocking(move || {
+                seam::name_successor(&record, &native_id, provider);
+                Ok(())
+            })
+            .await;
+        }
         cli.session
             .send(first)
             .await
@@ -911,6 +928,10 @@ impl SessionManager {
                 .steer(TurnInput::text(text))
                 .await
                 .map_err(|err| Error::Provider(err.to_string()));
+        }
+        // Its generation closed at a hand-off (D14): the message goes to its successor.
+        if self.worker_seam_closed(task).await {
+            return self.worker_successor(live, task, vec![text]).await;
         }
         let Some(native_id) = self.last_worker_native_id(task).await else {
             return Err(Error::Invalid(format!(
@@ -1525,9 +1546,13 @@ impl SessionManager {
                 .await;
             }
             // Its CLI keeps its own context, as it would in a terminal; its session hears when
-            // it compacts.
+            // it compacts. Its third compaction in one CLI session, or a failed one, hands it
+            // to a fresh one (D14).
             ProviderEvent::CompactionStarted { .. } => {
                 self.plain_fresh_context(live);
+            }
+            ProviderEvent::CompactionEnded { error, .. } => {
+                self.worker_compacted(live, cli, error.as_deref()).await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
@@ -1584,6 +1609,11 @@ impl SessionManager {
             _ => None,
         };
         let error = match &event {
+            // Claude's thrash stop, or a context too long for the model: the hand-off takes
+            // it (D14), not its session.
+            ProviderEvent::Error { error } if self.worker_seam_error(live, cli, error).await => {
+                None
+            }
             ProviderEvent::Error { error } if !error.will_retry => match fallback::verdict(error) {
                 // A usage limit (or a logout, an outage): its session hears it when the turn
                 // ends.
@@ -1616,18 +1646,31 @@ impl SessionManager {
     /// The worker's turn ended: it waits for its session's next message, and its session's
     /// `brigadier wait` hears it.
     async fn worker_turn_completed(&self, live: &Arc<TaskLive>, status: TurnStatus) {
-        {
+        let seam = {
             let mut state = live.state.lock().await;
             state.busy = false;
             if state.stopping {
                 return;
             }
-        }
+            state.seam.clone()
+        };
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
         };
-        if !task.state.is_final() {
-            self.plain_turn_ended(live, &task, status).await;
+        if task.state.is_final() {
+            return;
+        }
+        // A hand-off under way (D14): its successor goes on, and its session hears nothing.
+        match seam {
+            Some(seam) => {
+                let (manager, live) = (self.arc(), live.clone());
+                self.spawn(async move {
+                    manager
+                        .worker_seam_turn_end(&live, &task, seam, status)
+                        .await;
+                });
+            }
+            None => self.plain_turn_ended(live, &task, status).await,
         }
     }
 
@@ -1846,6 +1889,11 @@ impl SessionManager {
         }
         let live = self.task_live(task);
         let mut state = live.state.lock().await;
+        // Handing off (D14): its successor's first input carries it.
+        if state.seam.as_ref().is_some_and(|seam| seam.holds()) {
+            state.seam_held.push(text);
+            return Ok(());
+        }
         let Some(cli) = state.cli.clone() else {
             drop(state);
             return self.revive_worker(&live, task, text).await;

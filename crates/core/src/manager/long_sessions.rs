@@ -38,6 +38,10 @@ pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
 /// one goes on from its hand-off note (D16: each compaction summarises the one before).
 pub(crate) const SESSION_HANDOFF_AFTER: u32 = 5;
 
+/// How many compactions in a row one CLI session of a worker takes before a fresh one goes on
+/// from its hand-off note (D14).
+pub(crate) const WORKER_HANDOFF_AFTER: u32 = 3;
+
 /// What a session does at long contexts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LongSessions {

@@ -35,7 +35,7 @@ pub(super) struct LongLive {
 
 /// Claude's stop when its auto-compaction refills the context three times in a row
 /// ("Autocompact is thrashing", CLI-INTERNALS §1.1).
-pub(super) fn thrashing(message: &str) -> bool {
+pub(crate) fn thrashing(message: &str) -> bool {
     message.to_lowercase().contains("autocompact is thrashing")
 }
 
@@ -74,7 +74,7 @@ pub(crate) fn read_long(record: &Path) -> LongFile {
         .unwrap_or_default()
 }
 
-pub(super) fn write_long(record: &Path, file: &LongFile) {
+pub(crate) fn write_long(record: &Path, file: &LongFile) {
     let written = serde_json::to_vec_pretty(file)
         .map_err(|err| crate::Error::Invalid(err.to_string()))
         .and_then(|bytes| crate::manager::session_dir::write_atomic(&long_path(record), &bytes));

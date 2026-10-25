@@ -65,11 +65,6 @@ impl SessionDir {
         self.0.join("logs")
     }
 
-    /// The ledger the session keeps as it works (S17); nothing makes it but the session.
-    pub(crate) fn ledger(&self) -> PathBuf {
-        self.record().join(LEDGER_FILE)
-    }
-
     /// What the standing instructions name, for the CLI's environment ([`standing_env`]).
     pub(crate) fn standing_env(&self) -> Vec<(String, String)> {
         standing_env(self.root())

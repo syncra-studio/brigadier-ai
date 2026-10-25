@@ -764,7 +764,11 @@ impl SessionManager {
             ..Default::default()
         });
         let records = thread_view::read_turns(&record);
-        Ok(thread_view::view(files, live.as_ref(), &records))
+        let mut view = thread_view::view(files, live.as_ref(), &records);
+        // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
+        // hand-off hidden, as a session's.
+        view.seams = super::seam::marks(&record, &mut view.entries);
+        Ok(view)
     }
 
     /// Whether session `id` has had worker rows sent.

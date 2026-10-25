@@ -275,6 +275,32 @@ pub(crate) fn write_seam(record: &Path, file: &SeamFile) -> Result<()> {
     write_atomic(&record.join(SEAM_FILE), text.as_bytes())
 }
 
+/// Seam `n` is complete: its successor runs, as generation `n + 1`.
+pub(crate) fn complete(
+    file: &mut SeamFile,
+    record: &Path,
+    n: u32,
+    successor: String,
+    provider: ProviderKind,
+    end: SeamEnd,
+    messages: Vec<String>,
+) {
+    let note = note_path(record, n);
+    file.seams.push(Seam {
+        n,
+        end,
+        successor,
+        provider,
+        started_at_ms: crate::now_ms(),
+        note: note.is_file().then(|| note.display().to_string()),
+        start: start_path(record, n).display().to_string(),
+        messages,
+        first_context: None,
+    });
+    file.generation = n + 1;
+    file.phase = Phase::Live;
+}
+
 /// Seam `n`'s note.
 pub(crate) fn note_path(record: &Path, n: u32) -> PathBuf {
     record

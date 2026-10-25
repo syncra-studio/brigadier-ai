@@ -2476,6 +2476,8 @@ mod warm_session_tests;
 #[cfg(unix)]
 mod worker_events_tests;
 #[cfg(unix)]
+mod worker_seam_tests;
+#[cfg(unix)]
 mod workspace_tests;
 #[cfg(unix)]
 mod worktree_copies_tests;

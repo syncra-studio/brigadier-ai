@@ -106,7 +106,8 @@ async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
                     &flow
                         .manager
                         .session_dir(&flow.conversation)
-                        .ledger()
+                        .record()
+                        .join("ledger.md")
                         .display()
                         .to_string()
                 )
@@ -116,7 +117,8 @@ async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
                     &flow
                         .manager
                         .session_dir(&chat)
-                        .ledger()
+                        .record()
+                        .join("ledger.md")
                         .display()
                         .to_string()
                 )

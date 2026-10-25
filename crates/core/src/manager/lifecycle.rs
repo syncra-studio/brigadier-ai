@@ -165,6 +165,14 @@ impl SessionManager {
                 continue;
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
+                // Its hand-off a restart came in goes on from its record (D14), whether its
+                // session heard its last turn end (a count's note turn) or not (a cut-off's).
+                if task.plain.is_some()
+                    && conversation.lifecycle != Lifecycle::Archived
+                    && task.native_session.is_some()
+                {
+                    crate::heap(|| self.recover_worker_seam(&task)).await;
+                }
                 match task.state {
                     // Its worktree is intact; the worker resumes when its session sends it more.
                     TaskState::Reported | TaskState::ReadyToLand if task.kind.writes() => continue,

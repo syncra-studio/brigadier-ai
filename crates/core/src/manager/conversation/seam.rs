@@ -27,8 +27,8 @@ use brigadier_providers::{Origin, ProviderKind, TurnInput};
 use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
-    Boot, Phase, Seam, SeamEnd, SeamFile, TailBudget, bootstrap, handoff_line, note_path, nudge,
-    read_seam, start_path, write_seam,
+    Boot, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, complete, handoff_line, note_path,
+    nudge, read_seam, start_path, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -998,30 +998,4 @@ impl SessionManager {
     pub(super) fn seam_origin(reserved: Option<String>) -> Option<Origin> {
         reserved.map(|native_id| Origin::NewAs { native_id })
     }
-}
-
-/// Seam `n` is complete: its successor runs, as generation `n + 1`.
-fn complete(
-    file: &mut SeamFile,
-    record: &std::path::Path,
-    n: u32,
-    successor: String,
-    provider: brigadier_providers::ProviderKind,
-    end: SeamEnd,
-    messages: Vec<String>,
-) {
-    let note = note_path(record, n);
-    file.seams.push(Seam {
-        n,
-        end,
-        successor,
-        provider,
-        started_at_ms: now_ms(),
-        note: note.is_file().then(|| note.display().to_string()),
-        start: start_path(record, n).display().to_string(),
-        messages,
-        first_context: None,
-    });
-    file.generation = n + 1;
-    file.phase = Phase::Live;
 }
