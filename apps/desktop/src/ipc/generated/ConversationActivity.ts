@@ -15,6 +15,10 @@ export type ConversationActivity = { conversationId: ConversationId, run: RunSta
  */
 turnOpen?: boolean, 
 /**
+ * One of its own workers has an open CLI turn, as `WorkerRow::working` reads it.
+ */
+workersWorking?: boolean, 
+/**
  * Its tasks that are not over, with their state.
  */
 tasks: Array<[TaskId, TaskState]>, 

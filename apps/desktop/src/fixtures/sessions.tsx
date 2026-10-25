@@ -15,8 +15,8 @@ import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
 import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
-import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request } from "@/ipc/generated";
-import { applyActivityEvents, fromSnapshot, useActivity } from "@/state/activity";
+import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request, WorkerRow } from "@/ipc/generated";
+import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
@@ -54,6 +54,11 @@ const conversations = [
   session("w11-a", "Paused task", 0),
   session("w13-a", "Draft the notes", -2),
 ];
+if (params.has("workerActivity")) conversations.push(
+  session("worker-activity", "Workers still running", 13),
+  session("worker-approval", "Approval with workers", 12),
+  session("worker-question", "Question with workers", 11),
+);
 if (params.has("questions")) conversations.push(
   session("question", "Choose a direction", 13),
   session("question-approval", "Question and approval", 12),
@@ -80,6 +85,11 @@ useActivity.setState({
     activity("w7-a", { failed: true }),
     activity("w11-a", { stopped: true }),
     activity("w9-a", { signIns: ["linear"] }),
+    ...(params.has("workerActivity") ? [
+      activity("worker-activity", { workersWorking: true }),
+      activity("worker-approval", { workersWorking: true, approvals: ["a"] }),
+      activity("worker-question", { workersWorking: true, questions: ["q"] }),
+    ] : []),
     ...(params.has("questions") ? [
       activity("question", { questions: ["q"], turnOpen: true, run: "running" }),
       activity("question-approval", { questions: ["qa"], approvals: ["a"], turnOpen: true, run: "running" }),
@@ -89,6 +99,9 @@ useActivity.setState({
 let seq = 0;
 const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
 useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" }, "w13-a": { state: "ready", pullRequest: "draft" } } });
+if (params.has("workerActivity")) useSettledTabs.setState((s) => ({ byTab: {
+  ...s.byTab, "worker-activity": { state: "merged" }, "worker-approval": { state: "merged" }, "worker-question": { state: "merged" },
+} }));
 applySettledTabEvents([
   envelope("conversation:w2-a", { type: "requestReady", conversationId: "w2-a", requestId: "r-1", head: "abc" }),
   envelope("conversation:w2-a", { type: "pullRequestSeen", conversationId: "w2-a", pullRequest: { number: 7, title: "Login", url: "https://github.com/o/n/pull/7", state: "open" } }),
@@ -242,9 +255,32 @@ const answered = (id: string, conversationId: string, answer: string): Question 
   text: "Which direction?", options: [], recommended: null, items: [], answer, answers: [], createdAtMs: 0, answeredAtMs: 1,
 });
 
+const liveWorker = (id: string, working: boolean): WorkerRow => ({
+  id, number: 1, title: id, agent: "codex", model: null, startedAtMs: 1, working,
+  lastEnd: working ? null : "done", gone: false, lastEventAtMs: 1, limit: null,
+  freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
+});
+const workerActivityRow = () => rows().find((row) => row.title === "Workers still running")!;
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("workerActivity")) {
+      void (async () => {
+        await until(() => workerActivityRow()?.status === "working:Working");
+        const before = rows().filter((row) => ["Workers still running", "Approval with workers", "Question with workers"].includes(row.title ?? ""));
+        applyActivityNews({ conversationId: "worker-activity", entries: [], workers: [liveWorker("one", false), liveWorker("two", true), liveWorker("three", true)] });
+        await wait(100);
+        const someWorking = workerActivityRow();
+        applyActivityNews({ conversationId: "worker-activity", entries: [], workers: [liveWorker("one", false), liveWorker("two", false), liveWorker("three", false)] });
+        await until(() => workerActivityRow()?.status === "merged:Merged");
+        const idle = workerActivityRow();
+        useActivity.setState((s) => ({ byConversation: { ...s.byConversation, ...Object.fromEntries([activity("worker-activity", { workersWorking: true })]) } }));
+        await until(() => workerActivityRow()?.status === "working:Working");
+        setResult(JSON.stringify({ before, someWorking, idle, reconnected: workerActivityRow(), threadReads: requests.filter((method) => method === "threadView") }));
+      })();
+      return;
+    }
     if (params.has("questions")) {
       void (async () => {
         await until(() => questionRow("question")?.status === "question:Question");

@@ -312,6 +312,13 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
     }
 }
 
+/// The sidebar and worker row agree on whether this worker has work under way.
+fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
+    cli.is_some_and(|cli| cli.open)
+        && !task.state.is_final()
+        && !task.plain.as_ref().is_some_and(|plain| plain.closed)
+}
+
 /// A worker's row from its task (its link to the session, its title and model, its branch),
 /// its CLI and its git.
 pub(crate) fn row(
@@ -345,7 +352,7 @@ pub(crate) fn row(
         agent: task.route.choice.provider,
         model: task.route.choice.model.clone(),
         started_at_ms: task.created_at_ms,
-        working: cli.open && !gone,
+        working: working(task, Some(&cli)),
         last_end,
         gone,
         last_event_at_ms: cli.last_event_ms,
@@ -398,6 +405,12 @@ impl SessionManager {
             .background
             .iter()
             .find_map(shell)
+    }
+
+    /// The sidebar's activity bit, from the same CLI state as the workers' rows, without git.
+    pub(super) fn workers_working(&self, tasks: &[Task]) -> bool {
+        let cli = self.worker_rows.cli.lock().unwrap();
+        tasks.iter().any(|task| working(task, cli.get(&task.id)))
     }
 
     /// How full worker `task`'s context is, as its CLI last said, with its model's window when

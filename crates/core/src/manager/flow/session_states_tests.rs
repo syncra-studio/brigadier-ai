@@ -317,3 +317,101 @@ fn pr_list(state: &str, head: &str, merge_commit: Option<&str>) -> String {
     }])
     .to_string()
 }
+
+/// The activity snapshot used on connect knows working workers even without a thread-view
+/// read, and keeps them working after their session's own turn ended.
+#[tokio::test]
+async fn activity_keeps_a_sessions_live_workers_after_its_own_turn_ends() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let released = Arc::new(AtomicUsize::new(0));
+    let gate = released.clone();
+    let flow = Flow::start(
+        "states-live-workers",
+        Options::default(),
+        script(move |turn| {
+            let gate = gate.clone();
+            async move {
+                if turn.worker().is_some() {
+                    let index = if turn.input.contains("First.") { 1 } else { 2 };
+                    while gate.load(Ordering::SeqCst) < index {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    return Reply::text("Finished.");
+                }
+                if turn.input.contains("Start workers.") {
+                    turn.start_worker("First", "First.").await;
+                    turn.start_worker("Second", "Second.").await;
+                    turn.start_worker("Third", "Third.").await;
+                }
+                Reply::text("Waiting for the workers.")
+            }
+        }),
+    )
+    .await;
+    let mut news = flow.manager.subscribe_thread_news();
+    flow.say("Start workers.").await;
+    flow.idle().await;
+    super::eventually_async("the activity snapshot to see live workers", || async {
+        flow.manager.activity().await.iter().any(|entry| {
+            entry.conversation_id == flow.conversation && !entry.turn_open && entry.workers_working
+        })
+    })
+    .await;
+    let before = flow.manager.activity().await;
+    let own = before
+        .iter()
+        .find(|entry| entry.conversation_id == flow.conversation)
+        .unwrap();
+    let wire = serde_json::to_value(own).unwrap();
+    assert_eq!(
+        wire["workersWorking"], true,
+        "the reconnect's wire snapshot carries the bit"
+    );
+
+    released.store(1, Ordering::SeqCst);
+    flow.until("the first worker's turn to end", |board| {
+        board.tasks.values().any(|task| {
+            task.title.starts_with("First") && task.state == crate::work::TaskState::Reported
+        })
+    })
+    .await;
+    assert!(
+        flow.manager
+            .activity()
+            .await
+            .iter()
+            .any(|entry| { entry.conversation_id == flow.conversation && entry.workers_working }),
+        "the other workers still work"
+    );
+
+    released.store(2, Ordering::SeqCst);
+    super::eventually_async(
+        "all workers to become idle in the activity snapshot",
+        || async {
+            !flow
+                .manager
+                .activity()
+                .await
+                .iter()
+                .any(|entry| entry.conversation_id == flow.conversation && entry.workers_working)
+        },
+    )
+    .await;
+    // The same daemon rows reach an unopened sidebar session through live news.
+    loop {
+        let sent = tokio::time::timeout(Duration::from_secs(20), news.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if sent.conversation_id == flow.conversation
+            && let Some(rows) = sent.workers
+            && rows.len() == 3
+            && rows.iter().all(|row| !row.working)
+        {
+            break;
+        }
+    }
+    flow.stop().await;
+}

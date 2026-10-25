@@ -312,7 +312,13 @@ impl SessionManager {
                 (id, turn)
             })
             .collect();
-        self.core.activity(&turns).await
+        let mut activity = self.core.activity(&turns).await;
+        for entry in &mut activity {
+            if let Ok(tasks) = self.core.tasks(&entry.conversation_id).await {
+                entry.workers_working = self.workers_working(&tasks);
+            }
+        }
+        activity
     }
 
     /// Conversation `id`'s thread as its CLI keeps it, with its workers' rows.

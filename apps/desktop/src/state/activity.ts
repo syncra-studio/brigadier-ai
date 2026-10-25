@@ -16,6 +16,8 @@ type Activity = {
   run: RunState;
   /** Its CLI's turn is open. */
   turnOpen: boolean;
+  /** One of its own workers has an open CLI turn, as the daemon's rows read it. */
+  workersWorking?: boolean;
   /** How its CLI's last turn ended, as its row names it: failed (or cut off), stopped, or neither. */
   ended: "failed" | "stopped" | null;
   /** Tasks not over yet, by id. */
@@ -35,6 +37,7 @@ const NONE: ReadonlySet<string> = new Set();
 const IDLE: Activity = {
   run: "idle",
   turnOpen: false,
+  workersWorking: false,
   ended: null,
   tasks: {},
   titles: {},
@@ -155,6 +158,7 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
   return {
     run: activity.run,
     turnOpen: activity.turnOpen ?? false,
+    workersWorking: activity.workersWorking ?? false,
     ended,
     tasks: Object.fromEntries(activity.tasks),
     titles: Object.fromEntries(activity.titles ?? []),
@@ -256,25 +260,26 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
   if (changed) activityStore.setState({ byConversation: changed });
 }
 
-/** Folds a CLI's turn opening or ending (`threadNews`) into its conversation's activity. */
+/** Folds session turns and daemon worker rows into activity, even when its thread has never opened. */
 export function applyActivityNews(news: ThreadNews): void {
-  if (!news.opened && !news.ended) return;
+  if (!news.opened && !news.ended && news.workers === undefined) return;
   const { byConversation } = activityStore.getState();
   const current = byConversation[news.conversationId] ?? IDLE;
-  const next: Activity = news.ended
+  const turn: Activity = news.ended
     ? {
         ...current,
         turnOpen: false,
         ended: news.ended === "failed" || news.ended === "interrupted" ? "failed" : news.ended === "stopped" ? "stopped" : null,
       }
-    : { ...current, turnOpen: true, ended: null };
-  if (next.turnOpen === current.turnOpen && next.ended === current.ended) return;
+    : news.opened ? { ...current, turnOpen: true, ended: null } : current;
+  const next = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };
+  if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking) return;
   activityStore.setState({ byConversation: { ...byConversation, [news.conversationId]: next } });
 }
 
 /**
  * What a sidebar row shows: a pill while it waits for the user (a permission prompt, a
- * question, an MCP sign-in, or its last turn failed), else a spinner while its CLI works, and
+ * question, an MCP sign-in, or its last turn failed), else a spinner while its CLI or one of its own workers works, and
  * how many of its workers run.
  */
 export type RowActivity = {
@@ -287,7 +292,7 @@ const QUIET: RowActivity = { running: false, awaiting: null, workers: 0 };
 
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
-  const running = works(activity);
+  const running = works(activity) || !!activity.workersWorking;
   const awaiting =
     activity.approvals.size > 0
       ? "approval"
@@ -305,7 +310,7 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
 /** The conversations whose CLI works now, for the menu-bar item. */
 export function runningConversations(byConversation: Record<string, Activity>): string[] {
   return Object.entries(byConversation)
-    .filter(([, activity]) => rowActivity(activity).running)
+    .filter(([, activity]) => works(activity))
     .map(([id]) => id);
 }
 

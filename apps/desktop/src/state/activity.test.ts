@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { EventEnvelope } from "@/ipc/generated";
+import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity } from "@/state/activity";
-import { sessionStatus } from "@/state/tabStates";
+import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
   ({ stream: `conversation:${conversationId}`, event }) as EventEnvelope;
@@ -24,7 +24,7 @@ test("the CLI's turn opening and ending decides Working; Brigadier handing it a 
 const worker = (state: string) =>
   on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "write", state, title: "Add a test" } });
 
-test("a worker alone is not work; its count still shows", () => {
+test("a task state alone does not prove a worker CLI works; its count still shows", () => {
   applyActivityEvents([worker("running")]);
   assert.deepEqual(row("c3"), { running: false, awaiting: null, workers: 0 }, "a quiet row");
   applyActivityNews({ conversationId: "c3", entries: [], opened: true });
@@ -76,4 +76,40 @@ test("a failed or cut-off last turn reads Failed until the next turn opens; a fa
   assert.equal(row("c5").awaiting, "failed");
   const reloaded = fromSnapshot({ conversationId: "c6", run: "idle", tasks: [], approvals: [], questions: [], failed: true });
   assert.equal(rowActivity(reloaded).awaiting, "failed", "a failed last turn through a reconnect");
+});
+
+
+const workerRow = (working: boolean): WorkerRow => ({
+  id: "worker", number: 1, title: "Worker", agent: "codex", model: null, startedAtMs: 1,
+  working, lastEnd: working ? null : "done", gone: false, lastEventAtMs: 1, limit: null,
+  freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
+});
+
+test("unopened sessions fold worker news directly into activity, keep Working until all workers stop, and clear it on an empty list", () => {
+  useActivity.setState({ byConversation: {} });
+  const id = "unopened";
+  applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true), { ...workerRow(false), id: "other" }] });
+  assert.equal(row(id).running, true);
+  assert.equal(tabState(row(id), false, "merged"), "working");
+  assert.deepEqual(sessionStatus(row(id), null, { state: "merged" }), { state: "working", reason: null });
+  assert.deepEqual(sidebarIndicators(row(id), false, true), { working: true, error: false, unread: false });
+  applyActivityNews({ conversationId: id, entries: [], opened: true });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done" });
+  assert.equal(row(id).running, true, "the session ending its turn does not end its workers");
+  applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(false)] });
+  assert.equal(tabState(row(id), false, "merged"), "merged");
+  applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true)] });
+  applyActivityNews({ conversationId: id, entries: [], workers: [] });
+  assert.deepEqual(sidebarIndicators(row(id), false, false), { working: false, error: false, unread: false });
+});
+
+test("the reconnect snapshot restores live worker activity without a thread view, with Question and Needs you taking precedence", () => {
+  const snapshot = fromSnapshot({ conversationId: "snapshot", run: "idle", tasks: [], approvals: [], questions: [], workersWorking: true });
+  useActivity.setState({ byConversation: { snapshot } });
+  assert.equal(row("snapshot").running, true);
+  assert.equal(tabState(row("snapshot"), false, "merged"), "working");
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, { state: "merged" }), { state: "question", reason: null });
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, { state: "merged" }), { state: "needsYou", reason: "approval" });
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, { state: "merged" }), { state: "needsYou", reason: "sign-in" });
+  assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
 });

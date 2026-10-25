@@ -106,7 +106,7 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
 /**
  * The first that holds wins, as the daemon's `Board::tab_state` decides it: needs you (a
  * permission prompt or plan, a question, an MCP sign-in, or its last turn failed, unless it
- * waits for a limit), working (its CLI's turn, or its messages wait for a limit to reset),
+ * waits for a limit), working (its CLI or an own worker works, or its messages wait for a limit to reset),
  * then the settled mark.
  */
 export function tabState(activity: RowActivity, quotaWait: boolean, settled: Settled["state"]): TabState | null {

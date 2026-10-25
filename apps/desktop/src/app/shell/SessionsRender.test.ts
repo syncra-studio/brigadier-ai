@@ -153,3 +153,21 @@ test("waiting questions show Question and the unread dot, even when open or an a
     { status: "needsYou:Needs you", tip: "Needs you · approval", mark: "spinner" },
   ]);
 });
+
+
+test("unopened sessions with working workers keep Working over Merged, including reconnect snapshots; user requests still win", { timeout: 60000 }, async (t) => {
+  type Row = { title: string; status: string; mark: string | null };
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
+  assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
+    ["Approval with workers", "needsYou:Needs you", "spinner"],
+    ["Question with workers", "question:Question", "unread"],
+    ["Workers still running", "working:Working", "spinner"],
+  ]);
+  for (const row of [seen.someWorking, seen.reconnected]) {
+    assert.equal(row.status, "working:Working");
+    assert.equal(row.mark, "spinner");
+  }
+  assert.equal(seen.idle.status, "merged:Merged");
+  assert.equal(seen.idle.mark, null);
+  assert.deepEqual(seen.threadReads, [], "no sidebar session's thread was read");
+});

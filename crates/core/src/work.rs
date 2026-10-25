@@ -1472,6 +1472,10 @@ pub struct ConversationActivity {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub turn_open: bool,
+    /// One of its own workers has an open CLI turn, as `WorkerRow::working` reads it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub workers_working: bool,
     /// Its tasks that are not over, with their state.
     pub tasks: Vec<(TaskId, TaskState)>,
     /// The titles of those tasks, for their rows under the session's row.
@@ -1504,7 +1508,7 @@ pub struct ConversationActivity {
 pub enum TabState {
     /// An open approval, plan, question or MCP sign-in, or its last turn failed.
     NeedsYou,
-    /// Its CLI's turn is open or starting, or its messages wait for a usage limit to reset.
+    /// Its CLI's turn is open or starting, one of its workers works, or its messages wait for a usage limit to reset.
     Working,
     /// Idle, with commits its base doesn't have since its last merge.
     Ready,
