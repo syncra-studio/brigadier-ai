@@ -141,7 +141,7 @@ const heldRows = () => [...document.querySelectorAll("[data-slot=held-direct]")]
 const heldButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("[data-slot=held-direct] button")].find((button) => button.textContent === label)!;
 async function clearComposer() {
   field()!.focus();
-  await key("a", ["Meta"]);
+  await key("a", [navigator.platform.startsWith("Mac") ? "Meta" : "Control"]);
   await key("Backspace");
   await until("the composer cleared", () => typed() === "");
 }
@@ -189,7 +189,8 @@ async function drive() {
   const seen: Record<string, unknown> = {};
   try {
     await until("the field", () => field() !== null);
-    await until("the kept draft", () => typed().includes("see"));
+    // Its chips drawn too: before they are, the text ends in a space.
+    await until("the kept draft", () => typed() === "Image #1 see Pasted text #1");
 
     // An image and a pasted text, both #1, go to the worker; the user types on meanwhile,
     // leaves and comes back, and then the worker refuses it: it is kept whole apart, never
