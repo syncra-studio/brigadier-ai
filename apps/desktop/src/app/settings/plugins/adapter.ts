@@ -42,8 +42,14 @@ export type PluginsAdapter = {
   subscribe: (onChange: () => void) => () => void;
   /** The row switch: `projectId` null means every project; `agent`, for that agent alone. */
   switchPlugin: (key: string, projectId: string | null, on: boolean, agent?: ProviderKind) => Promise<PluginAgentResult[]>;
-  /** The place picker: a Library item on in every project (`projectIds` null), or in exactly these projects. */
-  setPlaces: (key: string, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
+  /**
+   * The place picker: a Library item on in every project (`projectIds` null), or in exactly these
+   * projects. `undo`: what its Undo takes, each agent back exactly where it had it.
+   */
+  setPlaces: (key: string, projectIds: string[] | null) => Promise<{ results: PluginAgentResult[]; undo: string | null }>;
+  undoPlaces: (undo: string) => Promise<PluginAgentResult[]>;
+  /** Add to every agent, for a Library item: the agents missing it get it where the others have it. */
+  addMissing: (key: string) => Promise<PluginAgentResult[]>;
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   add: (text: string, name: string | null, projectId: string | null, shared: boolean, more: PluginAddMore) => Promise<PluginAgentResult[]>;
@@ -77,8 +83,10 @@ export const usePlugins = create<{
   error: string | null;
   /** Reads the page again now. */
   refresh: () => void;
+  /** Reads the page again, done once it's read. */
+  reload: () => Promise<void>;
   setProject: (project: string | null) => void;
-}>(() => ({ view: EMPTY, project: null, adapter: null, error: null, refresh: () => {}, setProject: () => {} }));
+}>(() => ({ view: EMPTY, project: null, adapter: null, error: null, refresh: () => {}, reload: async () => {}, setProject: () => {} }));
 
 /** Installs `adapter` and follows its changes; a read for an older project or connection is dropped. */
 export function connectPlugins(adapter: PluginsAdapter): () => void {
@@ -97,6 +105,7 @@ export function connectPlugins(adapter: PluginsAdapter): () => void {
   usePlugins.setState({
     adapter,
     refresh: () => void refresh(),
+    reload: refresh,
     setProject: (project) => {
       usePlugins.setState({ project });
       void refresh();
@@ -107,6 +116,6 @@ export function connectPlugins(adapter: PluginsAdapter): () => void {
   return () => {
     active = false;
     unsubscribe();
-    if (usePlugins.getState().adapter === adapter) usePlugins.setState({ adapter: null, refresh: () => {}, setProject: () => {} });
+    if (usePlugins.getState().adapter === adapter) usePlugins.setState({ adapter: null, refresh: () => {}, reload: async () => {}, setProject: () => {} });
   };
 }

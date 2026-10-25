@@ -110,6 +110,10 @@ const elsewhere: Spec[] = [
 ];
 
 let items: Spec[] = startingItems(1);
+/** How long a read of the page takes, to show what a slow daemon does. */
+let readDelay = 0;
+/** What each place picker change found before it, by its Undo. */
+const placesBefore = new Map<string, { key: string; spec: Pick<Spec, "everywhere" | "onIn" | "offIn"> }>();
 let empty = false;
 const calls: string[] = [];
 let adding: { resolve: (results: PluginAgentResult[]) => void } | null = null;
@@ -139,7 +143,10 @@ const spec = (key: string) => items.find((item) => item.key === key) ?? elsewher
 const toggle = (list: string[] = [], path: string, add: boolean) => (add ? [...new Set([...list, path])] : list.filter((entry) => entry !== path));
 
 const adapter: PluginsAdapter = {
-  read: async (projectId) => view(projectId),
+  read: async (projectId) => {
+    if (readDelay) await new Promise((resolve) => setTimeout(resolve, readDelay));
+    return view(projectId);
+  },
   subscribe: (onChange) => {
     listeners.add(onChange);
     return () => listeners.delete(onChange);
@@ -165,8 +172,23 @@ const adapter: PluginsAdapter = {
   setPlaces: async (key, projectIds) => {
     calls.push(`setPlaces ${key} ${projectIds?.join(",") ?? "global"}`);
     const item = spec(key)!;
+    const undo = `undo-${placesBefore.size + 1}`;
+    placesBefore.set(undo, { key, spec: { everywhere: item.everywhere, onIn: [...(item.onIn ?? [])], offIn: [...(item.offIn ?? [])] } });
     if (!projectIds) Object.assign(item, { everywhere: true, offIn: [], onIn: [] });
     else Object.assign(item, { everywhere: false, offIn: [], onIn: projectIds.map((id) => projects.find((project) => project.id === id)!.path) });
+    changed();
+    return { results: ok(), undo };
+  },
+  undoPlaces: async (undo) => {
+    calls.push(`undoPlaces ${undo}`);
+    const before = placesBefore.get(undo)!;
+    Object.assign(spec(before.key)!, before.spec);
+    changed();
+    return ok();
+  },
+  addMissing: async (key) => {
+    calls.push(`addMissing ${key}`);
+    Object.assign(spec(key)!, { only: undefined, attention: undefined });
     changed();
     return ok();
   },
@@ -272,6 +294,7 @@ function rowsOf(root: ParentNode) {
       chips: all('[data-slot="scope-chip"]', row).map(text),
       picker: text(row.querySelector('[data-slot="places-picker"]')) || null,
       switch: row.querySelector("[role=switch]")?.getAttribute("aria-checked") ?? null,
+      locked: row.querySelector("[role=switch]")?.hasAttribute("disabled") ?? false,
       button: text(row.querySelector("button[data-slot=button]")) || null,
     };
   });
@@ -339,6 +362,7 @@ function read() {
 const project = (id: string | null) => usePlugins.getState().setProject(id);
 async function reset(setKey: (key: number) => void, signIns = 1) {
   items = startingItems(signIns);
+  readDelay = 0;
   empty = false;
   adding = null;
   document.querySelectorAll('[data-dialog] button[aria-label="Close"]').forEach((button) => (button as HTMLButtonElement).click());
@@ -544,6 +568,17 @@ async function drive(setKey: (key: number) => void) {
   seen.spreadCalls = calls.slice(spread);
   click("Plugins", main());
   await pause();
+  Object.assign(spec("lib:delegator")!, { only: ["claude"], onIn: [], attention: { type: "notEverywhere", message: "Only Claude Code has it." } });
+  usePlugins.getState().refresh();
+  await pause(120);
+  click("Open delegator");
+  await pause(120);
+  const nowhere = calls.length;
+  click("Add to every agent");
+  await pause(120);
+  seen.nowhereCalls = calls.slice(nowhere);
+  click("Plugins", main());
+  await pause();
   click("Open higgsfield");
   await pause(120);
   seen.pluginBanner = read();
@@ -668,6 +703,47 @@ async function drive(setKey: (key: number) => void) {
   await pause(120);
   seen.placesOtherDialog = read();
   seen.placesCalls = calls.slice(placed);
+
+  // Undo puts back exactly where it was: a project it was off in stays off.
+  await reset(setKey);
+  Object.assign(spec("lib:postgres")!, { everywhere: true, onIn: [], offIn: [STEADY] });
+  usePlugins.getState().refresh();
+  await pause(120);
+  const undone = calls.length;
+  await openPicker("postgres");
+  pick("landing");
+  await pause(300);
+  all<HTMLButtonElement>('[data-slot="toast"] button').filter((button) => text(button) === "Undo").at(-1)!.click();
+  await pause(300);
+  seen.placesUndoExact = read();
+  seen.placesUndoCalls = calls.slice(undone);
+
+  // A slow read: the next pick waits for it, so it starts from the last pick.
+  await reset(setKey);
+  readDelay = 300;
+  usePlugins.getState().refresh();
+  await pause(400);
+  const quick = calls.length;
+  await openPicker("postgres");
+  pick("steady-app");
+  await pause(60);
+  pick("landing");
+  await pause(700);
+  if (!read().places?.some((entry) => entry.startsWith("landing") && entry.includes("*"))) pick("landing");
+  await pause(700);
+  seen.quickCalls = calls.slice(quick);
+  readDelay = 0;
+
+  // A sign-in on a row kept to a project runs there, and the dialog shows that project's agents.
+  await reset(setKey);
+  Object.assign(spec("lib:postgres")!, { remote: true, special: { codex: { type: "needsSignIn" } }, attention: { type: "signIn", message: "Codex needs you to sign in." } });
+  usePlugins.getState().refresh();
+  await pause(120);
+  const signedAt = calls.length;
+  all<HTMLButtonElement>("button", all('[data-slot="plugin-row"]', main()).find((entry) => text(entry.querySelector(".font-medium")) === "postgres")!).find((button) => text(button) === "Sign in")!.click();
+  await pause(300);
+  seen.signInElsewhere = read();
+  seen.signInElsewhereCalls = calls.slice(signedAt);
 
   // Search keeps the rows that match.
   await reset(setKey);

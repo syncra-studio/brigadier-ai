@@ -14,7 +14,7 @@ import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginsAdapter } from "./adapter";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog, UseEverywhereDialog } from "./dialogs";
-import { elsewhereLine, has, placesOf, placesWords, projectSummary, sections, TAB_LABEL, type Row } from "./model";
+import { elsewhereLine, has, placesWords, projectSummary, sections, signInAt, TAB_LABEL, type Row } from "./model";
 import { FoldCard, PluginRow } from "./parts";
 import { PlacesPicker } from "./PlacesPicker";
 
@@ -34,24 +34,26 @@ export function pluginSearchRows() {
 /** A dialog open over the page. */
 type Open =
   | { type: "add"; projectId: string | null }
-  | { type: "signIn"; key: string }
+  /** `projectId`: where the sign-in runs, a place it's on (null: every project). */
+  | { type: "signIn"; key: string; projectId: string | null }
   | { type: "useEverywhere"; key: string; after?: { projectId: string | null; on: boolean } }
   | { type: "remove"; key: string };
 
 export function PluginsPage() {
-  const { view, project, adapter, error, refresh, setProject } = usePlugins();
-  return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} onProject={setProject} />;
+  const { view, project, adapter, error, refresh, reload, setProject } = usePlugins();
+  return <PluginsScreen view={view} projectId={project} adapter={adapter} error={error} refresh={refresh} reload={reload} onProject={setProject} />;
 }
 
 const TABS: PluginKind[] = ["server", "skill"];
 const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
-function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: {
+function PluginsScreen({ view, projectId, adapter, error, refresh, reload, onProject }: {
   view: PluginsView;
   projectId: string | null;
   adapter: PluginsAdapter | null;
   error: string | null;
   refresh: () => void;
+  reload: () => Promise<void>;
   onProject: (projectId: string | null) => void;
 }) {
   const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
@@ -90,15 +92,24 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     });
   };
 
-  /** The place picker: applies at once, with an Undo that puts back where it was. */
+  /**
+   * The place picker: applies at once, with an Undo that puts each agent back exactly where it
+   * had it. The page is read again before the picker takes the next pick, so each starts from
+   * the last one.
+   */
   const place = (item: PluginItemView, projectIds: string[] | null) => {
     if (!adapter) return;
-    const before = item.everywhere ? null : item.onIn.flatMap((path) => view.projects.find((project) => project.path === path)?.id ?? []);
     action.run(async () => {
-      await checked(view, () => adapter.setPlaces(item.key, projectIds));
-      refresh();
-      const undo = () => checked(view, () => adapter.setPlaces(item.key, before)).then(refresh, (cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }));
-      toast(`${item.name} is ${placesWords(view, projectIds)} now`, { actions: before?.length === 0 ? [] : [{ label: "Undo", run: () => void undo() }] });
+      let undo: string | null = null;
+      await checked(view, async () => {
+        const done = await adapter.setPlaces(item.key, projectIds);
+        undo = done.undo;
+        return done.results;
+      });
+      await reload();
+      const token = undo;
+      const back = (from: string) => checked(view, () => adapter.undoPlaces(from)).then(reload, (cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }));
+      toast(`${item.name} is ${placesWords(view, projectIds)} now`, { actions: token ? [{ label: "Undo", run: () => void back(token) }] : [] });
     });
   };
 
@@ -106,9 +117,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
   const addMissing = (item: PluginItemView) => {
     if (!adapter) return;
     action.run(async () => {
-      for (const { agent } of item.agents.filter((entry) => entry.state.type === "missing")) {
-        for (const where of placesOf(view, item)) await checked(view, () => adapter.switchPlugin(item.key, where, true, agent));
-      }
+      await checked(view, () => adapter.addMissing(item.key));
       refresh();
     });
   };
@@ -129,7 +138,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
             await checked(view, () => adapter.switchPlugin(current.key, focus?.id ?? null, on, agent));
             refresh();
           }),
-          onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key }) : undefined,
+          onSignIn: adapter.signIn ? () => setOpen({ type: "signIn", key: current.key, projectId: signInAt(view, current, focus) ?? focus?.id ?? null }) : undefined,
           onUseEverywhere: () => setOpen({ type: "useEverywhere", key: current.key }),
           onAddMissing: () => addMissing(current),
           onRemove: () => setOpen({ type: "remove", key: current.key }),
@@ -180,7 +189,7 @@ function PluginsScreen({ view, projectId, adapter, error, refresh, onProject }: 
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
       {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} projectId={open.projectId} refresh={refresh} onClose={close} />}
-      {adapter && open?.type === "signIn" && target && <SignInDialog view={view} item={target} projectId={focus?.id ?? null} adapter={adapter} refresh={refresh} onClose={close} />}
+      {adapter && open?.type === "signIn" && target && <SignInDialog view={view} item={target} projectId={open.projectId} adapter={adapter} refresh={refresh} onClose={close} />}
       {adapter && open?.type === "useEverywhere" && target && (
         <UseEverywhereDialog
           view={view}
@@ -237,33 +246,36 @@ function ListBody({ view, focus, tab, query, busy, adapter, onTab, onQuery, onPr
   const elsewhere = view.elsewhere.filter((item) => item.kind === tab);
   const lists = sections(view, focus, tab, query);
   const empty = count(tab) === 0;
-  const row = (entry: Row, dim: boolean) => (
-    <PluginRow
-      key={entry.item.key}
-      view={view}
-      item={entry.item}
-      line={entry.line}
-      dim={dim}
-      chips={entry.chips}
-      picker={entry.places && (
-        <PlacesPicker
-          view={view}
-          item={entry.item}
-          places={entry.places}
-          busy={busy}
-          onPlaces={(projectIds) => onPlaces(entry.item, projectIds)}
-          onEveryAgent={() => onDialog({ type: "useEverywhere", key: entry.item.key })}
-        />
-      )}
-      onOpen={() => onOpen(entry.item)}
-      end={
-        <>
-          {entry.item.attention?.type === "signIn" && adapter?.signIn && <Button variant="soft" size="sm" onClick={() => onDialog({ type: "signIn", key: entry.item.key })}>Sign in</Button>}
-          <SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy} onCheckedChange={(on) => onFlip(entry.item, on)} />
-        </>
-      }
-    />
-  );
+  const row = (entry: Row, dim: boolean) => {
+    const signIn = entry.item.attention?.type === "signIn" && adapter?.signIn ? signInAt(view, entry.item, focus) : undefined;
+    return (
+      <PluginRow
+        key={entry.item.key}
+        view={view}
+        item={entry.item}
+        line={entry.line}
+        dim={dim}
+        chips={entry.chips}
+        picker={entry.places && (
+          <PlacesPicker
+            view={view}
+            item={entry.item}
+            places={entry.places}
+            busy={busy}
+            onPlaces={(projectIds) => onPlaces(entry.item, projectIds)}
+            onEveryAgent={() => onDialog({ type: "useEverywhere", key: entry.item.key })}
+          />
+        )}
+        onOpen={() => onOpen(entry.item)}
+        end={
+          <>
+            {signIn !== undefined && <Button variant="soft" size="sm" onClick={() => onDialog({ type: "signIn", key: entry.item.key, projectId: signIn })}>Sign in</Button>}
+            <SettingsSwitch label={entry.item.name} checked={entry.on} disabled={busy || !!entry.locked} onCheckedChange={(on) => onFlip(entry.item, on)} />
+          </>
+        }
+      />
+    );
+  };
   return (
     <div className="flex flex-col gap-10">
       <Toolbar view={view} focus={focus} tab={tab} query={query} count={count} onTab={onTab} onQuery={onQuery} onProject={onProject} onAddProject={() => adapter?.addProject()} />

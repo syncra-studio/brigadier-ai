@@ -677,6 +677,10 @@ pub(crate) fn build(
         let presence = &mut items[at].1;
         presence.note(agent, Some(folder));
         push(&mut presence.native, (agent, server.name.clone(), None));
+        // Its agent can't keep it to a project, whatever other agents' copies can.
+        if !switchable_source(server.source) {
+            presence.switchable = false;
+        }
     }
     // A Library item none of the agents has yet.
     for entry in library {
@@ -783,11 +787,37 @@ pub(crate) fn build(
                     (agent, state)
                 })
                 .collect();
-            let needs: Vec<Agent> = states
+            // How it stands wherever else each agent has it on: a row shows a sign-in or a
+            // failed start in every section, not only where the page looks.
+            let elsewhere: Vec<(Agent, AgentItemState)> = presence
+                .native
                 .iter()
-                .filter(|(_, state)| *state == AgentItemState::NeedsSignIn)
-                .map(|(agent, _)| *agent)
+                .flat_map(|(agent, name, plugin)| {
+                    let places = presence
+                        .everywhere
+                        .contains(agent)
+                        .then_some(None)
+                        .into_iter()
+                        .chain(
+                            presence
+                                .here
+                                .iter()
+                                .filter(|(_, a)| a == agent)
+                                .map(|(path, _)| Some(path.as_path())),
+                        )
+                        .filter(|place| *place != focus);
+                    places
+                        .filter_map(|place| health.state(*agent, name, plugin.as_deref(), place))
+                        .map(|state| (*agent, state))
+                        .collect::<Vec<_>>()
+                })
                 .collect();
+            let mut needs: Vec<Agent> = Vec::new();
+            for (agent, state) in states.iter().chain(&elsewhere) {
+                if *state == AgentItemState::NeedsSignIn {
+                    push(&mut needs, *agent);
+                }
+            }
             let missing: Vec<Agent> = agents
                 .iter()
                 .map(|adapter| adapter.agent())
@@ -797,10 +827,15 @@ pub(crate) fn build(
                 Some(PluginAttention::WontStart {
                     message: format!("Won't start: {problem}"),
                 })
-            } else if let Some(reason) = states.iter().find_map(|(_, state)| match state {
-                AgentItemState::WontStart { reason } => Some(reason),
-                _ => None,
-            }) {
+            } else if let Some(reason) =
+                states
+                    .iter()
+                    .chain(&elsewhere)
+                    .find_map(|(_, state)| match state {
+                        AgentItemState::WontStart { reason } => Some(reason),
+                        _ => None,
+                    })
+            {
                 Some(PluginAttention::WontStart {
                     message: format!("Won't start: {reason}"),
                 })
@@ -1031,6 +1066,17 @@ impl super::SessionManager {
         Ok(self.plugin_job(jobs::Action::SetPlaces { key, places }))
     }
 
+    /// Undoes place picker job `job`: each agent back exactly where it had the item. Its job's id.
+    pub fn undo_plugin_places(&self, job: String) -> String {
+        self.plugin_job(jobs::Action::UndoPlaces { job })
+    }
+
+    /// Gives Library item `key` to the agents that lack it, where the others have it (installed
+    /// and off when no agent has it on anywhere). Its job's id.
+    pub fn add_missing_plugin(&self, key: String) -> String {
+        self.plugin_job(jobs::Action::AddMissing { key })
+    }
+
     /// What pasted `text` would add, before anything is added.
     pub async fn check_plugin_add(
         &self,
@@ -1099,9 +1145,19 @@ impl super::SessionManager {
     ) -> std::sync::Arc<dyn Health + Send + Sync> {
         let clis = self.clis();
         let mut lists = Vec::new();
+        // Every project's too: a row shows how it stands wherever it is on.
+        let projects: Vec<PathBuf> = self
+            .plugin_projects()
+            .into_iter()
+            .map(|(_, _, path)| path)
+            .filter(|path| Some(path.as_path()) != focus)
+            .collect();
         for adapter in adapters() {
             let agent = adapter.agent();
-            for project in [None, focus] {
+            for project in [None, focus]
+                .into_iter()
+                .chain(projects.iter().map(|path| Some(path.as_path())))
+            {
                 if let Some(listed) = self.mcp_logins.listed(&clis, agent, project) {
                     lists.push((agent, project.map(Path::to_owned), listed));
                 }

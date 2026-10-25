@@ -1242,6 +1242,25 @@ fn simulate(home: &Path, step: &Step) {
         write(file, &toml::to_string(&doc).unwrap());
     }
     match step {
+        // Adding the Library's marketplace changes nothing these tests read.
+        Step::Run(call) if call.args.get(1).map(String::as_str) == Some("marketplace") => {}
+        Step::Run(call) if call.program == "codex" && call.args[1] == "add" => {
+            let cache = home.join(".codex/plugins/cache/brigadier/tidy/1.0.0");
+            let entry = Library::in_home(home, PathBuf::from("/bin/brigadier"))
+                .entry("tidy")
+                .unwrap();
+            write(
+                &cache.join(".codex-plugin/plugin.json"),
+                &std::fs::read_to_string(entry.dir.join(".codex-plugin/plugin.json")).unwrap(),
+            );
+            write(
+                &cache.join("skills/tidy/SKILL.md"),
+                "---\nname: tidy\ndescription: d\n---\n",
+            );
+        }
+        Step::Run(call) if call.program == "codex" && call.args[1] == "remove" => {
+            std::fs::remove_dir_all(home.join(".codex/plugins/cache/brigadier/tidy")).unwrap();
+        }
         Step::Run(call) if call.args.first().map(String::as_str) == Some("plugin") => {
             let on = match call.args[1].as_str() {
                 "enable" => true,
@@ -1409,7 +1428,12 @@ fn a_move_that_fails_puts_every_agent_back_and_says_what_it_couldnt() {
     };
     assert_eq!(
         set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &fail_codex_off),
-        Err("Nothing was changed: Codex: codex said no.".to_owned())
+        // The projects' own switches it wrote stay: said so, not "Nothing was changed".
+        Err(
+            "Codex: codex said no. Each agent has it where it had it again, but Claude Code now \
+             switches it on by itself in proj; Codex now switches it on by itself in proj."
+                .to_owned()
+        )
     );
     assert_eq!(
         places_now(&ctx),
@@ -1459,4 +1483,150 @@ fn only_a_library_item_has_places_and_it_needs_one() {
         Err("Pick a project, or Global.".to_owned())
     );
     assert!(set_places_with(&ctx, "lib:gone", None, &run).is_err());
+}
+
+/// The fixture's runner: each step done to its files, as the CLIs would.
+fn simulated(fx: &Fixture) -> impl Fn(&dyn AgentAdapter, &[Step]) -> Result<(), String> + '_ {
+    |_, steps| {
+        for step in steps {
+            simulate(&fx.home, step);
+        }
+        Ok(())
+    }
+}
+
+/// Claude Code's own settings for `project` switch tidy on or off.
+fn claude_here(project: &Path, on: bool) {
+    write(
+        &project.join(".claude/settings.local.json"),
+        &serde_json::json!({"enabledPlugins": {"tidy@brigadier": on}}).to_string(),
+    );
+}
+
+#[test]
+fn a_project_with_an_install_of_its_own_is_switched_on_there_before_global_goes_off() {
+    let (fx, projects) = two_projects("places-local-install", Some(true), Some(true));
+    // Claude Code has an install of the project's own too, which follows the user's switch.
+    let installs = fx.home.join(".claude/plugins/installed_plugins.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&installs).unwrap()).unwrap();
+    let user = json["plugins"]["tidy@brigadier"][0].clone();
+    let mut local = user.clone();
+    local["scope"] = "local".into();
+    local["projectPath"] = fx.project.display().to_string().into();
+    json["plugins"]["tidy@brigadier"] = serde_json::json!([user, local]);
+    write(&installs, &json.to_string());
+    let ctx = places_ctx(&fx, &projects);
+    let run = simulated(&fx);
+    set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &run).unwrap();
+    assert_eq!(places_now(&ctx), vec![(false, vec!["proj".to_owned()]); 2]);
+}
+
+#[test]
+fn a_put_back_that_fails_stops_before_switching_anything_off() {
+    let (fx, projects) = two_projects("places-stop", Some(false), Some(false));
+    // On only in proj, by each agent's own project switch.
+    claude_here(&fx.project, true);
+    write(
+        &fx.project.join(".codex/config.toml"),
+        "[plugins.\"tidy@brigadier\"]\nenabled = true\n",
+    );
+    let ctx = places_ctx(&fx, &projects);
+    // Codex can't switch it off in proj; Claude Code can't be put back on there either.
+    let run = |_: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
+        for step in steps {
+            if matches!(step, Step::ProjectFile { edit: TomlEdit { value, .. }, .. } if *value == OFF)
+            {
+                return Err("codex said no".to_owned());
+            }
+            if matches!(step, Step::Run(call) if call.args[1] == "enable"
+                && call.cwd.as_deref() == Some(fx.project.as_path()))
+            {
+                return Err("claude said no".to_owned());
+            }
+            simulate(&fx.home, step);
+        }
+        Ok(())
+    };
+    let err = set_places_with(&ctx, "lib:tidy", Some(&projects[1..]), &run).unwrap_err();
+    assert!(err.starts_with("Codex: codex said no."), "{err}");
+    // Claude Code couldn't go back on in proj, so it stays on in proj2: not off everywhere.
+    assert_eq!(places_now(&ctx)[0], (false, vec!["proj2".to_owned()]));
+}
+
+#[test]
+fn undo_puts_each_agent_back_exactly_missing_installs_and_project_offs_too() {
+    let (fx, projects) = two_projects("places-undo", Some(true), None);
+    claude_here(&projects[1], false);
+    let ctx = places_ctx(&fx, &projects);
+    let run = simulated(&fx);
+    let before = set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &run).unwrap();
+    assert_eq!(places_now(&ctx), vec![(false, vec!["proj".to_owned()]); 2]);
+    put_back_places_with(&ctx, "lib:tidy", &before, &run).unwrap();
+    // Claude Code on for every project but proj2; Codex without it, as before.
+    assert_eq!(
+        every_placed(&ctx, "tidy@brigadier"),
+        [
+            (
+                Agent::Claude,
+                Placed {
+                    has: true,
+                    global: true,
+                    on_in: vec![fx.project.clone()],
+                }
+            ),
+            (
+                Agent::Codex,
+                Placed {
+                    has: false,
+                    global: false,
+                    on_in: Vec::new(),
+                }
+            ),
+        ]
+    );
+}
+
+#[test]
+fn add_to_every_agent_keeps_the_projects_the_others_leave_it_off_in() {
+    let (fx, projects) = two_projects("missing-offs", Some(true), None);
+    claude_here(&projects[1], false);
+    let ctx = places_ctx(&fx, &projects);
+    let run = simulated(&fx);
+    add_missing_with(&ctx, "lib:tidy", &run).unwrap();
+    // Codex gets it for every project but proj2, like Claude Code.
+    assert_eq!(places_now(&ctx), vec![(true, vec!["proj".to_owned()]); 2]);
+}
+
+#[test]
+fn add_to_every_agent_installs_an_item_on_nowhere_switched_off() {
+    let (fx, projects) = two_projects("missing-off", Some(false), None);
+    let ctx = places_ctx(&fx, &projects);
+    let done = std::sync::Mutex::new(Vec::new());
+    let run = |adapter: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
+        for step in steps {
+            simulate(&fx.home, step);
+        }
+        done.lock().unwrap().extend(
+            lines(steps)
+                .into_iter()
+                .map(|line| format!("{:?} {line}", adapter.agent())),
+        );
+        Ok(())
+    };
+    add_missing_with(&ctx, "lib:tidy", &run).unwrap();
+    let done = done.into_inner().unwrap();
+    assert!(
+        done.contains(&"Codex codex plugin add tidy@brigadier".to_owned()),
+        "{done:?}"
+    );
+    assert_eq!(
+        done.last().unwrap(),
+        &format!("Codex user plugins.tidy@brigadier.enabled = {OFF:?}")
+    );
+    let codex = &every_placed(&ctx, "tidy@brigadier")[1].1;
+    assert_eq!(
+        (codex.has, codex.global, codex.on_in.len()),
+        (true, false, 0)
+    );
 }

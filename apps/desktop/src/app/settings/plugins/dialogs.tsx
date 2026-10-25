@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
@@ -153,10 +153,14 @@ export function RemoveDialog({ view, item, adapter, onClose, onRemoved }: {
   );
 }
 
-/** G5: each agent signs in to the item's server in turn; the rows follow each agent's own state. */
+/**
+ * G5: each agent signs in to the item's server in turn; the rows follow each agent's own state
+ * where the sign-in runs, which needn't be where the page looks.
+ */
 export function SignInDialog({ view, item, projectId, adapter, refresh, onClose }: {
   view: PluginsView;
   item: PluginItemView;
+  /** Where the sign-in runs: a place it's on (null: every project). */
   projectId: string | null;
   adapter: PluginsAdapter;
   refresh: () => void;
@@ -172,8 +176,17 @@ export function SignInDialog({ view, item, projectId, adapter, refresh, onClose 
   // Starts once, as the dialog opens.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(start, []);
-  const waiting = view.agents.filter((agent) => stateOf(item, agent.agent).type === "needsSignIn");
-  useWatch(refresh, waiting.length > 0);
+  // The agents' states where the sign-in runs, read with the page.
+  const [there, setThere] = useState<PluginsView | null>(null);
+  const reread = useCallback(() => {
+    refresh();
+    void adapter.read(projectId).then(setThere, () => {});
+  }, [adapter, projectId, refresh]);
+  useEffect(reread, [reread]);
+  const seen = there ?? view;
+  const current = seen.items.find((entry) => entry.key === item.key) ?? item;
+  const waiting = seen.agents.filter((agent) => stateOf(current, agent.agent).type === "needsSignIn");
+  useWatch(reread, waiting.length > 0);
   const cancel = () => {
     void adapter.cancelSignIn?.(item.key).catch(() => {});
     onClose();
@@ -181,8 +194,8 @@ export function SignInDialog({ view, item, projectId, adapter, refresh, onClose 
   return (
     <PluginDialog slot="sign-in" onClose={cancel} title={`Sign in to ${item.name}`} description="Each agent keeps its own sign-in, so your browser asks once per agent. After the first one it usually just confirms.">
       <div className="flex flex-col gap-3">
-        {view.agents.map((agent) => {
-          const state = stateOf(item, agent.agent);
+        {seen.agents.map((agent) => {
+          const state = stateOf(current, agent.agent);
           const failed = results.find((result) => result.agent === agent.agent && !result.ok);
           const turn = waiting.indexOf(agent);
           if (failed) return <AgentRow key={agent.agent} agent={agent} tone="error" line={failed.message ?? "Couldn't sign in."} end={<span className="text-destructive text-xs">Failed</span>} />;

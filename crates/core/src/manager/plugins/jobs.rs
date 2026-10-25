@@ -20,6 +20,9 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Every job of this run, by id.
 static JOBS: LazyLock<Mutex<HashMap<String, PluginJobView>>> = LazyLock::new(Default::default);
+/// What each place picker job found before it moved its item, by the job's id: its Undo.
+static PLACES_BEFORE: LazyLock<Mutex<HashMap<String, (String, ops::Before)>>> =
+    LazyLock::new(Default::default);
 /// Held while a job changes the agents' configs.
 static RUNNING: Mutex<()> = Mutex::new(());
 /// Whether each Library item's source has moved on, and when that was read.
@@ -118,6 +121,14 @@ pub(crate) enum Action {
         key: String,
         places: Option<Vec<PathBuf>>,
     },
+    /// Undoes place picker job `job`: each agent back where it had the item.
+    UndoPlaces {
+        job: String,
+    },
+    /// Gives a Library item to the agents that lack it.
+    AddMissing {
+        key: String,
+    },
     UseEverywhere {
         key: String,
     },
@@ -210,7 +221,25 @@ pub(crate) fn start(setup: Setup, action: Action) -> String {
                 Err(err) => (Err(err), None),
             },
             Action::SetPlaces { key, places } => (
-                ops::set_places(&ctx, key, places.as_deref()).map(|()| vec![key.clone()]),
+                ops::set_places(&ctx, key, places.as_deref()).map(|before| {
+                    lock(&PLACES_BEFORE).insert(job.clone(), (key.clone(), before));
+                    vec![key.clone()]
+                }),
+                None,
+            ),
+            Action::UndoPlaces { job: undone } => {
+                let before = lock(&PLACES_BEFORE).remove(undone);
+                (
+                    before
+                        .ok_or_else(|| "There's nothing to undo any more.".to_owned())
+                        .and_then(|(key, before)| {
+                            ops::put_back(&ctx, &key, &before).map(|()| vec![key])
+                        }),
+                    None,
+                )
+            }
+            Action::AddMissing { key } => (
+                ops::add_missing(&ctx, key).map(|()| vec![key.clone()]),
                 None,
             ),
             Action::UseEverywhere { key } => {

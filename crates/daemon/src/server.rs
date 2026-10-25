@@ -2454,6 +2454,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::SetPluginPlaces { key, project_ids } => Response::SetPluginPlaces {
             job: daemon.sessions.set_plugin_places(key, project_ids)?,
         },
+        Request::UndoPluginPlaces { job } => Response::UndoPluginPlaces {
+            job: daemon.sessions.undo_plugin_places(job),
+        },
+        Request::AddMissingPlugin { key } => Response::AddMissingPlugin {
+            job: daemon.sessions.add_missing_plugin(key),
+        },
         Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
             check: daemon.sessions.check_plugin_add(text, name).await?,
         },

@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; picker: string | null; switch: string | null; button: string | null };
+type RowSeen = { name: string; kind: string; line: string; tone: string | null; off: boolean; lit: string[]; chips: string[]; picker: string | null; switch: string | null; locked: boolean; button: string | null };
 type SectionSeen = { title: string; description: string; count: string; rows: RowSeen[] };
 type DialogSeen = { slot: string; width: number; title: string; description: string; text: string; agents: string[]; buttons: string[]; radios: string[]; values: string[]; picks: string[]; count: string };
 type Seen = {
@@ -285,7 +285,10 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   const partial = seen.partial!.rows;
   assert.deepEqual([row(partial, "delegator").line, row(partial, "higgsfield").line], ["Runs your plan with workers while you're away.", "Images, video, brand kits and websites."]);
   assert.equal(seen.delegatorBanner!.banner, "Only Claude Code has it. Add it to every agent and they all get it.Add to every agent");
-  assert.deepEqual(seen.spreadCalls, AGENTS.slice(1).map((agent) => `switchPlugin lib:delegator p-brigadier on ${agent}`));
+  // The daemon gives it to the agents missing it where the others have it, a project they leave
+  // it off in included; an item on nowhere is still sent (installed, off).
+  assert.deepEqual(seen.spreadCalls, ["addMissing lib:delegator"]);
+  assert.deepEqual(seen.nowhereCalls, ["addMissing lib:delegator"]);
   assert.equal(seen.pluginBanner!.banner, "Only Claude Code has it. It came in that agent's own plugin, so the other agents can't add it.");
   assert.deepEqual(seen.signInAndMissing!.banners, [
     "Codex needs you to sign in to linear. Until then, Codex sessions can't use it.Sign in",
@@ -293,8 +296,10 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   ]);
 
   // An agent's own copy in a folder that isn't a Brigadier project: a plain tag, and where it's on.
+  // Its switch can't turn off what that folder sets up: it's locked, and the row says where.
   const foreign = row(section(seen.foreign!, "Only in some projects").rows, "codescene");
-  assert.deepEqual([foreign.line, foreign.chips, foreign.switch], ["Code health checks.", ["freelogo-fos-2026"], "true"]);
+  assert.deepEqual([foreign.line, foreign.chips, foreign.switch, foreign.locked], ["Set up in freelogo-fos-2026. Turn it off there.", ["freelogo-fos-2026"], "true", true]);
+  assert.equal(row(section(seen.foreign!, "Only in some projects").rows, "postgres").locked, false);
   const foreignHere = row(section(seen.foreignInProject!, "Global").rows, "codescene");
   assert.deepEqual([foreignHere.line, foreignHere.off, foreignHere.switch], ["On in freelogo-fos-2026 only. Turn it on to use it here.", true, "false"]);
 
@@ -333,10 +338,20 @@ test("plugins: every drawn list, details and dialog state, and what the switches
   assert.equal(row(section(seen.placesLanding!, "Only in some projects").rows, "postgres").picker, "landing");
   assert.deepEqual(seen.placesCalls, [
     "setPlaces lib:postgres p-brigadier,p-steady",
-    "setPlaces lib:postgres p-brigadier",
+    "undoPlaces undo-1",
     "setPlaces lib:postgres global",
     "setPlaces lib:postgres p-landing",
   ]);
+  // Undo puts each agent back exactly: the project it was off in stays off.
+  const undoCalls = seen.placesUndoCalls as unknown as string[];
+  assert.deepEqual([undoCalls.length, undoCalls[0], undoCalls[1]?.startsWith("undoPlaces undo-")], [2, "setPlaces lib:postgres p-landing", true]);
+  assert.deepEqual(row(section(seen.placesUndoExact!, "Global").rows, "postgres").chips, ["Off in steady-app"]);
+  // Quick picks: the second waits for the first's read, so neither is lost.
+  assert.deepEqual((seen.quickCalls as unknown as string[]).filter((call) => call.startsWith("setPlaces")).at(-1), "setPlaces lib:postgres p-brigadier,p-steady,p-landing");
+  // A sign-in on a row kept to a project runs in that project, with its agents.
+  assert.deepEqual(seen.signInElsewhereCalls, ["signInPlugin lib:postgres p-brigadier"]);
+  assert.ok(seen.signInElsewhere!.dialog!.agents.some((agent) => agent.startsWith("CodexWaiting for your browser")), seen.signInElsewhere!.dialog!.agents.join(" | "));
+
   // Not a Library item: one line, which adds it to every agent first.
   assert.deepEqual(seen.placesOther!.places, ["Add to every agent first"]);
   assert.equal(seen.placesOtherDialog!.dialog!.title, "Add pencil to every agent?");

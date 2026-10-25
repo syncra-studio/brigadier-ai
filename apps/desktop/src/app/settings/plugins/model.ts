@@ -21,6 +21,8 @@ export type Row = {
   chips: { text: string; off: boolean; global?: boolean }[];
   /** The place picker's tag, where the row has one: Global, or the projects (folders) it's on in. */
   places?: Places;
+  /** Its switch can't do what it says: it is set up in a folder that isn't a project. */
+  locked?: boolean;
 };
 
 /** Where an item is on, as the place picker shows it: every project, or these projects' folders. */
@@ -123,10 +125,15 @@ export function sections(view: PluginsView, project: PluginProjectView | null, k
           // The projects it's on in go on the picker; a folder that isn't a project, or any folder of
           // another agent's plugin, is a plain tag.
           const projects = plugin(item) ? [] : item.onIn.filter((path) => isProject(view, path));
+          // An agent's own item set up in a folder that isn't a project stays on there whatever
+          // its switch does: the switch can't turn it off.
+          const foreign = item.onIn.filter((path) => !isProject(view, path));
+          const locked = !item.switchable && foreign.length > 0;
           return {
             item,
             on: true,
-            line: problem(item) ?? about(item),
+            line: problem(item) ?? (locked ? { text: `Set up in ${listNames(foreign.map((path) => projectName(view, path)))}. Turn it off there.`, tone: "muted" as const } : about(item)),
+            ...(locked ? { locked } : {}),
             chips: item.onIn.filter((path) => !projects.includes(path)).map((path) => ({ text: projectName(view, path), off: false })),
             ...(projects.length ? { places: projects } : {}),
           };
@@ -184,12 +191,14 @@ export function spreadOf(item: PluginItemView): "addMissing" | "useEverywhere" |
 }
 
 /**
- * Where a Library item goes for the agents missing it: where the others have it, by project id
- * (null: every project). Never wider than that: an item on in no project goes nowhere.
+ * Where a sign-in for `item` runs, looking at `project`: there when it's on there, else for every
+ * project when it's on in every project, else the first of its projects (by id); `undefined`
+ * when it's on only in folders that aren't projects.
  */
-export function placesOf(view: PluginsView, item: PluginItemView): (string | null)[] {
-  if (item.everywhere) return [null];
-  return item.onIn.flatMap((path) => view.projects.find((project) => project.path === path)?.id ?? []);
+export function signInAt(view: PluginsView, item: PluginItemView, project: PluginProjectView | null): string | null | undefined {
+  if (project && isOn(item, project)) return project.id;
+  if (item.everywhere) return null;
+  return item.onIn.flatMap((path) => view.projects.find((entry) => entry.path === path)?.id ?? [])[0];
 }
 
 /** A project's summary in the filter: "2 of its own · 2 turned off". */

@@ -1140,6 +1140,16 @@ pub enum Request {
         key: String,
         project_ids: Option<Vec<String>>,
     },
+    /// Undoes place picker job `job` (a [`Request::SetPluginPlaces`]'s): each agent back exactly
+    /// where it had the item. Answers with a job.
+    UndoPluginPlaces {
+        job: String,
+    },
+    /// Gives Settings › Plugins Library item `key` to the agents that lack it, where the others
+    /// have it (installed and off when no agent has it on anywhere). Answers with a job.
+    AddMissingPlugin {
+        key: String,
+    },
     /// What pasted `text` would add (a skill, an MCP server), before anything is added;
     /// `name` names a server the paste doesn't.
     CheckPluginAdd {
@@ -1896,6 +1906,12 @@ pub enum Response {
         job: String,
     },
     SetPluginPlaces {
+        job: String,
+    },
+    UndoPluginPlaces {
+        job: String,
+    },
+    AddMissingPlugin {
         job: String,
     },
     CheckPluginAdd {

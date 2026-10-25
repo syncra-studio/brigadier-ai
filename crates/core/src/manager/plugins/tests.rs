@@ -518,3 +518,67 @@ fn a_claude_server_kept_to_a_folder_that_isnt_a_project_says_where_it_is_on() {
     );
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn a_foreign_folder_claude_server_is_not_switchable_beside_a_codex_one() {
+    let home = home("foreign-and-codex");
+    let foreign = home.join("clients/elsewhere");
+    std::fs::create_dir_all(&foreign).unwrap();
+    write(
+        &home.join(".claude.json"),
+        &serde_json::json!({"projects": {
+            foreign.display().to_string(): {"mcpServers": {"codescene": {"command": "codescene-mcp"}}}
+        }})
+        .to_string(),
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.codescene]\ncommand = \"codescene-mcp\"\nenabled = false\n",
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let view = build(&Catalog::read(&roots, None), &[], &[], &Unknown, None);
+    // Claude Code's copy can't be kept to a project: its switch asks to add it to every agent.
+    assert!(!item(&view, "server:codescene").switchable);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn a_sign_in_where_it_is_on_shows_on_a_row_looking_elsewhere() {
+    let home = home("sign-in-elsewhere");
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    write(
+        &home.join(".claude.json"),
+        &serde_json::json!({"projects": {
+            project.display().to_string(): {"mcpServers": {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp"}}}
+        }})
+        .to_string(),
+    );
+    let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+    let projects = [ProjectCatalog {
+        id: "p".to_owned(),
+        name: "project".to_owned(),
+        catalog: Catalog::read(&roots, Some(&project)),
+        path: project.clone(),
+    }];
+    let health = Lists(vec![(
+        Agent::Claude,
+        Some(project.clone()),
+        vec![Listed {
+            name: "linear".to_owned(),
+            needs_sign_in: true,
+            failed: None,
+        }],
+    )]);
+    // Looking at every project, where it's on only in the project.
+    let view = build(&Catalog::read(&roots, None), &projects, &[], &health, None);
+    let linear = item(&view, "server:linear");
+    assert_eq!(linear.on_in, [project.display().to_string()]);
+    assert_eq!(
+        linear.attention,
+        Some(PluginAttention::SignIn {
+            message: "Claude Code needs you to sign in.".to_owned()
+        })
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
