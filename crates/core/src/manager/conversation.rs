@@ -2708,8 +2708,8 @@ impl SessionManager {
                     );
                     grant_values.push(hook_grant.clone());
                     output_hook = Some(self.output_hook(hook_grant));
-                    stop_hook = Some(self.stop_hook());
                 }
+                stop_hook = Some(self.stop_hook());
                 (choice, prompt)
             }
             (Some(Setup::Chat { model, .. }), ConversationKind::Chat)
@@ -3033,9 +3033,9 @@ impl SessionManager {
         }
     }
 
-    /// A Claude thread's Stop hook (`brigadierd hook stop`): it sends a turn that ends with a
-    /// round of questions written as text back once, to ask them on the card (harness D43,
-    /// D45). Always on; workers have none, they don't talk to the user.
+    /// A thread's Stop hook (`brigadierd hook stop`): it sends a turn that ends with a round of
+    /// questions written as text back once, to ask them on the card (harness D43, D45; Codex's
+    /// too, D49). Always on; workers have none, they don't talk to the user.
     fn stop_hook(&self) -> OutputHook {
         OutputHook {
             command: self.config.daemon_exe.clone(),

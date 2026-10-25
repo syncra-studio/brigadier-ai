@@ -1520,10 +1520,10 @@ pub struct SessionSpec {
     pub omit_ai_coauthors: bool,
     /// A Claude thread's output hook (see [`OutputHook`]).
     pub output_hook: Option<OutputHook>,
-    /// A Claude thread's `Stop` hook: the command answers whether its turn may end (it sends
-    /// back a turn that ends with a round of questions written as text, harness D43). Codex
-    /// doesn't run it: 0.164 has Stop hooks, but one from Brigadier's flags waits for the user
-    /// to trust it, and its trust lives only in the user's own config (D46).
+    /// A thread's `Stop` hook: the command answers whether its turn may end (it sends back a
+    /// turn that ends with a round of questions written as text, harness D43). Claude gets it
+    /// in Brigadier's settings layer; Codex with the thread's own flags, once its trust is in
+    /// the user's `config.toml`, which Brigadier writes (D49, `codex::stop_hook`).
     pub stop_hook: Option<OutputHook>,
     /// A worker `brigadier start` started (D13, D17): none of the user's own setup, neither
     /// their global instruction file, skills, plugins, hooks nor MCP servers, and no memory

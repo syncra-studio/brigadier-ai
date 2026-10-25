@@ -18,7 +18,8 @@
 //! output. Whatever goes wrong, the hook prints nothing and exits 0: the tool call never
 //! breaks. No async runtime and no logging, so it starts at once.
 //!
-//! `brigadierd hook stop` is the same thread's `Stop` hook (harness D43, D45): when the turn's
+//! `brigadierd hook stop` is a thread's `Stop` hook, Claude's and Codex's (harness D43, D45,
+//! D49; Codex sends the same event fields and takes the same answer): when the turn's
 //! last reply ends with a round of questions written as text ([`crate::text_round`]), it sends
 //! the turn back once with [`STOP_REASON`], and the model asks the round on the question card
 //! itself; Brigadier rewrites nothing. A stop that is already such a send-back
@@ -448,6 +449,38 @@ mod tests {
             None
         );
         assert_eq!(stop("not json"), None);
+    }
+
+    /// Codex's Stop event, as codex-cli 0.164.0 sent it to a trusted hook (harness D49): the
+    /// same two fields the check reads, and Codex takes the same `decision: "block"` answer.
+    #[test]
+    fn codex_s_stop_event_gets_the_same_send_back() {
+        let event = |reply: &str, active: bool| {
+            json!({
+                "session_id": "01a1739e-c970-7652-ab58-ebd836dac836",
+                "turn_id": "01a1739e-cb5a-7070-8257-bf866b1e7fcd",
+                "transcript_path": "/Users/me/.codex/sessions/2026/10/25/rollout-2026-10-25T17-12-28-01a1739e-c970-7652-ab58-ebd836dac836.jsonl",
+                "cwd": "/Users/me/code/app",
+                "hook_event_name": "Stop",
+                "model": "gpt-5.6-luna",
+                "permission_mode": "bypassPermissions",
+                "stop_hook_active": active,
+                "last_assistant_message": reply,
+            })
+            .to_string()
+        };
+        let round = "Before I start:\n\n1. Which branch should this land on?\n2. Keep the old flag?\n3. Ship it today?\n";
+        let printed: Value =
+            serde_json::from_str(&stop(&event(round, false)).expect("sent back")).unwrap();
+        assert_eq!(
+            printed,
+            json!({ "decision": "block", "reason": STOP_REASON })
+        );
+        assert_eq!(stop(&event(round, true)), None, "never twice in one turn");
+        assert_eq!(stop(&event("hello", false)), None);
+        // Codex sends a null when the turn ended without a reply.
+        let none = json!({ "hook_event_name": "Stop", "stop_hook_active": false, "last_assistant_message": null });
+        assert_eq!(stop(&none.to_string()), None);
     }
 
     #[test]

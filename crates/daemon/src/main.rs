@@ -15,7 +15,7 @@
 //! The same binary has more jobs, chosen before any of the above runs:
 //!
 //! - `brigadierd hook post-tool-use`: a Claude thread's output hook, and `brigadierd hook
-//!   stop` its Stop hook ([`hook`]);
+//!   stop` a Claude or Codex thread's Stop hook ([`hook`]);
 //! - `brigadierd quit`: asks a data directory's daemon to quit ([`quit`]).
 
 mod awake;

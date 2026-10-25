@@ -281,19 +281,16 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                         let Some(role @ ("user" | "assistant")) = string(payload, "role") else {
                             continue;
                         };
+                        let body = content(&payload["content"]);
+                        // A Stop hook's send-back (harness D49): the CLI's, as Claude's
+                        // `isMeta` feedback is, not the user's words.
+                        if role == "user" && body.trim_start().starts_with("<hook_prompt ") {
+                            continue;
+                        }
                         let id = string(payload, "id")
                             .map(str::to_owned)
                             .unwrap_or_else(|| anonymous(payload, &mut occurrences));
-                        push(
-                            id,
-                            role,
-                            None,
-                            "message",
-                            content(&payload["content"]),
-                            None,
-                            at_ms,
-                            None,
-                        );
+                        push(id, role, None, "message", body, None, at_ms, None);
                     }
                     Some("function_call" | "custom_tool_call") => {
                         let Some(id) = string(payload, "call_id") else {

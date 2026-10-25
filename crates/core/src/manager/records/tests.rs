@@ -498,3 +498,37 @@ fn filtered_paging_keeps_the_original_assistant_span_position() {
     assert!(output.contains("origin assistant"));
     assert!(output.ends_with("Checking\n"), "{output}");
 }
+
+#[test]
+fn a_codex_stop_hooks_send_back_is_not_user_words() {
+    let fixture = Fixture::new();
+    let codex = fixture.root.join("codex.jsonl");
+    let prompt = "<hook_prompt hook_run_id=\"stop:0:/&lt;session-flags&gt;/config.toml\">hooksendbackneedle</hook_prompt>";
+    std::fs::write(
+        &codex,
+        [
+            serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user",
+                "content":[{"type":"input_text","text":"userwordsneedle"}]}}),
+            serde_json::json!({"type":"response_item", "payload":{"type":"message", "id":"msg_1", "role":"user",
+                "content":[{"type":"input_text","text":prompt}]}}),
+            serde_json::json!({"type":"event_msg", "payload":{"type":"item_completed",
+                "item":{"type":"HookPrompt", "id":"msg_1", "fragments":[{"text":"hooksendbackneedle",
+                    "hookRunId":"stop:0:/<session-flags>/config.toml"}]}}}),
+        ]
+        .map(|line| format!("{line}\n"))
+        .concat(),
+    )
+    .unwrap();
+    let texts: Vec<String> = items::read(&fixture.session)
+        .into_iter()
+        .map(|item| item.text)
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "userwordsneedle"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("hooksendbackneedle")),
+        "{texts:?}"
+    );
+}

@@ -37,6 +37,7 @@ pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
 pub mod rollout;
+mod stop_hook;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -163,6 +164,38 @@ impl Codex {
         }
     }
 
+    /// Trusts the thread's Stop hook in the user's `config.toml` (harness D49), once: whether
+    /// Codex will run it. A file Brigadier can't edit safely leaves the thread without it.
+    async fn trust_stop_hook(&self, spec: &SessionSpec) -> bool {
+        let Some(hook) = stop_hook_of(Some(spec)) else {
+            return false;
+        };
+        let Some(file) = crate::trust::TrustCli::Codex.file(&self.env) else {
+            return false;
+        };
+        let hash = stop_hook::hash(hook);
+        let at = file.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            crate::trust::trust_codex_hook(&at, stop_hook::KEY, &hash)
+        })
+        .await;
+        match written {
+            Ok(Ok(crate::trust::HookTrust::AlreadyTrusted)) => true,
+            Ok(Ok(crate::trust::HookTrust::Trusted)) => {
+                tracing::info!(file = %file.display(), "trusted Brigadier's Stop hook in Codex's config");
+                true
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(file = %file.display(), %err, "Codex's config can't hold the Stop hook's trust; the thread goes without it");
+                false
+            }
+            Err(err) => {
+                tracing::warn!(%err, "trusting the Stop hook stopped");
+                false
+            }
+        }
+    }
+
     /// Who is logged in: Codex's own account record (`account/read`, which hands out no
     /// token), as (email, plan).
     async fn account(&self) -> Option<(Option<String>, Option<String>)> {
@@ -268,6 +301,9 @@ impl Codex {
         if let Some(session) = session {
             crate::cli::apply_session_env(&mut spec, &session.env, &session.unset_env);
             spec.low_priority = session.low_priority;
+        }
+        if let Some(hook) = stop_hook_of(session) {
+            crate::cli::apply_session_env(&mut spec, &[stop_hook_env(hook)], &[]);
         }
         spec
     }
@@ -432,6 +468,22 @@ fn plan_name(plan: p::PlanType) -> Option<&'static str> {
 /// `brigadier ask`, as its standing instructions say (harness D7, D28).
 const THREAD_QUESTIONS: &str = "features.default_mode_request_user_input=true";
 
+/// A thread's Stop hook ([`stop_hook`]); a worker has none.
+fn stop_hook_of(session: Option<&SessionSpec>) -> Option<&OutputHook> {
+    session
+        .filter(|session| session.tools == ToolSet::Thread && !session.naked_worker)?
+        .stop_hook
+        .as_ref()
+}
+
+/// The variable the Stop hook's command finds the daemon by.
+fn stop_hook_env(hook: &OutputHook) -> (String, String) {
+    (
+        stop_hook::VAR.to_owned(),
+        hook.command.to_string_lossy().into_owned(),
+    )
+}
+
 /// `codex app-server`'s arguments for a session (`None`: a control connection).
 fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let mut args: Vec<String> = vec!["app-server".into()];
@@ -497,6 +549,12 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     if tools == ToolSet::Thread {
         args.push("-c".into());
         args.push(THREAD_QUESTIONS.into());
+    }
+    // Its Stop hook, the text-round net (harness D49), with the thread's own flags: a plain
+    // Codex session never has it.
+    if let Some(hook) = stop_hook_of(session) {
+        args.push("-c".into());
+        args.push(stop_hook::config(hook));
     }
     // The user's own skills they switched off for Brigadier, by file, beside their own
     // entries: the override replaces the list (docs/research/phase7-probes.md (d)).
@@ -572,6 +630,7 @@ fn terminal_command(
     ];
     args.extend(app_server_args(Some(spec)).into_iter().skip(1));
     let mut variables = spec.env.clone();
+    variables.extend(stop_hook_of(Some(spec)).map(stop_hook_env));
     if let Some(Value::Object(servers)) = config.get_mut("mcp_servers") {
         terminal_servers(servers, env, &mut variables);
     }
@@ -908,8 +967,15 @@ impl Provider for Codex {
         })
     }
 
-    fn start(&self, spec: SessionSpec, ledger: Arc<dyn Ledger>) -> BoxFuture<'_, Result<Started>> {
+    fn start(
+        &self,
+        mut spec: SessionSpec,
+        ledger: Arc<dyn Ledger>,
+    ) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
+            if stop_hook_of(Some(&spec)).is_some() && !self.trust_stop_hook(&spec).await {
+                spec.stop_hook = None;
+            }
             let cwd = spec.cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", spec.cwd.display()))
             })?;
@@ -3347,6 +3413,63 @@ mod tests {
         assert!(on(ToolSet::Thread));
         assert!(!on(ToolSet::Lean));
         assert!(!on(ToolSet::SideChat));
+    }
+
+    /// A thread's Stop hook comes with its own flags and its environment names the daemon
+    /// (harness D49), in the app and in a terminal; a worker and a Chat have none.
+    #[test]
+    fn only_a_thread_runs_its_stop_hook() {
+        let hook = OutputHook {
+            command: PathBuf::from("/Applications/Brigadier App.app/brigadierd"),
+            args: vec!["hook".into(), "stop".into()],
+            env: Vec::new(),
+            timeout_secs: 30,
+        };
+        let codex = Codex::new(
+            brigadier_sandbox::native(brigadier_sandbox::PlatformOptions::default()).unwrap(),
+            Arc::new(CliEnv::from_vars([("HOME".into(), "/home/me".into())])),
+        );
+        let with = |tools, naked_worker| SessionSpec {
+            stop_hook: Some(hook.clone()),
+            naked_worker,
+            ..spec(tools, None)
+        };
+        let config = stop_hook::config(&hook);
+        let has = |session: &SessionSpec| {
+            let args = app_server_args(Some(session));
+            let flagged = args
+                .windows(2)
+                .any(|pair| pair[0] == "-c" && pair[1] == config);
+            let server =
+                codex.server_spec(Path::new("/bin/codex"), Path::new("/tmp"), Some(session));
+            let named = server.env.iter().any(|(key, value)| {
+                key.to_str() == Some(stop_hook::VAR)
+                    && value.to_str() == Some("/Applications/Brigadier App.app/brigadierd")
+            });
+            assert_eq!(flagged, named, "{args:?}");
+            flagged
+        };
+        assert!(has(&with(ToolSet::Thread, false)));
+        assert!(!has(&with(ToolSet::Lean, true)));
+        assert!(!has(&with(ToolSet::SideChat, false)));
+        assert!(!has(&spec(ToolSet::Thread, None)));
+        let thread = with(ToolSet::Thread, false);
+        let terminal = terminal_command(
+            "/usr/local/bin/codex".into(),
+            &thread,
+            "thread-1",
+            "/tmp".into(),
+            Map::new(),
+            &CliEnv::from_vars([("PATH".into(), "/usr/bin".into())]),
+        );
+        assert!(terminal.args.contains(&config));
+        assert!(
+            terminal
+                .env
+                .iter()
+                .any(|(key, value)| key.to_str() == Some(stop_hook::VAR)
+                    && value.to_str() == Some("/Applications/Brigadier App.app/brigadierd"))
+        );
     }
 
     #[test]

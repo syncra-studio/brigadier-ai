@@ -2793,3 +2793,27 @@ async fn a_cli_that_ends_after_the_next_one_started_leaves_it_its_grant() {
     assert!(flow.manager.cli_caller(&session, &old.grants[0]).is_none());
     flow.stop().await;
 }
+
+/// A Codex thread gets the same Stop hook as a Claude one (harness D49), and no output hook:
+/// Codex has no way to replace a command's output.
+#[tokio::test]
+async fn a_codex_thread_gets_the_stop_hook_too() {
+    let flow = Flow::start(
+        "codex-stop-hook",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    flow.say("Hello.").await;
+    flow.settled().await;
+    let (kind, thread) = flow.thread_specs().pop().expect("the thread");
+    assert_eq!(kind, ProviderKind::Codex);
+    let stop = thread.stop_hook.as_ref().expect("a thread's Stop hook");
+    assert_eq!(stop.command, flow.manager.config.daemon_exe);
+    assert_eq!(stop.args, ["hook", "stop"]);
+    assert!(thread.output_hook.is_none());
+    flow.stop().await;
+}

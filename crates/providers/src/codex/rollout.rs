@@ -515,6 +515,75 @@ mod tests {
         );
     }
 
+    /// A turn the Stop hook sent back once (harness D49), as codex-cli 0.164.0 wrote it: the
+    /// send-back is a `HookPrompt` item and a user-role response item, and neither reads as a
+    /// message of the user's.
+    #[test]
+    fn a_stop_hooks_send_back_reads_as_no_user_message() {
+        let completed = |at: i64, item: Value| {
+            serde_json::json!({"type": "event_msg", "payload": {
+                "type": "item_completed", "started_at_ms": at, "item": item}})
+        };
+        let prompt = "<hook_prompt hook_run_id=\"stop:0:/&lt;session-flags&gt;/config.toml\">Say the word PINEAPPLE and stop.</hook_prompt>";
+        let lines = [
+            serde_json::json!({"type": "event_msg", "payload": {"type": "task_started"}}),
+            completed(
+                1,
+                serde_json::json!({"type": "UserMessage", "id": "u1",
+                "content": [{"type": "text", "text": "Reply with just: hello"}]}),
+            ),
+            completed(
+                2,
+                serde_json::json!({"type": "AgentMessage", "id": "a1",
+                "content": [{"type": "Text", "text": "hello"}], "phase": "final_answer"}),
+            ),
+            serde_json::json!({"type": "response_item", "payload": {"type": "message",
+                "id": "msg_1", "role": "user",
+                "content": [{"type": "input_text", "text": prompt}]}}),
+            completed(
+                3,
+                serde_json::json!({"type": "HookPrompt", "id": "msg_1",
+                "fragments": [{"text": "Say the word PINEAPPLE and stop.",
+                    "hookRunId": "stop:0:/<session-flags>/config.toml"}]}),
+            ),
+            completed(
+                4,
+                serde_json::json!({"type": "AgentMessage", "id": "a2",
+                "content": [{"type": "Text", "text": "PINEAPPLE"}], "phase": "final_answer"}),
+            ),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "20261025-1046-harness-research-w30-rollout-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let entries = read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let messages: Vec<(Role, &str)> = entries
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                ProviderEvent::Message { role, text, .. } => Some((*role, text.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                (Role::User, "Reply with just: hello"),
+                (Role::Assistant, "hello"),
+                (Role::Assistant, "PINEAPPLE"),
+            ]
+        );
+    }
+
     #[test]
     fn equal_and_missing_times_keep_file_order_and_steers_follow_file_state() {
         let user = |id: &str, start: Option<i64>| {

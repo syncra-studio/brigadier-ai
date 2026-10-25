@@ -1734,6 +1734,36 @@ mod tests {
 
     /// Brigadier's word on a declined command is no message of the user's (#560): the
     /// command's own row says it was declined, and the word names it for the rollout.
+    /// The Stop hook's send-back (harness D49) is Codex's `hookPrompt` item: the model's,
+    /// never a message of the user's in the thread.
+    #[test]
+    fn a_stop_hooks_send_back_is_no_user_message() {
+        let mut parser = Parser::live();
+        let item = json!({"type": "hookPrompt", "id": "msg_1", "fragments": [{
+            "text": "Put these questions in your question tool (or brigadier ask) instead of the reply.",
+            "hookRunId": "stop:0:/<session-flags>/config.toml"}]});
+        let lines = [
+            json!({"method": "item/started", "params": {"threadId": "t", "turnId": "u",
+                "startedAtMs": 1, "item": item}}),
+            json!({"method": "item/completed", "params": {"threadId": "t", "turnId": "u",
+                "completedAtMs": 2, "item": item}}),
+        ];
+        let events: Vec<ProviderEvent> = lines
+            .iter()
+            .flat_map(|line| events(&mut parser, line))
+            .collect();
+        assert!(
+            events.iter().all(|event| !matches!(
+                event,
+                ProviderEvent::Message {
+                    role: Role::User,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+    }
+
     #[test]
     fn a_declines_steer_is_no_user_message() {
         let mut parser = Parser::live();

@@ -128,6 +128,30 @@ pub fn write(cli: TrustCli, file: &Path, folder: &str, expected: &TrustBefore) -
     })
 }
 
+/// What [`trust_codex_hook`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookTrust {
+    Trusted,
+    /// Trusted with that hash already: nothing changed.
+    AlreadyTrusted,
+}
+
+/// Trusts one of Brigadier's own Codex hooks in Codex's `config.toml` at `file` (harness D49):
+/// `[hooks.state."<key>"] trusted_hash = "<hash>"`, the entry Codex itself writes when the
+/// user trusts a hook. Only that one key changes; the user's own hooks, their trust and the
+/// rest of the file stay byte for byte, and a rerun with the same hash changes nothing. An
+/// `enabled` the user set beside it stays theirs.
+pub fn trust_codex_hook(file: &Path, key: &str, hash: &str) -> Result<HookTrust> {
+    edit(TrustCli::Codex, file, |text| {
+        let state = codex::hook_state(text, key, hash)?;
+        if matches!(state, State::Trusted) {
+            return Ok(Edit::Keep(HookTrust::AlreadyTrusted));
+        }
+        let new = codex::trust_hook(text, key, hash, &state)?;
+        Ok(Edit::Replace(new, HookTrust::Trusted))
+    })
+}
+
 /// Puts back what [`write`] replaced, while `folder` is still trusted as Brigadier left it; a
 /// value the user changed since is theirs and stays.
 pub fn undo(cli: TrustCli, file: &Path, folder: &str, before: &TrustBefore) -> Result<()> {
@@ -857,6 +881,102 @@ mod codex {
         };
         // What was spliced in must read back as exactly that.
         match self::state(&new, folder)? {
+            State::Trusted => Ok(new),
+            _ => Err(invalid("the edit did not read back as trusted")),
+        }
+    }
+
+    const HOOK_KEY: &str = "trusted_hash";
+
+    /// A hook's state table, `[hooks.state."<key>"]`, when it and the tables above it are
+    /// standard tables (an implicit `hooks` or `hooks.state` counts).
+    fn hook_table<'a>(doc: &'a Document<&str>, key: &str) -> Result<Option<&'a Table>> {
+        let standard = |item: &'a Item, what: &str| match item {
+            Item::Table(table) if !table.is_dotted() => Ok(table),
+            _ => Err(invalid(&format!(
+                "{what} is written inline or with dotted keys"
+            ))),
+        };
+        let Some(hooks) = doc.as_table().get("hooks") else {
+            return Ok(None);
+        };
+        let Some(states) = standard(hooks, "[hooks]")?.get("state") else {
+            return Ok(None);
+        };
+        match standard(states, "[hooks.state]")?.get(key) {
+            None => Ok(None),
+            Some(Item::Table(table)) if !table.is_dotted() && !table.is_implicit() => {
+                Ok(Some(table))
+            }
+            Some(_) => Err(invalid(
+                "the hook's state is written inline or with dotted keys",
+            )),
+        }
+    }
+
+    /// Where the trust of the hook `key` stands: [`State::Trusted`] only with `hash`.
+    pub(super) fn hook_state(text: &str, key: &str, hash: &str) -> Result<State> {
+        let doc = parse(text)?;
+        let Some(table) = hook_table(&doc, key)? else {
+            return Ok(State::NoEntry);
+        };
+        Ok(match table.get(HOOK_KEY) {
+            None => State::NoKey,
+            Some(item) if item.as_str() == Some(hash) => State::Trusted,
+            Some(item) => {
+                let span = item
+                    .span()
+                    .ok_or_else(|| invalid("a value has no position"))?;
+                State::Other {
+                    raw: text[span.clone()].to_owned(),
+                    span,
+                }
+            }
+        })
+    }
+
+    /// `text` with the hook `key` trusted at `hash`: a table of its own at the end, a line
+    /// right after its header, or its old hash replaced in place.
+    pub(super) fn trust_hook(text: &str, key: &str, hash: &str, state: &State) -> Result<String> {
+        let line = format!("{HOOK_KEY} = {}", basic_string(hash));
+        let new = match state {
+            State::Trusted => return Ok(text.to_owned()),
+            State::NoProjects | State::NoEntry => {
+                let mut new = text.to_owned();
+                if !new.is_empty() && !new.ends_with('\n') {
+                    new.push('\n');
+                }
+                if !new.is_empty() {
+                    new.push('\n');
+                }
+                new.push_str(&format!("[hooks.state.{}]\n{line}\n", basic_string(key)));
+                new
+            }
+            State::NoKey => {
+                let doc = parse(text)?;
+                let span = hook_table(&doc, key)?
+                    .and_then(Table::span)
+                    .ok_or_else(|| invalid("the hook's table has no position"))?;
+                let at = text[span.end..]
+                    .find('\n')
+                    .map_or(text.len(), |i| span.end + i + 1);
+                let mut new = text[..at].to_owned();
+                if !new.ends_with('\n') {
+                    new.push('\n');
+                }
+                new.push_str(&line);
+                new.push('\n');
+                new.push_str(&text[at..]);
+                new
+            }
+            State::Other { span, .. } => format!(
+                "{}{}{}",
+                &text[..span.start],
+                basic_string(hash),
+                &text[span.end..]
+            ),
+        };
+        match hook_state(&new, key, hash)? {
             State::Trusted => Ok(new),
             _ => Err(invalid("the edit did not read back as trusted")),
         }

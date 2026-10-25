@@ -396,3 +396,124 @@ fn the_files_follow_the_clis_environment() {
         Some(PathBuf::from("/x/config.toml"))
     );
 }
+
+const HOOK: &str = "/<session-flags>/config.toml:stop:0:0";
+const HASH: &str = "sha256:ada0be2f4b70d00c208e587a2633b12494a80f1473a16a45ce6ae36079f0aee7";
+const OUR_TABLE: &str = "[hooks.state.\"/<session-flags>/config.toml:stop:0:0\"]\n";
+
+// A user's Codex config with hooks of their own, inline and in tables, their trust, and
+// comments and spacing Brigadier must keep.
+const CODEX_WITH_HOOKS: &str = r#"model = "gpt-5.6-luna"   # mine
+notify = [ "/bin/true", "turn-ended" ]
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "~/bin/my-stop"
+
+# trusted by hand
+[hooks.state."/Users/me/.codex/hooks.json:stop:0:0"]
+enabled = true
+trusted_hash = "sha256:1ae8ee19d95298f7bc4821368a7d4600b9f9d36c68695812c19419b28b5ad53e"
+
+[hooks.state."/Users/me/.codex/config.toml:stop:0:0"]
+trusted_hash = "sha256:6970486fae0b2896a8b644de5827a2083935b46940a85fc3d1a2f40d690df200"
+
+[tui]
+screen_reader_detection_done = true
+"#;
+
+#[test]
+fn codex_hook_trust_in_a_fresh_file_and_a_rerun_changes_nothing() {
+    let scratch = Scratch::new();
+    let file = scratch.file("config.toml", None);
+    assert_eq!(
+        trust_codex_hook(&file, HOOK, HASH).unwrap(),
+        HookTrust::Trusted
+    );
+    let written = fs::read_to_string(&file).unwrap();
+    assert_eq!(written, format!("{OUR_TABLE}trusted_hash = \"{HASH}\"\n"));
+    assert_eq!(
+        trust_codex_hook(&file, HOOK, HASH).unwrap(),
+        HookTrust::AlreadyTrusted
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), written);
+    // Only the user can read it, as Codex makes it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
+#[test]
+fn codex_hook_trust_keeps_the_users_hooks_their_trust_and_formatting() {
+    let scratch = Scratch::new();
+    let file = scratch.file("config.toml", Some(CODEX_WITH_HOOKS));
+    assert_eq!(
+        trust_codex_hook(&file, HOOK, HASH).unwrap(),
+        HookTrust::Trusted
+    );
+    let written = fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        written,
+        format!("{CODEX_WITH_HOOKS}\n{OUR_TABLE}trusted_hash = \"{HASH}\"\n")
+    );
+    // A rerun: not a byte changes.
+    assert_eq!(
+        trust_codex_hook(&file, HOOK, HASH).unwrap(),
+        HookTrust::AlreadyTrusted
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), written);
+    // A file without a final newline still ends up valid.
+    let file = scratch.file("b.toml", Some(CODEX_WITH_HOOKS.trim_end()));
+    trust_codex_hook(&file, HOOK, HASH).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), written);
+}
+
+#[test]
+fn codex_hook_trust_replaces_only_an_old_hash_and_keeps_the_users_switch() {
+    let scratch = Scratch::new();
+    // An older Brigadier's hash, beside the user's own `enabled`.
+    let old = format!(
+        "{CODEX_WITH_HOOKS}\n{OUR_TABLE}enabled = true # keep\ntrusted_hash = \"sha256:old\"  # ours\n"
+    );
+    let file = scratch.file("config.toml", Some(&old));
+    assert_eq!(
+        trust_codex_hook(&file, HOOK, HASH).unwrap(),
+        HookTrust::Trusted
+    );
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        old.replace("\"sha256:old\"", &format!("\"{HASH}\""))
+    );
+    // A table with no hash yet gets one right under its header; what else it holds stays.
+    let no_hash = format!("{CODEX_WITH_HOOKS}\n{OUR_TABLE}enabled = false\n\n[later]\nx = 1\n");
+    let file = scratch.file("b.toml", Some(&no_hash));
+    trust_codex_hook(&file, HOOK, HASH).unwrap();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        no_hash.replace(
+            OUR_TABLE,
+            &format!("{OUR_TABLE}trusted_hash = \"{HASH}\"\n")
+        )
+    );
+}
+
+#[test]
+fn codex_hook_trust_refuses_layouts_a_splice_cant_edit() {
+    let scratch = Scratch::new();
+    for text in [
+        "hooks = { state = {} }\n".to_owned(),
+        "[hooks]\nstate = { \"/x:stop:0:0\" = { enabled = true } }\n".to_owned(),
+        format!("hooks.state.\"{HOOK}\".trusted_hash = \"sha256:old\"\n"),
+        format!("[hooks.state]\n\"{HOOK}\" = {{ trusted_hash = \"sha256:old\" }}\n"),
+        "not toml = = 1\n".to_owned(),
+    ] {
+        let file = scratch.file("config.toml", Some(&text));
+        assert!(trust_codex_hook(&file, HOOK, HASH).is_err(), "{text}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), text);
+    }
+    assert!(!scratch.0.join("config.toml.brigadier.lock").exists());
+}
