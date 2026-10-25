@@ -15,6 +15,8 @@ export type MentionRow = {
   detail?: string | undefined;
   /** Grey text at the row's end (a worker's state). */
   trailing?: string | undefined;
+  /** Not a mention: picking it sends the composer's next message to this worker alone. */
+  direct?: boolean;
 };
 
 /** A part of the `@` menu: its heading (none for the ranked results), rows and a grey note. */
@@ -29,6 +31,8 @@ export type MentionTab = { id: string; title: string; url: string };
  */
 export type MentionSources = {
   workers: readonly MentionTarget[];
+  /** The workers the next message can go to directly (see `MentionRow.direct`). */
+  direct?: readonly MentionTarget[];
   tabs?: readonly MentionTab[];
   files: readonly string[];
   folders: readonly string[];
@@ -65,6 +69,13 @@ function pathRow(type: "file" | "folder", path: string): MentionRow {
 function workerRow(target: MentionTarget): MentionRow {
   // By its title, as everywhere the user reads it; `task-N` is what it leaves in the text.
   return { mention: { type: "task", id: target.id }, label: `task-${target.number}`, name: target.title, trailing: target.state };
+}
+
+/** The heading of the workers the next message can go to alone, and what such a row says. */
+export const DIRECT_SECTION = "Message directly";
+
+function directRow(target: MentionTarget, detail?: string): MentionRow {
+  return { ...workerRow(target), trailing: undefined, detail, direct: true };
 }
 
 /** A page's address as it reads: without its scheme or a trailing slash. */
@@ -109,6 +120,7 @@ export function mentionSections(query: string, sources: MentionSources): Mention
   if (!query) {
     const sections: MentionSection[] = [];
     if (sources.workers.length > 0) sections.push({ title: "Workers", rows: sources.workers.map(workerRow) });
+    if (sources.direct?.length) sections.push({ title: DIRECT_SECTION, rows: sources.direct.map((target) => directRow(target)) });
     if (sources.tabs?.length) sections.push({ title: "Browser tabs", rows: sources.tabs.map(tabRow) });
     if (sources.files.length > 0) sections.push({ title: "Files", rows: [], note: "Type to search for files" });
     const top = sources.folders.filter((folder) => !folder.includes("/")).slice(0, SECTION_ROWS);
@@ -118,6 +130,7 @@ export function mentionSections(query: string, sources: MentionSources): Mention
   }
   const rows = [
     ...sources.workers.map(workerRow),
+    ...(sources.direct ?? []).map((target) => directRow(target, DIRECT_SECTION)),
     ...(sources.tabs ?? []).map(tabRow),
     ...sources.files.map((file) => pathRow("file", file)),
     ...sources.folders.map((folder) => pathRow("folder", folder)),
@@ -131,7 +144,9 @@ export function mentionSections(query: string, sources: MentionSources): Mention
         a.score - b.score ||
         a.row.name.length - b.row.name.length ||
         a.row.label.length - b.row.label.length ||
-        KIND_ORDER[a.row.mention.type] - KIND_ORDER[b.row.mention.type],
+        KIND_ORDER[a.row.mention.type] - KIND_ORDER[b.row.mention.type] ||
+        // A worker's mention before its "Message directly".
+        Number(a.row.direct ?? false) - Number(b.row.direct ?? false),
     )
     .slice(0, RESULT_ROWS)
     .map((entry) => entry.row);

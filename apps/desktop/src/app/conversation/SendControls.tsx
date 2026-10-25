@@ -16,7 +16,9 @@ import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SendButton } from "@/components/controls";
 import { useComposerSend, useAui, useAuiState } from "@/components/conversation";
 import { clearBackgroundSend, markBackgroundSend, useBackgroundArmed } from "@/state/backgroundSend";
+import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { cancelDictation, useDictation } from "@/state/dictation";
+import { useDirectSending, useDirectTo } from "@/state/directTo";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { turnStopping, useStopping } from "@/state/stopping";
 import { useApp } from "@/state/store";
@@ -162,10 +164,15 @@ export function SendControls({
   useImagesUnsupportedToast();
   const stored = useAuiState((s) => anyUploading(s.composer.attachments));
   const uploading = useReadingFiles(dictationOwner) || stored;
+  // The composer's To: its message goes to that worker alone, past the session's queue.
+  const direct = useDirectTo(conversationId);
+  const directName = useWorkerName(direct ?? "");
+  const directSending = useDirectSending(conversationId);
   const state = sendButtonState({ armed, canCancel, empty, running, resumable: onResume !== null });
   const sending = state === "send";
-  const queue = sending && running && !empty;
-  const background = sending && projectSession !== null && !empty && (modHeld || chip);
+  const toWorker = sending && direct !== null;
+  const queue = sending && running && !empty && !toWorker;
+  const background = sending && projectSession !== null && !empty && (modHeld || chip) && !toWorker;
   const tip = state === "stop" ? armed ? "Press Esc again to stop" : "Stop"
     : state === "resume" ? "Resume" : queue ? steers ? "Steer" : "Queue" : "Send message";
   const tooltip =
@@ -173,6 +180,8 @@ export function SendControls({
       ? IMAGES_BLOCKED
       : sending && uploading
         ? FILES_UPLOADING
+        : toWorker
+          ? `Send to ${directName ?? "the worker"}`
         : background
         ? START_TIP
         : sending && projectSession
@@ -181,7 +190,7 @@ export function SendControls({
   const button = (
     <SendButton
       tooltip={tooltip}
-      disabled={sending && (sendDisabled || imagesBlocked || uploading)}
+      disabled={sending && (sendDisabled || imagesBlocked || uploading || (toWorker && directSending))}
       state={state}
       background={background}
       onClick={
@@ -192,6 +201,12 @@ export function SendControls({
                 if (cancellable) aui.composer().cancel();
               }
           : (event: MouseEvent<HTMLButtonElement>) => {
+              if (toWorker) {
+                // Its own way: no new session, no paused-queue question.
+                if (projectSession) clearBackgroundSend(projectSession);
+                if (!empty && !directSending) send();
+                return;
+              }
               const toNewSession = sending && !empty && (mac ? event.metaKey : event.ctrlKey);
               // A paused queue asks before this click sends.
               if (sending && !empty && !(projectSession && toNewSession) && askPausedSend(conversationId, () => send())) {

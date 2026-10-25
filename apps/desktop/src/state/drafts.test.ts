@@ -89,3 +89,17 @@ test("nonempty drafts retain and pin deleted images for undo and reload", () => 
   assert.deepEqual(pins.at(-1)?.attachments, [image]);
   assert.deepEqual(draftRefs(draft!.text, [], draft!.attachments), [image]);
 });
+
+test("a refused direct message left behind comes back whole into its session's kept draft, before what was typed since", async () => {
+  const { restoreDraft } = await import("@/app/conversation/composerDraft");
+  const file: AttachmentRef = { id: "file", name: "notes.txt", mime: "text/plain", bytes: 3, pasted: false, inline: null };
+  saveDraft("session", "typed since @README.md", [], [{ at: 12, name: "README.md", mention: { type: "file", path: "README.md" } }]);
+  restoreDraft("session", { text: "Use blue @src/a.ts", attachments: [file], mentions: [{ type: "file", path: "src/a.ts" }] });
+  const kept = loadDraft("session");
+  assert.equal(kept?.text, "Use blue @src/a.ts\ntyped since @README.md");
+  assert.deepEqual(kept?.attachments, [file]);
+  assert.deepEqual(kept?.mentions, [
+    { at: 9, name: "src/a.ts", mention: { type: "file", path: "src/a.ts" } },
+    { at: 31, name: "README.md", mention: { type: "file", path: "README.md" } },
+  ]);
+});

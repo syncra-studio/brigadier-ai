@@ -15,6 +15,7 @@ import { useApp } from "@/state/store";
 export type { MentionTarget };
 
 const TASK = /@task-(\d+)\b/g;
+const NO_TARGETS: readonly MentionTarget[] = [];
 
 /** What a mention leaves in the text, after `@`. */
 function label(mention: Mention, targets: readonly MentionTarget[]): string | null {
@@ -181,6 +182,14 @@ export class MentionMemory {
   }
 }
 
+/** The `@` menu item of a "Message directly" row (see `MentionRow.direct`): no mention. */
+export const DIRECT_ITEM = "direct";
+
+/** The worker a picked "Message directly" item sends to; null for any other item. */
+export function directTaskOf(item: { id: string; type: string }): string | null {
+  return item.type === DIRECT_ITEM ? item.id.slice(item.id.indexOf(":") + 1) : null;
+}
+
 /** A mention's menu item: its id is unique across kinds, its label goes in the text. */
 function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
   const id = "path" in mention ? `${mention.type}:${mention.path}`
@@ -293,8 +302,10 @@ function iconOf(mention: Mention): ReactNode {
 export const Mentions: FC<{
   conversation: Conversation | null;
   targets: readonly MentionTarget[];
+  /** The workers the next message can go to directly, under "Message directly". */
+  direct?: readonly MentionTarget[];
   projectId?: string | null;
-}> = ({ conversation, targets, projectId = null }) => {
+}> = ({ conversation, targets, direct = NO_TARGETS, projectId = null }) => {
   const [refresh, setRefresh] = useState(0);
   const onOpen = useCallback(() => setRefresh((value) => value + 1), []);
   const files = useCheckoutFiles(conversation, refresh, projectId);
@@ -316,17 +327,19 @@ export const Mentions: FC<{
   const search = useCallback(
     (query: string): MentionGroup[] => {
       const option = (row: MentionRow) => ({
-        item: itemOf(row.mention, row.label),
+        item: row.direct && row.mention.type === "task"
+          ? { id: `${DIRECT_ITEM}:${row.mention.id}`, type: DIRECT_ITEM, label: row.label }
+          : itemOf(row.mention, row.label),
         icon: iconOf(row.mention),
         name: row.name,
         detail: row.detail,
         trailing: row.trailing,
       });
-      return mentionSections(query, { workers: targets, tabs, files: files?.files ?? [], folders, chats }).map(
+      return mentionSections(query, { workers: targets, direct, tabs, files: files?.files ?? [], folders, chats }).map(
         (section) => ({ title: section.title, options: section.rows.map(option), note: section.note }),
       );
     },
-    [targets, tabs, files, folders, chats],
+    [targets, direct, tabs, files, folders, chats],
   );
 
   return <ComposerMentions search={search} onOpen={onOpen} />;

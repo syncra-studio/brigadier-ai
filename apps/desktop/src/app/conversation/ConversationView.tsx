@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -46,7 +47,7 @@ import {
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
-import { putBack } from "@/app/conversation/composerDraft";
+import { putBack, restoreDraft } from "@/app/conversation/composerDraft";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
@@ -94,12 +95,15 @@ import {
   startSessionFrom,
   steerQueued,
   switchBranch,
+  sendToWorker,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { takeBackgroundSend } from "@/state/backgroundSend";
+import { beginDirectSend, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { readSessionImageBlob, sessionImageOf, useThreadView } from "@/state/cliThread";
+import { loadWorkerThread, readSessionImageBlob, sessionImageOf, useThreadView, useWorkerRows } from "@/state/cliThread";
+import { isNativeWorker } from "@/state/nativeWorkers";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -472,6 +476,18 @@ const EMPTY_DIGEST: BoardDigest = {
   compactions: {},
 };
 
+/**
+ * Those of `targets` the composer's next message can go to directly: the session's own
+ * workers whose CLI still runs (not the CLI's own agents, not one gone or closed).
+ */
+function useDirectTargets(conversationId: string | null, targets: readonly MentionTarget[]): MentionTarget[] {
+  const rows = useWorkerRows(conversationId);
+  return useMemo(() => {
+    const live = new Set(rows.filter((row) => !isNativeWorker(row) && !row.gone).map((row) => row.id));
+    return targets.filter((target) => live.has(target.id));
+  }, [rows, targets]);
+}
+
 /** The open conversation's workers, for @-mentions. */
 function useMentionTargets(conversationId: string | null): MentionTarget[] {
   const flat = useBoard(
@@ -566,6 +582,7 @@ export function ConversationView({
     s.board?.conversationId === conversationId ? s.board.queue.items : null,
   );
   const targets = useMentionTargets(conversationId);
+  const direct = useDirectTargets(conversationId, targets);
   const resolved = useResolvedDraft(selection);
   const [error, setError] = useState<string | null>(null);
 
@@ -716,6 +733,17 @@ export function ConversationView({
   }), [attachments, conversationId]);
   const [mentions] = useState(() => new MentionMemory());
   const [pulled] = useState(() => new PulledSlot());
+  // This view's visit of the conversation: a direct send's end acts here only while it lasts.
+  const visit = useRef<object>({});
+  useEffect(() => {
+    const here = {};
+    visit.current = here;
+    return () => {
+      visit.current = {};
+      // The To: is for one message in this visit: leaving takes it away.
+      if (conversationId) setDirectTo(conversationId, null);
+    };
+  }, [conversationId]);
   const draftTarget = resolved.target;
   // The conversation whose `/status` card shows (none once another one opens).
   const [statusFor, setStatusFor] = useState<string | null>(null);
@@ -731,8 +759,68 @@ export function ConversationView({
   }, []);
   // The user's rules' refusals read in their words (as Settings › Routing words a rule).
   const refusals = useRuleRefusals(resolved.groups);
+  const { setPanel: showWorker } = agents;
+  /**
+   * The message to the composer's To: worker alone: past the session's queue, its paused
+   * state and a new background session. Refused, the whole message (text, attachments,
+   * mentions and its To:) goes back where it was written; taken, the To: goes and the worker's
+   * thread opens, if this visit still lasts. Nothing after the worker took it fails the send.
+   */
+  const sendDirect = useCallback(
+    (message: AppendMessage, from: string, taskId: string) => {
+      const text = textOf(message);
+      const refs = attachments.messageRefs(text, message.attachments ?? []);
+      if (!text && refs.length === 0) return;
+      const draft = { text, attachments: refs, mentions: mentionsIn(text, targets, mentions.known()) };
+      const here = visit.current;
+      const keep = (cause: unknown) => {
+        restoreDraft(from, draft);
+        if (directToOf(from) === null) setDirectTo(from, taskId);
+        if (visit.current === here) fail(cause);
+        else toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
+      };
+      // A queued message being edited is the session's; it never goes to a worker.
+      if (pulled.holds(from)) {
+        keep(new Error("Send the queued message you're editing first"));
+        return;
+      }
+      if (!beginDirectSend(from)) {
+        keep(new Error("Your message to the worker is still on its way"));
+        return;
+      }
+      setError(null);
+      sendToWorker(from, taskId, draft).then(
+        () => {
+          endDirectSend(from);
+          try {
+            if (directToOf(from) === taskId) setDirectTo(from, null);
+            if (visit.current === here) showWorker(taskId);
+            void loadWorkerThread(from, taskId).catch((cause: unknown) =>
+              console.error("reading the worker's thread failed", cause),
+            );
+          } catch (cause) {
+            console.error("showing the worker after its message failed", cause);
+          }
+        },
+        (cause: unknown) => {
+          endDirectSend(from);
+          keep(cause);
+        },
+      );
+    },
+    [attachments, targets, mentions, pulled, fail, showWorker],
+  );
   const submit = useCallback(
     (message: AppendMessage, lane: SendLane | "followUp") => {
+      // To the composer's To: worker, before anything of the session's queue is taken.
+      const directTo = directToOf(conversationId);
+      if (conversationId && directTo !== null) {
+        // This send's marks are void: it goes to neither a new session nor the paused queue.
+        takeBackgroundSend(conversationId);
+        takeQueueSend(conversationId);
+        sendDirect(message, conversationId, directTo);
+        return;
+      }
       const text = textOf(message);
       const refs = attachments.messageRefs(text, message.attachments ?? []);
       // ⌘⏎ asked for a new background session.
@@ -773,7 +861,7 @@ export function ConversationView({
         },
       ).catch(keep);
     },
-    [attachments, pulled, conversationId, targets, mentions, draftTarget, fail],
+    [attachments, pulled, conversationId, targets, mentions, draftTarget, fail, sendDirect],
   );
 
   // assistant-ui's queue over the daemon's: sends go through it so the composer stays usable
@@ -932,12 +1020,13 @@ export function ConversationView({
       conversation,
       resolved,
       targets,
+      direct,
       mentions,
       running,
       onResume,
       queue: { pulled, attachments },
     }),
-    [conversation, resolved, targets, mentions, running, onResume, pulled, attachments],
+    [conversation, resolved, targets, direct, mentions, running, onResume, pulled, attachments],
   );
 
   // The same value while these stay: each change draws every message of the thread again.

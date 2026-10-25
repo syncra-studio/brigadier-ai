@@ -6,6 +6,8 @@ import { findModel } from "@/components/shared/model-selector";
 import { IMAGES_UNSUPPORTED, takesImages } from "@/app/conversation/imageModels";
 import type { ModelChoice, ModelInfo } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
+import { useWorkerRow } from "@/state/cliThread";
+import { useDirectTo } from "@/state/directTo";
 import { toast } from "@/state/toasts";
 
 /**
@@ -14,13 +16,18 @@ import { toast } from "@/state/toasts";
  * of what it takes is taken to take images.
  */
 
-/** The model the composer's message goes to: the conversation's, else the draft's. */
+/**
+ * The model the composer's message goes to: the worker's on its To:, else the conversation's,
+ * else the draft's.
+ */
 function useComposerModel(): ModelInfo | null {
   const target = useContext(ComposerTargetContext);
   const groups = useModelGroups();
+  const worker = useWorkerRow(useDirectTo(target?.conversation?.id ?? null));
   const setup = target?.conversation?.setup ?? null;
-  const choice: ModelChoice | null =
-    setup?.type === "session" ? setup.orchestrator : setup?.type === "chat" ? setup.model : (target?.resolved.model ?? null);
+  const choice: ModelChoice | null = worker
+    ? { provider: worker.agent, model: worker.model, effort: null }
+    : setup?.type === "session" ? setup.orchestrator : setup?.type === "chat" ? setup.model : (target?.resolved.model ?? null);
   return choice ? findModel(groups, choice) : null;
 }
 

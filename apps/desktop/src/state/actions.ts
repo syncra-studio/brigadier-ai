@@ -1220,6 +1220,19 @@ export async function sendMockupNotes(taskId: string, text: string, attachments:
   await request({ method: "sendMockupNotes", taskId, text, attachments });
 }
 
+/**
+ * The user's one message straight to one of the session's own workers (the composer's To:).
+ * Resolves once the worker took it (`queued`: into its running turn); rejects when it didn't.
+ */
+export async function sendToWorker(
+  conversationId: string,
+  taskId: string,
+  message: { text: string; attachments: AttachmentRef[]; mentions: Mention[] },
+): Promise<{ queued: boolean }> {
+  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message });
+  return { queued };
+}
+
 export async function pauseTask(taskId: string): Promise<void> {
   await request({ method: "pauseTask", taskId });
 }

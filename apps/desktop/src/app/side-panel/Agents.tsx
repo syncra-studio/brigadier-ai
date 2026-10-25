@@ -1,6 +1,7 @@
 import { type ReactNode, useContext, useState } from "react";
 
 import { workerStateOf } from "@/app/conversation/activity/workerState";
+import { COMPOSER_EDITABLE, ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { TaskDetails } from "@/app/side-panel/TaskDetails";
 import { MarkdownBlock } from "@/components/conversation";
 import {
@@ -17,6 +18,8 @@ import { modelName, useModelGroups } from "@/lib/setup";
 import { useBoard } from "@/state/board";
 import { isNativeWorker } from "@/state/nativeWorkers";
 import { useWorkerRows } from "@/state/cliThread";
+import { setDirectTo } from "@/state/directTo";
+import { toast } from "@/state/toasts";
 
 export { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 
@@ -50,6 +53,18 @@ function WorkerDetail({ conversationId, row, headerActions }: { conversationId: 
   const now = useNow(30_000);
   const model = modelName(groups, { provider: row.agent, model: row.model, effort: null });
   const state = workerStateOf(row, now).word;
+  // Its session's composer sends its next message here alone, while the worker can take one.
+  const composer = useContext(ComposerTargetContext);
+  const message = !isNativeWorker(row) && !row.gone && composer?.conversation?.id === conversationId
+    ? () => {
+        if (composer.queue.pulled.holds(conversationId)) {
+          toast("Send the queued message you're editing first", { tone: "error" });
+          return;
+        }
+        setDirectTo(conversationId, row.id);
+        document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus();
+      }
+    : undefined;
   return (
     <section aria-label={`Worker: ${name ?? row.title}`} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <WorkerHeader
@@ -60,6 +75,7 @@ function WorkerDetail({ conversationId, row, headerActions }: { conversationId: 
         details={details}
         onBack={() => details ? setDetails(false) : setPanel(null)}
         onToggleDetails={task || isNativeWorker(row) ? () => setDetails((open) => !open) : undefined}
+        onMessage={message}
         headerActions={headerActions}
       />
       {details && isNativeWorker(row) ? (

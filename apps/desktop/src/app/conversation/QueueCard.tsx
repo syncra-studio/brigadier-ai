@@ -33,6 +33,7 @@ import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
+import { useDirectTo } from "@/state/directTo";
 
 const NO_ITEMS: QueuedMessage[] = [];
 const NO_SENT: SentToWorker[] = [];
@@ -72,7 +73,10 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
     },
     [aui, target, conversationId, items],
   );
-  return conversationId && items.length > 0 ? pull : null;
+  // A queued message is the session's: none is pulled into a composer whose next message goes
+  // to a worker.
+  const direct = useDirectTo(conversationId);
+  return conversationId && items.length > 0 && direct === null ? pull : null;
 }
 
 /** An attachment-only message's label, or what rides along with the text. */

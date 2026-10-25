@@ -16,6 +16,11 @@ export class PulledSlot {
     this.slot = { conversationId, index, mentions };
   }
 
+  /** Whether a queued message of `conversationId` is pulled out to edit. */
+  holds(conversationId: string | null): boolean {
+    return this.slot !== null && this.slot.conversationId === conversationId;
+  }
+
   take(conversationId: string | null): { index: number; mentions: Mention[] } | null {
     const slot = this.slot;
     this.slot = null;
@@ -37,6 +42,8 @@ export type ComposerTarget = {
   conversation: Conversation | null;
   resolved: ResolvedDraft;
   targets: readonly MentionTarget[];
+  /** The session's workers its next message can go to directly (the composer's To:). */
+  direct: readonly MentionTarget[];
   /** The files and conversations the `@` menu put in the text. */
   mentions: MentionMemory;
   running: boolean;

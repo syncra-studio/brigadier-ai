@@ -42,10 +42,50 @@ export function putBack(scope: string, text: string): void {
   );
 }
 
+/** A whole message the daemon didn't take: its text, stored attachments and mentions. */
+export type SentDraft = { text: string; attachments: AttachmentRef[]; mentions: Mention[] };
+
+/** The composers open now by draft scope, each taking a whole message back (`restoreDraft`). */
+const restorers = new Map<string, (draft: SentDraft) => void>();
+
+/**
+ * Puts a whole message the daemon didn't take back into the composer of `scope`, before
+ * anything typed since, with its attachments and mentions; into its kept draft when no
+ * composer for it is open.
+ */
+export function restoreDraft(scope: string, draft: SentDraft): void {
+  const restore = restorers.get(scope);
+  if (restore) {
+    restore(draft);
+    return;
+  }
+  const saved = loadDraft(scope);
+  const shift = saved?.text ? draft.text.length + 1 : 0;
+  saveDraft(
+    scope,
+    saved?.text ? `${draft.text}\n${saved.text}` : draft.text,
+    [...draft.attachments, ...(saved?.attachments ?? [])],
+    [
+      ...mentionsAt(draft.text, named(draft.mentions)),
+      ...(saved?.mentions ?? []).map((mention) => ({ ...mention, at: mention.at + shift })),
+    ],
+  );
+}
+
+/** Each file, folder, conversation or tab mention with the `@name` it leaves in the text. */
+function named(mentions: readonly Mention[]): [string, Mention][] {
+  return mentions.flatMap((mention): [string, Mention][] => {
+    if (mention.type === "file" || mention.type === "folder") return [[mention.path, mention]];
+    if (mention.type === "chat") return [[mention.title, mention]];
+    if (mention.type === "browserTab") return [[mention.title.trim() || mention.url, mention]];
+    return [];
+  });
+}
+
 /** Where each remembered file or conversation's `@name` stands in `text`. */
-function mentionsAt(text: string, memory: MentionMemory): DraftMention[] {
+function mentionsAt(text: string, entries: Iterable<[string, Mention]>): DraftMention[] {
   const found: DraftMention[] = [];
-  for (const [name, mention] of memory.entries()) {
+  for (const [name, mention] of entries) {
     for (let at = text.indexOf(`@${name}`); at >= 0; at = text.indexOf(`@${name}`, at + 1)) {
       found.push({ at, name, mention });
     }
@@ -96,7 +136,7 @@ export function useComposerDraft(
 
   const keep = useCallback(() => {
     const state = aui.composer().getState();
-    saveDraft(scope, state.text, attachments.draftRefs(state.text, state.attachments), mentionsAt(state.text, memory));
+    saveDraft(scope, state.text, attachments.draftRefs(state.text, state.attachments), mentionsAt(state.text, memory.entries()));
   }, [aui, attachments, memory, scope]);
 
   // Once typing rests; an emptied composer (sent or cleared) lets the draft go at once.
@@ -113,11 +153,20 @@ export function useComposerDraft(
       const composer = aui.composer();
       composer.setText(edit(composer.getState().text));
     };
+    const restore = (draft: SentDraft) => {
+      const composer = aui.composer();
+      const now = composer.getState().text;
+      memory.recall(draft.mentions);
+      composer.setText(now === "" ? draft.text : `${draft.text}\n${now}`);
+      for (const ref of draft.attachments) void composer.addAttachment(attachments.adopt(ref));
+    };
     typists.set(scope, type);
+    restorers.set(scope, restore);
     return () => {
       if (typists.get(scope) === type) typists.delete(scope);
+      if (restorers.get(scope) === restore) restorers.delete(scope);
     };
-  }, [aui, scope]);
+  }, [aui, attachments, memory, scope]);
 }
 
 /**
