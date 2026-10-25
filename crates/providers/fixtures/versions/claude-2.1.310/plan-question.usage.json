@@ -1,0 +1,30 @@
+{
+  "nativeTotals": {
+    "costUsd": 0.08253559999999999,
+    "modelUsage": {
+      "claude-sonnet-5-5": {
+        "cacheCreationInputTokens": 18358,
+        "cacheReadInputTokens": 52076,
+        "costUSD": 0.08253559999999999,
+        "inputTokens": 8,
+        "outputTokens": 388,
+        "thinkingTokens": 0,
+        "webSearchRequests": 0
+      }
+    }
+  },
+  "note": "CLI-reported cumulative totals, not additive. Codex supplies no dollar cost. For total spend across resume, use the native Claude cost-state or Codex thread/tokenUsage totals; do not add cumulative reports.",
+  "reports": [
+    {
+      "cacheWrite1hTokens": 18358,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 18358,
+      "cachedInputTokens": 52076,
+      "costUsd": 0.08253559999999999,
+      "inputTokens": 8,
+      "modelCalls": 4,
+      "outputTokens": 388,
+      "reasoningTokens": 0
+    }
+  ]
+}

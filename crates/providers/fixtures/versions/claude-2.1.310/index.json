@@ -9,18 +9,22 @@
   "scenarios": {
     "plain": {
       "recording": "../../claude-plan-questions.jsonl",
-      "native": "plan-question.native.jsonl",
+      "native": "lifecycle.native.jsonl",
       "view": "plain.view.json",
+      "nativeRecording": "lifecycle.jsonl",
       "historyRecordings": [
-        "../../claude-plan-questions.jsonl"
+        "lifecycle.jsonl",
+        "resume.jsonl"
       ]
     },
     "tools": {
       "recording": "../../claude-plan-questions.jsonl",
-      "native": "plan-question.native.jsonl",
+      "native": "lifecycle.native.jsonl",
       "view": "tools.view.json",
+      "nativeRecording": "lifecycle.jsonl",
       "historyRecordings": [
-        "../../claude-plan-questions.jsonl"
+        "lifecycle.jsonl",
+        "resume.jsonl"
       ]
     },
     "background": {
@@ -33,12 +37,11 @@
       ]
     },
     "interrupt": {
-      "recording": "lifecycle.jsonl",
-      "native": "lifecycle.native.jsonl",
+      "recording": "interrupt.jsonl",
+      "native": "interrupt.native.jsonl",
       "view": "interrupt.view.json",
       "historyRecordings": [
-        "lifecycle.jsonl",
-        "resume.jsonl"
+        "interrupt.jsonl"
       ]
     },
     "compaction": {
@@ -60,19 +63,27 @@
       ]
     },
     "plan": {
-      "recording": "../../claude-plan-questions.jsonl",
+      "recording": "plan-question.jsonl",
       "native": "plan-question.native.jsonl",
       "view": "plan.view.json",
       "historyRecordings": [
-        "../../claude-plan-questions.jsonl"
+        "plan-question.jsonl"
       ]
     },
     "question": {
-      "recording": "../../claude-plan-questions.jsonl",
+      "recording": "plan-question.jsonl",
       "native": "plan-question.native.jsonl",
       "view": "question.view.json",
       "historyRecordings": [
-        "../../claude-plan-questions.jsonl"
+        "plan-question.jsonl"
+      ]
+    },
+    "subagent": {
+      "recording": "subagent.jsonl",
+      "native": "subagent.native.jsonl",
+      "view": "subagent.view.json",
+      "historyRecordings": [
+        "subagent.jsonl"
       ]
     }
   }

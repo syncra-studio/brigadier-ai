@@ -1,0 +1,41 @@
+{
+  "nativeTotals": {
+    "costUsd": 0.0034499900000000004,
+    "modelUsage": {
+      "claude-haiku-5-5": {
+        "cacheCreationInputTokens": 17375,
+        "cacheReadInputTokens": 62009,
+        "costUSD": 0.0034499900000000004,
+        "inputTokens": 12,
+        "outputTokens": 250,
+        "thinkingTokens": 0,
+        "webSearchRequests": 0
+      }
+    }
+  },
+  "note": "CLI-reported cumulative totals, not additive. Codex supplies no dollar cost. For total spend across resume, use the native Claude cost-state or Codex thread/tokenUsage totals; do not add cumulative reports.",
+  "reports": [
+    {
+      "cacheWrite1hTokens": 6550,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 6550,
+      "cachedInputTokens": 32568,
+      "costUsd": 0.0017105800000000002,
+      "inputTokens": 4,
+      "modelCalls": 2,
+      "outputTokens": 149,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 7091,
+      "cacheWrite5mTokens": 10284,
+      "cacheWriteTokens": 17375,
+      "cachedInputTokens": 62009,
+      "costUsd": 0.0034499900000000004,
+      "inputTokens": 12,
+      "modelCalls": 5,
+      "outputTokens": 171,
+      "reasoningTokens": 0
+    }
+  ]
+}

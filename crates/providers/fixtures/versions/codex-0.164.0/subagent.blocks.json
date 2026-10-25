@@ -1,0 +1,52 @@
+{
+  "live": [
+    {
+      "key": "01a173c1-bd75-7b53-86ba-ea386225df38",
+      "state": "done",
+      "user": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+          "name": "agents/spawnAgent",
+          "detail": "echo hi",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792943444116,
+          "item": "tool"
+        }
+      ]
+    }
+  ],
+  "persisted": [
+    {
+      "key": "01a173c1-bd75-7b53-86ba-ea386225df38",
+      "state": "done",
+      "user": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+          "name": "agents/spawnAgent",
+          "detail": "echo hi",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792943444116,
+          "item": "tool"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "live": [
+    {
+      "key": "7fd4f1fa-92c6-455c-81cd-36da4d7f680c",
+      "state": "done",
+      "user": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgPDY5CwVzZfYpipkyfZL:0",
+          "text": "The subagent is running `echo hi` now. I'll reply OK once it finishes."
+        },
+        {
+          "messageId": "msg_011CgPDYHxQbagFHfLoKm8D1:0",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_011E1g6VbebewGRL7iDU426f",
+          "name": "Agent",
+          "detail": "Run echo hi",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792943240470,
+          "item": "tool"
+        }
+      ]
+    }
+  ],
+  "persisted": [
+    {
+      "key": "7fd4f1fa-92c6-455c-81cd-36da4d7f680c",
+      "state": "done",
+      "user": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+      "texts": [
+        {
+          "messageId": "msg_011CgPDY5CwVzZfYpipkyfZL:0",
+          "text": "The subagent is running `echo hi` now. I'll reply OK once it finishes."
+        },
+        {
+          "messageId": "msg_011CgPDYHxQbagFHfLoKm8D1:0",
+          "text": "OK"
+        }
+      ],
+      "steps": [
+        {
+          "type": "tool",
+          "itemId": "toolu_011E1g6VbebewGRL7iDU426f",
+          "name": "Agent",
+          "detail": "Run echo hi",
+          "status": "completed",
+          "throughPosition": 0,
+          "endedAtMs": 1792943240470,
+          "item": "tool"
+        }
+      ]
+    }
+  ]
+}

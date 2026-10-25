@@ -1,49 +1,14 @@
 {
   "live": [
     {
-      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
-              "summary": "Ran a command",
-              "rows": [
-                "Ran sleep 2"
-              ]
-            },
-            {
-              "item": "compaction"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "item": "taskNotice"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "key": "3a04f166-93ad-44b6-82a5-c57928b70daa",
       "state": "stopped",
       "folded": false,
       "parts": [
         {
           "work": [
             {
-              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
+              "group": "step:toolu_01NnpedHgSs8B124AdxHkHqx",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"
@@ -52,59 +17,18 @@
           ]
         }
       ]
-    },
-    {
-      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
-      "state": "done",
-      "folded": false,
-      "parts": []
     }
   ],
   "persisted": [
     {
-      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
-              "summary": "Ran a command",
-              "rows": [
-                "Ran sleep 2"
-              ]
-            },
-            {
-              "item": "compaction"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "item": "taskNotice"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "key": "3a04f166-93ad-44b6-82a5-c57928b70daa",
       "state": "stopped",
       "folded": false,
       "parts": [
         {
           "work": [
             {
-              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
+              "group": "step:toolu_01NnpedHgSs8B124AdxHkHqx",
               "summary": "Ran a command",
               "rows": [
                 "stopped: Ran sleep 30"
@@ -113,12 +37,6 @@
           ]
         }
       ]
-    },
-    {
-      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
-      "state": "done",
-      "folded": false,
-      "parts": []
     }
   ]
 }

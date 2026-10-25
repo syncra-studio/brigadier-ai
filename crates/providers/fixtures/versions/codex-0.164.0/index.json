@@ -87,6 +87,14 @@
       "historyRecordings": [
         "plan-question.jsonl"
       ]
+    },
+    "subagent": {
+      "recording": "subagent.jsonl",
+      "native": "subagent.native.jsonl",
+      "view": "subagent.view.json",
+      "historyRecordings": [
+        "subagent.jsonl"
+      ]
     }
   }
 }

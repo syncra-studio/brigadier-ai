@@ -126,6 +126,10 @@ fn check_scenario(name: &str, events: &[(i64, ProviderEvent)]) {
         }
         "plan" => any(|event| matches!(event, ProviderEvent::PlanProposed { .. })),
         "question" => any(|event| matches!(event, ProviderEvent::QuestionsAsked { .. })),
+        // D52: one subagent started (Claude's `Agent`, Codex's spawn).
+        "subagent" => any(
+            |event| matches!(event, ProviderEvent::ToolCall { name, .. } if matches!(name.as_str(), "Agent" | "Task" | "agents/spawnAgent")),
+        ),
         _ => panic!("unrecognized scenario {name}"),
     };
     assert!(
@@ -281,7 +285,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
             );
         }
         let scenarios = index["scenarios"].as_object().unwrap();
-        assert_eq!(scenarios.len(), 8);
+        assert_eq!(scenarios.len(), 9);
         for (name, case) in scenarios {
             let (recording, events) = replay(
                 provider.as_ref(),

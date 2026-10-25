@@ -318,7 +318,7 @@ test("a brigadier send whose message has its own Messaged row is no row of its o
 
 /** The recorded ToolSearch call as another tool: the recording's event, only its name and input changed (D29). */
 function recordedCallAs(name: string, input: string): ToolStep | undefined {
-  const view = load("claude-2.1.310", "tools").persisted;
+  const view = load("claude-2.1.310", "plan").persisted;
   const call = view.entries.find((entry) => entry.event.type === "toolCall" && entry.event.name === "ToolSearch");
   assert.ok(call?.event.type === "toolCall");
   const { itemId } = call.event;

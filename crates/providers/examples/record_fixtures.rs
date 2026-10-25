@@ -25,17 +25,84 @@ impl Ledger for Kept {
     }
 }
 
-fn spec(cwd: &Path, kind: ProviderKind, recording: PathBuf, origin: Origin) -> SessionSpec {
+/// The one request of a recording group, in the same words for both CLIs but the tool each names
+/// (D52: the parity test compares what each CLI's run reads as).
+fn prompt(group: &str, kind: ProviderKind) -> &'static str {
+    match (group, kind) {
+        ("plan-question", ProviderKind::Claude) => {
+            "Use AskUserQuestion to ask Ready? with Yes/No options, then propose a one-line plan to create ok.txt. Do not implement it."
+        }
+        ("plan-question", ProviderKind::Codex) => {
+            "Use request_user_input to ask Ready? with Yes/No options, then propose a one-line plan to create ok.txt. Do not implement it."
+        }
+        ("subagent", _) => {
+            "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK."
+        }
+        _ => "Run sleep 30 using your shell tool.",
+    }
+}
+
+fn spec(
+    cwd: &Path,
+    kind: ProviderKind,
+    recording: PathBuf,
+    origin: Origin,
+    group: &str,
+) -> SessionSpec {
+    // The subagent recording is the one that starts one.
+    let rule = if group == "subagent" {
+        ""
+    } else {
+        " Do not inspect the environment or start subagents."
+    };
     SessionSpec {
-        cwd: cwd.into(), model: Some(match kind { ProviderKind::Claude => "haiku", ProviderKind::Codex => "gpt-6-luna" }.into()),
-        effort: Some("low".into()), fast: false, origin, ephemeral: false, access: Access::Full,
-        append_system_prompt: Some("This is a tiny protocol recording. Follow only the one-line request; keep replies tiny, preserving native plan markup. Do not inspect the environment or start subagents.".into()),
-        mcp_servers: vec![], tools: ToolSet::Default, add_dirs: vec![], project: None,
-        skill_plugins: vec![], installed_skills: vec![], switched_off: Default::default(),
-        env: vec![], unset_env: vec![], low_priority: true, record_to: Some(recording), redactor: None,
-        owned_cwd: true, sweep_dir: Some(cwd.into()), keeps_detached: false, auto_compact: true,
-        allowed_models: Some(AllowedModels::default()), omit_ai_coauthors: true, output_hook: None,
-        stop_hook: None, naked_worker: false, native_compaction: None,
+        cwd: cwd.into(),
+        model: Some(
+            match kind {
+                ProviderKind::Claude => "haiku",
+                ProviderKind::Codex => "gpt-6-luna",
+            }
+            .into(),
+        ),
+        effort: Some("low".into()),
+        fast: false,
+        origin,
+        ephemeral: false,
+        access: Access::Full,
+        append_system_prompt: Some(format!(
+            "This is a tiny protocol recording. Follow only the one-line request; keep replies tiny, preserving native plan markup.{rule}"
+        )),
+        mcp_servers: vec![],
+        tools: ToolSet::Default,
+        add_dirs: vec![],
+        project: None,
+        skill_plugins: vec![],
+        installed_skills: vec![],
+        switched_off: Default::default(),
+        env: vec![],
+        unset_env: vec![],
+        low_priority: true,
+        record_to: Some(recording),
+        redactor: None,
+        owned_cwd: true,
+        sweep_dir: Some(cwd.into()),
+        keeps_detached: false,
+        auto_compact: true,
+        // No subagents (an empty list) but in the subagent recording: Claude's on Haiku; Codex's
+        // can't be held to a list, so its run has no list.
+        allowed_models: match (group, kind) {
+            ("subagent", ProviderKind::Claude) => Some(AllowedModels {
+                ids: vec!["haiku".into()],
+                outside: vec![],
+            }),
+            ("subagent", ProviderKind::Codex) => None,
+            _ => Some(AllowedModels::default()),
+        },
+        omit_ai_coauthors: true,
+        output_hook: None,
+        stop_hook: None,
+        naked_worker: false,
+        native_compaction: None,
     }
 }
 
@@ -125,7 +192,9 @@ async fn turn(
                 status: ItemStatus::InProgress,
                 ..
             } if interrupt && !interrupted => {
-                // Interrupt once the CLI starts its command, with no wait for its sleep.
+                // Interrupt 3 s after the CLI starts its command: Claude says it starts a call
+                // before its checks, and a stop then never runs it (D52).
+                tokio::time::sleep(Duration::from_secs(3)).await;
                 started.session.interrupt().await?;
                 interrupted = true;
             }
@@ -169,45 +238,73 @@ async fn record(
         path
     };
     let mut started = provider
-        .start(spec(cwd, kind, path.clone(), origin), ledger.clone())
+        .start(spec(cwd, kind, path.clone(), origin, group), ledger.clone())
         .await?;
     let mut native = None;
     let mut usage = vec![];
     let result: std::result::Result<(), Box<dyn std::error::Error>> = async {
         if group == "plan-question" {
             started.session.set_plan_mode(true).await?;
-            let prompt = if kind == ProviderKind::Claude {
-                "Use AskUserQuestion to ask Ready? (Yes/No), then ExitPlanMode with a one-line plan to create ok.txt. Do not implement it."
-            } else {
-                "Use request_user_input to ask Ready? (Yes/No), then return <proposed_plan>Create ok.txt.</proposed_plan>. Do not implement it."
-            };
-            turn(&mut started, prompt, false, &mut native, &mut usage).await?;
+            turn(
+                &mut started,
+                prompt(group, kind),
+                false,
+                &mut native,
+                &mut usage,
+            )
+            .await?;
+        } else if matches!(group, "interrupt" | "subagent") {
+            turn(
+                &mut started,
+                prompt(group, kind),
+                group == "interrupt",
+                &mut native,
+                &mut usage,
+            )
+            .await?;
         } else {
             if !continuing {
-            let prompt = if kind == ProviderKind::Claude {
-                "Run sleep 2 with Bash run_in_background=true, reply OK."
-            } else {
-                "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting."
-            };
-            turn(&mut started, prompt, false, &mut native, &mut usage).await?;
-            // Native compaction on a tiny history, never context filling (D29).
-            started.session.compact(None).await?;
-            loop {
-                let event = receive(&mut started).await?;
-                observe(&event, &mut native, &mut usage);
-                if let ProviderEvent::CompactionEnded { error, .. } = event {
-                    if let Some(error) = error { return Err(error.into()); }
-                    break;
+                let prompt = if kind == ProviderKind::Claude {
+                    "Run sleep 2 with Bash run_in_background=true, reply OK."
+                } else {
+                    "Run sleep 2 with exec_command yield_time_ms=1, reply OK without waiting."
+                };
+                turn(&mut started, prompt, false, &mut native, &mut usage).await?;
+                // Native compaction on a tiny history, never context filling (D29).
+                started.session.compact(None).await?;
+                loop {
+                    let event = receive(&mut started).await?;
+                    observe(&event, &mut native, &mut usage);
+                    if let ProviderEvent::CompactionEnded { error, .. } = event {
+                        if let Some(error) = error {
+                            return Err(error.into());
+                        }
+                        break;
+                    }
+                }
+                // Both CLIs report the compaction item before its turn ends. Drain the end so
+                // the next input cannot be steered into an unsteerable compact turn.
+                loop {
+                    if matches!(
+                        receive(&mut started).await?,
+                        ProviderEvent::TurnCompleted { .. }
+                    ) {
+                        break;
+                    }
                 }
             }
-            // Both CLIs report the compaction item before its turn ends. Drain the end so
-            // the next input cannot be steered into an unsteerable compact turn.
-            loop { if matches!(receive(&mut started).await?, ProviderEvent::TurnCompleted { .. }) { break; } }
-            }
-            turn(&mut started, "Run sleep 30 using your shell tool.", true, &mut native, &mut usage).await?;
+            turn(
+                &mut started,
+                prompt("interrupt", kind),
+                true,
+                &mut native,
+                &mut usage,
+            )
+            .await?;
         }
         Ok(())
-    }.await;
+    }
+    .await;
     let id = started.session.native_id();
     started.session.close().await;
     while let Ok(Some(event)) =
@@ -224,7 +321,13 @@ async fn record(
         let resume_path = folder.join("resume.jsonl");
         let mut resumed = provider
             .start(
-                spec(cwd, kind, resume_path, Origin::Resume { native_id: id }),
+                spec(
+                    cwd,
+                    kind,
+                    resume_path,
+                    Origin::Resume { native_id: id },
+                    group,
+                ),
                 ledger.clone(),
             )
             .await?;
@@ -327,10 +430,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&folder)?;
     let index_path = folder.join("index.json");
     if !index_path.exists() {
-        let scenarios: serde_json::Map<String, Value> = ["plain", "tools", "background", "interrupt", "compaction", "resume", "plan", "question"].into_iter().map(|name| {
-            let group = if matches!(name, "plan" | "question") { "plan-question" } else { "lifecycle" };
+        let scenarios: serde_json::Map<String, Value> = ["plain", "tools", "background", "interrupt", "compaction", "resume", "plan", "question", "subagent"].into_iter().map(|name| {
+            let group = match name { "plan" | "question" => "plan-question", "subagent" => "subagent", _ => "lifecycle" };
             let recording = if name == "resume" { "resume" } else { group };
-            (name.to_owned(), json!({"recording":format!("{recording}.jsonl"),"native":format!("{group}.native.jsonl"),"view":format!("{name}.view.json"),"historyRecordings":if group == "lifecycle" { vec!["lifecycle.jsonl", "resume.jsonl"] } else { vec!["plan-question.jsonl"] }}))
+            (name.to_owned(), json!({"recording":format!("{recording}.jsonl"),"native":format!("{group}.native.jsonl"),"view":format!("{name}.view.json"),"historyRecordings":if group == "lifecycle" { vec!["lifecycle.jsonl".to_owned(), "resume.jsonl".to_owned()] } else { vec![format!("{group}.jsonl")] }}))
         }).collect();
         std::fs::write(
             &index_path,

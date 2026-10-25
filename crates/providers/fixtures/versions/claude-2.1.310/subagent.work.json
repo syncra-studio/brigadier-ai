@@ -1,0 +1,54 @@
+{
+  "live": [
+    {
+      "key": "7fd4f1fa-92c6-455c-81cd-36da4d7f680c",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:toolu_011E1g6VbebewGRL7iDU426f",
+              "summary": "Ran an agent",
+              "rows": [
+                "Ran agent: Run echo hi"
+              ]
+            },
+            {
+              "item": "text"
+            },
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "persisted": [
+    {
+      "key": "7fd4f1fa-92c6-455c-81cd-36da4d7f680c",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:toolu_011E1g6VbebewGRL7iDU426f",
+              "summary": "Ran an agent",
+              "rows": [
+                "Ran agent: Run echo hi"
+              ]
+            },
+            {
+              "item": "text"
+            },
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

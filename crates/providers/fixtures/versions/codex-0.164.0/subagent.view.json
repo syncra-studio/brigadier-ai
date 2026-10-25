@@ -1,0 +1,209 @@
+{
+  "events": [
+    {
+      "itemId": "01a173c1-bd75-7b53-86ba-ea386225df38",
+      "role": "user",
+      "text": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+      "type": "message"
+    },
+    {
+      "input": "echo hi",
+      "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+      "name": "agents/spawnAgent",
+      "output": null,
+      "status": "inProgress",
+      "type": "toolCall"
+    },
+    {
+      "input": "echo hi",
+      "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+      "name": "agents/spawnAgent",
+      "output": null,
+      "status": "inProgress",
+      "type": "toolCall"
+    },
+    {
+      "input": null,
+      "itemId": "call_423e84d970254e8084224d9e38b063c5",
+      "name": "agents/wait",
+      "output": null,
+      "status": "inProgress",
+      "type": "toolCall"
+    },
+    {
+      "input": "echo hi",
+      "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+      "name": "agents/spawnAgent",
+      "output": null,
+      "status": "completed",
+      "type": "toolCall"
+    },
+    {
+      "input": "echo hi",
+      "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+      "name": "agents/spawnAgent",
+      "output": null,
+      "status": "completed",
+      "type": "toolCall"
+    },
+    {
+      "input": null,
+      "itemId": "call_423e84d970254e8084224d9e38b063c5",
+      "name": "agents/wait",
+      "output": null,
+      "status": "completed",
+      "type": "toolCall"
+    },
+    {
+      "itemId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+      "phase": "answer",
+      "text": "OK",
+      "type": "messageDelta"
+    },
+    {
+      "itemId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+      "role": "assistant",
+      "text": "OK",
+      "type": "message"
+    },
+    {
+      "durationMs": 6875,
+      "status": "completed",
+      "turnId": "01a173c1-b7ed-7b83-ad71-eb3a4e9e455d",
+      "type": "turnCompleted",
+      "usage": null
+    }
+  ],
+  "live": {
+    "entries": [
+      {
+        "atMs": 1792943439222,
+        "event": {
+          "itemId": "01a173c1-bd75-7b53-86ba-ea386225df38",
+          "role": "user",
+          "text": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792943440591,
+        "event": {
+          "input": "echo hi",
+          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+          "name": "agents/spawnAgent",
+          "output": null,
+          "status": "completed",
+          "type": "toolCall"
+        },
+        "updatedAtMs": 1792943444116
+      },
+      {
+        "atMs": 1792943441430,
+        "event": {
+          "input": null,
+          "itemId": "call_423e84d970254e8084224d9e38b063c5",
+          "name": "agents/wait",
+          "output": null,
+          "status": "completed",
+          "type": "toolCall"
+        }
+      },
+      {
+        "atMs": 1792943444590,
+        "event": {
+          "itemId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792943444682,
+        "event": {
+          "durationMs": 6875,
+          "status": "completed",
+          "turnId": "01a173c1-b7ed-7b83-ad71-eb3a4e9e455d",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      }
+    ],
+    "turns": [
+      {
+        "end": "done",
+        "endedAtMs": 1792943444683,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792943439222,
+        "userMessage": "01a173c1-bd75-7b53-86ba-ea386225df38"
+      }
+    ]
+  },
+  "persisted": {
+    "entries": [
+      {
+        "atMs": 1792943439222,
+        "event": {
+          "itemId": "01a173c1-bd75-7b53-86ba-ea386225df38",
+          "role": "user",
+          "text": "Start one subagent that runs echo hi in its shell, wait for it to finish, then reply OK.",
+          "type": "message"
+        }
+      },
+      {
+        "atMs": 1792943440591,
+        "event": {
+          "input": "echo hi",
+          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
+          "name": "agents/spawnAgent",
+          "output": null,
+          "status": "completed",
+          "type": "toolCall"
+        },
+        "updatedAtMs": 1792943444116
+      },
+      {
+        "atMs": 1792943441430,
+        "event": {
+          "input": null,
+          "itemId": "call_423e84d970254e8084224d9e38b063c5",
+          "name": "agents/wait",
+          "output": null,
+          "status": "completed",
+          "type": "toolCall"
+        }
+      },
+      {
+        "atMs": 1792943444590,
+        "event": {
+          "itemId": "msg_0e6dd824b139c2d6016ade25548e288191aff4457c6556b3ea",
+          "role": "assistant",
+          "text": "OK",
+          "type": "message"
+        },
+        "phase": "answer"
+      },
+      {
+        "atMs": 1792943444682,
+        "event": {
+          "durationMs": 6875,
+          "status": "completed",
+          "turnId": "01a173c1-b7ed-7b83-ad71-eb3a4e9e455d",
+          "type": "turnCompleted",
+          "usage": null
+        }
+      }
+    ],
+    "turns": [
+      {
+        "end": "done",
+        "endedAtMs": 1792943444683,
+        "error": null,
+        "requests": [],
+        "startedAtMs": 1792943439222,
+        "userMessage": "01a173c1-bd75-7b53-86ba-ea386225df38"
+      }
+    ]
+  }
+}

@@ -1,17 +1,52 @@
 {
   "live": [
     {
-      "key": "33e94e34-6f06-4755-894b-d088fc3e36b8",
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
       "state": "done",
       "folded": true,
       "parts": [
         {
           "work": [
             {
-              "group": "step:toolu_0167Z1GGnuBknK3YXXnH2NZd",
-              "summary": "Edited a file",
+              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
+              "summary": "Ran a command",
               "rows": [
-                "Edited use-your-askuserquestion-tool-composed-beacon.md"
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
               ]
             }
           ]
@@ -19,26 +54,7 @@
       ]
     },
     {
-      "key": "8b56b295-4795-4c6d-a732-32d11cd515a9",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_01MkhQF7ogUEVi3zAZWxgcia",
-              "summary": "Edited a file, read files",
-              "rows": [
-                "Edited c.txt",
-                "Read c.txt"
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
       "state": "done",
       "folded": false,
       "parts": []
@@ -46,17 +62,52 @@
   ],
   "persisted": [
     {
-      "key": "33e94e34-6f06-4755-894b-d088fc3e36b8",
+      "key": "c199fcab-1dff-435f-a6a1-bd84a67ef0cd",
       "state": "done",
       "folded": true,
       "parts": [
         {
           "work": [
             {
-              "group": "step:toolu_0167Z1GGnuBknK3YXXnH2NZd",
-              "summary": "Edited a file",
+              "group": "step:toolu_016Usd7ZQYaKByjVjKtJc8RQ",
+              "summary": "Ran a command",
               "rows": [
-                "Edited use-your-askuserquestion-tool-composed-beacon.md"
+                "Ran sleep 2"
+              ]
+            },
+            {
+              "item": "compaction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "63be1391-d661-4a4b-aea3-d0345b9ecc66",
+      "state": "done",
+      "folded": true,
+      "parts": [
+        {
+          "work": [
+            {
+              "item": "taskNotice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "8a9ba5b3-c2d8-4d10-ac60-9a1eeff92630",
+      "state": "stopped",
+      "folded": false,
+      "parts": [
+        {
+          "work": [
+            {
+              "group": "step:toolu_01JD5GDqUCUrri3WkpCYQuch",
+              "summary": "Ran a command",
+              "rows": [
+                "stopped: Ran sleep 30"
               ]
             }
           ]
@@ -64,26 +115,7 @@
       ]
     },
     {
-      "key": "8b56b295-4795-4c6d-a732-32d11cd515a9",
-      "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:toolu_01MkhQF7ogUEVi3zAZWxgcia",
-              "summary": "Edited a file, read files",
-              "rows": [
-                "Edited c.txt",
-                "Read c.txt"
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "key": "ff4e8545-d2de-4aed-b6f3-a6ec3a701629",
+      "key": "1e6fa9cc-a958-41c1-8210-61020835faa4",
       "state": "done",
       "folded": false,
       "parts": []

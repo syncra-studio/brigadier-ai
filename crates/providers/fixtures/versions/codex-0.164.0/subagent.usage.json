@@ -1,0 +1,49 @@
+{
+  "nativeTotals": {
+    "costUsd": null,
+    "tokens": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 34176,
+      "input_tokens": 41759,
+      "output_tokens": 70,
+      "reasoning_output_tokens": 0,
+      "total_tokens": 41829
+    }
+  },
+  "note": "CLI-reported cumulative totals, not additive. Codex supplies no dollar cost. For total spend across resume, use the native Claude cost-state or Codex thread/tokenUsage totals; do not add cumulative reports.",
+  "reports": [
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 11392,
+      "costUsd": null,
+      "inputTokens": 2453,
+      "modelCalls": 1,
+      "outputTokens": 44,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 22784,
+      "costUsd": null,
+      "inputTokens": 4972,
+      "modelCalls": 2,
+      "outputTokens": 65,
+      "reasoningTokens": 0
+    },
+    {
+      "cacheWrite1hTokens": 0,
+      "cacheWrite5mTokens": 0,
+      "cacheWriteTokens": 0,
+      "cachedInputTokens": 34176,
+      "costUsd": null,
+      "inputTokens": 7583,
+      "modelCalls": 3,
+      "outputTokens": 70,
+      "reasoningTokens": 0
+    }
+  ]
+}
