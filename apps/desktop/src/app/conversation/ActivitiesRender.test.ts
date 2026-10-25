@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-type Row = { label: string; state: string; moving: boolean; elapsed: string; tip: string } | null;
+type Row = { label: string; state: string | null; moving: boolean; elapsed: string; tip: string } | null;
 
 test("Background lists what still runs, one line each with its state and Stop on hover; a web preview opens in the browser, another preview opens its output in a tab, and what the user stopped leaves the card", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?drive=1", "activities-result", 60000)) as {
@@ -13,7 +13,7 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.equal(seen.title, "Background");
   // Newest first.
   assert.deepEqual(seen.order, ["preview-2", "preview-1"]);
-  assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", state: "running", moving: false, elapsed: "12m", tip: "Showing: pnpm dev --port 5199" });
+  assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", state: null, moving: false, elapsed: "12m", tip: "Showing: pnpm dev --port 5199" });
   // A build spins; the page that is up shows its live dot.
   assert.deepEqual([seen.rows["preview-2"]?.label, seen.rows["preview-2"]?.state, seen.rows["preview-2"]?.moving], ["Dev app", "building", true]);
   assert.match(seen.rows["preview-2"]?.tip ?? "", /^Building: pnpm tauri build[^]*\nFrom Demo of the fixes$/);
@@ -45,18 +45,18 @@ test("a Background row leaves as soon as its process ends, failed, finished or s
   assert.equal(seen.restartOrDismiss, 0);
 });
 
-type Look = { icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
+type Look = { word: string | null; icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
 
 test("Background rows: a spinner while a process is on its way, a green live dot once it is up, a pause sign while held; the word shimmers while it works, and nothing moves with less motion", { timeout: 120000 }, async (t) => {
   const looks = JSON.parse(await renderFixtureLive(t, "activities.html?states=1", "activities-result", 60000)) as Record<string, Look>;
-  const busy: Look = { icon: "spinner", moving: true, green: false, shimmer: true, sweeping: true };
+  const busy = { icon: "spinner", moving: true, green: false, shimmer: true, sweeping: true };
   const expected: Record<string, Look> = {
-    building: busy,
-    starting: busy,
-    "smoke testing": busy,
-    checking: busy,
-    running: { icon: "live", moving: true, green: true, shimmer: true, sweeping: true },
-    paused: { icon: "paused", moving: false, green: false, shimmer: false, sweeping: false },
+    building: { ...busy, word: "building" },
+    starting: { ...busy, word: "starting" },
+    "smoke testing": { ...busy, word: "smoke testing" },
+    checking: { ...busy, word: "checking" },
+    running: { word: null, icon: "live", moving: true, green: true, shimmer: false, sweeping: false },
+    paused: { word: "paused", icon: "paused", moving: false, green: false, shimmer: false, sweeping: false },
   };
   assert.deepEqual(looks, expected);
   const still = JSON.parse(await renderFixtureLive(t, "activities.html?states=1", "activities-result", 60000, { reducedMotion: true })) as Record<string, Look>;
@@ -69,22 +69,51 @@ test("Background rows: a spinner while a process is on its way, a green live dot
 test("Background shows CLI commands with Stop and output; native agents appear in Workers", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?tasks=1", "activities-result", 60000)) as {
     running: string[]; nativeWorkers: string[]; rows: Record<string, Row>; stops: string[]; buttons: string[]; opened: string; output: boolean; calls: string[];
-    done: Record<string, string>; icons: string[]; agentLeft: boolean; agentLeftWith: string[]; shellLeft: boolean; stoppedOrFailed: string[]; section: boolean;
+    completed: string[]; stoppedOrFailed: string[]; section: boolean;
   };
   // Newest first, each named as the CLI names it.
   assert.deepEqual(seen.running, ["task:bdza4j3ng"]);
   assert.deepEqual(seen.nativeWorkers, ["Reply with hi working"]);
-  assert.deepEqual(seen.rows["task:bdza4j3ng"], { label: "Sleep 20 seconds then echo marker", state: "running", moving: false, elapsed: "8s", tip: "sleeping" });
+  assert.deepEqual(seen.rows["task:bdza4j3ng"], { label: "Sleep 20 seconds then echo marker", state: null, moving: false, elapsed: "8s", tip: "sleeping" });
   assert.deepEqual(seen.stops, ["Stop"]);
   assert.deepEqual(seen.buttons, ["BUTTON"], "the command opens its output");
   assert.equal(seen.opened, "panel:output:task:bdza4j3ng");
   assert.equal(seen.output, true, "its output tab reads the CLI's output file");
   assert.deepEqual(seen.calls, ["stopBackgroundTask bdza4j3ng"]);
-  assert.deepEqual(seen.done, { "task:bdza4j3ng": "done" });
-  assert.deepEqual(seen.icons, ["done"]);
-  assert.equal(seen.agentLeft, true, "native agents are absent from Background");
-  assert.deepEqual(seen.agentLeftWith, ["task:bdza4j3ng"]);
-  assert.equal(seen.shellLeft, true, "a command leaves 5 min after it exited");
+  assert.deepEqual(seen.completed, [], "a command leaves as soon as it completes");
   assert.deepEqual(seen.stoppedOrFailed, [], "stopped and failed tasks leave at once");
   assert.equal(seen.section, false);
+});
+
+test("only Background names truncate: building stays whole and shimmering, running needs only its dot, and short names keep the word beside them", { timeout: 90000 }, async (t) => {
+  type Name = { truncated: boolean; ellipsis: string; state: string | null; stateFits: boolean; gap: number | null; shimmer: boolean; sweeping: boolean; green: boolean; height: number; beforeTime: boolean };
+  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?names=1", "activities-result", 60000)) as {
+    "800": Record<string, Name>; "420": Record<string, Name>; hover: Name & { stopVisible: boolean };
+  };
+  for (const width of ["800", "420"] as const) {
+    const names = seen[width];
+    const building = names["long-building"]!;
+    assert.equal(building.truncated, true, `${width}: the long building name truncates`);
+    assert.equal(building.ellipsis, "ellipsis");
+    assert.equal(building.state, "building");
+    assert.equal(building.stateFits, true, `${width}: the entire building word fits`);
+    assert.equal(building.shimmer && building.sweeping, true);
+    const short = names["preview-2"]!;
+    assert.equal(short.truncated, false);
+    assert.equal(short.stateFits, true);
+    assert.ok(short.gap !== null && short.gap > 0 && short.gap <= 8, `${width}: the state sits right after the short name`);
+    for (const activity of ["long-running", "task:bdza4j3ng", "task:plain-task"]) {
+      const running = names[activity]!;
+      assert.equal(running.truncated, true, `${width}: ${activity} truncates its name`);
+      assert.equal(running.ellipsis, "ellipsis");
+      assert.equal(running.state, null, `${width}: ${activity} has no running word`);
+      assert.equal(running.green, true, `${width}: ${activity} keeps its live dot`);
+    }
+    for (const name of Object.values(names)) {
+      assert.equal(name.height, 28, `${width}: rows stay one line high`);
+      assert.equal(name.beforeTime, true, `${width}: names and state words leave room for time`);
+    }
+  }
+  assert.equal(seen.hover.stopVisible, true);
+  assert.equal(seen.hover.truncated && seen.hover.stateFits && seen.hover.shimmer, true, "hover leaves room for the whole building word and Stop");
 });

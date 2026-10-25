@@ -7,7 +7,8 @@
  * With `ended=1` it runs processes, then ends them (failed, finished, stopped) and writes that
  * their rows left. With `tasks=1` the CLI's own background tasks come as its live stream says
  * them (a `run_in_background` command and a background subagent): their rows, Stop, the command's
- * output, and each row dropping on the CLI's own timing; it writes what it saw.
+ * output, and each row dropping as soon as it ends; it writes what it saw. With `names=1` it
+ * measures long and short names beside state words at wide and narrow card widths.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -20,6 +21,7 @@ import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
+import { fixtureInput } from "@/fixtures/input";
 import { rowOf, showRows } from "@/fixtures/workerRows";
 import type { BackgroundTask, Conversation, EventEnvelope, Preview, Request, Task } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
@@ -79,10 +81,10 @@ const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? 
 /** A row as it reads: what it is for, its state in a word, whether its icon moves, its time, its tooltip. */
 const read = (activity: string) => {
   const button = row(activity);
-  const name = button?.querySelector("span.truncate");
-  const state = name?.querySelector("[data-state]");
+  const name = button?.querySelector("[data-activity-name]");
+  const state = button?.querySelector("[data-state]");
   return button && {
-    label: name?.firstChild?.textContent?.trim() ?? null,
+    label: text(name),
     state: text(state),
     moving: button.querySelector(".motion-safe\\:animate-spin") !== null,
     elapsed: text(button.querySelector("span.tabular-nums")),
@@ -125,10 +127,12 @@ async function readStates(): Promise<Record<string, unknown>> {
   send(...Object.values(states).map((preview) => ({ type: "previewUpdated" as const, preview })), { type: "previewUpdated", preview: smoke },
     { type: "previewUpdated", preview: check });
   await frame();
-  return Object.fromEntries([...(section()?.querySelectorAll<HTMLElement>("[data-activity]") ?? [])].map((button) => {
-    const icon = button.querySelector("[data-icon]");
-    const word = button.querySelector("[data-state]");
-    return [word?.getAttribute("data-state"), {
+  return Object.fromEntries(Object.entries(states).map(([state, preview]) => {
+    const button = row(preview.id);
+    const icon = button?.querySelector("[data-icon]");
+    const word = button?.querySelector("[data-state]");
+    return [state, {
+      word: text(word),
       icon: icon?.getAttribute("data-icon") ?? null,
       moving: !!icon && [icon, ...icon.children].some(moves),
       green: !!icon?.querySelector(".bg-success"),
@@ -251,19 +255,61 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   stop("task:bdza4j3ng")?.click();
   await until(() => calls.length > 0, 3000);
   seen.calls = calls.toSorted();
-  // The command exited almost 5 minutes ago: done, then gone. Native agents stay in Workers.
-  const ended = Date.now();
-  tasksSaid({ ...sleep, status: "completed", endedAtMs: ended - 5 * MIN + 2500 }, { ...helper, status: "completed", endedAtMs: ended - 29_000, summary: "hi" });
+  // A command that just completed leaves immediately. Native agents stay in Workers.
+  tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now() }, { ...helper, status: "completed", endedAtMs: Date.now(), summary: "hi" });
   await frame();
-  seen.done = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
-  seen.icons = ids().map((activity) => row(activity!)?.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null);
-  seen.agentLeft = !row("task:a0c79");
-  seen.agentLeftWith = ids();
-  seen.shellLeft = await until(() => !row("task:bdza4j3ng"), 6000) < 6000 && Date.now() - ended >= 2400;
+  seen.completed = ids();
   tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });
   await frame();
   seen.stoppedOrFailed = ids();
   seen.section = !!section();
+  return seen;
+}
+
+/** Long names use the available room; state words stay whole, directly beside short names. */
+async function readNames(): Promise<Record<string, unknown>> {
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  const longName = "Close worker 1, wait for worker 2 and collect all their results before continuing with the remaining work. ".repeat(4);
+  send(...[
+    app,
+    { ...app, id: "long-building", name: longName, command: "pnpm build" },
+    { ...page, id: "long-running", name: longName },
+  ].map((preview) => ({ type: "previewUpdated" as const, preview })));
+  useCliThread.setState({ views: { [id]: { entries: [], turns: [], background: [
+    { ...sleep, label: longName },
+    { ...sleep, id: "plain-task", label: longName, outputFile: null },
+  ] } } });
+  const measure = (activity: string) => {
+    const button = row(activity)!;
+    const name = button.querySelector<HTMLElement>("[data-activity-name]")!;
+    const word = button.querySelector<HTMLElement>("[data-state]");
+    const words = name.parentElement!.getBoundingClientRect();
+    const rect = word?.getBoundingClientRect();
+    const meta = button.querySelector(".tabular-nums")?.getBoundingClientRect();
+    return {
+      truncated: name.scrollWidth > name.clientWidth,
+      ellipsis: getComputedStyle(name).textOverflow,
+      state: text(word),
+      stateFits: !!word && word.scrollWidth <= word.clientWidth && rect!.left >= words.left && rect!.right <= words.right + 1,
+      gap: rect ? rect.left - name.getBoundingClientRect().right : null,
+      shimmer: word?.classList.contains("shimmer") ?? false,
+      sweeping: moves(word),
+      green: !!button.querySelector(".bg-success"),
+      height: button.getBoundingClientRect().height,
+      beforeTime: !!meta && words.right <= meta.left,
+    };
+  };
+  const seen: Record<string, unknown> = {};
+  for (const width of [800, 420]) {
+    await fixtureInput({ type: "viewport", width, height: 976 });
+    await frame();
+    seen[width] = Object.fromEntries(["preview-2", "long-building", "long-running", "task:bdza4j3ng", "task:plain-task"].map((activity) => [activity, measure(activity)]));
+  }
+  // Hover replaces time with Stop; the full state word still fits in the narrower name space.
+  const rect = row("long-building")!.getBoundingClientRect();
+  await fixtureInput({ type: "pointer", x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+  await frame();
+  seen.hover = { ...measure("long-building"), stopVisible: actionsVisible("long-building") };
   return seen;
 }
 
@@ -274,6 +320,7 @@ function Fixture() {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("tasks")) void driveTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("names")) void readNames().then((seen) => setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
     else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     else send({ type: "previewUpdated", preview: page }, { type: "previewUpdated", preview: app },

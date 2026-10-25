@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows } from "@/app/conversation/backgroundRows";
@@ -82,16 +82,25 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   );
 }
 
+/** Only the name truncates; a live dot needs no word, and every other state keeps its room. */
+function ActivityLabel({ name, state }: { name: string; state: BackgroundState }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span data-activity-name className="truncate">{name}</span>
+      {state !== "running" && (
+        <span data-state={state} className={cn("text-muted-foreground shrink-0 whitespace-nowrap", live(state) && "shimmer")}>
+          {state}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function BackgroundRow({ conversationId, activity, now }: { conversationId: string; activity: Activity; now: number }) {
   const name = label(activity);
   // A task that ended shows how long it ran.
   const meta = elapsedWords((activity.type === "task" ? (activity.task.endedAtMs ?? now) : now) - activity.startedAtMs);
-  const state = (
-    <span data-state={activity.state} className={cn("text-muted-foreground", live(activity.state) && "shimmer")}>
-      {" "}{activity.state}
-    </span>
-  );
-  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} name={name} meta={meta} state={activity.state} words={state} />;
+  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} name={name} meta={meta} state={activity.state} />;
   const tip = [
     `${previewWord(activity.preview)}: ${activity.preview.command}`,
     activity.worker && `From ${activity.worker}`,
@@ -120,8 +129,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
         ? () => openLink(url, { agent: true, conversationId }).catch((reason: unknown) => toast(`Couldn't open it: ${String(reason)}`, { tone: "error" }))
         : output}
     >
-      {name}
-      {state}
+      <ActivityLabel name={name} state={activity.state} />
     </SummaryRowButton>
   );
 }
@@ -130,13 +138,12 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
  * A row for one of the CLI's background tasks: its last line on hover, Stop while it runs, and a
  * command's output in a tab on a click. A subagent or a Codex terminal has no output to open.
  */
-function TaskRow({ conversationId, task, name, meta, state, words }: {
+function TaskRow({ conversationId, task, name, meta, state }: {
   conversationId: string;
   task: BackgroundTask;
   name: string;
   meta: string;
   state: BackgroundState;
-  words: ReactNode;
 }) {
   const parts = {
     "data-activity": `task:${task.id}`,
@@ -145,11 +152,10 @@ function TaskRow({ conversationId, task, name, meta, state, words }: {
     meta,
     action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id)} /> : undefined,
   };
-  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{name}{words}</SummaryRow>;
+  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}><ActivityLabel name={name} state={state} /></SummaryRow>;
   return (
     <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id }, name)}>
-      {name}
-      {words}
+      <ActivityLabel name={name} state={state} />
     </SummaryRowButton>
   );
 }
