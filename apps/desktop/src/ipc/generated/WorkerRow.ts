@@ -3,6 +3,7 @@ import type { DiffStat } from "./DiffStat";
 import type { LimitHit } from "./LimitHit";
 import type { McpServerState } from "./McpServerState";
 import type { ProviderKind } from "./ProviderKind";
+import type { StepAtWork } from "./StepAtWork";
 import type { TaskId } from "./TaskId";
 import type { TurnEnd } from "./TurnEnd";
 import type { WorkerWait } from "./WorkerWait";
@@ -63,4 +64,8 @@ ahead: number,
 /**
  * It has commits, and that branch has them all.
  */
-merged: boolean, };
+merged: boolean, 
+/**
+ * What its CLI has at work in its open turn, oldest first; none between its steps.
+ */
+steps?: Array<StepAtWork>, };

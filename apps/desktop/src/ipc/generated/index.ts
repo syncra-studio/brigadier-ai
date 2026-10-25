@@ -413,6 +413,7 @@ export type { SourceRebase } from "./SourceRebase";
 export type { SourceScope } from "./SourceScope";
 export type { SourceState } from "./SourceState";
 export type { SourceStatus } from "./SourceStatus";
+export type { StepAtWork } from "./StepAtWork";
 export type { StepTokens } from "./StepTokens";
 export type { StorageReport } from "./StorageReport";
 export type { StoreMetrics } from "./StoreMetrics";

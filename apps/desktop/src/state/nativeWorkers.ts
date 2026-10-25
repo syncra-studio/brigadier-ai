@@ -1,4 +1,5 @@
-import type { BackgroundTask, ThreadView, WorkerRow } from "@/ipc/generated";
+import { stepAtWork } from "@/app/conversation/activity/workerNow";
+import type { BackgroundTask, StepAtWork, ThreadView, WorkerRow } from "@/ipc/generated";
 
 /** Native agents share the Workers presentation, but never a Brigadier task's actions. */
 export type NativeWorker = WorkerRow & {
@@ -21,8 +22,13 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
   const tasks = (view.background ?? []).filter((task) => task.kind === "agent");
   const seen = new Set<string>();
   const lastChild = new Map<string, number>();
+  // Each agent's calls at work, oldest first, as an engine worker's row lists its own.
+  const atWork = new Map<string, StepAtWork[]>();
   for (const entry of view.entries) {
-    if (entry.parent) lastChild.set(entry.parent, entry.updatedAtMs ?? entry.atMs ?? 0);
+    if (!entry.parent) continue;
+    lastChild.set(entry.parent, entry.updatedAtMs ?? entry.atMs ?? 0);
+    const step = stepAtWork(entry.event);
+    if (step) atWork.set(entry.parent, [...(atWork.get(entry.parent) ?? []), step]);
   }
   // A foreground agent works while its call does, in a turn still running: one its turn left
   // unfinished (the CLI ended or was stopped under it) is over.
@@ -34,12 +40,14 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
     const working = task ? task.status === "running" : status === "inProgress" && at >= liveFrom;
     const end = task ? task.status === "stopped" ? "stopped" : task.status === "failed" ? "failed" : "done"
       : status === "failed" || status === "declined" ? "failed" : "done";
+    const steps = callId === null ? undefined : atWork.get(callId);
     const row: NativeWorker = {
       id: `native:${conversationId}:${callId ?? task!.id}`, number: next++, title,
       agent: "claude", model, startedAtMs: task?.startedAtMs ?? at,
       working, lastEnd: working ? null : end, gone: !working,
       lastEventAtMs: task?.endedAtMs ?? ended, limit: null, freshContext: false,
       waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
+      ...(working && steps && { steps }),
       native: { conversationId, callId, backgroundId: task?.id ?? null, prompt },
     };
     rows.push(row);

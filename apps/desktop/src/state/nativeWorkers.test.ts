@@ -27,3 +27,15 @@ test("native agents are numbered after the engine's workers, gaps and all", () =
   const rows = workersOf("c-numbers", { entries: [user("u1", 1000), agentCall("a", 1010)], turns: [turn("u1", 1000, null)], workers: [worker] });
   assert.deepEqual(rows.map((row) => row.number).toSorted(), [7, 8]);
 });
+
+const read = (itemId: string, status: "inProgress" | "completed"): FileEntry => ({
+  event: { type: "toolCall", itemId, name: "Read", input: JSON.stringify({ file_path: `/w/${itemId}.ts` }), status, output: null },
+  atMs: 2020, parent: "live",
+});
+
+test("a working agent's row lists its calls at work, from its own items", () => {
+  const rows = workersOf("c-steps", { entries: [user("u2", 2000), agentCall("live", 2010), read("a", "completed"), read("b", "inProgress")], turns: [turn("u2", 2000, null)] });
+  assert.deepEqual(rows[0]?.steps, [{ name: "Read", detail: "/w/b.ts" }]);
+  const over = workersOf("c-steps-2", { entries: [user("u2", 2000), agentCall("live", 2010), read("b", "inProgress")], turns: [turn("u2", 2000, "stopped")] });
+  assert.equal(over[0]?.steps, undefined);
+});
