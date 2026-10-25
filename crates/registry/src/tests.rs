@@ -1536,6 +1536,7 @@ fn a_change_reads_again_then_tells_each_listener() {
     assert!(registry.catalog(None).server("claude:user:late").is_some());
 }
 
+#[cfg(unix)]
 #[test]
 fn the_watcher_looks_at_each_projects_own_configs_and_skills() {
     let home = fixture("watch-projects");
