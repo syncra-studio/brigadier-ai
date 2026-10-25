@@ -18,7 +18,7 @@
           "detail": "sleep 2",
           "status": "completed",
           "throughPosition": 0,
-          "endedAtMs": 1792929293295,
+          "endedAtMs": 1792929291436,
           "exit": 0,
           "item": "command"
         }
@@ -43,7 +43,7 @@
           "status": "failed",
           "stopped": true,
           "throughPosition": 0,
-          "endedAtMs": 1792929470766,
+          "endedAtMs": 1792929470759,
           "exit": -1,
           "item": "command"
         }
@@ -81,7 +81,7 @@
           "detail": "sleep 2",
           "status": "completed",
           "throughPosition": 0,
-          "endedAtMs": 1792929293295,
+          "endedAtMs": 1792929291436,
           "exit": 0,
           "item": "command"
         }
@@ -106,7 +106,7 @@
           "status": "failed",
           "stopped": true,
           "throughPosition": 0,
-          "endedAtMs": 1792929470766,
+          "endedAtMs": 1792929470759,
           "exit": -1,
           "item": "command"
         }

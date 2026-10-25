@@ -39,6 +39,7 @@ pub(crate) fn context_of(value: &Value) -> Option<Option<crate::session_file::Fi
 pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
     let text = std::fs::read_to_string(path)?;
     let mut entries = Vec::new();
+    let mut previous_at_ms = None;
     // A turn runs, and whether its user message came yet.
     let mut turn: Option<bool> = None;
     // Codex can write both its native marker and a finished ContextCompaction item for
@@ -48,9 +49,10 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let at_ms = str_of(&value, "timestamp").and_then(crate::time::parse_rfc3339_ms);
+        let mut at_ms = str_of(&value, "timestamp").and_then(crate::time::parse_rfc3339_ms);
         if str_of(&value, "type") == Some("compacted") {
-            entries.push(FileEntry::new(compaction(), at_ms));
+            previous_at_ms = at_ms.or(previous_at_ms);
+            entries.push((previous_at_ms, FileEntry::new(compaction(), at_ms)));
             compacted = true;
             continue;
         }
@@ -100,6 +102,10 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                 let Some(event) = item_event(item) else {
                     continue;
                 };
+                at_ms = payload
+                    .get("started_at_ms")
+                    .and_then(Value::as_i64)
+                    .or(at_ms);
                 phase = match str_of(item, "phase") {
                     Some("final_answer") => Some(TextPhase::Answer),
                     Some("commentary") => Some(TextPhase::Commentary),
@@ -123,13 +129,20 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
         if user && turn == Some(false) {
             turn = Some(true);
         }
-        entries.push(FileEntry {
-            steer,
-            phase,
-            ..FileEntry::new(event, at_ms)
-        });
+        previous_at_ms = at_ms.or(previous_at_ms);
+        entries.push((
+            previous_at_ms,
+            FileEntry {
+                steer,
+                phase,
+                ..FileEntry::new(event, at_ms)
+            },
+        ));
     }
-    Ok(entries)
+    // D44/D47: a finished item keeps its start position, as in the live stream. Turn and
+    // steer state above follows file order; ties and untimed entries keep that order too.
+    entries.sort_by_key(|(at_ms, _)| *at_ms);
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
 }
 
 /// A finished item as the stream's event.
@@ -435,6 +448,115 @@ mod tests {
             ]
         );
         assert!(!entries[2].steer);
+    }
+
+    /// D44/D47: the recorded commands finish after the answer or the turn's interruption,
+    /// but reload keeps them where the live stream started them, with their own start times.
+    #[test]
+    fn recorded_rollout_items_keep_their_start_order() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/versions/codex-0.164.0/lifecycle.native.jsonl");
+        let entries = read(&path).unwrap();
+        let command = |text: &str| {
+            entries.iter().position(|entry| {
+                matches!(&entry.event, ProviderEvent::Command { command, .. } if command == text)
+            }).unwrap()
+        };
+        let sleep = command("sleep 2");
+        let answer = entries
+            .iter()
+            .position(
+                |entry| matches!(&entry.event, ProviderEvent::Message { text, .. } if text == "OK"),
+            )
+            .unwrap();
+        assert!(sleep < answer);
+        let interrupted = entries
+            .iter()
+            .position(|entry| {
+                matches!(
+                    &entry.event,
+                    ProviderEvent::TurnCompleted {
+                        status: TurnStatus::Interrupted,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(command("sleep 30") < interrupted);
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut checked = 0;
+        for line in text.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            let Some(payload) = value.get("payload") else {
+                continue;
+            };
+            if str_of(payload, "type") != Some("item_completed") {
+                continue;
+            }
+            let Some(id) = payload.pointer("/item/id").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| crate::session_file::item_id(&entry.event) == Some(id))
+            {
+                assert_eq!(
+                    entry.at_ms,
+                    payload.get("started_at_ms").and_then(Value::as_i64)
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 8);
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].at_ms <= pair[1].at_ms)
+        );
+    }
+
+    #[test]
+    fn equal_and_missing_times_keep_file_order_and_steers_follow_file_state() {
+        let user = |id: &str, start: Option<i64>| {
+            serde_json::json!({"type": "event_msg", "payload": {
+                "type": "item_completed", "started_at_ms": start,
+                "item": {"type": "UserMessage", "id": id,
+                    "content": [{"type": "text", "text": id}]}
+            }})
+        };
+        // Deliberately inverted starts: classification uses file order, even after sorting.
+        let lines = [
+            serde_json::json!({"type": "event_msg", "payload": {"type": "task_started"}}),
+            user("first", Some(30)),
+            user("steer", Some(10)),
+            user("untimed", None),
+            user("equal", Some(10)),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "20261025-1046-harness-research-w25-rollout-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let entries = read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| crate::session_file::item_id(&entry.event).unwrap())
+                .collect::<Vec<_>>(),
+            ["steer", "untimed", "equal", "first"]
+        );
+        assert!(entries[..3].iter().all(|entry| entry.steer));
+        assert!(!entries[3].steer);
+        assert_eq!(entries[1].at_ms, None);
     }
 
     #[test]
