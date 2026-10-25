@@ -5,6 +5,42 @@
 > what a CLI can't do by itself: seeing and driving other sessions, previews, the browser, computer use, asking
 > the user as a card, and searching the record. This plan only removes and re-wires.
 
+> **Amendment, 2026-10-25 (run `20261025-1046-harness-research`, D13–D18).** These supersede the lines below
+> where they differ.
+> - **Pull, never push (D13).** After a compaction or a hand-off, Brigadier puts nothing into the conversation:
+>   no SessionStart restore hook, no Codex `thread/inject_items` note, no decisions note. This supersedes
+>   **run2-D8** (restore injection) and the restore half of S22b. Every session's and worker's standing
+>   instructions say that everything about its job (brief, decisions, open questions, ledger, transcript,
+>   skills, MCP servers, project, routing) is in `brigadier context`; it runs that when it starts and after any
+>   compaction. Claude's steered `/compact` ends its summary with "next: run `brigadier context`". The ledger
+>   stays: `brigadier context` reads it. The checkpoint stays pull-only (`brigadier checkpoint set|show`): run2-D9
+>   without its put-back. The standing-instruction budget is 2,050 bytes (proposed; the pointer and the
+>   lines a parser pins did not fit in 2,000).
+> - **Naked workers (D13, D17, D18; reverses G17 for workers).** A `brigadier start` worker runs the user's own
+>   `claude`/`codex` with no user-global instruction file, skills, MCP servers, plugins or user hooks, but with
+>   the repository's own CLAUDE.md/AGENTS.md. `brigadier start --mcp <name>` (repeatable) grants servers by name;
+>   the default is none, and `brigadier context mcps` lists them. `--lean` is accepted and ignored; `--skill` is
+>   an error that points to `brigadier context skills <name>`. Sessions are unchanged: they keep the user's
+>   files, skills and servers (D15).
+> - **Compaction in place by default (D15; supersedes run2-D15).** Every session's thread compacts with its CLI's
+>   own compaction. There is no switch and no user setting: `BRIGADIER_LONG_SESSIONS` is only a test opt-out
+>   (`seams`, `native-bare`). Workers compact with their CLI's own compaction, as before.
+> - **Hand-off counts (D14, D16).** A session hands off to a fresh CLI session after 5 compactions in a row in one
+>   CLI session; a worker does so after 3. A failed or looping compaction (run2-D10) and a context too long for
+>   the model still hand off at once. The hand-off is hidden behind its divider (run2-D44).
+>   - **Same-CLI successor.** Its first message is only the hand-off note (or why there is none) and the
+>     `brigadier context` pointer.
+>   - **Move to another CLI (D46).** It keeps D49's conversation tail, without the ledger sections. D49 holds
+>     only for these moves.
+> - **The worker hand-off (D14, proposed details).**
+>   - **No steering.** The note is never steered into a running turn; it is asked for in a turn of its own once
+>     the turn ends.
+>   - **After a count.** The session hears that turn's end, and the worker's successor starts with the next
+>     message.
+>   - **After a failure or a thrash.** The session hears nothing of the broken turn, and the successor carries on
+>     at once.
+>   - **The successor.** Same worker, same worktree. The setup script and the secrets copy are not run again.
+
 > Status: plan, 2026-10-22, from the user's decisions G1–G21 (project memory `plain-cli-threads-1022`), the
 > 10-22 diagnosis (run `20261022-0805-take-over-5-sessions`, `DIAGNOSIS.md`) and the long-sessions research
 > (same run, `research/PROPOSAL.md`, `QUESTIONS.md`, `EVIDENCE.md`). The decisions are settled. Where one looks
@@ -330,8 +366,9 @@ compacts in place (switch on, below; run2-D2).
     wait? See how delegator works"). Its bootstrap is the first lines of its first user message, also
     saved to disk (Q4). The successor may search every earlier file of the lineage (Q5).
   - **Codex.** Codex's forced compaction at 90% is a known limit. The divider shows when it happens (Q0).
-- **Switch on: the CLI compacts in place (run2-D2).** Behind `BRIGADIER_LONG_SESSIONS`, off by default, until
-  the test round passes (run2-D15). The tab keeps one CLI session for its whole life. What each lever did on
+- **Switch on: the CLI compacts in place (run2-D2).** Now the default, with nothing put back after a compaction
+  (D15, D13; see the 2026-10-25 amendment at the top). The text below on the switch and the put-back is history.
+  It was behind `BRIGADIER_LONG_SESSIONS`, off by default, until the test round passes (run2-D15). The tab keeps one CLI session for its whole life. What each lever did on
   the installed CLIs: `docs/evidence/2026-10-24-long-session-levers.md`.
   - **The switch.** Read when the daemon starts. Its value is the mode, one of the battery's candidate arms
     (`tools/continuity-battery/arms.py`): `native-bare` adds nothing; `native` or `restore-only` puts the
