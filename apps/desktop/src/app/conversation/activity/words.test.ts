@@ -57,6 +57,8 @@ test("a tool keeps its words across provider namespaces and never shows them", (
 
 test("the CLIs' plumbing is never a row", () => {
   for (const name of ["ToolSearch", "tool_search", "spawn_agent", "functions.spawn_agent"]) assert.ok(isPlumbing(name), name);
+  // The CLI's own question tool and plan: their cards say them (harness D7).
+  for (const name of ["AskUserQuestion", "request_user_input", "ExitPlanMode"]) assert.ok(isPlumbing(name), name);
   for (const name of ["Read", "Bash", "WebSearch", "imagegen"]) assert.ok(!isPlumbing(name), name);
 });
 

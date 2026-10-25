@@ -14,6 +14,8 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     peerHint: string;
     peerHintBlurred: string;
     browser: { title: string | null; body: string | null };
+    plan: { title: string | null; body: string | null; bare: string | null };
+    replied: string[];
   };
   assert.equal(seen.network, "Allow connecting to https://example.com?");
   assert.equal(seen.networkBody, "example.com isn’t on this session’s list of allowed sites.");
@@ -28,6 +30,10 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
   assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
   // A browser action that asks first: the question, what the agent would do, and plain answers.
   assert.deepEqual(seen.buttons["browser"], ["Don'tEsc", "Go ahead"]);
+  // The CLI's own plan (harness D7): Build it and Reply…, no Deny; its heading names it.
+  for (const id of ["plan", "plan-bare"]) assert.deepEqual(seen.buttons[id], ["Reply…", "Build it"]);
+  assert.deepEqual(seen.plan, { title: "Build this plan? Add a.txt", body: "Create a.txt holding hello.\nCheck it reads back.", bare: "Build this plan?" });
+  assert.deepEqual(seen.replied, ["plan"]);
   assert.deepEqual(seen.browser, { title: "Pay on shop.example?", body: "Clicks button “Pay $5”.\nOn https://shop.example/checkout" });
   assert.deepEqual(seen.calls, [
     // A window-wide Enter allows nothing: allowing takes a click or Enter on a focused Allow.
@@ -38,6 +44,8 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     // The message to another session: Enter on the focused card sends it, a window-wide one doesn't.
     { id: "peer", decision: "allow" },
     { id: "browser", decision: "allow" },
+    // Esc on a plan refuses nothing; Build it allows it.
+    { id: "plan", decision: "allow" },
   ]);
   assert.equal(seen.peerFocused, true);
   assert.equal(seen.peerHint, "contents", "its ⏎ shows while the card has focus");

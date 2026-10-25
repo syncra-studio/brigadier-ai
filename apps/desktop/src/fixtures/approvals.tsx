@@ -44,7 +44,15 @@ approvals["browser"] = {
     question: "Pay on shop.example?", details: "Clicks button “Pay $5”.\nOn https://shop.example/checkout", fingerprint: "click\u001fe4",
   },
 };
-const shown = [...variants.map(([id]) => id), "peer", "browser"];
+// The plan the CLI proposed from its own plan mode (harness D7): Build it, or reply; no Deny.
+const plan = (id: string, text: string): ShownApproval => ({
+  id, conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,
+  subject: { type: "plan", plan: text },
+});
+approvals["plan"] = plan("plan", "# Add a.txt\n\n1. Create `a.txt` holding `hello`.\n2. Check it reads back.");
+approvals["plan-bare"] = plan("plan-bare", "## Plan\n\nWrite the file.");
+const replied: string[] = [];
+const shown = [...variants.map(([id]) => id), "peer", "browser", "plan", "plan-bare"];
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals } });
 const calls: { id: string; decision: string }[] = [];
 mockIPC((command, payload) => {
@@ -106,7 +114,25 @@ function Fixture() {
       };
       buttons("browser").find((button) => button.textContent === "Go ahead")?.click();
     });
+    // A plan: its title from its own heading, and Esc refuses nothing; Build it allows it.
+    at(2800, () => setOnly("plan"));
     at(2900, () => {
+      seen.plan = {
+        title: card("plan").querySelector("[role=alert]")?.textContent ?? null,
+        body: card("plan").querySelector("[data-slot=plan-text] ol")?.textContent?.trim() ?? null,
+        bare: null,
+      };
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      card("plan").querySelector<HTMLElement>("[data-slot=action-card]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    at(3000, () => setOnly(null));
+    at(3100, () => {
+      (seen.plan as Record<string, unknown>).bare = card("plan-bare").querySelector("[role=alert]")?.textContent ?? null;
+      buttons("plan").find((button) => button.textContent === "Reply…")?.click();
+      buttons("plan").find((button) => button.textContent === "Build it")?.click();
+    });
+    at(3300, () => {
+      seen.replied = replied;
       seen.calls = calls;
       const result = document.createElement("pre");
       result.id = "approvals-result";
@@ -121,7 +147,7 @@ function Fixture() {
       <div className="flex flex-wrap items-start gap-6">
         {shown.filter((id) => only === null || id === only).map((id) => (
           <div key={id} data-fixture={id} style={{ width: id === "narrow" || id === "long" ? 320 : 680 }} className="bg-composer rounded-xl">
-            <ApprovalAction id={id} />
+            <ApprovalAction id={id} {...(id.startsWith("plan") ? { onReply: () => void replied.push(id) } : {})} />
           </div>
         ))}
       </div>

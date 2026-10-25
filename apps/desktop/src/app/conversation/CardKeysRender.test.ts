@@ -62,8 +62,8 @@ test("every question card takes Enter only on the focused card and lights nothin
   assert.deepEqual(escapeAsk!.calls, [{ method: "dismiss" }]);
 });
 
-test("a question card keeps the answer the user lit and the text typed after a visit to Settings, and takes a typed answer next to its options", { timeout: 90000 }, async (t) => {
-  const { kept, typed } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
+test("a question card keeps the answer the user lit and the text typed after a visit to Settings, takes a typed answer next to its options, and sends a multi-select question's marked answers together", { timeout: 90000 }, async (t) => {
+  const { kept, typed, multi } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
   assert.equal(kept!.error, undefined, `kept: ${kept!.error}`);
   assert.notDeepEqual(kept!.litBefore, kept!.litFresh, "↓ lights an answer");
   assert.deepEqual(kept!.litAfter, kept!.litBefore);
@@ -74,4 +74,11 @@ test("a question card keeps the answer the user lit and the text typed after a v
   assert.deepEqual(kept!.calls, []);
   assert.equal(typed!.error, undefined, `typed: ${typed!.error}`);
   assert.deepEqual(typed!.calls, [{ method: "answerQuestion", cardId: "typed", answers: ["Both"], input: "typed" }]);
+  // The CLI's own multi-select question (harness D7): checkboxes, marked by clicks, sent together.
+  assert.equal(multi!.error, undefined, `multi: ${multi!.error}`);
+  assert.deepEqual(multi!.roles, ["checkbox", "checkbox", "checkbox"]);
+  assert.deepEqual(multi!.marked, [1, 2]);
+  assert.deepEqual(multi!.beforeSend, []);
+  assert.equal(multi!.button, "Submit");
+  assert.deepEqual(multi!.calls, [{ method: "answerQuestion", cardId: "multi", answers: ["Percent off, Fixed amount"], input: "click" }]);
 });

@@ -6,7 +6,9 @@ import { createServer } from "vite";
 import { createStore } from "zustand/vanilla";
 
 import {
+  answerWords,
   codeParts,
+  multiPicks,
   questionAnswers,
   questionRound,
   questionRowWords,
@@ -81,6 +83,26 @@ const watch: Question = {
   options: ["Watch", "No"], recommended: 0, items: [],
   answer: null, answers: [], createdAtMs: 1, answeredAtMs: null,
 };
+
+test("a multi-select answer is its marked options, each worded as the CLI offered it (harness D7)", () => {
+  const item = {
+    text: "Which colours?",
+    options: [{ label: "red", description: null }, { label: "blue", description: null }, { label: "red, or blue", description: null }],
+    recommended: 0,
+    multiSelect: true,
+  };
+  assert.deepEqual(multiPicks(item, "red, blue"), [0, 1]);
+  assert.deepEqual(multiPicks(item, "blue"), [1]);
+  // An option whose label holds ", " is one pick; the user's own words are no picks.
+  assert.deepEqual(multiPicks(item, "red, or blue"), [2]);
+  assert.equal(multiPicks(item, "green, blue"), null);
+  assert.equal(answerWords(item, "red, blue"), "red (Recommended), blue");
+  assert.equal(answerWords(item, "green please"), "green please");
+  // A one-pick question with no option marked recommended marks nothing.
+  const single = { ...item, recommended: null, multiSelect: false };
+  assert.equal(answerWords(single, "red, blue"), "red, blue");
+  assert.equal(answerWords(single, "red"), "red");
+});
 
 test("a question's row says it asks while open, and how many it asked once answered", () => {
   assert.equal(questionRowWords(watch), "Asking a question");

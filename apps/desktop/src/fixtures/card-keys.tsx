@@ -42,6 +42,17 @@ const ask: Question = {
 const keep: Question = { ...ask, id: "keep" };
 // Answered in the user's own words, next to its options (`brigadier ask`, S13).
 const typed: Question = { ...ask, id: "typed" };
+// The CLI's own multi-select question (harness D7): clicks mark answers, the button sends them.
+const multi: Question = {
+  ...ask,
+  id: "multi",
+  items: [{
+    text: "Which discount kinds?",
+    options: [{ label: "Percent off", description: null }, { label: "Fixed amount", description: null }, { label: "Free shipping", description: null }],
+    recommended: 0,
+    multiSelect: true,
+  }],
+};
 // A merge card left lit and unanswered, apart from the one the other cases mount: an open card keeps what is lit.
 const mergeLeftLit: Question = { ...merge, id: "merge-left-lit" };
 // Closed with ×, and put aside with Esc.
@@ -52,7 +63,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
-    questions: { merge, ask, keep, typed, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk },
+    questions: { merge, ask, keep, typed, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk, multi },
   },
 });
 
@@ -154,6 +165,7 @@ async function visitSettings(action: PendingAction) {
   await mountCard(action);
 }
 const field = () => document.querySelector<HTMLInputElement>("[data-slot=action-card] input")!;
+const options = () => [...document.querySelectorAll<HTMLElement>("[data-slot=action-option]")];
 const results = new URLSearchParams(location.search).get("case") === "kept" ? {
   // The answer the user lit, and then the text typed in the free-text row, survive a visit to Settings.
   kept: await run(async (seen) => {
@@ -189,6 +201,21 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     await key("Enter");
     await until("the answer to go", sent(before));
     await settle();
+  }),
+  // A multi-select question: each click marks an answer or unmarks it and sends nothing; the
+  // button sends the marked ones together.
+  multi: await run(async (seen, since) => {
+    await mountCard({ type: "question", id: "multi" });
+    seen.roles = options().map((option) => option.getAttribute("role"));
+    for (const index of [0, 1, 2, 2]) await fixtureClick(options()[index]!);
+    await settle();
+    seen.marked = options().flatMap((option, index) => (option.getAttribute("aria-checked") === "true" ? [index + 1] : []));
+    seen.beforeSend = since();
+    const button = [...document.querySelectorAll<HTMLButtonElement>("[data-slot=action-card] button")].find((one) => one.textContent === "Submit");
+    seen.button = button?.textContent ?? null;
+    const before = calls.length;
+    await fixtureClick(button!);
+    await until("the answers to go", sent(before));
   }),
 } : {
   mountEnter: await run(async (seen) => {
