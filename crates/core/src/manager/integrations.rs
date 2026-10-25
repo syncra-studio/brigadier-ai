@@ -279,7 +279,7 @@ impl SessionManager {
 
     /// What a lean worker in `cwd` goes without ([`lean_switched_off`]): its agent's every MCP
     /// server and every skill but those `keep` names.
-    pub(crate) async fn lean_worker_switched_off(
+    pub(crate) async fn naked_worker_switched_off(
         &self,
         conversation: &ConversationId,
         provider: ProviderKind,
@@ -322,7 +322,7 @@ mod tests {
     /// A Claude plugin and a Codex plugin, each with a skill and a server: a lean worker goes
     /// without them by its own agent's names, but the skills it keeps.
     #[test]
-    fn a_lean_worker_goes_without_plugins_by_their_agents_names() {
+    fn a_naked_worker_goes_without_plugins_by_their_agents_names() {
         let home = std::env::temp_dir().join(format!("brigadier-plugins-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let home = {

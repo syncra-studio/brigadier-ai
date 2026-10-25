@@ -149,7 +149,7 @@ for line in sys.stdin:
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
-            lean_worker: false,
+            naked_worker: false,
             native_compaction: None,
         }
     }

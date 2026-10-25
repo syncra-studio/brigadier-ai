@@ -2762,7 +2762,7 @@ impl SessionManager {
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
             stop_hook: None,
-            lean_worker: false,
+            naked_worker: false,
             native_compaction: self.native_compaction(conv, choice.provider),
         };
         let mut resumed = resume.is_some();

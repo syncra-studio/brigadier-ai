@@ -110,6 +110,14 @@ const RESTRICTED_OVERRIDES: &[&str] = &[NO_SUB_AGENTS, NO_SKILLS_CATALOG];
 /// Leaves the user's skills catalog out of the session's instructions.
 const NO_SKILLS_CATALOG: &str = "skills.include_instructions=false";
 
+/// Leaves out the skills that ship with Codex (a naked worker, D13).
+const NO_BUNDLED_SKILLS: &str = "skills.bundled.enabled=false";
+
+/// A worker `brigadier start` started, with none of the user's setup (D13).
+fn user_setup_naked(session: Option<&SessionSpec>) -> bool {
+    session.is_some_and(|session| session.naked_worker && session.tools.user_setup())
+}
+
 /// Removes Codex's sub-agent tools. Codex can't hold a sub-agent to a set of models, so a
 /// session whose models are limited ([`SessionSpec::allowed_models`]) runs without them.
 const NO_SUB_AGENTS: &str = "agents.enabled=false";
@@ -430,10 +438,21 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
         ToolSet::SideChat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
+    // A naked worker (D13, D17) goes without the user's plugins and hooks, as a sealed session
+    // does; its user skills go by file and its servers in its thread's config, below. Codex
+    // 0.164.0 has no way to leave out the user's own `$CODEX_HOME/AGENTS.md` while keeping the
+    // repository's (no config key, thread field, feature or variable; `project_doc_max_bytes=0`
+    // drops the repository's instead): only a home without one would, so a naked Codex worker
+    // still reads it, should the user write one.
+    let naked = user_setup_naked(session);
     let user_setup = tools.user_setup();
-    let sealed: &[&str] = if user_setup { &[] } else { USER_SETUP_FEATURES };
+    let sealed: &[&str] = if user_setup && !naked {
+        &[]
+    } else {
+        USER_SETUP_FEATURES
+    };
     let memory_off = session.is_none_or(|session| {
-        session.lean_worker
+        session.naked_worker
             || matches!(
                 tools,
                 ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat
@@ -448,6 +467,11 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     {
         args.push("--disable".into());
         args.push((*feature).into());
+    }
+    // …and without the skills that ship with Codex (0.164.0: `skills/list` drops them).
+    if naked {
+        args.push("-c".into());
+        args.push(NO_BUNDLED_SKILLS.into());
     }
     if restricted {
         for value in RESTRICTED_OVERRIDES {
@@ -1668,8 +1692,10 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     let mut servers: Map<String, Value> = effective
         .pointer("/config/mcp_servers")
         .and_then(Value::as_object)
-        // A sealed session, or a lean worker (G23), goes without every server of the user's.
-        .filter(|_| !spec.tools.user_setup() || spec.lean_worker)
+        // A sealed session, or a naked worker (D13), goes without every server of the user's;
+        // a naked worker's granted ones come back below, from [`SessionSpec::mcp_servers`]
+        // (D18).
+        .filter(|_| !spec.tools.user_setup() || spec.naked_worker)
         .map(|servers| {
             servers
                 .keys()
@@ -2852,7 +2878,7 @@ mod tests {
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
-            lean_worker: false,
+            naked_worker: false,
             native_compaction: None,
         }
     }
@@ -3379,7 +3405,7 @@ mod tests {
             assert!(about_memory(&args).is_empty(), "{tools:?}: {args:?}");
         }
         let mut lean = spec(ToolSet::Lean, None);
-        lean.lean_worker = true;
+        lean.naked_worker = true;
         assert!(off(&app_server_args(Some(&lean))), "a lean worker");
         for tools in [
             ToolSet::TabChat,
@@ -3653,14 +3679,14 @@ mod tests {
     /// config and writes no memories; the skills it goes without come switched off by file,
     /// and those `--skill` kept are simply not among them.
     #[test]
-    fn a_lean_worker_goes_without_the_users_servers_and_memories() {
+    fn a_naked_worker_goes_without_the_users_servers_and_memories() {
         let effective = json!({"config": {"mcp_servers": {"railway": {"command": "r"},
                                                           "docs": {"url": "https://d"}}}});
         let mut session = spec(ToolSet::Lean, None);
         session.mcp_servers = vec![server("given", stdio("/bin/given", None), &[])];
         let full = mcp_config(&effective, &session);
         assert!(full.get("railway").is_none() && full.get("docs").is_none());
-        session.lean_worker = true;
+        session.naked_worker = true;
         let lean = mcp_config(&effective, &session);
         assert_eq!(lean["railway"], json!({"enabled": false}));
         assert_eq!(lean["docs"], json!({"enabled": false}));

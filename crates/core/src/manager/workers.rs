@@ -650,7 +650,7 @@ impl SessionManager {
         // only the skills it kept (G23).
         let switched_off = match task.plain.as_ref() {
             Some(plain) if plain.lean => {
-                self.lean_worker_switched_off(&conversation_id, provider, &cwd, &plain.skills)
+                self.naked_worker_switched_off(&conversation_id, provider, &cwd, &plain.skills)
                     .await
             }
             _ => Default::default(),
@@ -746,7 +746,7 @@ impl SessionManager {
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook: None,
             stop_hook: None,
-            lean_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
+            naked_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
             native_compaction: None,
         };
         let worktree = workspace.worktree.clone();

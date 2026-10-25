@@ -862,13 +862,13 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         ))
     );
     assert!(spec.stop_hook.is_none());
-    assert!(!spec.lean_worker);
+    assert!(!spec.naked_worker);
     assert_eq!(
         spec.access,
         crate::model::PermissionLevel::AcceptEdits.access()
     );
     let (_, lean) = spec_of(&c);
-    assert!(lean.lean_worker);
+    assert!(lean.naked_worker);
     assert_eq!(lean.access, crate::model::PermissionLevel::Full.access());
 
     // G21: its worktree's branch starts from the session's current branch and merges back

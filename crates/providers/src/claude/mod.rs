@@ -388,7 +388,21 @@ impl Claude {
         // reads them whether or not they are linked.
         let user_setup = spec.tools.user_setup();
         let hooks_off = hooks_disabled(spec, cwd, user_config);
-        let mut args: Vec<String> = if user_setup {
+        let mut args: Vec<String> = if naked(spec) {
+            // A naked worker (D13, D17): the user's CLAUDE.md, skills, agents, plugins (with
+            // their skills, hooks and servers), hooks and servers all come with the `user`
+            // source and `~/.claude.json`; the project's CLAUDE.md with the `project` one, in a
+            // folder the user trusts. An empty list loads none (checked on 2.1.310: no local
+            // hook fired). `--bare` would drop the user's login too.
+            let sources = if spec.project.is_some() {
+                "project"
+            } else {
+                ""
+            };
+            ["--strict-mcp-config", "--setting-sources", sources]
+                .map(str::to_owned)
+                .to_vec()
+        } else if user_setup {
             let sources = if spec.project.is_some() {
                 "user,project,local"
             } else {
@@ -402,11 +416,6 @@ impl Claude {
         };
         // The CLI moves dynamic facts to the first message without removing them (D63).
         args.push("--exclude-dynamic-system-prompt-sections".into());
-        // A lean worker (G23) loads only the servers Brigadier gives it, none of the user's,
-        // with the user's settings and instruction files still read.
-        if user_setup && spec.lean_worker {
-            args.push("--strict-mcp-config".into());
-        }
         args.push("--mcp-config".into());
         args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
@@ -450,6 +459,11 @@ impl Claude {
             }
         }
         let mut layer = settings(spec, &sub_agents, home_login);
+        if naked(spec)
+            && let Some(user) = user_config.and_then(|dir| read_json(&dir.join("settings.json")))
+        {
+            carry_user_settings(&mut layer, &user);
+        }
         if hooks_off {
             layer
                 .as_object_mut()
@@ -512,6 +526,11 @@ fn session_env(spec: &SessionSpec, hooks_on: bool, backstop: Option<i64>) -> Vec
         )
     {
         env.push(("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), "5m".into()));
+    }
+    // A naked worker goes without the skills that ship with Claude Code too (D13); the
+    // project's and Brigadier's own (`--plugin-dir`) stay (2.1.310).
+    if naked(spec) {
+        env.push(("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS".into(), "1".into()));
     }
     // What the MCP config of Brigadier's servers (the computer-use driver's, S35) refers to by
     // name, each under its server's own alias, and what the output hook reads. The user's own
@@ -908,7 +927,7 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
 /// Whether a session goes without Claude's memory whatever the user's setting ([`settings`]).
 fn memory_off(spec: &SessionSpec) -> bool {
     match spec.tools {
-        ToolSet::Default | ToolSet::Lean | ToolSet::Thread => spec.lean_worker,
+        ToolSet::Default | ToolSet::Lean | ToolSet::Thread => spec.naked_worker,
         ToolSet::SideChat => false,
         ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat => true,
     }
@@ -933,6 +952,44 @@ fn hooks_disabled(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) ->
         .unwrap_or(false)
 }
 
+/// A worker `brigadier start` started, which loads none of the user's setup (D13).
+fn naked(spec: &SessionSpec) -> bool {
+    spec.naked_worker && spec.tools.user_setup()
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// What a naked worker keeps of the user's own settings, which it doesn't load (D13): their
+/// permission rules and their environment, so it asks for and runs what the user's own Claude
+/// Code would. Nothing of it reaches the model's context. Brigadier's own rules and variables
+/// in `layer` come first and win.
+fn carry_user_settings(layer: &mut Value, user: &Value) {
+    for kind in ["allow", "deny", "ask"] {
+        let Some(theirs) = user
+            .pointer(&format!("/permissions/{kind}"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        let rules = layer["permissions"][kind]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut merged = rules.clone();
+        merged.extend(theirs.iter().filter(|rule| !rules.contains(rule)).cloned());
+        layer["permissions"][kind] = Value::Array(merged);
+    }
+    if let Some(theirs) = user.get("env").and_then(Value::as_object) {
+        let mut env = theirs.clone();
+        if let Some(ours) = layer.get("env").and_then(Value::as_object) {
+            env.extend(ours.clone());
+        }
+        layer["env"] = Value::Object(env);
+    }
+}
+
 /// The value at JSON `pointer` in the settings sources this session loads, the one that wins:
 /// local overrides project, which overrides user ([`hooks_disabled`]).
 fn setting(
@@ -948,8 +1005,10 @@ fn setting(
             .cloned()
     };
     let user_setup = spec.tools.user_setup();
+    // A naked worker loads the project's settings alone, and only in a folder the user trusts.
+    let user = user_setup && !naked(spec);
     let mut off = user_config
-        .filter(|_| user_setup)
+        .filter(|_| user)
         .and_then(|dir| read(&dir.join("settings.json")));
     let project = if user_setup {
         spec.project.as_deref()
@@ -960,7 +1019,7 @@ fn setting(
         let dirs = project_dirs(project);
         for name in ["settings.json", "settings.local.json"]
             .into_iter()
-            .take(if user_setup { 2 } else { 1 })
+            .take(if user { 2 } else { 1 })
         {
             for dir in dirs.iter().rev() {
                 if let Some(value) = read(&dir.join(".claude").join(name)) {
@@ -2646,7 +2705,7 @@ for line in sys.stdin:
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
-            lean_worker: false,
+            naked_worker: false,
             native_compaction: None,
         }
     }
@@ -3164,10 +3223,10 @@ for line in sys.stdin:
                 .position(|arg| arg == name)
                 .map(|at| args[at + 1].clone())
         };
-        let memory = |tools: ToolSet, lean_worker: bool| {
+        let memory = |tools: ToolSet, naked_worker: bool| {
             let session = SessionSpec {
                 tools,
-                lean_worker,
+                naked_worker,
                 project: Some(cwd.path().to_owned()),
                 ..spec(cwd.path(), &[])
             };
@@ -3646,13 +3705,21 @@ for line in sys.stdin:
         }
     }
 
-    /// A lean worker (`brigadier start --lean`, G23) keeps the user's settings and instruction
-    /// files but loads only the servers Brigadier gives it (`--strict-mcp-config`), writes no
-    /// memories, and has the skills it goes without turned off by name (plugin skills by a
-    /// deny rule); a skill `--skill` kept is simply not among them.
+    /// A naked worker (D13, D17) loads none of the user's setup: only the project's settings
+    /// source in a trusted folder (its CLAUDE.md), none in another, only the servers Brigadier
+    /// gives it (D18), no bundled skills and no memories. The user's permission rules and
+    /// environment still hold; their hooks don't.
     #[test]
-    fn a_lean_worker_loads_none_of_the_users_servers_and_only_its_kept_skills() {
+    fn a_naked_worker_loads_none_of_the_users_setup_but_the_projects_and_its_grants() {
         let cwd = Temp::new();
+        let config = Temp::new();
+        std::fs::write(
+            config.path().join("settings.json"),
+            r#"{"permissions": {"allow": ["Bash(cargo test:*)"], "deny": ["Bash(rm -rf:*)"]},
+                "env": {"THEIRS": "1", "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"},
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "theirs"}]}]}}"#,
+        )
+        .unwrap();
         let worker = SessionSpec {
             project: Some(cwd.path().to_owned()),
             ..spec(cwd.path(), &[])
@@ -3662,39 +3729,69 @@ for line in sys.stdin:
                 .position(|arg| arg == name)
                 .map(|at| args[at + 1].clone())
         };
-        let args = Claude::session_args(&worker, cwd.path(), "n", false, None).unwrap();
+        let config_dir = Some(config.path());
+        let args = Claude::session_args(&worker, cwd.path(), "n", false, config_dir).unwrap();
         assert!(!args.contains(&"--strict-mcp-config".to_owned()));
-        let lean = SessionSpec {
-            lean_worker: true,
-            switched_off: skills_off(&["review"], &["docs:write"]),
-            ..worker.clone()
-        };
-        let args = Claude::session_args(&lean, cwd.path(), "n", false, None).unwrap();
-        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
         assert_eq!(
             flag(&args, "--setting-sources").as_deref(),
-            Some("user,project,local"),
-            "the user's settings and the project's still load"
+            Some("user,project,local")
         );
+        let granted = McpServer {
+            name: "pencil".into(),
+            transport: McpTransport::Stdio {
+                command: PathBuf::from("/bin/pencil"),
+                args: Vec::new(),
+                cwd: None,
+            },
+            env: vec![("TOKEN".into(), "secret".into())],
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+        };
+        let naked = SessionSpec {
+            naked_worker: true,
+            mcp_servers: vec![granted],
+            switched_off: skills_off(&["review"], &[]),
+            ..worker.clone()
+        };
+        let args = Claude::session_args(&naked, cwd.path(), "n", false, config_dir).unwrap();
+        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
+        assert_eq!(flag(&args, "--setting-sources").as_deref(), Some("project"));
+        let servers: Value = serde_json::from_str(&flag(&args, "--mcp-config").unwrap()).unwrap();
         assert_eq!(
-            flag(&args, "--mcp-config").as_deref(),
-            Some(r#"{"mcpServers":{}}"#)
+            servers["mcpServers"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["pencil"]
         );
-        let settings = settings(&lean, &SubAgents::Any, false);
-        assert_eq!(settings["autoMemoryEnabled"], json!(false));
-        assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
+        let layer: Value = serde_json::from_str(&flag(&args, "--settings").unwrap()).unwrap();
+        assert_eq!(layer["autoMemoryEnabled"], json!(false));
+        assert_eq!(layer["skillOverrides"], json!({"review": "off"}));
         assert!(
-            settings["permissions"]["deny"]
+            layer["permissions"]["allow"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("Skill(docs:write)"))
+                .contains(&json!("Bash(cargo test:*)"))
         );
-        // With `--skill review` kept, only the plugin's skill goes.
-        let kept = SessionSpec {
-            switched_off: skills_off(&[], &["docs:write"]),
-            ..lean
+        assert_eq!(layer["permissions"]["deny"], json!(["Bash(rm -rf:*)"]));
+        assert_eq!(layer["env"]["THEIRS"], "1");
+        assert!(layer["hooks"].get("Stop").is_none(), "{layer}");
+        let env = session_env(&naked, true, None);
+        assert!(env.contains(&("CLAUDE_CODE_DISABLE_BUNDLED_SKILLS".into(), "1".into())));
+        assert!(
+            !session_env(&worker, true, None)
+                .iter()
+                .any(|(name, _)| name == "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS")
+        );
+        // A folder the user doesn't trust: no source at all, not even the project's.
+        let untrusted = SessionSpec {
+            project: None,
+            ..naked
         };
-        assert!(settings_of(&kept).get("skillOverrides").is_none());
+        let args = Claude::session_args(&untrusted, cwd.path(), "n", false, config_dir).unwrap();
+        assert_eq!(flag(&args, "--setting-sources").as_deref(), Some(""));
     }
 
     fn skills_off(names: &[&str], plugins: &[&str]) -> SwitchedOff {

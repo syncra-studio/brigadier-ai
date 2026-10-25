@@ -214,7 +214,7 @@ async fn a_worker_has_them_and_a_lean_one_only_when_asked_on_both_clis() {
                     .unwrap_or_else(|| panic!("task-{number} started"))
             };
             let (ordinary, lean, lean_with) = (spec_of(1), spec_of(2), spec_of(3));
-            assert!(lean.lean_worker && lean_with.lean_worker);
+            assert!(lean.naked_worker && lean_with.naked_worker);
             assert_eq!(has_computer(&ordinary), on, "{provider:?} ordinary");
             assert!(!has_computer(&lean), "{provider:?} lean");
             assert_eq!(has_computer(&lean_with), on, "{provider:?} lean with");

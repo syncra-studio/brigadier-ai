@@ -138,7 +138,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         omit_ai_coauthors: false,
         output_hook: None,
         stop_hook: None,
-        lean_worker: false,
+        naked_worker: false,
         native_compaction: None,
     };
     let ledger = Arc::new(Recorded(Mutex::default()));

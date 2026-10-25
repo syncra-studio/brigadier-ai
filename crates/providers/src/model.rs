@@ -1425,14 +1425,16 @@ pub struct SessionSpec {
     /// A Claude worker's `Stop` hook: the command answers whether its turn may end (it
     /// refuses a turn that ends with no report, BUILD-PLAN E2). Codex doesn't run it.
     pub stop_hook: Option<OutputHook>,
-    /// A lean research worker (`brigadier start --lean`, G23): none of the user's MCP servers
-    /// and no memory writes, from the CLI's own flags and settings, never by editing the user's
-    /// files. Its skills are cut through [`Self::switched_off`]; its instruction files still
-    /// load.
-    pub lean_worker: bool,
-    /// A session's thread under `BRIGADIER_LONG_SESSIONS` (run2-D2): the CLI compacts in place
-    /// with its own compaction instead of the session moving to a fresh one at a size. `None`:
-    /// as [`Self::auto_compact`] says.
+    /// A worker `brigadier start` started (D13, D17): none of the user's own setup, neither
+    /// their global instruction file, skills, plugins, hooks nor MCP servers, and no memory
+    /// writes, from the CLI's own flags and settings, never by editing the user's files. The
+    /// repository's own CLAUDE.md / AGENTS.md still load, and it gets only the servers in
+    /// [`Self::mcp_servers`] (the ones it was granted, D18). Its user skills are cut through
+    /// [`Self::switched_off`]. It pulls what it needs with `brigadier context`.
+    pub naked_worker: bool,
+    /// A session's thread compacting in place (run2-D2, D15): the CLI compacts with its own
+    /// compaction instead of the session moving to a fresh one at a size. `None`: as
+    /// [`Self::auto_compact`] says.
     pub native_compaction: Option<NativeCompaction>,
 }
 
