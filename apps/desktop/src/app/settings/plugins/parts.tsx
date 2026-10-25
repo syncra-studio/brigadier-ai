@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from "react";
 
-import { Badge } from "@/components/controls";
-import { ChevronDown, ChevronRight, Folder, Folders, Globe, Plugin, ProviderGlyph, Sparkle, Spinner, Terminal } from "@/components/icons";
+import { SettingsSwitch } from "@/app/settings/parts";
+import { ChevronDown, ChevronRight, Folder, Folders, ProviderGlyph, ServerArt, ServerBrand, SkillArt } from "@/components/icons";
 import { SettingsCard } from "@/components/shared";
-import type { AgentItemState, PluginAgentView, PluginItemView, PluginsView, ProviderKind } from "@/ipc/generated";
+import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { has, KIND_LABEL, type Line, type Tone } from "./model";
+import { brandOf } from "./brand";
+import type { Line, Tone } from "./model";
+import type { PluginItemView, PluginKind } from "./types";
 
 /** The agents with a mark of their own; any other shows its name's first letter. */
 const GLYPHS: readonly string[] = ["claude", "codex"] satisfies ProviderKind[];
@@ -13,23 +15,11 @@ const glyphed = (agent: string): agent is ProviderKind => GLYPHS.includes(agent)
 
 const TONE: Record<Tone, string> = { muted: "text-foreground/65", warning: "text-warning", error: "text-destructive" };
 
-/** An agent's small mark, in a row's strip and the Add dialog. */
-export function AgentMark({ agent, dim = false }: { agent: PluginAgentView; dim?: boolean }) {
-  return (
-    <span
-      data-slot="agent-mark"
-      data-agent={agent.agent}
-      data-dim={dim || undefined}
-      title={agent.label}
-      className={cn("bg-foreground/8 text-foreground/85 flex size-4.5 shrink-0 items-center justify-center rounded-sm text-2xs font-medium", dim && "opacity-20")}
-    >
-      {glyphed(agent.agent) ? <ProviderGlyph provider={agent.agent} className="size-2.5" /> : agent.label.charAt(0).toUpperCase()}
-    </span>
-  );
-}
+/** An agent, as the dialogs name it. */
+export type PluginAgent = { agent: string; label: string };
 
-/** An agent's tile, beside its name in the details and the dialogs. */
-function AgentTile({ agent, dim = false }: { agent: PluginAgentView; dim?: boolean }) {
+/** An agent's tile, beside its name in the dialogs. */
+function AgentTile({ agent, dim = false }: { agent: PluginAgent; dim?: boolean }) {
   if (glyphed(agent.agent)) return <ProviderGlyph provider={agent.agent} tile="md" dim={dim} />;
   return (
     <span
@@ -43,91 +33,70 @@ function AgentTile({ agent, dim = false }: { agent: PluginAgentView; dim?: boole
   );
 }
 
-/** Every agent's mark, the ones `lit` says no to dimmed. */
-function AgentStrip({ view, item, lit }: { view: PluginsView; item: PluginItemView; lit: (state: AgentItemState) => boolean }) {
-  const shown = view.agents.filter((agent) => lit(stateOf(item, agent.agent)));
-  return (
-    <span data-slot="agent-strip" aria-label={shown.length ? `In ${shown.map((agent) => agent.label).join(", ")}` : "In no agent"} className="flex shrink-0 items-center gap-0.75">
-      {view.agents.map((agent) => <AgentMark key={agent.agent} agent={agent} dim={!lit(stateOf(item, agent.agent))} />)}
-    </span>
-  );
+/**
+ * An item's mark: its maker's mark for a well-known server, else its site's icon (a remote
+ * server's favicon), else the illustration for its kind.
+ */
+export function PluginMark({ item, favicon = null, large = false }: {
+  item: { kind: PluginKind; name: string; detail: string };
+  /** A remote server's site icon. */
+  favicon?: string | null | undefined;
+  large?: boolean;
+}) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const brand = brandOf(item);
+  const site = !brand && favicon && favicon !== failed ? favicon : null;
+  const size = large ? "size-11" : "size-9";
+  if (brand || site) {
+    return (
+      <span data-slot="plugin-mark" data-mark={brand ?? "favicon"} className={cn("bg-foreground/5 flex shrink-0 items-center justify-center", size, large ? "rounded-xl" : "rounded-toolbar-button")}>
+        {brand
+          ? <ServerBrand brand={brand} className={cn("text-foreground/85", large ? "size-5.5" : "size-4.5")} />
+          : site && <img src={site} alt="" onError={() => setFailed(site)} className={cn("rounded-xs", large ? "size-6" : "size-4.5")} />}
+      </span>
+    );
+  }
+  const Art = item.kind === "skill" ? SkillArt : ServerArt;
+  return <Art data-slot="plugin-mark" data-mark={item.kind} className={size} />;
 }
 
-export const stateOf = (item: PluginItemView, agent: string): AgentItemState =>
-  item.agents.find((entry) => entry.agent === agent)?.state ?? { type: "missing" };
-
-/** An item's tile: a skill's sparkle, a plugin's piece, a server's globe (remote) or terminal. */
-export function ItemMark({ item, large = false }: { item: Pick<PluginItemView, "kind" | "remote" | "key" | "attention">; large?: boolean }) {
-  const Icon = item.kind === "skill" ? (item.key.startsWith("plugin:") ? Plugin : Sparkle) : item.remote ? Globe : Terminal;
-  const broken = item.attention?.type === "wontStart";
+/** Where an item is on, as a tag: "Global", a project's name, "3 projects". */
+function ScopeChip({ text }: { text: string }) {
+  const Icon = text === "Global" ? Folders : Folder;
   return (
-    <span className={cn("bg-foreground/5 flex shrink-0 items-center justify-center", large ? "size-11 rounded-xl" : "rounded-toolbar-button size-9")}>
-      <Icon aria-hidden className={cn(large ? "size-5" : "size-4", broken ? "text-destructive" : item.kind === "skill" ? "text-file-pink" : "text-foreground/65")} />
-    </span>
-  );
-}
-
-/** A project tag: where it's on, or "Off in steady-app". */
-function ScopeChip({ global = false, children }: { global?: boolean; children: ReactNode }) {
-  const Icon = global ? Folders : Folder;
-  return (
-    <span data-slot="scope-chip" className="bg-foreground/5 text-foreground/65 rounded-capsule flex h-pill shrink-0 items-center gap-1 px-2 text-xs">
+    <span data-slot="scope-chip" className="bg-foreground/5 text-foreground/65 rounded-capsule flex h-pill w-fit shrink-0 items-center gap-1 px-2 text-xs">
       <Icon aria-hidden className="size-3" />
-      {children}
+      {text}
     </span>
   );
 }
 
-/** One item: its tile, name and kind, a line, its agents, tags, and its switch or button. */
-export function PluginRow({ view, item, line, dim = false, chips = [], picker, lit, end, onOpen }: {
-  view: PluginsView;
+/** One item in the list's grid: its mark, name, line and where it's on; its switch at the corner. */
+export function PluginCard({ item, line, chip, favicon, busy, onOpen, onSwitch }: {
   item: PluginItemView;
   line: Line;
-  /** Off where the page looks. */
-  dim?: boolean;
-  chips?: { text: string; global?: boolean }[];
-  /** The place picker, after the tags. */
-  picker?: ReactNode;
-  lit?: (state: AgentItemState) => boolean;
-  /** Its switch or button. */
-  end: ReactNode;
-  onOpen?: () => void;
+  chip: string | null;
+  favicon?: string | null | undefined;
+  busy: boolean;
+  onOpen: () => void;
+  onSwitch: (on: boolean) => void;
 }) {
-  const words = (
-    <>
-      <ItemMark item={item} />
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-label font-medium">{item.name}</span>
-          <span data-slot="row-kind" className="text-foreground/50 shrink-0 text-xs">{kindLine(item)}</span>
-        </span>
-        <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone])}>{line.text}</span>
-      </span>
-    </>
-  );
+  const on = item.on;
+  // How it runs (a command, an address or a folder) is in code's letters.
+  const code = line.text === item.detail && !item.problem && !item.locked;
   return (
-    <div data-slot="plugin-row" data-key={item.key} data-off={dim || undefined} data-setting={`plugin:${item.key}`} className="flex min-w-0 items-center gap-3 px-4 py-3">
-      {onOpen ? (
-        <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex min-w-0 flex-1 items-center gap-3 text-start", dim && "opacity-50")}>{words}</button>
-      ) : (
-        <span className={cn("flex min-w-0 flex-1 items-center gap-3", dim && "opacity-50")}>{words}</span>
-      )}
-      <span className={cn("flex shrink-0 items-center gap-3", dim && "opacity-50")}>
-        <AgentStrip view={view} item={item} lit={dim ? () => false : (lit ?? has)} />
-        {chips.map((chip) => <ScopeChip key={chip.text} global={chip.global ?? false}>{chip.text}</ScopeChip>)}
-        {picker}
-      </span>
-      {end}
-    </div>
+    <SettingsCard data-slot="plugin-row" data-key={item.key} data-off={!on || undefined} data-locked={item.locked ? true : undefined} data-setting={`plugin:${item.key}`} split={false} className="flex-row items-start gap-3 px-4 py-3.5">
+      <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex min-w-0 flex-1 items-start gap-3 text-start", !on && "opacity-50")}>
+        <PluginMark item={item} favicon={favicon} />
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span data-slot="row-name" className="truncate text-label font-medium">{item.name}</span>
+          <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>
+          {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
+        </span>
+      </button>
+      <SettingsSwitch label={item.name} checked={on} disabled={busy || !!item.locked} onCheckedChange={onSwitch} />
+    </SettingsCard>
   );
-}
-
-/** "MCP server", "Plugin · 9 skills", "MCP server · in Claude Desktop". */
-function kindLine(item: PluginItemView): string {
-  const plugin = item.key.startsWith("plugin:") && item.kind === "skill";
-  const kind = plugin ? "Plugin" : KIND_LABEL[item.kind];
-  if (item.foundIn) return `${kind} · in ${item.foundIn}`;
-  return plugin && item.skills > 0 ? `${kind} · ${item.skills} ${item.skills === 1 ? "skill" : "skills"}` : kind;
 }
 
 /** A card that folds open: its title and line, then what it holds. */
@@ -154,22 +123,9 @@ export function FoldCard({ title, line, initiallyOpen = false, setting, children
   );
 }
 
-/** How an agent stands with an item, as a pill. */
-export function StateBadge({ state }: { state: AgentItemState }) {
-  switch (state.type) {
-    case "ready": return <Badge variant="success">Ready</Badge>;
-    case "needsSignIn": return <Badge variant="warning">Needs sign-in</Badge>;
-    case "wontStart": return <Badge variant="destructive">Won't start</Badge>;
-    case "off": return <Badge variant="secondary">Off</Badge>;
-    case "missing": return <Badge variant="secondary">Not added</Badge>;
-    case "notSupported": return <Badge variant="outline">Not supported</Badge>;
-    case "working": return <Spinner aria-label="Working" className="text-foreground/65 size-icon-sm animate-spin" />;
-  }
-}
-
 /** An agent's row: its tile, name and line, and what sits at its end. */
 export function AgentRow({ agent, line, tone = "muted", dim = false, end, children, className }: {
-  agent: PluginAgentView;
+  agent: PluginAgent;
   line: ReactNode;
   tone?: Tone;
   dim?: boolean;
@@ -194,10 +150,10 @@ export function AgentRow({ agent, line, tone = "muted", dim = false, end, childr
 }
 
 /** One of a choice's options, drawn as the design's radio row. */
-export function RadioRow({ checked, title, line, onSelect, end }: { checked: boolean; title: string; line: string; onSelect: () => void; end?: ReactNode }) {
+export function RadioRow({ checked, title, line, onSelect, end, disabled = false }: { checked: boolean; title: string; line: string; onSelect: () => void; end?: ReactNode; disabled?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <button type="button" role="radio" aria-checked={checked} onClick={onSelect} className="flex min-w-0 flex-1 items-start gap-3 text-start">
+      <button type="button" role="radio" aria-checked={checked} disabled={disabled} onClick={onSelect} className="flex min-w-0 flex-1 items-start gap-3 text-start disabled:opacity-50">
         <span className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full", checked ? "bg-toggle-on" : "border-foreground/30 border")}>
           {checked && <span className="bg-foreground size-1.5 rounded-full" />}
         </span>

@@ -1,7 +1,8 @@
-import { usePlugins, type PluginAgentResult, type PluginDraft, type PluginsAdapter } from "@/app/settings/plugins/adapter";
+import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "@/app/settings/plugins/adapter";
+import { failures } from "@/app/settings/plugins/dialogs";
+import type { NextRequest, PluginItemDetails, PluginsView } from "@/app/settings/plugins/types";
 import { pickFolder, request } from "@/ipc/client";
 import type { McpSignInProgress, PluginJobView } from "@/ipc/generated";
-import { openAddProject } from "@/state/addProject";
 import { useApp } from "@/state/store";
 import { setFolderTrust } from "@/state/trust";
 
@@ -53,11 +54,22 @@ function signInResults(progress: McpSignInProgress): PluginAgentResult[] {
   }));
 }
 
+/**
+ * The shared-plugins requests, until the generated `Request` and `Response` have them: each
+ * answers as the protocol says (`{ plugins }`, `{ item }`, else `{ job }`). Goes when ts-rs
+ * generates them; the calls below then go through `request` as they are.
+ */
+const next = request as unknown as {
+  (call: Extract<NextRequest, { method: "getPlugins" }>): Promise<{ plugins: PluginsView | null }>;
+  (call: Extract<NextRequest, { method: "getPluginItem" }>): Promise<{ item: PluginItemDetails }>;
+  (call: Exclude<NextRequest, { method: "getPlugins" | "getPluginItem" }>): Promise<{ job: string }>;
+};
+
 /** The Plugins page over the daemon. */
 export function livePlugins(): PluginsAdapter {
   return {
-    read: async (projectId) => {
-      const { plugins } = await request({ method: "getPlugins", projectId });
+    read: async () => {
+      const { plugins } = await next({ method: "getPlugins" });
       // An answer without the page (an older daemon, a test's stand-in) keeps the last one.
       if (!plugins) throw new Error("Brigadier didn't send the plugins.");
       return plugins;
@@ -72,14 +84,9 @@ export function livePlugins(): PluginsAdapter {
         unsubscribe();
       };
     },
-    switchPlugin: async (key, projectId, on, agent) =>
-      finished((await request({ method: "switchPlugin", key, projectId, on, agent: agent ?? null })).job),
-    setPlaces: async (key, projectIds) => {
-      const { job } = await request({ method: "setPluginPlaces", key, projectIds });
-      return { results: await finished(job), undo: job };
-    },
-    undoPlaces: async (undo) => finished((await request({ method: "undoPluginPlaces", job: undo })).job),
-    addMissing: async (key) => finished((await request({ method: "addMissingPlugin", key })).job),
+    switchPlugin: async (key, on) => finished((await next({ method: "switchPlugin", key, on })).job),
+    setScope: async (key, projectIds) => finished((await next({ method: "setPluginScope", key, projectIds })).job),
+    share: async (key) => finished((await next({ method: "sharePlugin", key })).job),
     checkAdd: async (text, name) => {
       const { check } = await request({ method: "checkPluginAdd", text, name });
       if (check.needsName && !name?.trim()) return { drafts: [], needsName: true };
@@ -95,18 +102,20 @@ export function livePlugins(): PluginsAdapter {
       }));
       return { drafts, needsName: false };
     },
-    add: async (text, name, projectId, shared, { agents, values }) =>
-      finished((await request({ method: "addPlugin", text, name, projectId, shared, ...(agents ? { agents } : {}), ...(values ? { values } : {}) })).job),
-    everyAgent: async (key) => {
-      const job = await settled((await request({ method: "useEverywhere", key })).job);
-      return { results: results(job), key: job.keys[0] ?? null };
+    add: async (text, name, projectIds, values) =>
+      finished((await next({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}) })).job),
+    remove: async (key) => finished((await next({ method: "removePlugin", key })).job),
+    update: async (key) => finished((await next({ method: "updatePlugin", key })).job),
+    details: async (key) => (await next({ method: "getPluginItem", key })).item,
+    saveSkill: async (key, path, contents, expected) => {
+      const job = await settled((await next({ method: "savePluginSkill", key, path, contents, expected })).job);
+      // A refusal because the file changed since it was opened: its own answer, not a failure.
+      if (job.error && /changed since/i.test(job.error)) return "changed";
+      const problem = failures(results(job));
+      if (problem) throw new Error(problem);
+      return "saved";
     },
-    undoEveryAgent: async (key) => finished((await request({ method: "undoUseEverywhere", key })).job),
-    remove: async (key) => finished((await request({ method: "removePlugin", key })).job),
-    update: async (key) => finished((await request({ method: "updatePlugin", key })).job),
-    signIn: async (key, projectId) => {
-      const serverId = usePlugins.getState().view.items.find((item) => item.key === key)?.serverId;
-      if (!serverId) throw new Error("It has nothing to sign in to.");
+    signIn: async (key, serverId, projectId) => {
       const { id } = await request({ method: "signInMcpServer", serverId, projectId });
       signIns.set(key, id);
       try {
@@ -123,6 +132,5 @@ export function livePlugins(): PluginsAdapter {
     trustProject: async (projectId) => {
       await setFolderTrust(projectId, null, true);
     },
-    addProject: () => openAddProject(),
   };
 }

@@ -13,18 +13,18 @@ import { TooltipProvider } from "@/components/overlays";
 import { TitlebarNav } from "@/components/shared";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { accounts, overviews, usageView } from "@/fixtures/providersData";
-import type { PluginsView, Request } from "@/ipc/generated";
+import type { PluginsView } from "@/app/settings/plugins/types";
+import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { openAgentPage, useAgentPageAsk } from "@/state/agentPage";
 import { useHistory } from "@/state/history";
 import { useApp } from "@/state/store";
 
 const plugins: PluginsView = {
-  agents: [], projects: [], elsewhere: [],
+  projects: [], elsewhere: [],
   items: [{
     key: "server:example", kind: "server", name: "Example server", description: "Fixture server", detail: "example-mcp",
-    remote: false, library: true, everywhere: true, onIn: [], offIn: [], agents: [], attention: null, switchable: true,
-    updateAvailable: false, canUndo: false, serverId: null, files: [], foundIn: null, skills: 0,
+    url: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false, skillCount: 0, files: [],
   }],
 };
 const native: string[] = [];

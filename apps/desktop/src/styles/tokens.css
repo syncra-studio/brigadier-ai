@@ -249,6 +249,10 @@
   /* The model picker (Pen: Model picker): agents on the left, the picked agent's models beside. */
   --container-model-picker: 35rem;
   --container-model-picker-agents: 11rem;
+  /* A plugin's file open from Settings › Plugins (a skill's SKILL.md, a server's settings): a
+     file tab's room in a dialog. */
+  --container-plugin-file: min(96rem, calc(100vw - 4rem));
+  --spacing-plugin-file-height: min(64rem, calc(100dvh - 6rem));
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
   --container-setup: min(68rem, calc(100vw - 2rem));

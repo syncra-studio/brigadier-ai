@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
+import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { useAction } from "@/app/conversation/useAction";
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
 import { Badge, Button, ErrorLine } from "@/components/controls";
 import { Spinner, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
-import type { PluginItemView, PluginsView } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { toast } from "@/state/toasts";
 import type { PluginAgentResult, PluginsAdapter } from "./adapter";
-import { has, listNames, labelOf, TAB_LABEL } from "./model";
-import { AgentRow, stateOf } from "./parts";
+import { AgentRow, type PluginAgent } from "./parts";
+import type { PluginItemView } from "./types";
 
 /** How often a dialog that waits on the agents reads the page again. */
 const WATCH_MS = 1000;
@@ -45,11 +44,14 @@ export function PluginDialog({ open = true, onClose, title, description, slot, c
   );
 }
 
+/** An agent as the dialogs name it: "Claude Code", or its id for one the app has no name for. */
+export const agentOf = (agent: string): PluginAgent => ({ agent, label: (PROVIDER_LABELS as Record<string, string>)[agent] ?? agent });
+
 /** The agents that didn't take a change, with why: "Codex: …". */
-export function failures(view: PluginsView, results: PluginAgentResult[]): string | null {
+export function failures(results: PluginAgentResult[]): string | null {
   const failed = results.filter((result) => !result.ok);
   if (!failed.length) return null;
-  return failed.map((result) => `${labelOf(view, result.agent)}: ${result.message ?? "it didn't take the change."}`).join("\n");
+  return failed.map((result) => `${agentOf(result.agent).label}: ${result.message ?? "it didn't take the change."}`).join("\n");
 }
 
 /** What the user should know although every agent took a change: "sentry is added, but it didn't start: …". */
@@ -59,9 +61,9 @@ export function notes(results: PluginAgentResult[]): string | null {
 }
 
 /** Runs `action` and throws what the agents that didn't take it said. */
-export async function checked(view: PluginsView, action: () => Promise<PluginAgentResult[]>): Promise<PluginAgentResult[]> {
+export async function checked(action: () => Promise<PluginAgentResult[]>): Promise<PluginAgentResult[]> {
   const results = await action();
-  const problem = failures(view, results);
+  const problem = failures(results);
   if (problem) throw new Error(problem);
   return results;
 }
@@ -75,56 +77,11 @@ export function useWatch(refresh: () => void, on: boolean) {
   }, [refresh, on]);
 }
 
-/** Who has an item now, for "Right now only … has it". */
-const holders = (view: PluginsView, item: PluginItemView) =>
-  item.foundIn ?? listNames(view.agents.filter((agent) => has(stateOf(item, agent.agent))).map((agent) => agent.label));
-
-/** G6: Add to every agent: puts an item that one agent (or another app) has into the Library, for every agent. Undo follows as a toast. */
-export function UseEverywhereDialog({ view, item, adapter, onClose, onDone }: {
-  view: PluginsView;
-  item: PluginItemView;
-  adapter: PluginsAdapter;
-  onClose: () => void;
-  /** After it is everywhere: a switch the user flipped waits for this. */
-  onDone?: () => void;
-}) {
-  const action = useAction();
-  const holder = holders(view, item);
-  const kinds = TAB_LABEL[item.kind].toLowerCase().replace("mcp", "MCP");
-  const confirm = () => action.run(async () => {
-    // Undo takes the Library's copy it made, not the item it came from.
-    let copy: string | null = null;
-    await checked(view, async () => {
-      const done = await adapter.everyAgent(item.key);
-      copy = done.key;
-      return done.results;
-    });
-    onClose();
-    const undo = copy;
-    toast(`${item.name} is in every agent now`, {
-      actions: undo ? [{ label: "Undo", run: () => void adapter.undoEveryAgent(undo).catch((cause: unknown) => toast(String(cause), { tone: "error" })) }] : [],
-    });
-    onDone?.();
-  });
-  return (
-    <PluginDialog slot="use-everywhere" onClose={onClose} title={`Add ${item.name} to every agent?`} description={`Right now only ${holder} has it. Brigadier gives it to every agent, the same way each agent adds its own ${kinds}. You can undo this.`}>
-      <ol className="bg-foreground/5 rounded-control text-foreground/85 flex list-inside list-decimal flex-col gap-2 px-4 py-3 text-xs">
-        <li>Keeps a copy in Brigadier's library</li>
-        <li>Gives it to all {view.agents.length} agents</li>
-        <li>{item.foundIn ? `Leaves ${item.foundIn}'s own copy as it is.` : `Removes ${holder}'s old copy, only after every agent has the new one.`}</li>
-      </ol>
-      <ErrorLine error={action.error} />
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button disabled={action.busy} onClick={confirm}>{action.busy ? "Working…" : "Add to every agent"}</Button>
-      </div>
-    </PluginDialog>
-  );
-}
-
-/** G7: removes an item from every agent and every project. */
-export function RemoveDialog({ view, item, adapter, onClose, onRemoved }: {
-  view: PluginsView;
+/**
+ * Remove: takes out what Brigadier added. A Brigadier-added item goes from every agent; for one
+ * an agent has of its own, only the copies Brigadier gave the others go, and its original stays.
+ */
+export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
   item: PluginItemView;
   adapter: PluginsAdapter;
   onClose: () => void;
@@ -132,17 +89,21 @@ export function RemoveDialog({ view, item, adapter, onClose, onRemoved }: {
   onRemoved: () => void;
 }) {
   const action = useAction();
-  const signsIn = item.agents.some((entry) => entry.state.type === "needsSignIn") || (item.remote && item.kind === "server");
   const remove = () => action.run(async () => {
-    await checked(view, () => adapter.remove(item.key));
+    await checked(() => adapter.remove(item.key));
     onRemoved();
   });
+  const copies = item.removal === "copies";
   return (
     <PluginDialog
       slot="remove"
       onClose={onClose}
       title={`Remove ${item.name}?`}
-      description={`It goes from all ${view.agents.length} agents and every project${signsIn ? ", and each agent forgets its sign-in" : ""}. Sessions already running keep it until they end.`}
+      description={
+        copies
+          ? `Brigadier takes out only the copies it gave your other agents. Your own original stays as it is, so ${item.name} stays listed, and Share with every agent brings the copies back. Sessions already running keep it until they end.`
+          : `It goes from every agent and every project. Sessions already running keep it until they end.`
+      }
     >
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">
@@ -154,67 +115,67 @@ export function RemoveDialog({ view, item, adapter, onClose, onRemoved }: {
 }
 
 /**
- * G5: each agent signs in to the item's server in turn; the rows follow each agent's own state
- * where the sign-in runs, which needn't be where the page looks.
+ * Sign in: each agent signs in to the server in turn, its browser opening for the next. The rows
+ * are the agents the sign-in reports once it's done; until then the browser is waited on.
  */
-export function SignInDialog({ view, item, projectId, adapter, refresh, onClose }: {
-  view: PluginsView;
+export function SignInDialog({ item, serverId, projectId, adapter, refresh, onClose }: {
   item: PluginItemView;
-  /** Where the sign-in runs: a place it's on (null: every project). */
+  serverId: string;
+  /** Where the sign-in runs (null: every project). */
   projectId: string | null;
   adapter: PluginsAdapter;
   refresh: () => void;
   onClose: () => void;
 }) {
-  const [results, setResults] = useState<PluginAgentResult[]>([]);
+  const [results, setResults] = useState<PluginAgentResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const start = () => {
     setError(null);
+    setResults(null);
     if (!adapter.signIn) return;
-    adapter.signIn(item.key, projectId).then(setResults, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+    adapter.signIn(item.key, serverId, projectId).then(
+      (done) => {
+        setResults(done);
+        refresh();
+      },
+      (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)),
+    );
   };
   // Starts once, as the dialog opens.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(start, []);
-  // The agents' states where the sign-in runs, read with the page.
-  const [there, setThere] = useState<PluginsView | null>(null);
-  const reread = useCallback(() => {
-    refresh();
-    void adapter.read(projectId).then(setThere, () => {});
-  }, [adapter, projectId, refresh]);
-  useEffect(reread, [reread]);
-  const seen = there ?? view;
-  const current = seen.items.find((entry) => entry.key === item.key) ?? item;
-  const waiting = seen.agents.filter((agent) => stateOf(current, agent.agent).type === "needsSignIn");
-  useWatch(reread, waiting.length > 0);
+  const waiting = results === null && error === null;
+  useWatch(refresh, waiting);
   const cancel = () => {
     void adapter.cancelSignIn?.(item.key).catch(() => {});
     onClose();
   };
+  const failed = results?.filter((result) => !result.ok) ?? [];
   return (
-    <PluginDialog slot="sign-in" onClose={cancel} title={`Sign in to ${item.name}`} description="Each agent keeps its own sign-in, so your browser asks once per agent. After the first one it usually just confirms.">
+    <PluginDialog slot="sign-in" onClose={waiting ? cancel : onClose} title={`Sign in to ${item.name}`} description="Each agent keeps its own sign-in, so your browser asks once per agent. After the first one it usually just confirms.">
       <div className="flex flex-col gap-3">
-        {seen.agents.map((agent) => {
-          const state = stateOf(current, agent.agent);
-          const failed = results.find((result) => result.agent === agent.agent && !result.ok);
-          const turn = waiting.indexOf(agent);
-          if (failed) return <AgentRow key={agent.agent} agent={agent} tone="error" line={failed.message ?? "Couldn't sign in."} end={<span className="text-destructive text-xs">Failed</span>} />;
-          if (state.type === "ready") return <AgentRow key={agent.agent} agent={agent} line="Signed in" end={<Badge variant="success">Signed in</Badge>} />;
-          if (state.type === "notSupported") return <AgentRow key={agent.agent} agent={agent} dim line={state.reason} end={<Aside>Not supported</Aside>} />;
-          if (turn === 0) return <AgentRow key={agent.agent} agent={agent} line="Waiting for your browser…" end={<Spinner aria-label="Waiting" className="text-foreground/65 size-icon-sm animate-spin" />} />;
-          if (turn === 1) return <AgentRow key={agent.agent} agent={agent} line={`Opens your browser after ${waiting[0]!.label}`} end={<Aside>Next</Aside>} />;
-          if (turn > 1) return <AgentRow key={agent.agent} agent={agent} line="Waiting" end={<Aside>Next</Aside>} />;
-          return <AgentRow key={agent.agent} agent={agent} dim line={state.type === "wontStart" ? "Couldn't start it." : "Doesn't have it"} />;
-        })}
+        {waiting && (
+          <div data-slot="sign-in-waiting" className="text-foreground/65 flex items-center gap-3 text-label">
+            <Spinner aria-label="Waiting" className="size-icon-sm animate-spin" />
+            Waiting for your browser…
+          </div>
+        )}
+        {results?.map((result) => (
+          <AgentRow
+            key={result.agent}
+            agent={agentOf(result.agent)}
+            tone={result.ok ? "muted" : "error"}
+            line={result.ok ? "Signed in" : result.message ?? "Couldn't sign in."}
+            end={result.ok ? <Badge variant="success">Signed in</Badge> : <span className="text-destructive text-xs">Failed</span>}
+          />
+        ))}
       </div>
       <ErrorLine error={error} />
       <div className="flex items-center gap-2">
-        {waiting.length > 0 && <Button variant="ghost" onClick={start}>Open browser again</Button>}
+        {(waiting || failed.length > 0 || error) && <Button variant="ghost" onClick={start}>Open browser again</Button>}
         <span className="flex-1" />
-        {waiting.length > 0 ? <Button variant="ghost" onClick={cancel}>Cancel</Button> : <Button onClick={onClose}>Done</Button>}
+        {waiting ? <Button variant="ghost" onClick={cancel}>Cancel</Button> : <Button onClick={onClose}>Done</Button>}
       </div>
     </PluginDialog>
   );
 }
-
-const Aside = ({ children }: { children: ReactNode }) => <span className="text-foreground/50 shrink-0 text-xs">{children}</span>;

@@ -11,15 +11,9 @@ import {
 
 import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/side-panel/FileReview";
 import { FindLineBox, MAX_MATCHES } from "@/app/side-panel/FindLineBox";
-import { FileTypeIcon, useCheckoutRoot } from "@/components/conversation";
-import { TooltipIconButton } from "@/components/controls";
-import {
-  Check,
-  Copy,
-  FolderOpen,
-} from "@/components/icons";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { request, RequestError, revealPath } from "@/ipc/client";
+import { useCheckoutRoot } from "@/components/conversation";
+import { CodeFileHeader } from "@/components/shared";
+import { request, RequestError } from "@/ipc/client";
 import type { CheckoutFile } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highlight";
@@ -28,7 +22,6 @@ import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import type { FileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
-import { toast } from "@/state/toasts";
 import { onWorkspaceChanged } from "@/state/workspaceCache";
 
 /**
@@ -37,15 +30,6 @@ import { onWorkspaceChanged } from "@/state/workspaceCache";
  * comes to the front. While agents' changes to it wait for review, it shows them inline to
  * keep or undo (`FileReview`).
  */
-
-function baseName(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-
-function dirName(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash < 0 ? "" : path.slice(0, slash);
-}
 
 type Read =
   | { state: "loading" }
@@ -114,44 +98,18 @@ export function FileTabView({
   }, [active, conversationId]);
   const read = useFile(conversationId, tab.path, again);
   const review = useFileReview(conversationId, tab.path, again, active);
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  const mac = useApp((s) => s.info?.platform === "macos");
   // A file outside the checkout is opened by its absolute path.
   const absolute = root && !/^(\/|[A-Za-z]:[\\/])/.test(tab.path) ? `${root.replace(/\/$/, "")}/${tab.path}` : tab.path;
   const file = read.state === "read" ? read.file : null;
   return (
     <div data-slot="file-tab" className="flex min-h-0 flex-1 flex-col">
-      <header className="border-border flex h-control-lg shrink-0 items-center gap-2 border-b px-4">
-        <FileTypeIcon name={tab.path} className="size-icon-md shrink-0" />
-        <h2 className="min-w-0 flex-1 truncate text-sm" title={absolute}>
-          <span className="font-medium">{baseName(tab.path)}</span>
-          {dirName(tab.path) && <span className="text-muted-foreground"> {dirName(tab.path)}</span>}
-        </h2>
+      <CodeFileHeader path={tab.path} reveal={absolute} gone={read.state === "gone"}>
         {review.shown ? (
           <FileReviewBar review={review} />
         ) : (
           file && <span className="text-muted-foreground shrink-0 text-xs">{formatBytes(file.size)}</span>
         )}
-        <TooltipIconButton
-          tooltip={isCopied ? "Copied" : "Copy path"}
-          size="icon-sm"
-          onClick={() => copyToClipboard(tab.path)}
-        >
-          {isCopied ? <Check /> : <Copy />}
-        </TooltipIconButton>
-        <TooltipIconButton
-          tooltip={mac ? "Reveal in Finder" : "Open in File Manager"}
-          size="icon-sm"
-          disabled={read.state === "gone"}
-          onClick={() =>
-            revealPath(absolute).catch((cause: unknown) =>
-              toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" }),
-            )
-          }
-        >
-          <FolderOpen />
-        </TooltipIconButton>
-      </header>
+      </CodeFileHeader>
       {review.file ? (
         <FileReviewBody review={review} line={tab.line} reveal={tab.reveal} />
       ) : read.state === "gone" ? (
