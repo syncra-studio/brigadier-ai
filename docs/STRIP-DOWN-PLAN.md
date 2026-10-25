@@ -42,6 +42,25 @@
 > Amended again on 10-24 with the same run's run2-D23…D43: every session and Chat is an orchestrator, like the
 > Delegator; workers do the real work (§1, Teams, §6, S15). Old-run D43 ("Default: do it yourself") is superseded
 > by run2-D23; run2-D25 and run2-D30 (the session's own subagents) by run2-D43.
+> Amended again on 10-25 with run `20261025-1046-harness-research`'s D2, D3, D4, D8, D22 and D31 (row 6):
+> - D2: every session and Chat is always a brigade, working like the Delegator with workers doing the real
+>   work, never only when the user asks; it keeps run2-D23, run2-D24 and the grilling of harness D7 and D28.
+> - D3 supersedes run2-D43 and the subagent switch-off it brought (Claude `--disallowedTools Agent,Task,Workflow`,
+>   Codex `agents.enabled=false` for threads): the thread has its CLI's own subagents again, for look-ups,
+>   reading across files and small edits, beside its workers. D31 (the Delegator's) keeps only Claude's
+>   `Workflow` tool off for the thread: it runs a multi-agent orchestration of its own beside the workers.
+>   A model list the CLI can't hold subagents to still turns them off, for the thread as for a worker.
+> - D8 amends run2-D24 in part: the thread and its subagents may run quick, targeted checks after their own small
+>   edits (one test file, a type check); full test suites, app builds and live runs stay with workers or CI.
+>   It is guidance the thread judges, not a rule Brigadier enforces.
+> - D4 and D22: adversarial reviews stay, copied from the Delegator. A big job's own plan gets a plan review
+>   before it goes to workers (run2-D33), a worker's plan may get one before the thread approves it (proposed),
+>   and the job gets one end verification: a fresh reviewer worker code-reviews the job's base..head
+>   adversarially, checks every "done when", fixes what it can and reports pass or fail per item with evidence.
+>   The reviewer runs on another provider than the author's, among those ready, else in a fresh session of the
+>   author's provider; never a hard-coded Codex. This supersedes the shipped "Independent review | codex" row:
+>   the work now has one row per provider (each provider's model), and `brigadier start --reviewing <id>|session`
+>   picks the row (proposed flag, S13). Reviews stay guidance: no engine gate, no merge hold (G18).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -70,23 +89,27 @@ The user's ask: Brigadier sessions should work exactly like plain Claude Code an
 app-server`) session, in the project's worktree or its Local checkout. The session is an orchestrator, like the
 Delegator (run2-D23): it talks with the user, plans, looks things up, makes small edits and runs `git merge`,
 `git push`, `gh` and CI as plain commands; builds, tests, research and bigger work go to its workers, and it
-checks their evidence (run2-D24, run2-D43). Reviews run on a routed reviewer worker, not a hard-coded `codex
-review` (run2-D35, run2-D36). Its commands show as ordinary tool rows with their real output and exit code. Its
-background tasks, permission prompts and memory files are the CLI's own; its CLI's own subagents are off, a
-worker's stay on (run2-D43).
+checks their evidence (run2-D24). It and its own subagents may run a quick, targeted check after their own small
+edit (one test file, a type check); full suites, app builds and live runs go to workers or CI (harness D8,
+amending run2-D24). Reviews run on a reviewer worker on another provider than the author's, not a hard-coded
+`codex review` (run2-D35, run2-D36, harness D22). Its commands show as ordinary tool rows with their real output
+and exit code. Its background tasks, permission prompts, memory files and subagents are the CLI's own, as a
+worker's are; only Claude's `Workflow` tool is off for it (harness D3 superseding run2-D43, D31).
 
 **A session gets exactly what the plain CLI gets (G17).** The project's instructions (CLAUDE.md, AGENTS.md),
 the user's MCP servers, skills, and memory as the user's own settings have it. Brigadier strips none of it by
 default. It trims only its own additions: the short standing instructions (§6), no MCP server of its own, the
 one `brigadier --help` pointer, and the always-installed `/brigade` skill, which costs only its description
 until used (G20). The one thing it turns off is the few CLI tools that cannot work inside a Brigadier tab (S17),
-never anything of the user's, and, for sessions and Chats only, the CLI's own subagent tool, through the CLI's
-own switch (Claude's `--disallowedTools`, Codex's `agents.enabled=false`) (run2-D43, user, 2026-10-24: "we
-should disabled subagents for the orchestrator and only allow them for the workers"). Stripping comes back only with measured evidence on our own tasks (§8, item 13).
+never anything of the user's, and, for sessions and Chats only, Claude's `Workflow` tool (`--disallowedTools`)
+(harness D31). Their subagents stay on (harness D3, superseding run2-D43's switch-off: user, 2026-10-25: "we
+should allow back the orchestrator own subagents for lookups, small file edits and other needed stuff").
+Stripping comes back only with measured evidence on our own tasks (§8, item 13).
 The user's `disableAllHooks` applies inside Brigadier too, including to Brigadier's own hooks (S37, §8 item 17)
 (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
-The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
-choice per worker, never the user's own sessions.
+The one exception is a worker: every worker `brigadier start` starts is naked, with the project's own
+instruction file and only the MCP servers `--mcp` grants; `--lean` is gone (harness D13, D17, D18, superseding
+G23's lean workers). The user's own sessions are never stripped.
 
 D63: every Claude launch uses the CLI’s `--exclude-dynamic-system-prompt-sections`; it and the cache TTL option below are the CLI’s own options, and the facts the model sees are unchanged (G17).
 
@@ -145,14 +168,19 @@ skill is always installed, and one line of the standing instructions says the se
 `brigadier` and points at the skill. No one invokes it and there is no "New brigade" UI. The user talks to the
 session as usual. The session works like the Delegator, an orchestrator (run2-D23, user, 2026-10-24: "it works
 just like the delegator, how an orchestrator works"; supersedes old-run D43 "Default: do it yourself"):
-- It does the talking, asking and planning, quick look-ups, small edits (a few lines in a file or two), git,
-  merges, pushes and CI, and checks workers' evidence (`git log`, their reported commands and output, CI). It
-  never builds or tests itself; the checks on its integrated tree go to a worker or CI (run2-D24, run2-D43).
-- It has no subagents of its own; workers keep theirs (run2-D43, superseding run2-D25 and run2-D30).
-- Anything bigger, anything needing a build or tests, and research beyond a quick look-up go to workers;
-  research to a `--lean` worker on the routing's search row ("Mechanical changes and search", or the user's own
-  research row) (run2-D24, run2-D36, run2-D43; the row choice is proposed: the shipped rows name no research
-  kind).
+- It is always a brigade, never only when the user asks (harness D2). It does the talking, asking and planning,
+  quick look-ups, small edits (a few lines in a file or two), git, merges, pushes and CI, and checks workers'
+  evidence (`git log`, their reported commands and output, CI) (run2-D24).
+- It has its CLI's own subagents for look-ups, reading across files and small edits, as workers have theirs;
+  Claude's `Workflow` stays off for it (harness D3 superseding run2-D43, D31). Their models follow the routing
+  and the user's rules file; effort at most high (guidance: neither CLI takes a subagent effort).
+- After its own or its subagents' small edit it may run one quick, targeted check (one test file, a type check).
+  Full test suites, app builds, live runs and the checks on its integrated tree go to a worker or CI (harness
+  D8, amending run2-D24).
+- Anything bigger, anything needing a build or full tests, and research beyond a quick look-up go to workers;
+  research to a worker on the routing's search row ("Mechanical changes and search", or the user's own research
+  row) (run2-D24, run2-D36; every worker is naked, harness D13, D17; the row choice is proposed: the shipped rows
+  name no research kind).
 - Up to N workers at once on disjoint parts, N the user's "Workers at once" (Settings › Configuration ›
   Workers, default 3), read through `brigadier models`; Brigadier refuses no further start (run2-D31, G18).
 - It assigns work deliberately, sends a user's follow-up to the worker that owns that area, and reuses a
@@ -762,6 +790,9 @@ and `run`.
   - Amended by run2-D43 (10-24): a session's and a Chat's thread starts with its CLI's subagent tool off
     again (Claude `--disallowedTools Agent,Task,Workflow`: its Workflow tool runs sub-agents too; Codex `-c agents.enabled=false`); workers keep theirs.
     `Monitor`, `TaskStop`, goals and the sleep tool stay on.
+  - Superseded by harness D3 and D31 (10-25): the thread has `Agent`/`Task` and Codex's sub-agents again; only
+    Claude's `Workflow` stays off for it. A model list the CLI can't hold sub-agents to turns them all off, for
+    the thread as for a worker (Codex `agents.enabled=false` then).
 - **Files:** `P/claude/mod.rs`, `P/codex/mod.rs`, their provider tests.
 - **Done when:**
   - Provider tests assert the thread's tool and feature flags on both CLIs.
@@ -974,7 +1005,7 @@ and `run`.
   |---|---|
   | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. `--all` lists every project's sessions (S30) (user, 2026-10-23, w95 item 12: every project). |
   | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
-  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8), `--lean` with `--skill <name>` (G23, below) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule, and a call from a worker: a worker can't start workers, and uses its CLI's own subagents instead (user, 2026-10-23: "workers cant start other workers"). |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8), `--lean` with `--skill <name>` (G23, below; gone with harness D13), `--reviewing <id>\|session` (an independent review on another ready provider than the author's, else a fresh session of the author's; harness D22, the flag proposed) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule, and a call from a worker: a worker can't start workers, and uses its CLI's own subagents instead (user, 2026-10-23: "workers cant start other workers"). |
   | `brigadier send <id> <text>\|--allow\|--deny` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). `--allow` or `--deny` answers the worker's open CLI permission prompt through the CLI's own permission protocol, never key presses (Q8). The prompt reaches the parent as a `brigadier wait` "needs input" event, and until it is answered it shows under Waiting on you in the parent. |
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background, which re-invokes the parent when one ends (S29) (user, 2026-10-23: "The parent should know everything"). |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
@@ -1114,17 +1145,22 @@ and `run`.
       checkout's branch chosen from the rail.
   - The orchestrator default, worker reuse, grilling and the short reply as in "Teams" above (run2-D23…D43).
   - Research and review guidance (G23, as amended by run2-D32…D43). All of it is guidance; nothing is a gate:
-    - Research goes to lean workers (`brigadier start --lean`, S13) on the routing's search row; the session
-      makes only quick look-ups itself (run2-D43).
+    - Research goes to workers (naked, harness D13; `--lean` is gone) on the routing's search row; the session
+      and its own subagents make only quick look-ups (harness D3).
     - When the user is uncertain, help them: a model fusion gives the best advice or answer, through `/fusion`
       or the thread's own judgement (S36) (user, 2026-10-23: "if the user is uncertain - we help him").
       One lean researcher when the options need evidence. Builders only when prototypes must be compared,
       never by default.
     - Adversarial reviews, like the Delegator's: a big job's first plan gets a plan review before it goes to
-      workers, and the big job a code review once at its end on the integrated tree (run2-D33). The reviewer
-      sets out to break it, with evidence, never to approve; it is a `--lean` worker started with `--work
-      "Independent review"`, best on another vendor or model than the author; the session fixes the valid
-      findings through workers and notes each rejected one with its reason (run2-D35, run2-D36). A small change
+      workers (run2-D33; `--reviewing session`), a worker's own plan may get one before the session approves it
+      (proposed; `--reviewing <id>`), and the big job one end verification on the integrated tree: a fresh
+      reviewer worker code-reviews the job's base..head adversarially, checks every "done when", fixes what it
+      can and reports pass or fail per item with evidence (harness D4). The reviewer sets out to break it, with
+      evidence, never to approve. `brigadier start --reviewing <id>|session` runs it on another ready provider
+      than the author's whose row the rules allow and whose model is free, else a fresh session of the author's
+      provider, and its brief ends with `brigadier show <id>` and `brigadier context` (harness D22; the flag is
+      proposed). The session fixes the valid findings through workers and notes each rejected one with its
+      reason (run2-D35, run2-D36). A small change
       with its tests passing lands without a review or a critique (the w123 bench, 10-23: on a two-file job
       these rules tripled a Codex thread's time). "Asking once" (G23) gives way to grilling (run2-D32).
   - A Chat starts workers like any session; a worker of a Chat runs in a folder of its own under the Chat's
@@ -1903,14 +1939,14 @@ changes the guidance or the user's rules file by itself (G18).
 
 This file is all Brigadier adds to a session (G17). The session still gets everything the plain CLI loads: the
 project's CLAUDE.md or AGENTS.md, the user's MCP servers, skills, and memory per the user's own settings.
-Brigadier removes none of it; a `--lean` research worker (S13) is the thread's own choice (G23). The file
+Brigadier removes none of it; its workers are naked (harness D13, D17). The file
 holds only what every turn of every session needs; text that matters only at a seam travels in the seam
 message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Open kinds, absolute paths and the
 "cites entry ids" line were added on 10-23 (S22b, `research/CONTINUITY.md` §3.1–§3.6) (user, 2026-10-23: "find a fix for this").
 A worker gets the file without its last line, the orchestrator line: `brigadier start` refuses a worker's own
 workers, it has no brigade skill (the w152 bench, 10-23), and it keeps full reports (run2-D27). That line makes
-the session an orchestrator with the short reply, with no subagent split (run2-D23, run2-D24, run2-D27,
-run2-D43).
+the session an orchestrator with the short reply, with its own subagents and a quick check after its own small
+edit (run2-D23, run2-D27; harness D3 superseding run2-D43; harness D8 amending run2-D24).
 D63, D58: appended standing text keeps `$NAME` path placeholders and explains shell expansion; every named variable is exported by the session, so the text is identical across sessions.
 
 ```
