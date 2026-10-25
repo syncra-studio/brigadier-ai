@@ -148,6 +148,15 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const one = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => root.querySelector<T>(selector);
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [...root.querySelectorAll<T>(selector)];
 const at = (id: string) => one(`[data-case=${id}]`)!;
+/** Waits a frame at a time until `done` holds; fails after 15 s. */
+async function until(what: string, done: () => boolean) {
+  for (const end = performance.now() + 15_000; !done(); await new Promise(requestAnimationFrame)) {
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
+  }
+}
+/** Nothing in `root` is opening or closing (its scroll fades and shimmers go on). */
+const still = (root: Element) => !root.getAnimations({ subtree: true }).some((animation) =>
+  animation.playState === "running" && animation.timeline === document.timeline && animation.effect?.getTiming().iterations !== Infinity);
 
 async function measure(): Promise<object> {
   await wait(300);
@@ -170,11 +179,16 @@ async function measure(): Promise<object> {
 
   // An opened edit in an opened group, scrolled down its diff the way a wheel would: the
   // innermost scroller first, then the ones around it, up to the group's list.
+  // Each scrolls once it is open: the group, then its diff, its lines drawn (not the plain
+  // ones shown while the diff's code loads) and long enough to scroll, the openings over.
   for (const id of ["edit-wide", "edit-narrow"]) {
     one<HTMLElement>("[data-slot=work-group] > button", at(id))?.click();
-    await wait(500);
+    await until(`${id}'s group open`, () => one("[data-slot=work-group] [data-slot=collapsible-content][data-state=open]", at(id)) !== null && still(at(id)));
     one<HTMLElement>("[data-slot=edited-file] [role=button]", at(id))?.click();
-    await wait(800);
+    await until(`${id}'s diff drawn`, () => {
+      const lines = one("[data-slot=diff-card] [data-slot=diff-lines]", at(id));
+      return lines !== null && one("[data-slot=diff-plain]", lines) === null && lines.scrollHeight > lines.clientHeight && still(at(id));
+    });
     const group = one("[data-slot=work-group]", at(id))!;
     const groupList = one("[data-slot=work-group] [data-slot=collapsible-content] > div", at(id))!;
     const card = one("[data-slot=diff-card]", at(id))!;
