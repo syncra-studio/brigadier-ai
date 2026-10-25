@@ -883,11 +883,11 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     let workspace = a.workspace.clone().unwrap();
     let branch = workspace.branch.clone().unwrap();
     assert_ne!(branch, parent);
-    let merges_into = super::git(
-        &flow.repo,
-        &["config", "--get", &format!("branch.{branch}.gh-merge-base")],
-    );
-    assert_eq!(merges_into.trim(), parent);
+    // Done, its branch went and its `gh-merge-base` config with it (D8): what it merges back
+    // into is in its record.
+    assert!(super::git(&flow.repo, &["branch", "--list", &branch]).is_empty());
+    let config = super::git(&flow.repo, &["config", "--local", "-l"]);
+    assert!(!config.contains(&format!("branch.{branch}.")), "{config}");
     let record = flow
         .manager
         .session_dir(&flow.conversation)
