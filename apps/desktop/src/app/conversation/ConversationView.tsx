@@ -1,4 +1,4 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace } from "@/components/conversation";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace, ThreadListContext, ThreadListSource, type ThreadHolding } from "@/components/conversation";
 import {
   type FC,
   memo,
@@ -32,16 +32,12 @@ import { sendLane } from "@/app/conversation/composerKeys";
 import {
   type Block,
   type BoardDigest,
-  foldTurns,
-  HELD_TURNS,
-  MORE_TURNS,
-  OPEN_TURNS,
   type PeerOf,
   peerOf,
   type ThreadNode,
-  turnsFrom,
 } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
+import { heldRows, keepDrawnBlocks } from "@/app/conversation/heldThread";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
   type ComposerTarget,
@@ -243,14 +239,20 @@ function signature(
  * and renders only the block that streams or changed.
  */
 function useItems(
+  conversationId: string | null,
   nodes: readonly ThreadNode[],
   picked: ModelChoice | null,
   session: boolean,
   canRework: (requestId: string) => boolean,
   ratings: Partial<Record<string, Rating>>,
 ): Item[] {
-  const [cache] = useState(() => new Map<string, { item: Item; sig: string; texts: string[]; from?: Block }>());
   return useMemo(() => {
+    // Each conversation's, for the last few opened: one opened again (its view drawn anew) finds
+    // its items made.
+    const cache = itemsMade.get(conversationId) ?? new Map<string, ItemEntry>();
+    itemsMade.delete(conversationId);
+    itemsMade.set(conversationId, cache);
+    for (const key of itemsMade.keys()) if (itemsMade.size > KEPT_ITEMS) itemsMade.delete(key);
     const items: Item[] = [];
     const seen = new Set<string>();
     for (const node of nodes) {
@@ -275,6 +277,7 @@ function useItems(
             item: { id: node.id, parentId: node.parentId, kind: "user", block, rework },
             sig: "",
             texts: [],
+            from: block,
           });
         }
         items.push((cache.get(node.id) as { item: Item }).item);
@@ -289,14 +292,16 @@ function useItems(
         items.push(entry.item);
         continue;
       }
-      const sig = signature(block, picked, session, rework, rating);
       const texts = block.texts.map((text) => text.text);
+      // The shapes are compared only where one was drawn before (made then, if it wasn't yet).
+      let sig: string | null = null;
       const changed =
-        entry === undefined ||
+        entry?.item.kind !== "block" ||
         entry.item.parentId !== node.parentId ||
-        entry.sig !== sig ||
         entry.texts.length !== texts.length ||
-        entry.texts.some((text, index) => text !== texts[index]);
+        entry.texts.some((text, index) => text !== texts[index]) ||
+        (entry.sig ??= signature(entry.from, entry.item.meta.picked, entry.item.meta.session, entry.item.meta.rework, entry.item.rating)) !==
+          (sig = signature(block, picked, session, rework, rating));
       if (changed) {
         const meta: BlockMeta = {
           texts: block.texts.map((text) => ({
@@ -341,20 +346,25 @@ function useItems(
           answerId,
           forkId,
         };
-        cache.set(node.id, {
-          item: { id: node.id, parentId: node.parentId, kind: "block", block, meta, texts, rating },
-          sig,
-          texts,
-        });
+        cache.set(node.id, { item: { id: node.id, parentId: node.parentId, kind: "block", block, meta, texts, rating }, sig, texts, from: block });
       }
-      const kept = cache.get(node.id) as { item: Item; from?: Block };
+      const kept = cache.get(node.id) as ItemEntry;
       kept.from = block;
       items.push(kept.item);
     }
     for (const key of cache.keys()) if (!seen.has(key)) cache.delete(key);
     return items;
-  }, [nodes, picked, session, canRework, ratings, cache]);
+  }, [conversationId, nodes, picked, session, canRework, ratings]);
 }
+
+/** An item as made, with the block it was made from and that block's shape (`signature`, made once needed). */
+type ItemEntry = { item: Item; sig: string | null; texts: string[]; from: Block };
+
+/** Conversations whose items stay made while others open. */
+const KEPT_ITEMS = 4;
+
+/** The items made of the last few conversations opened, by node id. */
+const itemsMade = new Map<string | null, Map<string, ItemEntry>>();
 
 /** assistant-ui's form of each item, converted once per item. */
 const converted = new WeakMap<Item, ThreadMessage>();
@@ -369,6 +379,55 @@ function toThreadMessage(item: Item): ThreadMessage {
     converted.set(item, message);
   }
   return message;
+}
+
+/** The branch shown, oldest first: its items, and assistant-ui's form of each. */
+function branchOf(items: readonly Item[], headId: string | null): { items: Item[]; messages: ThreadMessage[] } {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const path: Item[] = [];
+  const seen = new Set<string>();
+  for (let item = headId ? byId.get(headId) : undefined; item && !seen.has(item.id); item = item.parentId ? byId.get(item.parentId) : undefined) {
+    seen.add(item.id);
+    path.push(item);
+  }
+  path.reverse();
+  return { items: path, messages: path.map(toThreadMessage) };
+}
+
+/** Messages at the branch's end assistant-ui holds of a thread before its list asks for any. */
+const OPEN_HOLD = 40;
+
+/** What assistant-ui holds of a thread its list hasn't asked of yet: its end, and where its kept place starts. */
+function openingHold(branch: readonly Item[], key: string | null): ThreadHolding {
+  const kept = keptPlace(key);
+  return { key, from: Math.max(0, branch.length - OPEN_HOLD), to: branch.length - 1, ids: kept && !kept.bottom && kept.anchor !== null ? [kept.anchor] : [] };
+}
+
+/**
+ * What assistant-ui holds of the thread (#627): the turns `heldRows` picks. Each message of them
+ * goes under the one before it held, so assistant-ui sees one branch with gaps left out; the
+ * other versions of each go beside it, under the same one, for its branch picker.
+ */
+function heldRepository(items: readonly Item[], branch: readonly Item[], headId: string | null, hold: ThreadHolding): ExportedMessageRepository {
+  const held = heldRows(branch, hold);
+  // Other versions there are only where the branch isn't everything.
+  let versions: Map<string | null, Item[]> | null = null;
+  if (items.length !== branch.length) {
+    versions = new Map();
+    for (const item of items) {
+      const siblings = versions.get(item.parentId);
+      if (siblings) siblings.push(item);
+      else versions.set(item.parentId, [item]);
+    }
+  }
+  const messages: ExportedMessageRepository["messages"][number][] = [];
+  let parentId: string | null = null;
+  branch.forEach((item, index) => {
+    if (!held[index]) return;
+    for (const each of versions?.get(item.parentId) ?? [item]) messages.push({ message: toThreadMessage(each), parentId });
+    parentId = item.id;
+  });
+  return { headId, messages };
 }
 
 function textOf(message: AppendMessage): string {
@@ -525,48 +584,31 @@ export function ConversationView({
   const session = conversation?.kind === "session" || resolved.kind === "session";
   // The thread is the CLI's own, read from its session file (S9, S10).
   const cliView = useThreadView(conversationId);
+  // The view opens with what it has: what arrives as it draws (its board, the messages read
+  // again) is built in a task of its own, the frame after, not in the one that opens it (#628).
+  const live = { cliView, items: thread.items, fullText: thread.fullText, digest, pending, run, runError };
+  const [opening, setOpening] = useState(true);
+  const [openedWith] = useState(live);
+  useEffect(() => {
+    const timer = setTimeout(() => setOpening(false), 0);
+    return () => clearTimeout(timer);
+  }, []);
+  const built = opening ? openedWith : live;
   const full = useMemo(
     () =>
       conversationId
-        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest ?? EMPTY_DIGEST, { state: run, error: runError }, session)
-        : cliThreadTree(EMPTY_VIEW, "", [], {}, pending, EMPTY_DIGEST, { state: run, error: runError }),
-    [cliView, conversationId, thread.items, thread.fullText, digest, pending, run, runError, session],
+        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView ?? EMPTY_VIEW, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session))
+        : cliThreadTree(EMPTY_VIEW, "", [], {}, built.pending, EMPTY_DIGEST, { state: built.run, error: built.runError }),
+    [built.cliView, conversationId, built.items, built.fullText, built.digest, built.pending, built.run, built.runError, session],
   );
-  // The list mounts only what is near the view (see `thread.tsx`), but holds the newest turns
-  // only: older ones join as the view nears the top, as a jump or Find needs them, and when the
-  // place the conversation was left at is among them (`HELD_TURNS`).
-  // It opens with fewer, for the switch to draw in one short task, and holds the rest once drawn.
-  const [heldIn, setHeldIn] = useState<{ id: string | null; turns: number }>({ id: null, turns: OPEN_TURNS });
-  if (heldIn.id !== conversationId && (full.nodes.length > 0 || conversationId === null)) {
-    const anchor = keptPlace(conversationId)?.anchor ?? null;
-    setHeldIn({ id: conversationId, turns: Math.max(OPEN_TURNS, (anchor === null ? null : turnsFrom(full, anchor)) ?? 0) });
-  }
-  const opening = heldIn.id === conversationId && heldIn.turns < HELD_TURNS;
-  useEffect(() => {
-    if (!opening) return;
-    const timer = setTimeout(() => setHeldIn((before) => (before.id === conversationId ? { id: conversationId, turns: Math.max(before.turns, HELD_TURNS) } : before)), 300);
-    return () => clearTimeout(timer);
-  }, [opening, conversationId]);
-  // A jump to a message between sessions here: its row is held and mounted, and it lands once shown.
+  // A jump to a message between sessions here: its row is mounted, and it lands once shown.
   const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
   const revealRow = useMemo(() => (reveal ? rowHolding(full.nodes, reveal.messageId) : null), [reveal, full.nodes]);
-  const revealTurns = useMemo(() => (revealRow === null ? 0 : (turnsFrom(full, revealRow) ?? 0)), [revealRow, full]);
-  const held = Math.max(heldIn.id === conversationId ? heldIn.turns : OPEN_TURNS, revealTurns);
-  const folded = useMemo(() => foldTurns(full, held), [full, held]);
-  const tree = folded.tree;
+  const tree = full;
   // An older page that failed to load offers Try again, in the conversation it failed in.
   const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
-  // The CLI's thread is read whole: what waits is the turns not held yet.
-  const hasMore = folded.hidden > 0;
-  // Find holds them all, `MORE_TURNS` at a time: all at once would hold the window up.
-  const [holdingAllIn, setHoldingAllIn] = useState<string | null>(null);
-  const holdAll = useCallback(() => setHoldingAllIn(conversationId), [conversationId]);
-  const holdMore = holdingAllIn === conversationId && hasMore;
-  useEffect(() => {
-    if (!holdMore) return;
-    const timer = setTimeout(() => setHeldIn((before) => ({ id: conversationId, turns: Math.max(HELD_TURNS, before.id === conversationId ? before.turns : 0) + MORE_TURNS })), 16);
-    return () => clearTimeout(timer);
-  }, [holdMore, held, conversationId]);
+  // The CLI's thread is read whole.
+  const hasMore = false;
   const oldest = thread.items[0]?.seq ?? null;
   const searchOlder = null;
   const earlier = useMemo<ThreadHistory>(
@@ -576,10 +618,6 @@ export function ConversationView({
       failed: olderFailedIn !== null && olderFailedIn === conversationId,
       loadOlder: async () => {
         if (conversationId === null) return;
-        if (hasMore) {
-          setHeldIn((before) => ({ id: conversationId, turns: Math.max(HELD_TURNS, before.id === conversationId ? before.turns : 0) + MORE_TURNS }));
-          return;
-        }
         setOlderFailedIn(null);
         try {
           await loadEarlier(conversationId);
@@ -588,11 +626,10 @@ export function ConversationView({
           throw cause;
         }
       },
-      holdAll: hasMore ? holdAll : null,
       oldest,
       searchOlder,
     }),
-    [revealRow, conversationId, hasMore, holdAll, olderFailedIn, oldest, searchOlder],
+    [revealRow, conversationId, hasMore, olderFailedIn, oldest, searchOlder],
   );
   // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
   const finishedAtMs = lastFinished(conversation) ?? 0;
@@ -631,14 +668,26 @@ export function ConversationView({
   const ratings = useBoard((s) =>
     s.board?.conversationId === conversationId ? s.board.ratings : NO_RATINGS,
   );
-  const items = useItems(tree.nodes, picked, session, canRework, ratings);
-  const repository = useMemo<ExportedMessageRepository>(
-    () => ({
-      headId: tree.headId,
-      messages: items.map((item) => ({ message: toThreadMessage(item), parentId: item.parentId })),
-    }),
-    [items, tree.headId],
+  const items = useItems(conversationId, tree.nodes, picked, session, canRework, ratings);
+  // The branch shown, whole, for what reads it all (`thread-list.ts`); assistant-ui holds only the
+  // turns the list asks for and the newest one (#627).
+  const branch = useMemo(() => branchOf(items, tree.headId), [items, tree.headId]);
+  const [list] = useState(() => new ThreadListSource());
+  const [holding, setHolding] = useState<ThreadHolding | null>(null);
+  list.hold = setHolding;
+  const held = useMemo(
+    () => (holding?.key === conversationId ? holding : openingHold(branch.items, conversationId)),
+    // Opening, what it holds is the branch's end as it opened (once read), not as it grows.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+    [holding, conversationId, branch.items.length === 0],
   );
+  list.held = held;
+  const repository = useMemo<ExportedMessageRepository>(
+    () => heldRepository(items, branch.items, tree.headId, held),
+    [items, branch, tree.headId, held],
+  );
+  // Told before assistant-ui is (its runtime's effect below): both draw in the same pass.
+  useEffect(() => list.set(conversationId, branch.messages), [list, conversationId, branch]);
   // What each item's branch ends at, for the branch picker.
   const heads = useMemo(
     () => new Map(tree.nodes.map((node) => [node.id, node.head])),
@@ -937,6 +986,7 @@ export function ConversationView({
           <AgentsPanelContext.Provider value={agents}>
             <StatusCardContext.Provider value={statusCard}>
               <AssistantRuntimeProvider runtime={runtime}>
+              <ThreadListContext.Provider value={list}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
                   <PastedTextOpenerContext.Provider value={openPasted}>
@@ -1013,6 +1063,7 @@ export function ConversationView({
                     />
                   )}
                 </AttachmentReaderContext.Provider>
+              </ThreadListContext.Provider>
               </AssistantRuntimeProvider>
             </StatusCardContext.Provider>
           </AgentsPanelContext.Provider>

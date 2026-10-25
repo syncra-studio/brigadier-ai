@@ -274,8 +274,7 @@ async function settle(ms: number): Promise<void> {
   for (let frames = 0; performance.now() < deadline; ) {
     await frame();
     const now = layoutNow();
-    // Find drawing messages out of sight to count their matches is not done either.
-    if (pending > 0 || $('[data-slot="reply-loading"]') || $('[data-slot="thread-find-index"]') || animating() || now !== last) {
+    if (pending > 0 || $('[data-slot="reply-loading"]') || animating() || now !== last) {
       stillSince = performance.now();
       frames = 0;
     } else if (++frames >= 3 && performance.now() - stillSince >= 200) return;
@@ -852,8 +851,8 @@ async function drive(): Promise<void> {
       await settle(100);
       result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), place: activePlace(), loads };
     } else if (FAR) {
-      // Matches only in messages far from those the thread mounts: counted as Find draws them out of
-      // sight, and each step mounts its message and goes to that very match of it, centred.
+      // Matches only in messages far from those the thread mounts: counted from their words, and each
+      // step mounts its message and goes to that very match of it, centred.
       await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       result["mounted"] = { rows: mountedRows().length, of: stored.length };

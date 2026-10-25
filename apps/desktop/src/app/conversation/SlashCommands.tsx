@@ -1,4 +1,4 @@
-import { useAui, useAuiState, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
+import { useAui, useThreadList, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { type FC, useContext, useMemo, useState } from "react";
 
 import { cliMenuCommands, conversationProvider } from "@/app/conversation/cliCommands";
@@ -51,9 +51,9 @@ const INIT_PROMPT =
 
 /** The id of the newest answer on the shown branch, which `/fork` forks from. */
 export function useLatestAnswer(): string | null {
-  return useAuiState((s) => {
-    for (let index = s.thread.messages.length - 1; index >= 0; index--) {
-      const custom = s.thread.messages[index]?.metadata.custom as {
+  return useThreadList((s) => {
+    for (let index = s.messages.length - 1; index >= 0; index--) {
+      const custom = s.messages[index]?.metadata.custom as {
         block?: { answerId: string | null };
       };
       if (custom.block?.answerId) return custom.block.answerId;

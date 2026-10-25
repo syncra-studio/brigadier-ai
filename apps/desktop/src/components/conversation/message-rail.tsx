@@ -1,8 +1,9 @@
-import { type AssistantState, useAuiState } from "@assistant-ui/react";
+import type { ThreadMessage } from "@assistant-ui/react";
 import {
   createContext,
   useCallback,
   useContext,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -12,6 +13,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { placeOf, type ThreadListState, useThreadList } from "@/components/conversation/thread-list";
 import type { ThreadScroller } from "@/components/conversation/thread-scroll";
 import type { MessageMatches } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -41,8 +43,6 @@ export type ThreadHistory = {
   failed: boolean;
   /** Loads the next older page; rejects when it fails. */
   loadOlder: () => Promise<void>;
-  /** Holds every turn of the thread, for Find to search them all (null: all are held). */
-  holdAll?: (() => void) | null;
   /** The oldest message loaded, by `seq`: older ones wait in the database. */
   oldest: number | null;
   /** Where a text is, case aside, in the older messages of the branch shown; null with none. */
@@ -82,7 +82,7 @@ function reducedMotion(): boolean {
 const nextFrame = () => new Promise<number>((resolve) => requestAnimationFrame(resolve));
 
 /** Plain text of a message's text parts. */
-function textOf(message: AssistantState["thread"]["messages"][number]): string {
+function textOf(message: ThreadMessage): string {
   return message.content
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("\n")
@@ -100,6 +100,8 @@ function plain(text: string): string {
     .slice(0, 400);
 }
 
+const NO_ENTRIES: readonly RailEntry[] = [];
+
 /** Each user message's rail entry, made once per message. */
 const entryOf = new WeakMap<object, RailEntry>();
 
@@ -109,9 +111,9 @@ const entryOf = new WeakMap<object, RailEntry>();
  */
 function useUserEntries(): readonly RailEntry[] {
   const last = useRef<readonly RailEntry[]>([]);
-  return useAuiState((s) => {
+  return useThreadList((s) => {
     const next: RailEntry[] = [];
-    for (const message of s.thread.messages) {
+    for (const message of s.messages) {
       if (message.role !== "user") continue;
       let entry = entryOf.get(message);
       if (!entry) {
@@ -128,9 +130,9 @@ function useUserEntries(): readonly RailEntry[] {
 }
 
 /** The start of the answer after user message `id` in the shown thread. */
-function answerAfter(s: AssistantState, id: string): string {
-  const messages = s.thread.messages;
-  const at = messages.findIndex((message) => message.id === id);
+function answerAfter(s: ThreadListState, id: string): string {
+  const { messages } = s;
+  const at = placeOf(messages, id);
   if (at < 0) return "";
   const parts: string[] = [];
   for (const message of messages.slice(at + 1)) {
@@ -214,7 +216,8 @@ function typing(target: EventTarget | null): boolean {
  */
 export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: ThreadScroller }> = ({ viewport, scroller }) => {
   const history = useContext(ThreadHistoryContext);
-  const entries = useUserEntries();
+  // Its markers join as React finds time: a long thread's thousands never hold up the view opening.
+  const entries = useDeferredValue(useUserEntries(), NO_ENTRIES);
 
   // What the jumps read after they wait: the newest, not what was there when they began.
   const historyRef = useRef(history);
@@ -557,7 +560,7 @@ const Rail: FC<{
 
 /** Beside the hovered marker: the message on one line, then the start of its answer. */
 const RailPreview: FC<{ id: string; top: number; text: string }> = ({ id, top, text }) => {
-  const reply = useAuiState((s) => answerAfter(s, id));
+  const reply = useThreadList((s) => answerAfter(s, id));
   return (
     <div
       role="tooltip"

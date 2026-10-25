@@ -1,7 +1,7 @@
-import { startTransition, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
-import { ThreadHistoryContext, ThreadMessageView, type ThreadOverlayProps, unstable_useThreadMessageIds, useAui, useThreadKey, keptChanges, rowKeyOf } from "@/components/conversation";
+import { ThreadHistoryContext, type ThreadMessage, type ThreadOverlayProps, useThreadKey, keptChanges, rowKeyOf, useThreadListIds, useThreadListSource, useAui, placeOf } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
 import { ChevronLeft, ChevronRight, Search, X } from "@/components/icons";
 import type { MessageMatch } from "@/ipc/generated";
@@ -21,9 +21,9 @@ import { PLAIN_FIELD } from "@/lib/plainTyping";
  * It searches what the thread shows: a turn's closed work and the closed work groups in it keep
  * their rows, hidden, while the bar has a text (`useFindSearching`): going to a match there opens
  * the work or the group, typing never does. The thread mounts only the messages near the view
- * (see `thread.tsx`): the others are drawn out of sight a few at a time while the bar has a text,
- * and the text they show kept (`FindIndex`), so their matches count in their places; going to one
- * mounts its message and finds it there again. Pages still in the database are searched by the
+ * (see `thread.tsx`): in the others it finds what they showed when last mounted, or else their
+ * words as the app holds them (`wordsOf`: what they say, not every label they draw), so their
+ * matches count in their places; going to one mounts its message and finds it there again. Pages still in the database are searched by the
  * engine (`searchOlder`), which counts their matches ahead of the thread's own; going to one loads
  * the pages down to it. Diffs draw in their own shadow tree and are not searched.
  */
@@ -178,9 +178,52 @@ function textIn(root: Element): { text: string; nodes: Text[]; starts: number[] 
   return { text, nodes, starts };
 }
 
-/** What message `row` (drawn out of sight) shows, lower case, for its matches to be counted. */
-export function shownText(row: Element): string {
-  return lower(textIn(row).text);
+/** Markdown's marks, which a message's text drawn shows without: fences, heads, quotes, list marks, links' targets, emphasis. */
+function unmarked(text: string): string {
+  return text
+    .replace(/^\s*```.*$/gm, "")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|~~|`/g, "");
+}
+
+/** What each message says, lower case, made once per message. */
+const wordsBy = new WeakMap<ThreadMessage, string>();
+
+/** A work step's fields its row draws as words (a tool's name and what it ran on, a line's text). */
+const STEP_WORDS = ["name", "detail", "text", "title", "reason", "what", "why", "command"] as const;
+
+/** What a turn's work says: its steps' words and the messages steered into it. */
+function workWords(meta: BlockMeta | undefined): string[] {
+  if (!meta) return [];
+  const words: string[] = [];
+  for (const step of meta.orchestratorSteps) {
+    const kind = step.kind as Partial<Record<(typeof STEP_WORDS)[number], unknown>>;
+    for (const key of STEP_WORDS) if (typeof kind[key] === "string") words.push(kind[key]);
+  }
+  for (const steer of meta.steers) words.push(steer.text);
+  return words;
+}
+
+/**
+ * What `message` says, lower case, as Find reads a message the thread hasn't mounted (and never
+ * did since it last changed): its text, the answer's without Markdown's marks, and its work's words
+ * (shown or closed, as Find searches closed work too).
+ */
+export function wordsOf(message: ThreadMessage): string {
+  let words = wordsBy.get(message);
+  if (words === undefined) {
+    words = lower(
+      [
+        ...message.content.map((part) => (part.type !== "text" ? "" : message.role === "assistant" ? unmarked(part.text) : part.text)),
+        ...workWords(message.metadata.custom["block"] as BlockMeta | undefined),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    wordsBy.set(message, words);
+  }
+  return words;
 }
 
 /**
@@ -227,11 +270,11 @@ export function findIn(root: Element, query: string): { ranges: Range[]; more: b
 
 /**
  * The matches of `query` in the thread, oldest first, the newest `MAX_RESULTS` of them: in the
- * messages `group` mounts, in its DOM; in the others, in what they showed when drawn out of sight
- * (`texts`, by message id). `ids`: the thread's messages, in order. What each mounted message
- * shows goes to `read`, kept for when it isn't mounted any more.
+ * messages `group` mounts, in its DOM; in the others, in their text as `texts` gives it, lower
+ * case. `ids`: the thread's messages, in order. What each mounted message shows goes to `read`,
+ * kept for when it isn't mounted any more.
  */
-export function findInThread(group: Element, ids: readonly string[], texts: ReadonlyMap<string, string>, query: string, read?: Map<string, string>): FindResult {
+export function findInThread(group: Element, ids: readonly string[], texts: (id: string) => string, query: string, read?: Map<string, string>): FindResult {
   if (query === "") return NONE;
   const mounted = new Map<string, Element>();
   for (const row of group.querySelectorAll<HTMLElement>(":scope > [data-thread-row]")) mounted.set(row.dataset["threadRow"] ?? "", row);
@@ -250,7 +293,7 @@ export function findInThread(group: Element, ids: readonly string[], texts: Read
       more = found.more;
       read?.set(id, found.text);
     } else {
-      const text = texts.get(id) ?? "";
+      const text = texts(id);
       for (let at = text.indexOf(needle), nth = 0; at >= 0; at = text.indexOf(needle, at + needle.length), nth++) hits.push({ row: id, nth });
     }
     count += hits.length;
@@ -383,11 +426,14 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const mac = useApp((s) => s.info?.platform === "macos");
   const history = useContext(ThreadHistoryContext);
   const aui = useAui();
+  const list = useThreadListSource();
   const threadKey = useThreadKey();
-  const ids = unstable_useThreadMessageIds();
+  const ids = useThreadListIds();
   const idsRef = useRef(ids);
-  /** What each message not mounted showed when drawn out of sight, and what it was drawn from. */
+  /** What each message showed when last mounted, and what it was drawn from. */
   const texts = useRef(new Map<string, Indexed>());
+  /** The thread's whole branch now (assistant-ui holds only some of it, see `thread-list.ts`). */
+  const messagesNow = useCallback(() => list?.get().messages ?? aui.thread().getState().messages, [list, aui]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<Found>(NOTHING);
@@ -412,6 +458,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const rerun = useRef<() => void>(() => {});
   /** Keeps what messages showed, by id, with what they were drawn from (see `freshIndex`). */
   const keepTexts = useRef<(read: ReadonlyMap<string, string>) => void>(() => {});
+  /** A message's text as Find reads it while not mounted: what it showed last, while that holds, or else its words. */
+  const textOf = useRef<(id: string) => string>(() => "");
   /** The search again, the match gone to kept: what a step reads after it opened or loaded something. */
   const research = useRef<() => Found>(() => NOTHING);
   useLayoutEffect(() => {
@@ -683,10 +731,9 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     (text: string, fresh: boolean): Found => {
       const { result: last, active: at, history: pages } = state.current;
       const group = viewport?.querySelector('[data-slot="aui_message-group"]');
-      const shown = new Map([...texts.current].map(([id, indexed]) => [id, indexed.text]));
       const read = new Map<string, string>();
-      const found = withOlder(group ? findInThread(group, idsRef.current, shown, text, read) : NONE, older.current, text, pages?.oldest ?? null);
-      // A message scrolled away keeps counting its matches, without being drawn out of sight first.
+      const found = withOlder(group ? findInThread(group, idsRef.current, textOf.current, text, read) : NONE, older.current, text, pages?.oldest ?? null);
+      // A message scrolled away counts its matches in what it showed.
       keepTexts.current(read);
       const { ranges, before: ahead } = found;
       const count = ahead + ranges.length;
@@ -877,77 +924,29 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     if (!hasText) return;
     return startSearching();
   }, [hasText]);
-  // A text in the bar: the thread holds all its turns, for every one to be searched.
-  const holdAll = history?.holdAll ?? null;
-  useEffect(() => {
-    if (hasText) holdAll?.();
-  }, [hasText, holdAll]);
-
   useLayoutEffect(() => {
     if (open && viewport) paint(viewport, result.ranges, result.ranges[active - result.before] ?? null);
   }, [open, viewport, result, active]);
 
-  // The messages not mounted are drawn out of sight while the bar has a text, a few at a time,
-  // nearest the view first, and what they show is kept (anew when what they are drawn from changed).
-  const [batch, setBatch] = useState<readonly string[]>([]);
-  const size = useRef(4);
-  const boardNow = useBoard((s) => (hasText ? s.board : null));
-  useEffect(() => {
-    if (!hasText || batch.length > 0 || !viewport) return;
-    const group = viewport.querySelector('[data-slot="aui_message-group"]');
-    const mounted = new Set([...(group?.querySelectorAll<HTMLElement>(":scope > [data-thread-row]") ?? [])].map((row) => row.dataset["threadRow"]));
-    const messages = aui.thread().getState().messages;
-    const next: string[] = [];
-    // From the newest back: the newest matches are those counted.
-    for (let index = messages.length - 1; index >= 0 && next.length < size.current; index--) {
-      const message = messages[index];
-      if (!message || mounted.has(message.id)) continue;
-      const kept = texts.current.get(message.id);
-      if (!kept || !freshIndex(kept, message, keptChanges(rowKeyOf(threadKey, message.id)), boardNow)) next.push(message.id);
-    }
-    if (next.length === 0) return;
-    // Drawn as React finds time: a message drawn out of sight never holds a frame up.
-    startTransition(() => setBatch(next));
-    // Run again as the thread's messages, or what the thread mounts (a new result), change.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [hasText, batch, viewport, aui, threadKey, ids, boardNow, result]);
-  const rerunSoon = useRef<() => void>(() => {});
   useLayoutEffect(() => {
     keepTexts.current = (read) => {
       if (read.size === 0) return;
-      const messages = aui.thread().getState().messages;
+      const messages = messagesNow();
       const board = useBoard.getState().board;
       for (const [id, text] of read) {
-        const message = messages.find((each) => each.id === id);
+        const message = messages[placeOf(messages, id)];
         if (message) texts.current.set(id, { text, message, kept: keptChanges(rowKeyOf(threadKey, id)), board: boardRefs(message, board) });
       }
     };
+    textOf.current = (id) => {
+      const messages = messagesNow();
+      const message = messages[placeOf(messages, id)];
+      if (!message) return "";
+      const kept = texts.current.get(id);
+      if (kept && freshIndex(kept, message, keptChanges(rowKeyOf(threadKey, id)), useBoard.getState().board)) return kept.text;
+      return wordsOf(message);
+    };
   });
-  const indexed = useCallback(
-    (read: ReadonlyMap<string, string>, ms: number) => {
-      keepTexts.current(read);
-      // About a frame's worth each time.
-      size.current = ms < 6 ? Math.min(32, size.current * 2) : ms > 16 ? Math.max(1, Math.floor(size.current / 2)) : size.current;
-      setBatch([]);
-      rerunSoon.current();
-    },
-    [],
-  );
-  useEffect(() => {
-    if (!open) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    rerunSoon.current = () => {
-      timer ??= setTimeout(() => {
-        timer = null;
-        rerun.current();
-      }, RERUN_MS);
-    };
-    return () => {
-      rerunSoon.current = () => {};
-      if (timer) clearTimeout(timer);
-    };
-  }, [open]);
-
   // Gone with the thread: so are its marks and references to messages it opened.
   useEffect(() => {
     const opened = expanded.current;
@@ -960,7 +959,6 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   if (!open) return null;
 
   const count = result.before + result.ranges.length;
-  const index = batch.length > 0 && viewport ? <FindIndex ids={batch} width={viewport.querySelector('[data-slot="aui_thread-column"]')?.clientWidth ?? viewport.clientWidth} onRead={indexed} /> : null;
   // Esc closes from the field or a button, and goes no further (the composer's Esc Esc stops a reply).
   const onEscape = (event: ReactKeyboardEvent) => {
     if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
@@ -970,8 +968,6 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   };
 
   return (
-    <>
-    {index}
     <div
       ref={bar}
       role="search"
@@ -1019,11 +1015,10 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         <X />
       </TooltipIconButton>
     </div>
-    </>
   );
 };
 
-/** What a message not mounted showed when drawn out of sight, and what it was drawn from. */
+/** What a message showed when last mounted, and what it was drawn from. */
 type Indexed = { text: string; message: object; kept: number; board: readonly unknown[] };
 
 /** The board's items a message draws from: its cards, and the workers, approvals and questions of its requests. */
@@ -1064,37 +1059,3 @@ function firstBelow(viewport: HTMLElement | null, ids: readonly string[], hits: 
   });
   return first < 0 ? 0 : first;
 }
-
-/**
- * Messages the thread hasn't mounted, drawn out of sight as their rows draw them (closed work
- * keeps its rows while the bar has a text, as in the thread), and read once drawn: `onRead` gets
- * what each shows and how long the reading took.
- */
-const FindIndex: FC<{ ids: readonly string[]; width: number; onRead: (texts: ReadonlyMap<string, string>, ms: number) => void }> = ({ ids, width, onRead }) => {
-  const host = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const from = performance.now();
-    const read = new Map<string, string>();
-    for (const row of host.current?.querySelectorAll<HTMLElement>(":scope > [data-find-index-row]") ?? []) {
-      read.set(row.dataset["findIndexRow"] ?? "", shownText(row));
-    }
-    onRead(read, performance.now() - from);
-    // Each batch drawn is read once.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [ids, onRead]);
-  return (
-    <div
-      ref={host}
-      aria-hidden
-      data-slot="thread-find-index"
-      className="pointer-events-none invisible fixed top-0 right-full flex flex-col px-4"
-      style={{ width }}
-    >
-      {ids.map((id) => (
-        <div key={id} data-find-index-row={id}>
-          <ThreadMessageView id={id} />
-        </div>
-      ))}
-    </div>
-  );
-};

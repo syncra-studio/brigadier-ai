@@ -13,8 +13,6 @@ import {
   type BoardDigest,
   blockSequence,
   foldsAway,
-  foldTurns,
-  turnsFrom,
   heldForWait,
   isUpdate,
   judgementCall,
@@ -22,7 +20,6 @@ import {
   reopenedSince,
   splitReport,
   type SequenceEntry,
-  type ThreadNode,
   updateIndices,
   withoutUpdateMark,
 } from "@/app/conversation/blocks";
@@ -459,53 +456,6 @@ test("the lead's feedback offer stays in view as its card; the user's answer sho
   assert.deepEqual(shown, [offer]);
   const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
   assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), [offer]);
-});
-
-const node = (id: string, parentId: string | null, kind: ThreadNode["kind"], state: Block["state"] = "done"): ThreadNode =>
-  ({ id, parentId, kind, block: { user: kind === "user" ? {} : null, state } as unknown as Block, head: null });
-
-test("a long thread folds its oldest turns, other versions of a folded turn with it", () => {
-  // Turn n is a user node and its reply; turn 2 has a second version (an edit) branching off turn 1.
-  const nodes: ThreadNode[] = [];
-  for (let turn = 1; turn <= 5; turn += 1) {
-    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), node(`r${turn}`, `u${turn}`, "block"));
-  }
-  nodes.push(node("u2-edit", "r1", "user"), node("r2-edit", "u2-edit", "block"));
-  const tree = { nodes, headId: "r5" };
-  const folded = foldTurns(tree, 3);
-  assert.equal(folded.hidden, 2);
-  assert.deepEqual(folded.tree.nodes.map((kept) => kept.id), ["u3", "r3", "u4", "r4", "u5", "r5"]);
-  assert.equal(folded.tree.nodes[0]?.parentId, null);
-  // Short enough: nothing folds.
-  assert.deepEqual(foldTurns(tree, 5), { tree, hidden: 0 });
-});
-
-test("the turns a thread must hold to show a row count from that row's turn to the end", () => {
-  const nodes: ThreadNode[] = [];
-  for (let turn = 1; turn <= 5; turn += 1) {
-    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), node(`r${turn}`, `u${turn}`, "block"));
-  }
-  const tree = { nodes, headId: "r5" };
-  assert.equal(turnsFrom(tree, "u5"), 1);
-  assert.equal(turnsFrom(tree, "r4"), 2);
-  assert.equal(turnsFrom(tree, "u2"), 4);
-  assert.equal(turnsFrom(tree, "missing"), null);
-  // Held from there, the row is in the list.
-  assert.ok(foldTurns(tree, turnsFrom(tree, "r2")!).tree.nodes.some((kept) => kept.id === "r2"));
-});
-
-test("a turn still waiting on the user keeps itself and every later turn out of the fold", () => {
-  // A reply's block carries its user message too (buildThread): turns are counted by user nodes only.
-  const nodes: ThreadNode[] = [];
-  for (let turn = 1; turn <= 5; turn += 1) {
-    const reply = node(`r${turn}`, `u${turn}`, "block", turn === 2 ? "waiting" : "done");
-    nodes.push(node(`u${turn}`, turn === 1 ? null : `r${turn - 1}`, "user"), { ...reply, block: { ...reply.block, user: {} } as Block });
-  }
-  const tree = { nodes, headId: "r5" };
-  const folded = foldTurns(tree, 2);
-  assert.equal(folded.hidden, 1);
-  assert.deepEqual(folded.tree.nodes.map((kept) => kept.id), ["u2", "r2", "u3", "r3", "u4", "r4", "u5", "r5"]);
-  assert.equal(foldTurns({ nodes: nodes.map((kept) => ({ ...kept, block: { ...kept.block, state: "done" } as Block })), headId: "r5" }, 2).hidden, 3);
 });
 
 // The user's session of 2026-10-09 (a grill, then the right sidebar and tabs built), from its

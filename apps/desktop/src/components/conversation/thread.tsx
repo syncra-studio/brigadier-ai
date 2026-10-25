@@ -8,7 +8,7 @@ import {
   TextMessagePartProvider,
   type TextMessagePartProps,
   ThreadPrimitive,
-  unstable_useThreadMessageIds,
+  useAui,
   useAuiEvent,
   useAuiState,
 } from "@assistant-ui/react";
@@ -26,6 +26,7 @@ import {
   Suspense,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -45,6 +46,7 @@ import { LinkTimeContext } from "@/components/conversation/file-links";
 import { MessageRail, ThreadHistoryContext } from "@/components/conversation/message-rail";
 import { RowScope, rowKeyOf, useKeptState } from "@/components/conversation/row-memory";
 import { keptPlace, ThreadScroller } from "@/components/conversation/thread-scroll";
+import { useThreadList, useThreadListIds, useThreadListSource } from "@/components/conversation/thread-list";
 import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { TurnBoundary } from "@/components/conversation/turn-boundary";
 import { Button } from "@/components/controls/button";
@@ -431,6 +433,10 @@ const ThreadRoot: FC<{
 const ESTIMATE_PX = 160;
 /** Messages mounted beyond the view's ends, each way. */
 const OVERSCAN = 3;
+/** Messages assistant-ui holds beyond those mounted, each way, when the list asks it again... */
+const HOLD_MORE = 40;
+/** ...which it does once what is mounted comes this near the end of what it holds. */
+const HOLD_EDGE = 12;
 /** Each conversation's messages' heights as last measured, by id, kept for the app's run. */
 const heightsByKey = new Map<string, Map<string, number>>();
 
@@ -448,15 +454,27 @@ function heightsOf(key: string | null): Map<string, number> {
    stays the same, so a new one each time would draw every message again on each streamed word. */
 const MESSAGE_COMPONENTS = { Message: () => <ThreadMessage /> };
 
-/** Message `id` of the thread around, drawn as its row draws it: for code reading what it shows. */
-export const ThreadMessageView: FC<{ id: string }> = ({ id }) => {
-  const key = useThreadKey();
-  return (
-    <RowScope rowKey={rowKeyOf(key, id)}>
-      <ThreadPrimitive.Unstable_MessageById messageId={id} components={MESSAGE_COMPONENTS} />
-    </RowScope>
-  );
-};
+const NO_IDS: readonly string[] = [];
+
+/** What a thread asks to mount as it is shown: the message its kept place starts at. */
+function restoring(key: string | null): ReadonlyMap<string, string> {
+  const kept = keptPlace(key);
+  return new Map(kept && !kept.bottom && kept.anchor !== null ? [["restore", kept.anchor]] : []);
+}
+
+/** The ids of the messages assistant-ui holds, made once per messages array. */
+const heldBy = new WeakMap<readonly { id: string }[], Set<string>>();
+function heldIds(messages: readonly { id: string }[]): Set<string> {
+  let ids = heldBy.get(messages);
+  if (!ids) {
+    ids = new Set(messages.map((message) => message.id));
+    heldBy.set(messages, ids);
+  }
+  return ids;
+}
+
+/** A row's place on the branch, for what its message reads of the one before it. */
+const RowPlaceContext = createContext<number | null>(null);
 
 /**
  * The messages, as a feed: only those near the view are mounted (with `OVERSCAN` more each way),
@@ -465,7 +483,9 @@ export const ThreadMessageView: FC<{ id: string }> = ({ id }) => {
  * places, follows and measures), the message the view's kept place starts at, and what code going
  * to a message asks for (`ThreadScroller.mount`). The scroller alone moves the view: a message
  * mounting above it at its measured height is a change above the anchor, kept in place there.
- * While the thread is hidden nothing is measured, and what is mounted stays.
+ * While the thread is hidden nothing is measured, and what is mounted stays. The ids are the whole
+ * branch's (`thread-list.ts`): assistant-ui holds only what the list asks for, `HOLD_MORE` more
+ * each way than it mounts, asked again as what it mounts nears the end of what is held.
  */
 const ThreadMessages: FC<{
   setGroup: (element: HTMLDivElement | null) => void;
@@ -474,18 +494,51 @@ const ThreadMessages: FC<{
   scroller: ThreadScroller;
   scrollKey: string | null;
 }> = ({ setGroup, group, viewport, scroller, scrollKey }) => {
-  const ids = unstable_useThreadMessageIds();
+  const source = useThreadListSource();
+  // Another conversation's, just after a switch (the app tells the list after drawing): none yet.
+  const current = useThreadList((s) => s.key === scrollKey);
+  const branch = useThreadListIds();
+  const ids = !source || current ? branch : NO_IDS;
   // The message the conversation asks to show (a jump between sessions'), mounted where it is.
   const showing = useContext(ThreadHistoryContext)?.showing ?? null;
   const running = useAuiState((s) => s.thread.isRunning);
-  const newestTurn = useAuiState((s) => s.thread.messages.findLastIndex((message) => message.role === "user"));
+  // What assistant-ui holds, drawn again as that changes (not on every streamed word).
+  const aui = useAui();
+  useAuiState((s) => `${s.thread.messages.length}:${s.thread.messages[0]?.id ?? ""}:${s.thread.messages.at(-1)?.id ?? ""}`);
+  const newestTurn = useThreadList((s) => s.messages.findLastIndex((message) => message.role === "user"));
   const heights = useMemo(() => heightsOf(scrollKey), [scrollKey]);
   const at = useMemo(() => new Map(ids.map((id, index) => [id, index])), [ids]);
-  // What code asked to be mounted, by purpose; the kept place's message to begin with.
-  const [asked, setAsked] = useState<ReadonlyMap<string, string>>(() => {
-    const kept = keptPlace(scrollKey);
-    return new Map(kept && !kept.bottom && kept.anchor !== null ? [["restore", kept.anchor]] : []);
-  });
+  // What code asked to be mounted, by purpose; the kept place's message to begin with, anew in
+  // each conversation shown.
+  const [asked, setAsked] = useState<ReadonlyMap<string, string>>(() => restoring(scrollKey));
+  const [askedIn, setAskedIn] = useState(scrollKey);
+  if (askedIn !== scrollKey) {
+    setAskedIn(scrollKey);
+    setAsked(restoring(scrollKey));
+  }
+  // Until the scroller has put the view in its place (the bottom, or the kept place), only what
+  // is pinned mounts: not the rows of wherever the view was before the conversation's rows came.
+  const placing = useRef(false);
+  const shownKey = useRef<string | null | undefined>(undefined);
+  if (ids.length > 0 && shownKey.current !== scrollKey) {
+    shownKey.current = scrollKey;
+    placing.current = true;
+  }
+  // Placed, it draws again with the rows of where the view is: the virtualizer itself draws again
+  // only when that range changes, and a view the scroller left where it was (a thread shorter than
+  // the view) never moves. That one is placed by the next frame.
+  const [, placed] = useState(0);
+  const place = useCallback(() => {
+    if (!placing.current) return;
+    placing.current = false;
+    placed((count) => count + 1);
+  }, []);
+  const anyIds = ids.length > 0;
+  useEffect(() => {
+    if (!anyIds) return;
+    const next = requestAnimationFrame(place);
+    return () => cancelAnimationFrame(next);
+  }, [scrollKey, anyIds, place]);
   useLayoutEffect(() => {
     scroller.setMounter((purpose, id) =>
       setAsked((before) => {
@@ -520,6 +573,8 @@ const ThreadMessages: FC<{
     return indices;
   }, [newestTurn, ids.length, asked, showing, at]);
   const last = useRef<number[]>([]);
+  // What the view mounts for where it is, without what is pinned.
+  const near = useRef<{ start: number; end: number } | null>(null);
   // The app does not use React Compiler, so the virtualizer's unmemoizable API is fine here.
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
@@ -540,7 +595,12 @@ const ThreadMessages: FC<{
     rangeExtractor: (range: VirtualRange) => {
       // Hidden, what is mounted stays: the view's size and place read nothing then.
       if (hidden() && last.current.length > 0) return last.current;
+      if (placing.current && pinned.size > 0) {
+        last.current = [...pinned].filter((index) => index < range.count).toSorted((a, b) => a - b);
+        return last.current;
+      }
       const indices = new Set(defaultRangeExtractor(range));
+      near.current = indices.size > 0 ? { start: Math.min(...indices), end: Math.max(...indices) } : null;
       for (const index of pinned) if (index < range.count) indices.add(index);
       last.current = [...indices].toSorted((a, b) => a - b);
       return last.current;
@@ -562,10 +622,14 @@ const ThreadMessages: FC<{
     // event: the rows of where it put the view are drawn before that frame paints.
     observeElementOffset: (instance, changed) => {
       const stop = observeElementOffset(instance, (offset, scrolling) => {
-        if (!hidden()) changed(offset, scrolling);
+        if (hidden()) return;
+        place();
+        changed(offset, scrolling);
       });
       const unsubscribe = scroller.subscribe(() => {
-        if (viewport && !hidden()) changed(viewport.scrollTop, false);
+        if (!viewport || hidden()) return;
+        place();
+        changed(viewport.scrollTop, false);
       });
       return () => {
         stop?.();
@@ -577,11 +641,13 @@ const ThreadMessages: FC<{
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
 
   const items = virtualizer.getVirtualItems();
+  const holds = source ? heldIds(aui.thread().getState().messages) : null;
   const rows: ReactNode[] = [];
   let end = 0;
   for (const item of items) {
     const id = ids[item.index];
-    if (id === undefined) continue;
+    // A message assistant-ui doesn't hold yet would draw nothing: its room stays a spacer until it does.
+    if (id === undefined || (holds !== null && !holds.has(id))) continue;
     const start = item.start - margin;
     if (start > end) rows.push(<div key={`gap:${id}`} aria-hidden data-slot="aui_thread-gap" style={{ height: start - end }} />);
     rows.push(
@@ -597,15 +663,38 @@ const ThreadMessages: FC<{
         tabIndex={-1}
         className={cn("focus:outline-none", item.index > 0 && "pt-6")}
       >
-        <RowScope rowKey={rowKeyOf(scrollKey, id)}>
-          <ThreadPrimitive.Unstable_MessageById messageId={id} components={MESSAGE_COMPONENTS} />
-        </RowScope>
+        <RowPlaceContext.Provider value={item.index}>
+          <RowScope rowKey={rowKeyOf(scrollKey, id)}>
+            <ThreadPrimitive.Unstable_MessageById messageId={id} components={MESSAGE_COMPONENTS} />
+          </RowScope>
+        </RowPlaceContext.Provider>
       </div>,
     );
     end = item.end - margin;
   }
   const total = virtualizer.getTotalSize();
   if (rows.length > 0 && total > end) rows.push(<div key="gap:end" aria-hidden data-slot="aui_thread-gap" style={{ height: total - end }} />);
+
+  // assistant-ui holds what is mounted, with room each way: asked again only as what is mounted
+  // nears the end of what it holds, or mounts what it was never asked for.
+  useLayoutEffect(() => {
+    if (!source || ids.length === 0) return;
+    // The newest turn the app holds itself.
+    const low = near.current?.start ?? ids.length - 1;
+    const high = near.current?.end ?? ids.length - 1;
+    const wanted = [...asked.values(), showing].filter((id): id is string => id !== null);
+    const held = source.held;
+    if (
+      held &&
+      held.key === scrollKey &&
+      (held.from <= 0 || low - HOLD_EDGE >= held.from) &&
+      (held.to >= ids.length - 1 || high + HOLD_EDGE <= held.to) &&
+      wanted.every((id) => held.ids.includes(id) || ((at.get(id) ?? -1) >= held.from && (at.get(id) ?? -1) <= held.to))
+    ) {
+      return;
+    }
+    source.hold({ key: scrollKey, from: Math.max(0, low - HOLD_MORE), to: Math.min(ids.length - 1, high + HOLD_MORE), ids: wanted });
+  });
 
   const feedKeys = useFeedKeys(ids, scroller);
   // The message holding the focus stays mounted while the view scrolls away from it.
@@ -880,10 +969,11 @@ const LatestResponse: FC = () => {
  */
 const DaySeparator: FC = () => {
   const sentAt = useAuiState((s) => s.message.createdAt.getTime());
-  const previous = useAuiState((s) => {
-    const index = s.message.index;
-    return index > 0 ? (s.thread.messages[index - 1]?.createdAt.getTime() ?? null) : null;
-  });
+  // The message before it on the branch, which assistant-ui may not hold.
+  const place = useContext(RowPlaceContext);
+  const held = useAuiState((s) => s.message.index);
+  const index = place ?? held;
+  const previous = useThreadList((s) => (index > 0 ? (s.messages[index - 1]?.createdAt.getTime() ?? null) : null));
   const now = useNow(60_000);
   if (!separatesTurn(sentAt, previous, now)) return null;
   return <TimeSeparator atMs={sentAt} className="pt-2 pb-4" />;

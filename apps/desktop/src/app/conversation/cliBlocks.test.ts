@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { answerIndex, blockSequence, type BoardDigest, foldsAway, foldTurns, seamMove } from "@/app/conversation/blocks";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
 import { turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
@@ -415,7 +415,7 @@ test("a turn that carries an earlier turn's request keeps its own message, so th
     ["request:u1", "r1"],
     ["request:u2", "request:u1"],
   ]);
-  assert.deepEqual(foldTurns(tree, 1).hidden, 0, "one turn of the user's");
+  assert.equal(tree.nodes.filter((node) => node.kind === "user").length, 1, "one turn of the user's");
 });
 
 const decision = (requestId: string | null, atMs: number) =>

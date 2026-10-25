@@ -358,14 +358,17 @@ This plan adds:
 3. **Open a worker by its name**, from every place it's named (§3.4).
 4. **Show brief** in a worker's thread (§3.6).
 5. ~~**Long-thread fold**: past 30 turns, the oldest turns fold into "N earlier messages". Clicking it shows them.~~
-   Superseded, proposed (run2-D45/D48): **the thread is virtualized** and nothing folds. Every turn is in the
+   Superseded, proposed (run2-D45/D48/D49): **the thread is virtualized** and nothing folds. Every turn is in the
    list; only the messages near the view are mounted (a few more each way), plus the newest turn, the message a
    kept place starts at, and whatever a jump, Find or the focus asks for. The thread's scroller alone moves the
-   view, so following the bottom and keeping one's place work as before. A long session's list holds its newest
-   300 turns (opening with 50): older ones join 150 at a time as the view nears the top, for a jump, a kept place,
-   or all of them while Find has a text (run2-D49; giving assistant-ui only the mounted messages is next, #627). What the user opened inside a message
-   stays open when it scrolls away and back. Accepted limits: text can't be selected or copied across turns that
-   aren't mounted, and Find's count over turns not mounted fills in over a moment, as they're read out of sight.
+   view, so following the bottom and keeping one's place work as before. The app's own list holds the whole
+   branch; assistant-ui holds only the mounted messages, 40 more each way and the newest turn, asked again as
+   the view nears the end of what it holds, so a streamed word costs the same at any length (#627). What the user
+   opened inside a message stays open when it scrolls away and back. Find searches the mounted messages in what
+   they show, and the others in what they showed when last mounted or, never shown since they changed, in their
+   words and their work's words; going to a match there mounts its message and finds it again. Accepted limits:
+   text can't be selected or copied across turns that aren't mounted, and a count from a message's words can
+   change once it mounts and shows its labels.
 6. **Jump to the live line**: the existing scroll-to-bottom button follows the live line while a turn runs.
 
 ## 6. Change list by file

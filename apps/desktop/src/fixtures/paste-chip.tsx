@@ -11,7 +11,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
-import { jumpInThread } from "@/components/conversation";
+import { jumpInThread, mountInThread } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
@@ -174,7 +174,11 @@ const editor = () => document.querySelector<HTMLElement>("[data-slot=pasted-text
 const shown = () => document.querySelector("[data-slot=pasted-text-editor] [contenteditable=false]");
 /** The thread's scrolling view, and how many rows it holds. */
 const thread = () => document.querySelector<HTMLElement>("[data-slot=aui_thread-viewport]");
-const rows = () => document.querySelectorAll("[data-slot=aui_message-group] > [data-thread-row]").length;
+/** The pasted text's chip in the earlier message, the first one the thread holds, while it is mounted. */
+const bubble = () => document.querySelector<HTMLElement>('[data-thread-row="u1"] [data-slot=inline-paste]') ?? undefined;
+
+/** The thread's newest message mounted. */
+const newestRow = () => [...document.querySelectorAll<HTMLElement>("[data-slot=aui_message-group] > [data-thread-row]")].at(-1)?.dataset["threadRow"] ?? null;
 
 function pasteData(data: Record<string, string>) {
   const clipboardData = new DataTransfer();
@@ -303,7 +307,7 @@ async function drive() {
     await until("the editor closed", () => editor() === null && pane() === null);
     await until("the edited text stored", () => document.querySelectorAll("[data-slot=composer-attachment]").length === 0 && pasteChip() !== null);
     field()!.focus();
-    const rowsBefore = rows();
+    const newestBefore = newestRow();
     const both = await send();
     seen.both = {
       text: both.text,
@@ -312,13 +316,14 @@ async function drive() {
     };
 
     // The earlier message shows its pasted text's chip where it was pasted; it opens read only.
-    const bubble = () => [...document.querySelectorAll("[data-slot=inline-paste]")].find((chip) => !field()!.contains(chip));
-    await until("the chip in the sent message", () => bubble() !== undefined);
     // The thread ends with the turns sent above: the earlier message is scrolled to first. The
     // click goes where the chip is, so it waits for the send's own turn to show (its spring moves
-    // the view), scrolls as the user's jump (a scroll of no one's is undone while the thread
-    // follows), and clicks once the chip holds still in view, ready.
-    await until("the sent turn shown", () => rows() > rowsBefore);
+    // the view), mounts the earlier message as a jump to it would (the thread mounts only the
+    // messages near the view), scrolls as the user's jump (a scroll of no one's is undone while
+    // the thread follows), and clicks once the chip holds still in view, ready.
+    await until("the sent turn shown", () => newestRow() !== newestBefore);
+    mountInThread(document.querySelector("[data-slot=aui_thread-viewport]"), "jump", "u1");
+    await until("the chip in the earlier message", () => bubble() !== undefined);
     jumpInThread(bubble()!);
     bubble()!.scrollIntoView({ block: "center" });
     const open = bubble()!.querySelector("button")!;

@@ -1,4 +1,4 @@
-import { useAui } from "@/components/conversation";
+import { useAui, useThreadListSource } from "@/components/conversation";
 import { type FC, useEffect, useState } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
@@ -56,9 +56,11 @@ function sessionWorkspace(conversation: Conversation): SessionWorkspace | null {
 /** The thread on its shown branch as Markdown, for "Copy as Markdown". */
 function useThreadMarkdown(title: string): () => string {
   const aui = useAui();
+  // The whole branch: assistant-ui holds only some of a long one.
+  const list = useThreadListSource();
   return () => {
     const parts = [`# ${title}`];
-    for (const message of aui.thread().getState().messages) {
+    for (const message of list?.get().messages ?? aui.thread().getState().messages) {
       const text = message.content
         .map((part) => (part.type === "text" ? part.text : ""))
         .filter(Boolean)

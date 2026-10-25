@@ -53,8 +53,8 @@ test("a feedback offer is written up, then sends, edits or dismisses", { timeout
   const note = "Usage, Stop and pinning\n\nThe usage popover keeps the old numbers after a session ends. Stop on a worker doesn't stop it. They'd like to pin a chat to the top.";
   assert.equal(seen.edit, note);
   assert.deepEqual(seen.failed, ["Couldn’t send it: HTTP 502: Bad gateway. Try again in a moment.", ["Try again", "Edit", "Dismiss"]]);
-  // Written once each, never again on Send.
-  assert.deepEqual(seen.wrote, ["Typo fixes take long\n\nA one-word fix took four minutes.", note]);
+  // Written once each, never again on Send (the newest first: the thread mounts the turn in view first).
+  assert.deepEqual((seen.wrote as string[]).toSorted(), ["Typo fixes take long\n\nA one-word fix took four minutes.", note].toSorted());
   assert.deepEqual(seen.opened, []);
   assert.deepEqual(seen.sent, ["Sent. Thank you", "You can follow them on GitHub."]);
   assert.deepEqual(seen.rows, [

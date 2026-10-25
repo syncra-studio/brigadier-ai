@@ -362,12 +362,13 @@ async function extra(seen: Record<string, unknown>) {
   } catch (error) {
     seen.find = { error: String(error) };
   }
-  // Scrolling the whole thread to its top, a screen's worth each frame.
-  await wait(500);
-  reset();
-  document.documentElement.dataset.phase = "scroll";
+  // Scrolling the thread from its bottom up towards its top, a screen's worth each frame.
   const scroller = viewport();
   if (!scroller) throw new Error("no thread");
+  scroller.scrollTop = scroller.scrollHeight;
+  await wait(1000);
+  reset();
+  document.documentElement.dataset.phase = "scroll";
   const scrolledFrom = performance.now();
   let steps = 0;
   while (scroller.scrollTop > 0 && performance.now() - scrolledFrom < PHASE_MS) {
