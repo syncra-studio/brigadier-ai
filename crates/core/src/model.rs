@@ -977,9 +977,9 @@ pub struct Settings {
     /// Brigadier's built-in browser exists (Settings › Browser). Off, there is no Browser tab,
     /// shortcut or menu item, links open in the default browser, and sessions are told.
     pub browser_enabled: bool,
-    /// Agents can see and drive apps on this Mac (Settings › Computer use): every session, Chat
-    /// and worker gets the `computer` tools and the `computer-use` skill, a lean worker only
-    /// with `--with computer-use` (S35). macOS only.
+    /// Agents can see and drive apps on this Mac (Settings › Computer use): every session and
+    /// Chat gets the `computer` tools and the `computer-use` skill, a worker only with `--with
+    /// computer-use` (S35, D13). macOS only.
     pub computer_use: bool,
     /// While computer use is on, a menu-bar item lists the agents using apps on this Mac, with
     /// a way to stop each.

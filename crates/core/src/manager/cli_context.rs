@@ -64,15 +64,16 @@ pub(crate) struct WorkerGrants {
     pub mcps: Option<Vec<String>>,
 }
 
-/// The skills and MCP servers worker `plain` was started with. A lean worker (G23) keeps only
-/// the skills it named and none of the user's servers; any other its agent's whole setup.
+/// The skills and MCP servers worker `plain` was started with: a `brigadier start` worker is
+/// naked (D13), with no skills and only the servers it was granted (D18); any other its
+/// agent's whole setup.
 pub(crate) fn worker_grants(plain: Option<&PlainWorker>) -> WorkerGrants {
     match plain {
-        Some(plain) if plain.lean => WorkerGrants {
-            skills: Some(plain.skills.clone()),
-            mcps: Some(Vec::new()),
+        Some(plain) => WorkerGrants {
+            skills: Some(Vec::new()),
+            mcps: Some(plain.mcps.clone()),
         },
-        _ => WorkerGrants {
+        None => WorkerGrants {
             skills: None,
             mcps: None,
         },
@@ -1098,7 +1099,7 @@ mod tests {
         assert!(format.text.contains("Run the formatter."));
         assert!(skills_output(&catalog, &session, None, Some("nope"), false).is_err());
 
-        // A lean worker has only the skills it kept, and can still read the others.
+        // A worker given only some skills has those, and can still read the others.
         let kept = ["tools:lint".to_owned()];
         let lean = skills_output(&catalog, &session, Some(&kept), None, true).unwrap();
         assert_eq!(names(&lean.items, true), ["tools:lint"]);
@@ -1142,25 +1143,20 @@ mod tests {
     }
 
     #[test]
-    fn a_lean_worker_is_granted_no_servers_and_only_its_skills() {
-        let lean = PlainWorker {
+    fn a_worker_has_no_skills_and_only_its_granted_servers() {
+        let naked = PlainWorker {
             permission: crate::model::PermissionLevel::Ask,
             local: false,
             repo: None,
             base: None,
-            lean: true,
-            skills: vec!["lint".into()],
+            mcps: vec!["pencil".into()],
             computer_use: false,
             closed: false,
         };
-        let grants = worker_grants(Some(&lean));
-        assert_eq!(grants.mcps, Some(Vec::new()));
-        assert_eq!(grants.skills, Some(vec!["lint".to_owned()]));
-        let plain = PlainWorker {
-            lean: false,
-            ..lean
-        };
-        let grants = worker_grants(Some(&plain));
+        let grants = worker_grants(Some(&naked));
+        assert_eq!(grants.mcps, Some(vec!["pencil".to_owned()]));
+        assert_eq!(grants.skills, Some(Vec::new()));
+        let grants = worker_grants(None);
         assert_eq!((grants.mcps, grants.skills), (None, None));
     }
 }

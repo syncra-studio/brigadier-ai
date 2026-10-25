@@ -811,7 +811,7 @@ fn help_lists_every_subcommand_and_every_schema_has_one() {
     let start = stdout(&brigadier(None, None, &["help", "start"]));
     assert!(!start.contains("Not available yet"), "{start}");
     assert!(
-        start.contains("--lean") && start.contains("--skill NAME"),
+        start.contains("--mcp NAME") && start.contains("--with WHAT"),
         "{start}"
     );
     let models = stdout(&brigadier(None, None, &["help", "models"]));

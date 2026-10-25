@@ -127,7 +127,7 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
 
 /// Codex's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
-/// memory should grow: a lean worker (G23), a side chat, which leaves nothing, Brigadier's own
+/// memory should grow: a naked worker (D13), a side chat, which leaves nothing, Brigadier's own
 /// one-shots and a control connection.
 const MEMORIES: &str = "memories";
 
@@ -3381,7 +3381,7 @@ mod tests {
 
     /// STRIP-DOWN-PLAN S19: Codex's own memory follows the user's setting. Every session reads
     /// the user's `config.toml`, so a thread, a worker and a Chat are given nothing about memory
-    /// and start with the user's `features.memories`, on or off. Only a lean worker (G23), a side
+    /// and start with the user's `features.memories`, on or off. Only a naked worker (D13), a side
     /// chat, Brigadier's own one-shots and a control connection go without it.
     #[test]
     fn codexs_memory_follows_the_users_setting() {
@@ -3406,7 +3406,7 @@ mod tests {
         }
         let mut lean = spec(ToolSet::Lean, None);
         lean.naked_worker = true;
-        assert!(off(&app_server_args(Some(&lean))), "a lean worker");
+        assert!(off(&app_server_args(Some(&lean))), "a naked worker");
         for tools in [
             ToolSet::TabChat,
             ToolSet::Review,
@@ -3675,9 +3675,9 @@ mod tests {
         assert_eq!(servers["railway"], json!({"enabled": false}));
     }
 
-    /// A lean worker (`brigadier start --lean`, G23) goes without every server of the user's
-    /// config and writes no memories; the skills it goes without come switched off by file,
-    /// and those `--skill` kept are simply not among them.
+    /// A naked worker (D13) goes without every server of the user's config but the one it was
+    /// granted (D18), given back in full, and writes no memories; its skills come switched off
+    /// by file.
     #[test]
     fn a_naked_worker_goes_without_the_users_servers_and_memories() {
         let effective = json!({"config": {"mcp_servers": {"railway": {"command": "r"},
@@ -3694,6 +3694,13 @@ mod tests {
             lean["given"]["command"], "/bin/given",
             "what Brigadier gives stays"
         );
+        session
+            .mcp_servers
+            .push(server("railway", stdio("/bin/railway", None), &[]));
+        let granted = mcp_config(&effective, &session);
+        assert_eq!(granted["railway"]["command"], "/bin/railway");
+        assert!(granted["railway"].get("enabled").is_none(), "{granted:?}");
+        assert_eq!(granted["docs"], json!({"enabled": false}));
         session.switched_off.skill_files = vec![PathBuf::from("/h/.agents/skills/x/SKILL.md")];
         let args = app_server_args(Some(&session));
         assert!(

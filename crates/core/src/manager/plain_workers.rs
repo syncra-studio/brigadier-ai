@@ -243,6 +243,23 @@ impl SessionManager {
                 Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
             },
         };
+        // D18: the servers it is granted, checked now, each kept by the name its CLI knows.
+        let folder = place
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| self.trusted_repo(&caller.conversation_id))
+            .unwrap_or_else(|| {
+                self.session_dir(&caller.conversation_id)
+                    .root()
+                    .to_path_buf()
+            });
+        let mcps = match self
+            .worker_grants_named(&caller.conversation_id, provider, &folder, &start.mcps)
+            .await
+        {
+            Ok(mcps) => mcps,
+            Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
+        };
         let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
         let choice = ModelChoice {
             provider,
@@ -256,8 +273,7 @@ impl SessionManager {
             local: start.local,
             repo: place,
             base: base.clone(),
-            lean: start.lean,
-            skills: start.skills,
+            mcps,
             computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
         };

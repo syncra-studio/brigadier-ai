@@ -853,7 +853,7 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         "permissions": permissions,
     });
     // Claude's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
-    // memory should grow: a lean worker (G23), a side chat, which leaves nothing, and Brigadier's
+    // memory should grow: a naked worker (D13), a side chat, which leaves nothing, and Brigadier's
     // own one-shots.
     if memory_off(spec) {
         settings["autoMemoryEnabled"] = json!(false);
@@ -3211,7 +3211,7 @@ for line in sys.stdin:
     /// environment.
     /// STRIP-DOWN-PLAN S19: Claude's own memory follows the user's setting. A thread or a
     /// worker loads the user's settings and Brigadier sets nothing; a Chat or a raw session, which
-    /// loads none, is given the user's value as set, and nothing when they set none. Only a lean worker (G23), a
+    /// loads none, is given the user's value as set, and nothing when they set none. Only a naked worker (D13), a
     /// side chat and Brigadier's own one-shots go without it.
     #[test]
     fn claudes_memory_follows_the_users_setting() {
@@ -3261,7 +3261,7 @@ for line in sys.stdin:
             assert_eq!(
                 memory(ToolSet::Lean, true).0,
                 Some(json!(false)),
-                "a lean worker"
+                "a naked worker"
             );
             for tools in [
                 ToolSet::TabChat,

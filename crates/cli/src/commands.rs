@@ -273,24 +273,33 @@ pub const COMMANDS: &[Command] = &[
                 &["ask", "accept-edits", "full-access"],
                 "The CLI's own permission mode; this session's by default.",
             ),
-            switch(
-                "lean",
-                "A research worker: the goal and the repository, with none of your MCP \
-                 servers, no skills and no memory writes. Your instruction files still load.",
-            ),
             Arg::Flag {
-                long: "skill",
+                long: "mcp",
                 value: Some("NAME"),
-                help: "With --lean: a skill it keeps.",
+                help: "An MCP server it gets, by the name `brigadier context mcps` lists; none \
+                       by default. A worker starts with none of your setup but the project's \
+                       instruction file (D13, D18).",
                 choices: &[],
                 repeat: true,
             },
             Arg::Flag {
                 long: "with",
                 value: Some("WHAT"),
-                help: "With --lean: computer-use gives it the computer tools while Settings › \
-                       Computer use is on (every other worker has them then).",
+                help: "computer-use gives it the computer tools while Settings › Computer use \
+                       is on.",
                 choices: &["computer-use"],
+                repeat: true,
+            },
+            switch(
+                "lean",
+                "Every worker is naked now (D13): accepted and ignored.",
+            ),
+            Arg::Flag {
+                long: "skill",
+                value: Some("NAME"),
+                help: "Gone: a worker has no skills (D13); it reads one with `brigadier context \
+                       skills <name>`.",
+                choices: &[],
                 repeat: true,
             },
             switch(

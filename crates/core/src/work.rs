@@ -1012,14 +1012,13 @@ pub struct PlainWorker {
     /// The branch its worktree starts from and merges back into (G21); none with `--local`.
     #[serde(default)]
     pub base: Option<String>,
-    /// A research worker with just the goal and the repository (`--lean`, G23).
-    #[serde(default)]
-    pub lean: bool,
-    /// With `lean`, the only skills it keeps (`--skill`).
-    #[serde(default)]
-    pub skills: Vec<String>,
-    /// With `lean`, it has the computer tools while Settings › Computer use is on (`--with
-    /// computer-use`, S35); every other worker has them then anyway.
+    /// The MCP servers it was granted (`--mcp`, D18), each by the name its CLI knows it by;
+    /// it has none of the user's others, nor their skills (D13). Its successors and resumes
+    /// keep them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcps: Vec<String>,
+    /// It has the computer tools while Settings › Computer use is on (`--with computer-use`,
+    /// S35); no other worker has them.
     #[serde(default)]
     pub computer_use: bool,
     /// `brigadier close` ended it: `brigadier workers` lists it no more.

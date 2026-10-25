@@ -281,11 +281,11 @@ pub struct StartRequest {
     pub base: Option<String>,
     /// Absent: the calling session's level.
     pub permission: Option<Permission>,
-    /// A research worker with just the goal and the repository (G23).
-    pub lean: bool,
-    /// With `lean`, the only skills it keeps.
-    pub skills: Vec<String>,
-    /// With `lean`, what it has beyond the goal and the repository (`--with`).
+    /// The MCP servers it gets (`--mcp`), by the names `brigadier context mcps` lists; none
+    /// by default (D18).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcps: Vec<String>,
+    /// What it has beyond the goal, the repository and its servers (`--with`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub with: Vec<Capability>,
     /// The session's mockup: the images it makes show in the session's Mockup tab, and the
@@ -295,8 +295,8 @@ pub struct StartRequest {
     pub prompt: String,
 }
 
-/// What a lean worker may be given (`brigadier start --lean --with`). Every other worker has
-/// them as its session does.
+/// What a worker may be given beyond its servers (`brigadier start --with`); none has it
+/// otherwise (D13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {

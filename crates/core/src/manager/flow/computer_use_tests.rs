@@ -1,6 +1,7 @@
 //! STRIP-DOWN-PLAN S35 (#529): while Settings › Computer use is on, every session, Chat and
 //! worker on both CLIs gets the vendored driver's own `computer` server and its skill, as a
-//! server entry of its own; a lean worker only when the thread asks (`--with computer-use`).
+//! server entry of its own; a worker, naked (D13), only when the thread asks (`--with
+//! computer-use`).
 
 use std::sync::Arc;
 
@@ -132,8 +133,7 @@ async fn a_session_and_a_chat_on_both_clis_have_the_computer_tools_while_it_is_o
     }
 }
 
-/// The session starts an ordinary worker, a lean one and a lean one with `--with
-/// computer-use`, all on `agent`.
+/// The session starts a worker and one with `--with computer-use`, both on `agent`.
 fn starting(answers: Answers, agent: Agent) -> Script {
     Arc::new(move |turn| {
         let answers = answers.clone();
@@ -145,16 +145,14 @@ fn starting(answers: Answers, agent: Agent) -> Script {
                 return Reply::text("Done.");
             }
             let mut ids = Vec::new();
-            for (name, lean, with) in [
-                ("ordinary", false, Vec::new()),
-                ("lean", true, Vec::new()),
-                ("lean with", true, vec![Capability::ComputerUse]),
+            for (name, with) in [
+                ("plain", Vec::new()),
+                ("with", vec![Capability::ComputerUse]),
             ] {
                 let started = brigadier(
                     &turn,
                     CliRequest::Start(Box::new(StartRequest {
                         agent: Some(agent),
-                        lean,
                         with,
                         ..start("Look at the app.")
                     })),
@@ -164,18 +162,18 @@ fn starting(answers: Answers, agent: Agent) -> Script {
                 answers.lock().unwrap().insert(name.into(), started);
             }
             let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-            let events = wait_for(&turn, &ids, 3).await;
+            let events = wait_for(&turn, &ids, 2).await;
             answers
                 .lock()
                 .unwrap()
                 .insert("events".into(), json!(events));
-            Reply::text("Started three.")
+            Reply::text("Started two.")
         })
     })
 }
 
 #[tokio::test]
-async fn a_worker_has_them_and_a_lean_one_only_when_asked_on_both_clis() {
+async fn a_worker_has_them_only_when_asked_on_both_clis() {
     for (provider, agent) in [
         (ProviderKind::Claude, Agent::Claude),
         (ProviderKind::Codex, Agent::Codex),
@@ -197,7 +195,7 @@ async fn a_worker_has_them_and_a_lean_one_only_when_asked_on_both_clis() {
             flow.settled().await;
             let specs = flow.specs();
             let board = flow.board().await;
-            // Started in order: the ordinary worker, the lean one, the lean one that asked.
+            // Started in order: the worker, the one that asked.
             let spec_of = |number: u32| {
                 let task = Flow::task(&board, number);
                 specs
@@ -213,15 +211,13 @@ async fn a_worker_has_them_and_a_lean_one_only_when_asked_on_both_clis() {
                     })
                     .unwrap_or_else(|| panic!("task-{number} started"))
             };
-            let (ordinary, lean, lean_with) = (spec_of(1), spec_of(2), spec_of(3));
-            assert!(lean.naked_worker && lean_with.naked_worker);
-            assert_eq!(has_computer(&ordinary), on, "{provider:?} ordinary");
-            assert!(!has_computer(&lean), "{provider:?} lean");
-            assert_eq!(has_computer(&lean_with), on, "{provider:?} lean with");
+            let (plain, with) = (spec_of(1), spec_of(2));
+            assert!(plain.naked_worker && with.naked_worker);
+            assert!(!has_computer(&plain), "{provider:?} plain");
+            assert_eq!(has_computer(&with), on, "{provider:?} with");
             // Asked for, its tools are in the model's list from the start.
             if on {
-                assert!(!ordinary.mcp_servers[0].always_load);
-                assert!(lean_with.mcp_servers[0].always_load);
+                assert!(with.mcp_servers[0].always_load);
             }
             flow.stop().await;
         }

@@ -328,11 +328,13 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 ),
                 None => None,
             };
-            let skills = args.all("skill");
-            if !skills.is_empty() && !args.switch("lean") {
-                return Err(error(
-                    "--skill goes with --lean; a worker without it has your skills".into(),
-                ));
+            // Every worker is naked (D13): `--lean` says nothing more, and a skill is read, not
+            // given.
+            if let Some(skill) = args.all("skill").first() {
+                return Err(error(format!(
+                    "--skill is gone: a worker has no skills; it reads one with `brigadier \
+                     context skills {skill}`"
+                )));
             }
             let with: Vec<Capability> = args
                 .all("with")
@@ -343,12 +345,6 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                         .find(|capability| capability.word() == word)
                 })
                 .collect();
-            if !with.is_empty() && !args.switch("lean") {
-                return Err(error(
-                    "--with goes with --lean; a worker without it has computer use while it is on"
-                        .into(),
-                ));
-            }
             let prompt = args.text("prompt");
             if prompt.trim().is_empty() {
                 return Err(error("missing <prompt>".into()));
@@ -376,8 +372,12 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                     "full-access" => Permission::FullAccess,
                     _ => Permission::AcceptEdits,
                 }),
-                lean: args.switch("lean"),
-                skills,
+                mcps: args
+                    .all("mcp")
+                    .iter()
+                    .map(|name| name.trim().to_owned())
+                    .filter(|name| !name.is_empty())
+                    .collect(),
                 with,
                 mockup: args.switch("mockup"),
                 prompt,
@@ -1015,10 +1015,10 @@ mod tests {
                 "--model",
                 "m",
                 "--lean",
-                "--skill",
-                "a",
-                "--skill",
-                "b",
+                "--mcp",
+                "pencil",
+                "--mcp",
+                "railway",
                 "--with",
                 "computer-use",
                 "write",
@@ -1036,8 +1036,7 @@ mod tests {
                 repo: None,
                 base: None,
                 permission: None,
-                lean: true,
-                skills: vec!["a".into(), "b".into()],
+                mcps: vec!["pencil".into(), "railway".into()],
                 with: vec![Capability::ComputerUse],
                 mockup: false,
                 prompt: "write a file".into(),
@@ -1147,8 +1146,15 @@ mod tests {
         assert!(fails(&["queue", "9f8e"]).contains("missing <judgment>"));
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
-        assert!(fails(&["start", "--skill", "a", "go"]).contains("goes with --lean"));
-        assert!(fails(&["start", "--with", "computer-use", "go"]).contains("goes with --lean"));
+        // Every worker is naked (D13): a skill is read, not given.
+        assert!(fails(&["start", "--skill", "a", "go"]).contains("`brigadier context skills a`"));
+        let CliRequest::Start(computer) = run(&["start", "--with", "computer-use", "go"]).0 else {
+            panic!()
+        };
+        assert_eq!(
+            (computer.with, computer.mcps),
+            (vec![Capability::ComputerUse], Vec::new())
+        );
         assert!(
             fails(&["start", "--lean", "--with", "screens", "go"])
                 .contains("must be one of: computer-use")

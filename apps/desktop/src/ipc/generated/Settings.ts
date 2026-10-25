@@ -186,9 +186,9 @@ dictationMicrophone: string,
  */
 browserEnabled: boolean, 
 /**
- * Agents can see and drive apps on this Mac (Settings › Computer use): every session, Chat
- * and worker gets the `computer` tools and the `computer-use` skill, a lean worker only
- * with `--with computer-use` (S35). macOS only.
+ * Agents can see and drive apps on this Mac (Settings › Computer use): every session and
+ * Chat gets the `computer` tools and the `computer-use` skill, a worker only with `--with
+ * computer-use` (S35, D13). macOS only.
  */
 computerUse: boolean, 
 /**

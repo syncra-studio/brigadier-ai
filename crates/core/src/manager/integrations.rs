@@ -1,22 +1,25 @@
 //! The agents' MCP servers and skills as sessions meet them: each thread and worker keeps its
 //! own agent's servers and skills, as its CLI loads them; the user turns them on or off with
-//! each CLI's own setup (Settings › Plugins). A lean worker (`brigadier start --lean`, G23)
-//! goes without them, and sign-ins go through each CLI's own `mcp login`.
+//! each CLI's own setup (Settings › Plugins). A worker (`brigadier start`) goes without them
+//! but the servers it was started with (D13, D18), and sign-ins go through each CLI's own `mcp
+//! login`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brigadier_providers::{ProviderKind, SwitchedOff};
+use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
 use brigadier_registry::adapter::adapters;
-use brigadier_registry::{Agent, Catalog, Registry, Roots, Server, Session, SkillRoot, Source};
+use brigadier_registry::{
+    Agent, Catalog, Registry, Roots, Server, Session, SkillRoot, Source, Transport,
+};
 
 use super::SessionManager;
 use super::mcp_login::{Clis, McpSignInProgress, McpSignInStatus, Open, Target};
 use crate::model::{ConversationId, ProjectId};
 use crate::{Error, Result};
 
-/// Brigadier's own servers' names, which a lean worker keeps.
+/// Brigadier's own servers' names, which a worker keeps.
 pub(crate) const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
 
 fn provider(agent: Agent) -> ProviderKind {
@@ -45,18 +48,21 @@ pub(super) fn registry(vars: impl IntoIterator<Item = (String, String)>) -> Arc<
     Registry::new(roots)
 }
 
-/// What of its agent's own setup a lean worker (`brigadier start --lean`, G23) goes without:
-/// every MCP server, and every skill but those `keep` names.
-pub(crate) fn lean_switched_off(
+/// What of its agent's own setup a naked worker (`brigadier start`, D13) goes without: every
+/// skill, and every MCP server but those `granted` names (D18).
+pub(crate) fn naked_switched_off(
     catalog: &Catalog,
     session: &Session<'_>,
-    keep: &[String],
+    granted: &[String],
 ) -> SwitchedOff {
     let mut off = SwitchedOff::default();
     for server in &catalog.servers {
         // A user's server under Brigadier's own name isn't one Brigadier gives: going without
         // it must not take Brigadier's own away.
-        if RESERVED.contains(&server.name.as_str()) || !catalog.server_native(server, session) {
+        if RESERVED.contains(&server.name.as_str())
+            || !catalog.server_native(server, session)
+            || granted.contains(&server.native_name())
+        {
             continue;
         }
         match (&server.plugin, server.source) {
@@ -75,10 +81,7 @@ pub(crate) fn lean_switched_off(
         }
     }
     for skill in &catalog.skills {
-        let kept = keep
-            .iter()
-            .any(|name| *name == skill.name || *name == skill.id);
-        if kept || !catalog.skill_native(skill, session) {
+        if !catalog.skill_native(skill, session) {
             continue;
         }
         match session.agent {
@@ -118,6 +121,68 @@ pub(crate) fn lean_switched_off(
         off.codex_skill_config = catalog.codex_skill_config.clone();
     }
     off
+}
+
+/// The servers `names` grant a worker (`brigadier start --mcp`, D18), each its agent's own
+/// (`session`'s), under the name `brigadier context mcps` prints for it, which is the name its
+/// CLI knows it by. Each is given to the CLI as Brigadier's own servers are, since a naked
+/// worker loads none of the user's config. A name none of them has is refused.
+pub(crate) fn granted_servers(
+    catalog: &Catalog,
+    session: &Session<'_>,
+    names: &[String],
+) -> std::result::Result<Vec<McpServer>, String> {
+    let mut granted: Vec<McpServer> = Vec::new();
+    for name in names {
+        let server = catalog
+            .servers
+            .iter()
+            .filter(|server| !RESERVED.contains(&server.name.as_str()))
+            .find(|server| {
+                (server.native_name() == *name || server.name == *name || server.id == *name)
+                    && catalog.server_native(server, session)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "no MCP server {name:?} of your agent's here; `brigadier context mcps` lists \
+                     them"
+                )
+            })?;
+        let name = server.native_name();
+        if granted.iter().any(|given| given.name == name) {
+            continue;
+        }
+        let expose = |values: &[(String, brigadier_registry::Secret)]| {
+            values
+                .iter()
+                .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+                .collect()
+        };
+        let (transport, env) = match &server.transport {
+            Transport::Stdio {
+                command, args, env, ..
+            } => (
+                McpTransport::Stdio {
+                    command: PathBuf::from(command),
+                    args: args.clone(),
+                    cwd: server.transport.working_dir().map(Path::to_owned),
+                },
+                expose(env),
+            ),
+            Transport::Http { url, headers } => {
+                (McpTransport::Http { url: url.clone() }, expose(headers))
+            }
+        };
+        granted.push(McpServer {
+            name,
+            transport,
+            env,
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+        });
+    }
+    Ok(granted)
 }
 
 /// The sign-in target of `server`, listed in `project`.
@@ -277,17 +342,17 @@ impl SessionManager {
         .await
     }
 
-    /// What a lean worker in `cwd` goes without ([`lean_switched_off`]): its agent's every MCP
-    /// server and every skill but those `keep` names.
-    pub(crate) async fn naked_worker_switched_off(
+    /// What a naked worker in `cwd` goes without ([`naked_switched_off`]), and the servers
+    /// `grants` give it ([`granted_servers`]): a grant whose server is gone since is left out.
+    pub(crate) async fn naked_worker_setup(
         &self,
         conversation: &ConversationId,
         provider: ProviderKind,
         cwd: &Path,
-        keep: &[String],
-    ) -> SwitchedOff {
+        grants: &[String],
+    ) -> (SwitchedOff, Vec<McpServer>) {
         let (registry, repo) = (self.registry(), self.trusted_repo(conversation));
-        let (cwd, keep) = (cwd.to_owned(), keep.to_vec());
+        let (cwd, grants) = (cwd.to_owned(), grants.to_vec());
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
             let session = Session {
@@ -296,10 +361,49 @@ impl SessionManager {
                 project: repo.as_deref(),
                 in_checkout: true,
             };
-            Ok(lean_switched_off(&catalog, &session, &keep))
+            let granted: Vec<McpServer> = grants
+                .iter()
+                .filter_map(|name| {
+                    granted_servers(&catalog, &session, std::slice::from_ref(name))
+                        .map_err(|err| tracing::warn!("a worker's granted server: {err}"))
+                        .ok()
+                })
+                .flatten()
+                .collect();
+            let names: Vec<String> = granted.iter().map(|server| server.name.clone()).collect();
+            Ok((naked_switched_off(&catalog, &session, &names), granted))
         })
         .await
         .unwrap_or_default()
+    }
+
+    /// The names `brigadier start --mcp` gave, each as its CLI knows it, or why one can't be
+    /// given ([`granted_servers`]), for a worker of `conversation` on `provider` in `cwd`.
+    pub(crate) async fn worker_grants_named(
+        &self,
+        conversation: &ConversationId,
+        provider: ProviderKind,
+        cwd: &Path,
+        names: &[String],
+    ) -> std::result::Result<Vec<String>, String> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (registry, repo) = (self.registry(), self.trusted_repo(conversation));
+        let (cwd, names) = (cwd.to_owned(), names.to_vec());
+        super::blocking(move || {
+            let catalog = registry.catalog(repo.as_deref());
+            let session = Session {
+                agent: agent(provider),
+                cwd: &cwd,
+                project: repo.as_deref(),
+                in_checkout: true,
+            };
+            Ok(granted_servers(&catalog, &session, &names)
+                .map(|servers| servers.into_iter().map(|server| server.name).collect()))
+        })
+        .await
+        .unwrap_or_else(|err| Err(err.to_string()))
     }
 }
 
@@ -319,8 +423,8 @@ mod tests {
         );
     }
 
-    /// A Claude plugin and a Codex plugin, each with a skill and a server: a lean worker goes
-    /// without them by its own agent's names, but the skills it keeps.
+    /// A Claude plugin and a Codex plugin, each with a skill and a server: a naked worker goes
+    /// without them by its own agent's names, but the servers it was granted.
     #[test]
     fn a_naked_worker_goes_without_plugins_by_their_agents_names() {
         let home = std::env::temp_dir().join(format!("brigadier-plugins-{}", std::process::id()));
@@ -368,14 +472,28 @@ mod tests {
             project: None,
             in_checkout: false,
         };
-        let lean = lean_switched_off(&catalog, &session(Agent::Claude), &[]);
+        let lean = naked_switched_off(&catalog, &session(Agent::Claude), &[]);
         assert_eq!(lean.plugin_skills, ["docs:write"]);
         assert!(lean.skill_names.is_empty());
         assert_eq!(lean.servers, ["plugin_docs_server"]);
-        let lean = lean_switched_off(&catalog, &session(Agent::Claude), &["write".to_owned()]);
-        assert!(lean.plugin_skills.is_empty(), "{lean:?}");
-        assert_eq!(lean.servers, ["plugin_docs_server"]);
-        let lean = lean_switched_off(&catalog, &session(Agent::Codex), &[]);
+        // A server granted (D18) is given, not switched off; its plugin's skill still goes.
+        let granted = vec!["plugin_docs_server".to_owned()];
+        let lean = naked_switched_off(&catalog, &session(Agent::Claude), &granted);
+        assert_eq!(lean.plugin_skills, ["docs:write"]);
+        assert!(lean.servers.is_empty(), "{lean:?}");
+        let given = granted_servers(&catalog, &session(Agent::Claude), &granted).unwrap();
+        assert_eq!(given.len(), 1);
+        assert_eq!(given[0].name, "plugin_docs_server");
+        assert!(matches!(
+            &given[0].transport,
+            McpTransport::Stdio { command, .. } if command == &PathBuf::from("s")
+        ));
+        // By its own name too; another agent's server, or none, is refused.
+        let by_name = granted_servers(&catalog, &session(Agent::Claude), &["server".into()]);
+        assert_eq!(by_name.unwrap()[0].name, "plugin_docs_server");
+        let other = granted_servers(&catalog, &session(Agent::Claude), &["calc".into()]);
+        assert!(other.unwrap_err().contains("`brigadier context mcps`"));
+        let lean = naked_switched_off(&catalog, &session(Agent::Codex), &[]);
         assert_eq!(
             lean.plugin_servers,
             [("sheets@openai".to_owned(), "calc".to_owned())]

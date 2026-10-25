@@ -548,8 +548,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         repo: None,
         base: None,
         permission: None,
-        lean: false,
-        skills: Vec::new(),
+        mcps: Vec::new(),
         with: Vec::new(),
         mockup: false,
         prompt: prompt.into(),
@@ -738,13 +737,25 @@ fn starting(answers: Answers) -> Script {
             );
             // b still lives, between turns: nothing more comes from it in a second.
             keep("wait idle", brigadier(&turn, wait(&[], Some(1))).await);
-            // A lean worker in the session's own checkout, at a level of its own.
+            // A server no setup has isn't granted (D18).
+            keep(
+                "start unknown server",
+                brigadier(
+                    &turn,
+                    CliRequest::Start(Box::new(StartRequest {
+                        mcps: vec!["nope".into()],
+                        ..start("Say hi.")
+                    })),
+                )
+                .await,
+            );
+            // A worker in the session's own checkout, at a level of its own, granted one of the
+            // user's servers.
             let c = brigadier(
                 &turn,
                 CliRequest::Start(Box::new(StartRequest {
                     local: true,
-                    lean: true,
-                    skills: vec!["kept-skill".into()],
+                    mcps: vec!["pencil".into()],
                     permission: Some(Permission::FullAccess),
                     ..start("Say hi.")
                 })),
@@ -771,6 +782,22 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         ..Options::default()
     };
     let flow = Flow::start("cli-workers", options, starting(answers.clone())).await;
+    // Two servers of the user's Claude setup: a worker gets only the one it is granted.
+    let home = flow
+        .manager
+        .runtime
+        .platform()
+        .paths()
+        .data_dir
+        .join("integrations-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers": {"pencil": {"command": "/bin/pencil", "env": {"KEY": "k"}},
+                           "railway": {"command": "/bin/railway"}}}"#,
+    )
+    .unwrap();
+    flow.manager.registry().refresh();
     let docs = flow.add_session("Docs", None, ProviderKind::Claude).await;
     flow.say_to(&docs, "Start one.").await;
     flow.until_in(&docs, "its worker said hi", |board| {
@@ -862,7 +889,8 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         ))
     );
     assert!(spec.stop_hook.is_none());
-    assert!(!spec.naked_worker);
+    // Every worker is naked (D13), with no server it wasn't granted (D18).
+    assert!(spec.naked_worker);
     assert_eq!(
         spec.access,
         crate::model::PermissionLevel::AcceptEdits.access()
@@ -870,6 +898,22 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     let (_, lean) = spec_of(&c);
     assert!(lean.naked_worker);
     assert_eq!(lean.access, crate::model::PermissionLevel::Full.access());
+    assert_eq!(plain(&c).mcps, ["pencil"]);
+    let given: Vec<_> = lean.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(given, ["pencil"]);
+    assert_eq!(
+        lean.mcp_servers[0].env,
+        [("KEY".to_owned(), "k".to_owned())]
+    );
+    assert_eq!(lean.switched_off.servers, ["railway"]);
+    let (_, naked) = spec_of(&a);
+    assert!(naked.mcp_servers.is_empty());
+    assert_eq!(naked.switched_off.servers, ["pencil", "railway"]);
+    let refused = &answers["start unknown server"];
+    assert!(
+        refused.to_string().contains("`brigadier context mcps`"),
+        "{refused:#}"
+    );
 
     // G21: its worktree's branch starts from the session's current branch and merges back
     // into it, as its folder's record says.

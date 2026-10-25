@@ -646,14 +646,15 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
-        // It has its CLI's own setup, as a thread does; a lean one none of its servers and
-        // only the skills it kept (G23).
-        let switched_off = match task.plain.as_ref() {
-            Some(plain) if plain.lean => {
-                self.naked_worker_switched_off(&conversation_id, provider, &cwd, &plain.skills)
+        // A worker `brigadier start` started is naked (D13, D17): none of the user's setup,
+        // no skills, and only the servers it was granted (D18). The project's instruction file
+        // still loads.
+        let (switched_off, granted) = match task.plain.as_ref() {
+            Some(plain) => {
+                self.naked_worker_setup(&conversation_id, provider, &cwd, &plain.mcps)
                     .await
             }
-            _ => Default::default(),
+            None => Default::default(),
         };
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));
@@ -667,14 +668,11 @@ impl SessionManager {
             std::fs::create_dir_all(&made).map_err(|err| Error::Invalid(err.to_string()))
         })
         .await;
-        // The computer tools, while the setting is on (S35); a lean worker only when the thread
-        // asked (`--with computer-use`), and then loaded from the start.
+        // The computer tools, while the setting is on (S35); a naked worker only when the
+        // thread asked (`--with computer-use`), and then loaded from the start.
         let computer = match task.plain.as_ref() {
-            Some(plain) if plain.lean && !plain.computer_use => None,
-            plain => {
-                self.computer_use_kit(&task.id.0, plain.is_some_and(|plain| plain.lean))
-                    .await
-            }
+            Some(plain) if !plain.computer_use => None,
+            plain => self.computer_use_kit(&task.id.0, plain.is_some()).await,
         };
         if let Some(kit) = &computer {
             secret_values.push(kit.token.clone());
@@ -716,7 +714,11 @@ impl SessionManager {
             append_system_prompt: Some(super::prompts::standing_text(
                 &super::prompts::worker_instructions(&self.core.settings(), provider),
             )),
-            mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),
+            mcp_servers: computer
+                .iter()
+                .map(|kit| kit.server.clone())
+                .chain(granted)
+                .collect(),
             tools: ToolSet::Lean,
             skill_plugins: computer.into_iter().map(|kit| kit.plugin).collect(),
             installed_skills: Vec::new(),
@@ -746,7 +748,7 @@ impl SessionManager {
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook: None,
             stop_hook: None,
-            naked_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
+            naked_worker: task.plain.is_some(),
             native_compaction: None,
         };
         let worktree = workspace.worktree.clone();
