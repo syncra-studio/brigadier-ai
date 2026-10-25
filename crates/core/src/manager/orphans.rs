@@ -417,6 +417,8 @@ impl SessionManager {
         self.forget_routing(id, &tasks).await;
         let mut purge = vec![
             streams::conversation(id),
+            // A session from before #540 still holds an orchestrator log.
+            streams::legacy_orchestrator(id),
             streams::inbox(id),
             streams::draft(&id.to_string()),
         ];
