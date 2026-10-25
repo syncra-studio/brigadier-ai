@@ -21,7 +21,7 @@ type Seen = {
   advanced: { open: boolean; text: string }[];
   removeRow: string;
   empty: string;
-  dialog: { slot: string; width: number; viewport: number; rem: number; height: number; title: string; text: string; buttons: string[]; editable: boolean; lines: number; coloured: boolean; status: string; banner: string; body: string } | null;
+  dialog: { slot: string; width: number; viewport: number; rem: number; spills: boolean; height: number; title: string; text: string; buttons: string[]; editable: boolean; lines: number; coloured: boolean; status: string; banner: string; body: string } | null;
   toasts: string[];
   alert: string;
   overflow: boolean;
@@ -162,6 +162,17 @@ test("plugins: the grid, details and Open, and the requests they make", { timeou
   assert.doesNotMatch(seen.addReview!.dialog!.text, /agents you picked|Share with the team/);
   assert.match(seen.adding!.dialog!.text, /Adding it to every agent…/);
   assert.match(seen.added!.dialog!.text, /Claude CodeAddedDone.*CodexAddedDone/);
+  // Import: each other app's servers under its own name, then the same review and adding steps.
+  const importList = seen.importList!.dialog!;
+  assert.match(importList.text, /Import from Claude Desktopfilesystemnpx -y @modelcontextprotocol\/server-filesystem ~\/DocumentsImport/);
+  assert.match(importList.text, /Import from Cursorbrave-searchhttps:\/\/search\.brave\.com\/mcpImport/);
+  assert.doesNotMatch(importList.text, /ChatGPT/);
+  assert.equal(importList.spills, false, "a long command doesn't push the dialog wider than it is");
+  assert.equal(seen.importReview!.dialog!.title, "Import filesystem");
+  assert.match(seen.importReview!.dialog!.text, /An MCP server from Claude Desktop\. Every agent gets it with its settings and values; Claude Desktop's own stays as it is\./);
+  assert.ok(seen.importReview!.dialog!.buttons.includes("Import"));
+  assert.match(seen.imported!.dialog!.text, /Claude CodeAddedDone.*CodexAddedDone/);
+  assert.ok(names(seen.afterImport!).includes("filesystem"), names(seen.afterImport!).join(", "));
   assert.deepEqual(names(seen.searched!), ["GitHub"]);
   assert.equal(seen.noMatch!.cards.length, 0);
   assert.deepEqual(seen.calls.filter((call) => !call.startsWith("getPluginItem") && !call.startsWith("checkPluginAdd")), [
@@ -174,6 +185,7 @@ test("plugins: the grid, details and Open, and the requests they make", { timeou
     "sharePlugin skill:pr-review",
     "removePlugin server:github",
     "addPlugin - all",
+    "importPlugin other:desktop:filesystem - all",
   ]);
 });
 

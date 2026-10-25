@@ -45,6 +45,11 @@ export type PluginsAdapter = {
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   /** Adds it to every agent, in every project (`projectIds` null) or these; `values`: env or headers typed in Advanced. */
   add: (text: string, name: string | null, projectIds: string[] | null, values: Record<string, string> | null) => Promise<PluginAgentResult[]>;
+  /**
+   * Imports another app's server (an `elsewhere` entry, by key) into every agent, its settings
+   * and values with it; `name` when its own clashes. The app's own stays as it is.
+   */
+  importPlugin: (key: string, name: string | null, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
   /** Takes out what Brigadier added (its `removal`); an original stays as it is. */
   remove: (key: string) => Promise<PluginAgentResult[]>;
   update: (key: string) => Promise<PluginAgentResult[]>;

@@ -6,7 +6,7 @@ import { SettingsNav } from "@/app/settings/SettingsNav";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
 import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
-import type { PluginItemDetails, PluginItemView, PluginProjectView, PluginsView } from "@/app/settings/plugins/types";
+import type { PluginElsewhereView, PluginItemDetails, PluginItemView, PluginProjectView, PluginsView } from "@/app/settings/plugins/types";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
@@ -107,7 +107,14 @@ description: Drafts release notes from the pull requests merged since the last t
 3. Group them under New, Fixed and Changed.
 `;
 
+/** Other apps' servers, which no agent uses until they're imported. */
+const startingElsewhere = (): PluginElsewhereView[] => [
+  { key: "other:desktop:filesystem", name: "filesystem", detail: "npx -y @modelcontextprotocol/server-filesystem ~/Documents", url: null, foundIn: "Claude Desktop", file: `${HOME}/Library/Application Support/Claude/claude_desktop_config.json` },
+  { key: "other:cursor:brave-search", name: "brave-search", detail: "https://search.brave.com/mcp", url: "https://search.brave.com/mcp", foundIn: "Cursor", file: `${HOME}/.cursor/mcp.json` },
+];
+
 let items: PluginItemView[] = startingItems();
+let elsewhere = startingElsewhere();
 let empty = false;
 const calls: string[] = [];
 /** SKILL.md files as saved, by path. */
@@ -118,7 +125,7 @@ const rank = (entry: PluginItemView) => (entry.problem ? 0 : 1);
 /** The page as the daemon sends it: problems first, then A–Z. */
 function view(): PluginsView {
   if (empty) return { projects, items: [], elsewhere: [] };
-  return { projects, items: items.toSorted((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })), elsewhere: [] };
+  return { projects, items: items.toSorted((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })), elsewhere };
 }
 
 const ok = (): PluginAgentResult[] => AGENTS.map((agent) => ({ agent, ok: true, message: null }));
@@ -179,6 +186,16 @@ const adapter: PluginsAdapter = {
   add: (_text, name, projectIds, values) => {
     calls.push(`addPlugin ${name ?? "-"} ${projectIds ? projectIds.join(",") : "all"}${values ? ` values ${Object.keys(values).join(",")}` : ""}`);
     items.push(item({ key: "lib:sentry", kind: "server", name: "sentry", description: "Errors and slow pages from your Sentry projects.", detail: "https://mcp.sentry.dev/mcp", url: "https://mcp.sentry.dev/mcp", scope: projectIds ? some(...projectIds) : { type: "allProjects" } }));
+    changed();
+    return new Promise((resolve) => {
+      adding = { resolve };
+    });
+  },
+  importPlugin: (key, name, projectIds) => {
+    calls.push(`importPlugin ${key} ${name ?? "-"} ${projectIds ? projectIds.join(",") : "all"}`);
+    const entry = elsewhere.find((other) => other.key === key)!;
+    elsewhere = elsewhere.filter((other) => other.key !== key);
+    items.push(item({ key: `lib:${name ?? entry.name}`, kind: "server", name: name ?? entry.name, detail: entry.detail, url: entry.url, scope: projectIds ? some(...projectIds) : { type: "allProjects" } }));
     changed();
     return new Promise((resolve) => {
       adding = { resolve };
@@ -343,6 +360,7 @@ function read() {
           slot: dialog.getAttribute("data-dialog"),
           width: Math.round(dialog.getBoundingClientRect().width),
           viewport: innerWidth,
+          spills: dialog.scrollWidth > dialog.clientWidth,
           rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
           height: Math.round(dialog.getBoundingClientRect().height),
           title: text(dialog.querySelector("h2")),
@@ -364,6 +382,7 @@ function read() {
 
 async function reset(setKey: (key: number) => void) {
   items = startingItems();
+  elsewhere = startingElsewhere();
   empty = false;
   adding = null;
   saved.clear();
@@ -511,6 +530,23 @@ async function drive(setKey: (key: number) => void) {
   adding?.resolve(ok());
   await pause(120);
   seen.added = read();
+
+  // Import another app's server: listed by its app on Add's first step, then reviewed and imported.
+  await reset(setKey);
+  click("Add");
+  await pause();
+  seen.importList = read();
+  click("Import filesystem");
+  await pause(120);
+  seen.importReview = read();
+  click("Import", document.querySelector("[data-dialog]")!);
+  await pause(120);
+  adding?.resolve(ok());
+  await pause(120);
+  seen.imported = read();
+  click("Done");
+  await pause(120);
+  seen.afterImport = read();
 
   // Search narrows the grid.
   await reset(setKey);

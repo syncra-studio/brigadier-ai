@@ -92,6 +92,7 @@ export function livePlugins(): PluginsAdapter {
     },
     add: async (text, name, projectIds, values) =>
       finished((await request({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}) })).job),
+    importPlugin: async (key, name, projectIds) => finished((await request({ method: "importPlugin", key, name, projectIds })).job),
     remove: async (key) => finished((await request({ method: "removePlugin", key })).job),
     update: async (key) => finished((await request({ method: "updatePlugin", key })).job),
     details: async (key) => (await request({ method: "getPluginItem", key })).item,

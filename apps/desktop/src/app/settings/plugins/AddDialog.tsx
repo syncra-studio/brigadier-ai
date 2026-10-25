@@ -8,14 +8,18 @@ import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "./adapter";
 import { agentOf, failures, notes, PluginDialog, useWatch } from "./dialogs";
 import { KIND_LABEL, shownDetail } from "./model";
 import { AgentRow, PluginMark, RadioRow } from "./parts";
-import type { PluginsView } from "./types";
+import type { PluginElsewhereView, PluginsView } from "./types";
 
 export const ADD_HINT = "Works with an mcp add line from any agent, a server URL, mcpServers JSON, a GitHub link, a skills.sh name or a skill folder.";
 
 /** One env or header value in Advanced: `pasted` came with the paste (its value stays in Brigadier unless typed over). */
 type ValueRow = { id: number; name: string; value: string; pasted: boolean };
 
-type Step = { type: "paste" } | { type: "review"; drafts: PluginDraft[] } | { type: "adding"; drafts: PluginDraft[]; results: PluginAgentResult[] | null };
+/** `from`: another app's server being imported, not a paste. */
+type Step =
+  | { type: "paste" }
+  | { type: "review"; drafts: PluginDraft[]; from?: PluginElsewhereView }
+  | { type: "adding"; drafts: PluginDraft[]; from?: PluginElsewhereView; results: PluginAgentResult[] | null };
 
 /** G1–G4: paste, check where it goes, then every agent adds it. */
 export function AddDialog({ view, adapter, refresh, onClose }: {
@@ -85,6 +89,16 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
           )}
           <ErrorLine error={action.error} />
         </div>
+        {view.elsewhere.length > 0 && (
+          <ImportList
+            entries={view.elsewhere}
+            onImport={(entry) => {
+              setName(entry.name);
+              setValues([]);
+              setStep({ type: "review", drafts: [importDraft(entry)], from: entry });
+            }}
+          />
+        )}
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={choose}>Choose folder…</Button>
           <span className="flex-1" />
@@ -95,12 +109,13 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
     );
   }
 
-  const { drafts } = step;
+  const { drafts, from } = step;
   const single = drafts.length === 1 ? drafts[0]! : null;
   const shownName = single ? name.trim() || single.name : `${drafts.length} items`;
   const inProject = where === "one" && project ? view.projects.find((entry) => entry.id === project) ?? null : null;
   /** The one server's values are its headers (at an address) or its environment (a command). */
-  const server = single?.kind === "server" ? single : null;
+  // An imported server brings its own values from the app it's in.
+  const server = single?.kind === "server" && !from ? single : null;
   const valuesLabel = server?.remote ? "Headers" : "Environment";
 
   if (step.type === "adding") {
@@ -130,25 +145,34 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
   }
 
   const add = () => {
-    setStep({ type: "adding", drafts, results: null });
+    setStep({ type: "adding", drafts, ...(from ? { from } : {}), results: null });
     // A paste with no name of its own always needs the one given.
     const given = single ? name.trim() || (needsName ? single.name : "") : "";
     // A pasted value left empty keeps the one pasted; a row without a name or value is left out.
     const typed = server ? values.filter((row) => row.name.trim() && row.value) : [];
     const typedValues = typed.length ? Object.fromEntries(typed.map((row) => [row.name.trim(), row.value])) : null;
-    adapter.add(text, given && (needsName || given !== single?.name) ? given : null, inProject ? [inProject.id] : null, typedValues).then(
+    const projectIds = inProject ? [inProject.id] : null;
+    const request = from
+      ? adapter.importPlugin(from.key, given && given !== from.name ? given : null, projectIds)
+      : adapter.add(text, given && (needsName || given !== single?.name) ? given : null, projectIds, typedValues);
+    request.then(
       (results) => {
-        setStep({ type: "adding", drafts, results });
+        setStep({ type: "adding", drafts, ...(from ? { from } : {}), results });
         refresh();
       },
       (cause: unknown) => {
-        setStep({ type: "review", drafts });
+        setStep({ type: "review", drafts, ...(from ? { from } : {}) });
         action.run(() => Promise.reject(cause instanceof Error ? cause : new Error(String(cause))));
       },
     );
   };
   return (
-    <PluginDialog slot="add-review" onClose={onClose} title={inProject ? `Add ${shownName} to ${inProject.name}` : `Add ${shownName}`} description={single ? about(single) : "Each one goes to every agent."}>
+    <PluginDialog
+      slot="add-review"
+      onClose={onClose}
+      title={`${from ? "Import" : "Add"} ${shownName}${inProject ? ` to ${inProject.name}` : ""}`}
+      description={from ? `An MCP server from ${from.foundIn}. Every agent gets it with its settings and values; ${from.foundIn}'s own stays as it is.` : single ? about(single) : "Each one goes to every agent."}
+    >
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           {drafts.map((draft) => (
@@ -212,7 +236,7 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
         <Button variant="ghost" onClick={() => setStep({ type: "paste" })}>Back</Button>
         <span className="flex-1" />
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button onClick={add}>Add</Button>
+        <Button onClick={add}>{from ? "Import" : "Add"}</Button>
       </div>
     </PluginDialog>
   );
@@ -281,6 +305,41 @@ function about(draft: PluginDraft): string {
     // Not a URL after all: the address as it was written.
   }
   return `An MCP server from ${host}.${signs}`;
+}
+
+/** Another app's server as Add's review shows it. */
+const importDraft = (entry: PluginElsewhereView): PluginDraft => ({
+  name: entry.name,
+  kind: "server",
+  detail: entry.url ?? entry.detail,
+  remote: entry.url !== null,
+  signsIn: false,
+  secrets: [],
+  error: null,
+});
+
+/** Other apps' servers, by the app each is in: none of the agents uses them until imported. */
+function ImportList({ entries, onImport }: { entries: PluginElsewhereView[]; onImport: (entry: PluginElsewhereView) => void }) {
+  const apps = [...new Set(entries.map((entry) => entry.foundIn))];
+  return (
+    <div data-slot="import" className="flex min-w-0 flex-col gap-4">
+      {apps.map((app) => (
+        <section key={app} aria-label={`Import from ${app}`} className="flex flex-col gap-2">
+          <h3 className="text-foreground/65 text-label">Import from {app}</h3>
+          {entries.filter((entry) => entry.foundIn === app).map((entry) => (
+            <div key={entry.key} data-slot="import-row" className="bg-foreground/5 rounded-control flex items-center gap-3 px-3 py-2">
+              <PluginMark item={{ kind: "server", name: entry.name, detail: entry.detail }} />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate text-label font-medium">{entry.name}</span>
+                <span className="text-foreground/65 truncate font-mono text-xs">{entry.url ?? entry.detail}</span>
+              </span>
+              <Button variant="soft" size="sm" aria-label={`Import ${entry.name}`} onClick={() => onImport(entry)}>Import</Button>
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
 }
 
 /** How one agent took the add. */
