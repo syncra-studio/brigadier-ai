@@ -1570,7 +1570,9 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
         // A round's questions on one card, each with its own options.
         assert_eq!(card.items.len(), given.len());
         if given.len() > 1 {
-            assert_eq!(card.title.as_deref(), Some("Round 2"));
+            // The request's third card: numbered by count, whatever number the asker wrote
+            // (D36).
+            assert_eq!(card.title.as_deref(), Some("Round 3"));
             assert_eq!(card.items[1].text, "Which size?");
             assert!(card.items[1].options.is_empty());
         }
