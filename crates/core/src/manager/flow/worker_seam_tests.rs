@@ -21,6 +21,10 @@ use crate::work::Task;
 struct Seen {
     worker: Mutex<Vec<(String, String)>>,
     parent: Mutex<Vec<String>>,
+    /// The account each worker CLI session ran on, by its id.
+    accounts: Mutex<Vec<(String, Option<String>)>>,
+    /// The session starts its worker with a routing row, an effort and a granted server.
+    routed: std::sync::atomic::AtomicBool,
 }
 
 impl Seen {
@@ -95,7 +99,23 @@ fn script(seen: Arc<Seen>) -> Script {
                 }
                 seen.parent.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("Start one.") {
-                    turn.start_worker("Grower", "Begin.").await;
+                    if seen.routed.load(std::sync::atomic::Ordering::SeqCst) {
+                        use brigadier_cli::protocol::{CliRequest, StartRequest};
+                        let started = super::cli_tests::brigadier(
+                            &turn,
+                            CliRequest::Start(Box::new(StartRequest {
+                                title: Some("Grower".into()),
+                                work: Some("Mechanical changes and search".into()),
+                                effort: Some("low".into()),
+                                mcps: vec!["pencil".into()],
+                                ..super::cli_tests::start("Begin.")
+                            })),
+                        )
+                        .await;
+                        assert!(started["worker"]["id"].is_string(), "{started:#}");
+                    } else {
+                        turn.start_worker("Grower", "Begin.").await;
+                    }
                     return Reply::text("Started.");
                 }
                 return Reply::text("Heard.");
@@ -104,6 +124,10 @@ fn script(seen: Arc<Seen>) -> Script {
                 .lock()
                 .unwrap()
                 .push((turn.native_id.clone(), turn.input.clone()));
+            seen.accounts
+                .lock()
+                .unwrap()
+                .push((turn.native_id.clone(), turn.account.clone()));
             let said = crate::manager::seam::without_handoff(&turn.input);
             if turn.input.starts_with(NUDGE_MARK) {
                 std::fs::write(
@@ -143,6 +167,17 @@ fn script(seen: Arc<Seen>) -> Script {
 const SETUP: &str = "#!/bin/sh\necho ran >> .setup-runs\n";
 
 async fn flow(name: &str, seen: Arc<Seen>) -> (Flow, Task) {
+    flow_then(name, seen, |_| Box::pin(async {})).await
+}
+
+/// The flow, set up by `before` before its session starts the worker.
+async fn flow_then(
+    name: &str,
+    seen: Arc<Seen>,
+    before: impl for<'a> FnOnce(
+        &'a Flow,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
+) -> (Flow, Task) {
     let options = Options {
         behavior: Arc::new(FakeBehavior {
             session_file: true,
@@ -152,6 +187,7 @@ async fn flow(name: &str, seen: Arc<Seen>) -> (Flow, Task) {
         ..Options::default()
     };
     let flow = Flow::start(name, options, script(seen.clone())).await;
+    before(&flow).await;
     flow.say("Start one.").await;
     flow.until("its worker started", |board| !board.tasks.is_empty())
         .await;
@@ -561,4 +597,128 @@ async fn a_crash_after_the_successor_took_its_handoff_resumes_it() {
     assert!(!next[0].1.contains(HANDOFF_MARK));
     assert_eq!(seam_file(&flow, &task).seams.len(), 1);
     flow.stop().await;
+}
+
+/// The specs the worker's CLI sessions were started with, in order.
+fn worker_specs(
+    flow: &Flow,
+    task: &Task,
+) -> Vec<(
+    brigadier_providers::ProviderKind,
+    brigadier_providers::SessionSpec,
+)> {
+    flow.specs()
+        .into_iter()
+        .filter(|(_, spec)| {
+            spec.env.iter().any(|(key, value)| {
+                key == brigadier_cli::protocol::SESSION_ENV && *value == task.id.0
+            })
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_successor_keeps_its_workers_routing_account_and_grants() {
+    for (name, said) in [("count", "Grow."), ("fallback", "Fail.")] {
+        let seen = Arc::new(Seen::default());
+        seen.routed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let (flow, task) = flow_then(
+            &format!("worker-seam-routing-{name}"),
+            seen.clone(),
+            |flow| {
+                Box::pin(async move {
+                    // Two servers of the user's Claude setup, one granted; two Claude accounts.
+                    let home = flow
+                        .manager
+                        .runtime
+                        .platform()
+                        .paths()
+                        .data_dir
+                        .join("integrations-home");
+                    std::fs::create_dir_all(&home).unwrap();
+                    std::fs::write(
+                        home.join(".claude.json"),
+                        r#"{"mcpServers": {"pencil": {"command": "/bin/pencil"},
+                                       "railway": {"command": "/bin/railway"}}}"#,
+                    )
+                    .unwrap();
+                    flow.manager.registry().refresh();
+                    flow.add_accounts(
+                        &[
+                            (brigadier_providers::ProviderKind::Claude, "first"),
+                            (brigadier_providers::ProviderKind::Claude, "second"),
+                        ],
+                        true,
+                    )
+                    .await;
+                    // The user's account rule: Claude runs on "second".
+                    let before = flow.core.settings();
+                    let mut settings = before.clone();
+                    for entry in &mut settings.accounts {
+                        entry.default = entry.id == "second";
+                    }
+                    let settings = crate::accounts::edited(&before, settings);
+                    flow.core.update_settings(settings).await.unwrap();
+                    flow.manager.runtime.sync_accounts().await;
+                })
+            },
+        )
+        .await;
+        let rounds = if said == "Grow." { 3 } else { 1 };
+        for _ in 0..rounds {
+            send(&flow, &task, said).await;
+        }
+        until(&flow, "the generation closed or carried on", || {
+            let file = seam_file(&flow, &task);
+            matches!(file.phase, Phase::Closed { .. }) || file.generation == 2
+        })
+        .await;
+        flow.idle().await;
+        if seam_file(&flow, &task).generation == 1 {
+            send(&flow, &task, "Next.").await;
+        }
+        until(&flow, "the successor", || {
+            seam_file(&flow, &task).generation == 2
+        })
+        .await;
+        flow.idle().await;
+
+        // The routing row's agent and model, the flag's effort: the same in both sessions.
+        let specs = worker_specs(&flow, &task);
+        assert_eq!(specs.len(), 2, "{name}");
+        let (before, after) = (&specs[0], &specs[1]);
+        assert_eq!(
+            before.0,
+            brigadier_providers::ProviderKind::Claude,
+            "{name}"
+        );
+        assert_eq!(after.0, before.0, "{name}");
+        assert_eq!(before.1.model.as_deref(), Some("sonnet"), "{name}");
+        assert_eq!(after.1.model, before.1.model, "{name}");
+        assert_eq!(before.1.effort.as_deref(), Some("low"), "{name}");
+        assert_eq!(after.1.effort, before.1.effort, "{name}");
+        assert_eq!(after.1.fast, before.1.fast, "{name}");
+        // Naked both times, with only the granted server (D13, D18).
+        let servers = |spec: &brigadier_providers::SessionSpec| -> Vec<String> {
+            spec.mcp_servers
+                .iter()
+                .map(|server| server.name.clone())
+                .collect()
+        };
+        assert!(before.1.naked_worker && after.1.naked_worker, "{name}");
+        assert_eq!(servers(&before.1), vec!["pencil".to_owned()], "{name}");
+        assert_eq!(servers(&after.1), servers(&before.1), "{name}");
+        assert_eq!(after.1.switched_off, before.1.switched_off, "{name}");
+        // On the account the user's account rules give it, as before.
+        let successor = seam_file(&flow, &task).seams[0].successor.clone();
+        let accounts = seen.accounts.lock().unwrap().clone();
+        let first = accounts.first().unwrap();
+        let next = accounts.iter().find(|(id, _)| *id == successor).unwrap();
+        assert_eq!(first.1.as_deref(), Some("second"), "{name}: {accounts:?}");
+        assert_eq!(next.1, first.1, "{name}: {accounts:?}");
+        let task = worker(&flow).await;
+        assert_eq!(task.route.choice.model.as_deref(), Some("sonnet"), "{name}");
+        assert_eq!(task.route.choice.effort.as_deref(), Some("low"), "{name}");
+        flow.stop().await;
+    }
 }
