@@ -59,9 +59,11 @@ export function toolName(name: string): string {
 /**
  * Calls of the CLIs' own plumbing, never a row: what came of them shows elsewhere (the tools a
  * search loaded, the question card and plan card of the CLI's own question tool and plan,
- * harness D7), and Codex's wait for its own agents, whose rows say when each finished (D44).
+ * harness D7), and the CLIs' waits on what they started: Codex's for its agents, Claude's
+ * `TaskOutput` (once `BashOutput`) for a background command or agent, whose own rows say when
+ * each finished, as Codex's polls of a command show none (D44, D52).
  */
-const PLUMBING = new Set(["ToolSearch", "tool_search", "AskUserQuestion", "request_user_input", "ExitPlanMode"]);
+const PLUMBING = new Set(["ToolSearch", "tool_search", "AskUserQuestion", "request_user_input", "ExitPlanMode", "TaskOutput", "BashOutput"]);
 
 /** Whether a call is plumbing, shown by what came of it rather than as a row. */
 export function isPlumbing(name: string): boolean {
@@ -88,6 +90,9 @@ export function agentDetail(name: string, input: string | null): string | null |
 /** What `other` calls Brigadier knows are called; anything else is "Used {name}". */
 const OTHER: Record<string, [doing: string, done: string]> = {
   imagegen: ["Creating an image", "Created an image"],
+  // Claude's stop of what it started in the background (`TaskStop`, once `KillShell`), in plain words (D44).
+  TaskStop: ["Stopping a background task", "Stopped a background task"],
+  KillShell: ["Stopping a background command", "Stopped a background command"],
 };
 
 const READS = new Set(["Read", "read", "read_file"]);

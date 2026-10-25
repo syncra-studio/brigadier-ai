@@ -326,3 +326,14 @@ test("a subagent's row names its task and a skill's its name; Codex's wait for i
   assert.equal(rowWords(skill), "Used skill brigade");
   assert.equal(recordedCallAs("agents/wait", ""), undefined);
 });
+
+test("Claude's waits on what it started are no row, as Codex's are none; its stops read in plain words (D44, D52)", () => {
+  assert.equal(recordedCallAs("TaskOutput", JSON.stringify({ task_id: "b1", block: true })), undefined);
+  assert.equal(recordedCallAs("BashOutput", JSON.stringify({ bash_id: "b1" })), undefined);
+  const stop = recordedCallAs("TaskStop", JSON.stringify({ task_id: "b1" }));
+  assert.ok(stop);
+  assert.equal(rowWords(stop), "Stopped a background task");
+  const kill = recordedCallAs("KillShell", JSON.stringify({ shell_id: "b1" }));
+  assert.ok(kill);
+  assert.equal(rowWords(kill), "Stopped a background command");
+});
