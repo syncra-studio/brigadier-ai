@@ -378,6 +378,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 lean: args.switch("lean"),
                 skills,
                 with,
+                mockup: args.switch("mockup"),
                 prompt,
             }))
         }
@@ -999,9 +1000,14 @@ mod tests {
                 lean: true,
                 skills: vec!["a".into(), "b".into()],
                 with: vec![Capability::ComputerUse],
+                mockup: false,
                 prompt: "write a file".into(),
             }))
         );
+        let CliRequest::Start(mockup) = run(&["start", "--mockup", "mock", "it"]).0 else {
+            panic!()
+        };
+        assert!(mockup.mockup);
         let CliRequest::Start(start) = run(&[
             "start",
             "--local",

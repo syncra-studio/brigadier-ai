@@ -20,7 +20,7 @@ test("a mockup gets its own session tab, busy while it builds, takes comments, s
   assert.equal(seen.hiddenSend, false, "⌘↩ with the tab behind Chat sends nothing");
   assert.equal(seen.noteWhileSending, false, "no note is made while the notes go");
   assert.deepEqual(seen.attachments, ["mockup-1-notes.png"]);
-  assert.equal(seen.sentTo, "mockup-fixture");
+  assert.equal(seen.sentTo, "task-1", "the notes go to the mockup's worker");
   assert.equal(seen.message,
     "Notes on the mockup (version 1), numbered as the markers on the attached screenshots:\n\n"
     + "Image 1 (mockup-1-notes.png):\n1. (x: 30%, y: 40%) Make this card blue\n2. (x: 85%, y: 85%) Taller footer band");

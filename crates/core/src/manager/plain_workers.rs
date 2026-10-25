@@ -42,7 +42,8 @@ use crate::model::{
     Conversation, ConversationId, Environment, ModelChoice, PermissionLevel, Setup,
 };
 use crate::work::{
-    Approval, ApprovalSubject, AttemptEnd, CardId, CardState, PlainWorker, Task, TaskId, TaskState,
+    Approval, ApprovalSubject, AttachmentRef, AttemptEnd, CardId, CardState, MockupPart,
+    PlainWorker, Task, TaskId, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -258,8 +259,16 @@ impl SessionManager {
             computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
         };
+        let mockup = start.mockup.then_some(MockupPart::Builds);
         let task = crate::heap(|| {
-            self.create_plain_task(&caller.conversation_id, title, start.prompt, choice, plain)
+            self.create_plain_task(
+                &caller.conversation_id,
+                title,
+                start.prompt,
+                choice,
+                plain,
+                mockup,
+            )
         })
         .await?;
         self.orchestrator_step(
@@ -544,12 +553,20 @@ impl SessionManager {
             Some(AttemptEnd::Error { message, .. }) => Some(message.clone()),
             _ => None,
         };
+        // A mockup's images show in its session's Mockup tab as each turn ends.
+        let outputs = match task.mockup {
+            Some(_) => self.final_outputs(task).await,
+            None => None,
+        };
         let updated = self
             .update_task(&task.conversation_id, &task.id, |task| {
                 task.state = state;
                 task.blocked_reason = blocked.clone();
                 if error.is_some() {
                     task.error = error.clone();
+                }
+                if let Some(outputs) = outputs {
+                    task.outputs = outputs;
                 }
             })
             .await;
@@ -632,6 +649,66 @@ impl SessionManager {
         event.message = Some(reason);
         self.worker_event(&task.conversation_id, &task.id, None, event);
         self.dispose_task(task, TaskState::Failed).await;
+    }
+
+    /// `text` to a plain worker, as `brigadier send` sends it: one sent right after `brigadier
+    /// start` reaches its CLI once that is up. True when it went into a running turn.
+    async fn send_plain(&self, task: &Task, text: String) -> Result<bool> {
+        let live = self.task_live(task);
+        if task.state == TaskState::Starting {
+            let up = tokio::time::Instant::now() + CLI_START;
+            while live.cli().await.is_none() && tokio::time::Instant::now() < up {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        let queued = live.busy().await;
+        self.message_worker(&task.conversation_id, task, text)
+            .await?;
+        Ok(queued)
+    }
+
+    /// The user's notes on a mockup, from its session's Mockup tab: `text` and the marked
+    /// screenshots (`attachments`, written in its scratch folder and named by path) go to the
+    /// mockup's worker as `brigadier send` sends, and its mockup counts a new version.
+    pub async fn send_mockup_notes(
+        &self,
+        task_id: TaskId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+    ) -> Result<()> {
+        let conversation_id = self.conversation_of_task(&task_id).await?;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        if task.mockup != Some(MockupPart::Builds) {
+            return Err(Error::Invalid(format!(
+                "worker {} builds no mockup",
+                task.number
+            )));
+        }
+        let Some(workspace) = &task.workspace else {
+            return Err(Error::Invalid(format!(
+                "worker {} hasn't started yet",
+                task.number
+            )));
+        };
+        let files = self
+            .attachment_files(&attachments, &PathBuf::from(&workspace.scratch))
+            .await;
+        if files.len() < attachments.len() {
+            return Err(Error::Invalid(
+                "the marked screenshots could not be saved".into(),
+            ));
+        }
+        let mut text = text;
+        if !files.is_empty() {
+            text.push_str("\n\nThe marked screenshots:");
+            for file in &files {
+                text.push_str(&format!("\n- {}", file.path.display()));
+            }
+        }
+        self.send_plain(&task, text).await?;
+        self.update_task(&conversation_id, &task_id, |task| task.rework_rounds += 1)
+            .await?;
+        Ok(())
     }
 
     /// One of the caller's own workers, by an id `brigadier workers` showed; another
@@ -721,18 +798,7 @@ impl SessionManager {
                 message: None,
             }));
         }
-        let text = text.unwrap_or_default();
-        let live = self.task_live(&task);
-        // Sent right after `brigadier start`: it reaches the CLI once that is up.
-        if task.state == TaskState::Starting {
-            let up = tokio::time::Instant::now() + CLI_START;
-            while live.cli().await.is_none() && tokio::time::Instant::now() < up {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        let queued = live.busy().await;
-        self.message_worker(&task.conversation_id, &task, text)
-            .await?;
+        let queued = self.send_plain(&task, text.unwrap_or_default()).await?;
         Ok(CliReply::ok(&SendOutput {
             id: shown,
             queued,

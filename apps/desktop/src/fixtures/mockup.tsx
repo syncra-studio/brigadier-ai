@@ -121,7 +121,7 @@ mockIPC((command, payload) => {
     const attachment = { id: `att-${req.name}`, name: req.name, mime: req.mime, bytes: req.data.length, pasted: false, inline: null };
     return new Promise((resolve) => setTimeout(() => resolve({ method: req.method, attachment }), 400));
   }
-  if (req.method === "sendMessage") return { method: req.method, outcome: { type: "queued", item: { id: "q1", text: req.text, attachments: req.attachments, mentions: [], createdAtMs: now } } };
+  if (req.method === "sendMockupNotes") return { method: req.method };
   return { method: req.method };
 });
 
@@ -217,7 +217,7 @@ function Fixture() {
     });
     at(3400, () => { command(); });
     at(3600, () => {
-      seen.hiddenSend = calls.some((call) => call.method === "addAttachment" || call.method === "sendMessage");
+      seen.hiddenSend = calls.some((call) => call.method === "addAttachment" || call.method === "sendMockupNotes");
       selectTab(id, MOCKUP_TAB);
     });
     at(3800, () => { command(); });
@@ -229,11 +229,11 @@ function Fixture() {
     at(4000, () => { seen.noteWhileSending = Boolean(document.querySelector('[data-slot="mockup-note"]')); });
     // Marking and sending decode and encode images, which take real time: wait for the send.
     const until = (done: () => boolean, then: () => void, tries = 400) => at(50, () => (done() || tries === 0 ? then() : until(done, then, tries - 1)));
-    at(4000, () => until(() => calls.some((call) => call.method === "sendMessage"), () => {
+    at(4000, () => until(() => calls.some((call) => call.method === "sendMockupNotes"), () => {
       seen.attachments = calls.filter((call) => call.method === "addAttachment").map((call) => call.method === "addAttachment" && call.name);
-      const sent = calls.find((call) => call.method === "sendMessage");
-      seen.message = sent?.method === "sendMessage" ? sent.text : null;
-      seen.sentTo = sent?.method === "sendMessage" ? sent.conversationId : null;
+      const sent = calls.find((call) => call.method === "sendMockupNotes");
+      seen.message = sent?.method === "sendMockupNotes" ? sent.text : null;
+      seen.sentTo = sent?.method === "sendMockupNotes" ? sent.taskId : null;
       at(200, () => {
         seen.working = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
         seen.notesLeft = mockupNotesOf(id).notes.length;

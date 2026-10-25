@@ -10,7 +10,7 @@ import { EmptyState } from "@/components/shared";
 import type { ArtifactRef } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { addAttachment, send } from "@/state/actions";
+import { addAttachment, sendMockupNotes } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { earlierShots, type Mockup, mockupOf, revisedSince, sentShots, type Shot, shotsOfMockup, takesNotes } from "@/state/mockup";
 import { changeNotes, markedName, markerNumber, mockupNotesOf, type MockupNote, NO_NOTES, notePlacement, notesByScreen, notesMessage, pointIn, sendEnded, takeNotes, useSessionNotes } from "@/state/mockupNotes";
@@ -547,8 +547,8 @@ function Toolbar({ conversationId, notes, commenting, canComment, working, revis
 }
 
 /**
- * Sends the notes as one message to the thread: its text names each marked screenshot,
- * attached with the markers drawn on it; the thread hands them to the mockup's worker.
+ * Sends the notes as one message to the mockup's worker: its text names each marked
+ * screenshot, attached with the markers drawn on it.
  */
 function useSendNotes(conversationId: string, mockup: Mockup | null, items: readonly Item[]) {
   // The send in flight is the session's, not this tab's: a tab closed and opened meanwhile
@@ -565,7 +565,7 @@ function useSendNotes(conversationId: string, mockup: Mockup | null, items: read
         return markedScreenshot(await loadImage(ref.id), own, notes, markedName(screen));
       }));
       const attachments = await Promise.all(files.map((file) => addAttachment(file)));
-      await send({ text: notesMessage(mockup.version, notes), attachments, mentions: [] }, undefined, { to: conversationId });
+      await sendMockupNotes(mockup.task.id, notesMessage(mockup.version, notes), attachments);
     })().then(
       () => sendEnded(conversationId, notes, { version: mockup.version, ...sentShots(mockup), dismissed: false }),
       () => sendEnded(conversationId, notes, null),

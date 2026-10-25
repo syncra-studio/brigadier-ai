@@ -36,9 +36,8 @@ export function markerNumber(notes: readonly MockupNote[], note: MockupNote): nu
 }
 
 /**
- * The one message the notes are sent as: one `Image N:` block per marked screenshot, each
- * note with its point and marker number, so the thread passes them to the mockup's worker
- * with the files.
+ * The one message the notes are sent to the mockup's worker as: one `Image N:` block per
+ * marked screenshot, each note with its point and marker number.
  */
 export function notesMessage(version: number, notes: readonly MockupNote[]): string {
   const blocks = notesByScreen(notes).map(({ screen, notes: own }, index) => [
