@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { turnActivity } from "@/app/conversation/activity/group";
 import { stepLabel, summarize, toolStepWords, type ToolStep } from "@/app/conversation/activity/words";
-import { answerIndex, answeringIndex, type Block, blockFinished, blockSequence, isLive } from "@/app/conversation/blocks";
+import { answerIndex, answeringIndex, type Block, type BoardDigest, blockFinished, blockSequence, isLive } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { turnParts } from "@/app/conversation/workParts";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
@@ -174,4 +174,75 @@ test("a call its CLI runs in the background reads running until its task ends, t
   });
   assert.equal(stopped.step?.stopped, true);
   assert.equal(rowWords(stopped.step!), "stopped: Ran sleep 2");
+});
+
+/**
+ * The recorded `sleep 2` (run in the background) or `sleep 30` call as one of the thread's own
+ * `brigadier` calls: the recording's events, only the command's text changed (D29: no new
+ * recording for it).
+ */
+function asBrigadier(scenario: "background" | "interrupt", command: string, board?: (atMs: number, requestId: string) => BoardDigest) {
+  const fixture = load("claude-2.1.310", scenario);
+  const recorded = scenario === "background" ? "sleep 2" : "sleep 30";
+  const view = fixture.persisted;
+  const call = view.entries.find((entry) => entry.event.type === "command" && entry.event.command === recorded);
+  assert.ok(call?.event.type === "command" && call.atMs !== undefined);
+  const { itemId } = call.event;
+  const label = "Wait for the workers";
+  const entries = view.entries.map((entry) => {
+    if (entry === call && entry.event.type === "command") return { ...entry, event: { ...entry.event, command } };
+    if (entry.event.type === "taskNotice") return { ...entry, event: { ...entry.event, text: `Background command "${label}" completed (exit code 0)` } };
+    return entry;
+  });
+  const task = fixture.events.flatMap((event) => (event.type === "backgroundTask" && event.task.status === "completed" ? [{ ...event.task, label }] : [])).at(-1);
+  const changed = { ...view, entries, background: task ? [task] : [] };
+  // The board's rows go in the block of the call's request.
+  const key = cliBlocks(changed, "recorded-thread").find((block) => toolSteps(block).some((kind) => kind.itemId === itemId))?.key ?? "";
+  const blocks = cliBlocks(changed, "recorded-thread", board?.(call.atMs, key));
+  return { blocks, step: blocks.flatMap(toolSteps).find((kind) => kind.itemId === itemId) };
+}
+
+const NO_BOARD: BoardDigest = { tasks: {}, questions: {}, orchestratorSteps: [], machineSteps: [], decisions: [], compactions: {} };
+
+/** What the recorded call's row says once done, as `command`. */
+function doneWords(command: string): string {
+  const { step } = asBrigadier("interrupt", command);
+  assert.ok(step, command);
+  return toolStepWords({ ...step, status: "completed", stopped: false }).done;
+}
+
+/** The board with the "Messaged" row a `brigadier send` made, just after the call. */
+function messaged(atMs: number, requestId: string): BoardDigest {
+  return { ...NO_BOARD, orchestratorSteps: [{ requestId, atMs: atMs + 300, position: 0, kind: { type: "messaged", taskId: "b36f2e6e", text: "Go on." } }] };
+}
+
+test("the thread's own brigadier wait and start are no rows, and a wait's end no line (D38, D47)", () => {
+  const waited = asBrigadier("background", "brigadier wait --any --timeout 600");
+  assert.equal(waited.step, undefined);
+  assert.deepEqual(waited.blocks.flatMap((block) => block.taskNotices), []);
+  // Any other background command's end still says so.
+  assert.equal(load("claude-2.1.310", "background").persisted.entries.filter((entry) => entry.event.type === "taskNotice").length, 1);
+  assert.equal(cliBlocks(load("claude-2.1.310", "background").persisted, "recorded-thread").flatMap((block) => block.taskNotices).length, 1);
+  assert.equal(asBrigadier("interrupt", 'cd /repo && brigadier start "Fix the parser" --title Parser').step, undefined);
+});
+
+test("the thread's other brigadier calls read in plain words, by the first brigadier call of a command (D47)", () => {
+  assert.equal(doneWords('brigadier ledger add --kind decision --source user "Ship it"'), "Updated the ledger");
+  assert.equal(doneWords("brigadier ledger"), "Read the ledger");
+  assert.equal(doneWords("brigadier workers"), "Checked the workers");
+  assert.equal(doneWords("brigadier models; brigadier ledger show"), "Checked the models");
+  assert.equal(doneWords("brigadier context"), "Read the brigadier context");
+  assert.equal(doneWords("brigadier close b36f2e6e"), "Closed a worker");
+  assert.equal(doneWords("brigadier send b36f2e6e \"$(cat <<'EOF'\nGo on.\nEOF\n)\""), "Messaged workers");
+  // Words inside an argument are no call of brigadier's.
+  assert.equal(doneWords('echo "brigadier ledger add"'), 'Ran echo "brigadier ledger add"');
+});
+
+test("a brigadier send whose message has its own Messaged row is no row of its own (D47)", () => {
+  const send = "brigadier send b36f2e6e \"$(cat <<'EOF'\nGo on.\nEOF\n)\"";
+  const shown = asBrigadier("interrupt", send, messaged);
+  assert.equal(shown.step, undefined);
+  assert.ok(shown.blocks.some((block) => block.orchestratorSteps.some((step) => step.kind.type === "messaged")));
+  // A Messaged row from another time is another message: the send keeps its row.
+  assert.ok(asBrigadier("interrupt", send, (atMs, requestId) => messaged(atMs + 60_000, requestId)).step);
 });

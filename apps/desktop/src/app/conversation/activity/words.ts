@@ -149,8 +149,74 @@ const searchedCode = (pattern: string | null, path: string | null = null): StepW
   return { kind: "code", doing: `Searching for ${object}${where}`, done: `Searched for ${object}${where}`, object };
 };
 
+/**
+ * The `brigadier <sub>` commands `command` runs, in order, each as a command of its own (after
+ * `start &&` too), never words inside an argument (`core::manager::cli_jobs::runs_brigadier`
+ * reads it the same).
+ */
+export function brigadierCalls(command: string): string[] {
+  const tokens = unwrapCommand(command).match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n]|[^\s;&|()'"\\])+|[;&|()\n]/g) ?? [];
+  const subs: string[] = [];
+  let start = true;
+  for (const [index, token] of tokens.entries()) {
+    if (/^[;&|()\n]$/.test(token)) {
+      start = true;
+    } else if (start) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+      const sub = tokens[index + 1];
+      if (/^(?:\S*\/)?brigadier$/.test(token) && sub !== undefined) subs.push(sub);
+      start = false;
+    }
+  }
+  return subs;
+}
+
+/**
+ * What the thread's own `brigadier` calls are called (D38, D47: under the hood, in plain words);
+ * `wait` and `start` have no row: the block's "Waiting for a worker" line and the worker's own
+ * row say them.
+ */
+const BRIGADIER: Record<string, [doing: string, done: string]> = {
+  sessions: ["Checking the sessions", "Checked the sessions"],
+  models: ["Checking the models", "Checked the models"],
+  workers: ["Checking the workers", "Checked the workers"],
+  show: ["Checking a worker", "Checked a worker"],
+  read: ["Reading a worker's messages", "Read a worker's messages"],
+  why: ["Checking why a line changed", "Checked why a line changed"],
+  send: ["Messaging workers", "Messaged workers"],
+  close: ["Closing a worker", "Closed a worker"],
+  queue: ["Queueing a message", "Queued a message"],
+  context: ["Reading the brigadier context", "Read the brigadier context"],
+  ask: ["Asking questions", "Asked questions"],
+  preview: ["Working on the preview", "Worked on the preview"],
+  checkpoint: ["Writing the checkpoint", "Wrote the checkpoint"],
+};
+
+/** The words of a command that runs `brigadier <sub>` first, by that sub. */
+function brigadierWords(sub: string, command: string): StepWords {
+  const words = wordsOf(command);
+  const ledger = words[words.indexOf("ledger") + 1];
+  const [doing, done] =
+    sub === "ledger"
+      ? ledger === "add" || ledger === "close"
+        ? ["Updating the ledger", "Updated the ledger"]
+        : ledger === "check"
+          ? ["Checking against the ledger", "Checked against the ledger"]
+          : ["Reading the ledger", "Read the ledger"]
+      : (BRIGADIER[sub] ?? ["Using Brigadier", "Used Brigadier"]);
+  return { kind: "other", doing, done, phrase: done };
+}
+
+/** A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47). */
+export function brigadierUnshown(command: string): boolean {
+  const [sub] = brigadierCalls(command);
+  return sub === "wait" || sub === "start";
+}
+
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
 function commandWords(raw: string): StepWords {
+  const [brigadier] = brigadierCalls(raw);
+  if (brigadier !== undefined) return brigadierWords(brigadier, unwrapCommand(raw));
   const command = unwrapCommand(raw);
   const [head = command, ...rest] = command.trim().split("\n");
   const firstLine = rest.length > 0 ? `${head} …` : head;

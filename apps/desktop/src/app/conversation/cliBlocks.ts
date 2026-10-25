@@ -1,4 +1,4 @@
-import { isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import {
   type Block,
   type BoardDigest,
@@ -273,6 +273,9 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
  */
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
   if (!step) return null;
+  // The thread's own `brigadier wait` and `start` are no rows (D47): the block's "Waiting for a
+  // worker" line and the worker's own row say them.
+  if (step.item === "command" && step.detail !== null && brigadierUnshown(step.detail)) return null;
   const ended = turn?.end != null;
   const { endedAtMs: _endedAtMs, exit: _exit, stopped: _stopped, ...running } = step;
   if (task?.status === "running") return { ...running, status: "inProgress", ...(ended && { background: true }) };
@@ -282,6 +285,43 @@ export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" |
   if (task && taskEnd !== undefined) return { ...step, endedAtMs: Math.max(taskEnd, step.endedAtMs ?? taskEnd) };
   if (step.status !== "inProgress" || !ended) return step;
   return { ...running, status: "failed", stopped: true, ...(turn?.endedAtMs != null && { endedAtMs: turn.endedAtMs }) };
+}
+
+/** How far a "Messaged …" row can be from the run of the `brigadier send` that made it. */
+const SEND_SLACK_MS = 2000;
+
+/**
+ * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's) is no
+ * row of its own: the two said the same (D47).
+ */
+function dropShownSends(blocks: readonly Block[]): void {
+  for (const block of blocks) {
+    const sent = block.orchestratorSteps.flatMap((step) => ((step.kind.type === "messaged" || step.kind.type === "peerSent") && step.atMs !== undefined ? [step.atMs] : []));
+    if (sent.length === 0) continue;
+    block.orchestratorSteps = block.orchestratorSteps.filter((step) => {
+      const { kind, atMs } = step;
+      if (kind.type !== "tool" || kind.item !== "command" || kind.detail === null || atMs === undefined || brigadierCalls(kind.detail)[0] !== "send") return true;
+      const [from, to] = [atMs - SEND_SLACK_MS, (kind.endedAtMs ?? atMs) + SEND_SLACK_MS];
+      return !sent.some((at) => at >= from && at <= to);
+    });
+  }
+}
+
+/**
+ * Whether a background job's end is that of the thread's own `brigadier wait` (Claude's notice
+ * names the task by its description, Brigadier's Codex word by its command): no line, as the
+ * wait had no row (D38, D47); the worker rows after it say what happened.
+ */
+function waitEnded(text: string, view: ThreadView): boolean {
+  const codex = /^\[your background command `([\s\S]*?)` finished after your turn/.exec(text);
+  if (codex) return brigadierCalls(codex[1] ?? "")[0] === "wait";
+  const name = /^Background command "([\s\S]*)" (?:completed|failed|was stopped|was killed|stopped|killed)\b/.exec(text.trim())?.[1];
+  if (name === undefined) return false;
+  if (brigadierCalls(name)[0] === "wait") return true;
+  const task = view.background?.find((each) => each.label === name && each.itemId !== null);
+  const call = task && view.entries.find((entry) => "itemId" in entry.event && entry.event.itemId === task.itemId)?.event;
+  const command = call?.type === "command" ? call.command : call?.type === "toolCall" ? stepDetail(call.input) : null;
+  return command != null && brigadierCalls(command)[0] === "wait";
 }
 
 /** Each entry's row as last made: an item the stream left alone keeps its entry (`mergeEntries`). */
@@ -629,7 +669,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text, ...(joins && { inWork: true }) }));
-      if (woke) block?.taskNotices.push({ position, text: wakeWords(asked.text), detail: asked.text, inWork: true });
+      if (woke && !waitEnded(asked.text, view)) block?.taskNotices.push({ position, text: wakeWords(asked.text), detail: asked.text, inWork: true });
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
@@ -711,6 +751,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice":
+        if (waitEnded(event.text, view)) return;
         current.taskNotices.push({ position, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
       case "compactionEnded": {
@@ -734,7 +775,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     }
   });
   if (block) close(block);
-  if (board) place(blocks, times, board);
+  if (board) {
+    place(blocks, times, board);
+    dropShownSends(blocks);
+  }
   // Each seam's divider after the turn before its successor's first message, or after the last
   // turn while the successor is still to come.
   for (const seam of seams) {

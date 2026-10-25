@@ -1,5 +1,5 @@
 import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
-import { unwrapCommand } from "@/app/conversation/activity/words";
+import { brigadierCalls } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/generated";
 
@@ -65,18 +65,7 @@ function runsBrigadierWait(command: string): boolean {
  * words inside an argument (`core::manager::cli_jobs::runs_brigadier` reads it the same).
  */
 export function runsBrigadier(command: string, sub: string): boolean {
-  const tokens = unwrapCommand(command).match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n]|[^\s;&|()'"\\])+|[;&|()\n]/g) ?? [];
-  let start = true;
-  for (const [index, token] of tokens.entries()) {
-    if (/^[;&|()\n]$/.test(token)) {
-      start = true;
-    } else if (start) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
-      if (/^(?:\S*\/)?brigadier$/.test(token) && tokens[index + 1] === sub) return true;
-      start = false;
-    }
-  }
-  return false;
+  return brigadierCalls(command).includes(sub);
 }
 
 /**
