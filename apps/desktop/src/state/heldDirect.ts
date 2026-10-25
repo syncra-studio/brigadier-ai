@@ -37,8 +37,13 @@ function heldNow(): HeldDirect[] {
   return useHeldDirect.getState().held ?? readIndex();
 }
 
+/** Conversations deleted (or removed with their project): nothing is held for them any more. */
+const gone = new Set<string>();
+
 /** Keeps `draft`, for worker `taskId` of `conversationId`, whole and apart. */
 export function holdDirect(conversationId: string, taskId: string, draft: SentDraft): void {
+  // A refusal heard after its conversation went keeps nothing.
+  if (gone.has(conversationId)) return;
   // A draft scope the daemon pins by: letters, digits and dashes.
   const scope = `held-${crypto.randomUUID()}`;
   keepWhole(scope, draft);
@@ -69,4 +74,17 @@ export function useHeldDirectOf(conversationId: string | null): HeldDirect[] {
     return [];
   }
   return held.filter((entry) => entry.conversationId === conversationId);
+}
+
+/**
+ * Lets go of what is held for conversations surely deleted, their attachments' pins with it,
+ * and holds nothing for them from now on.
+ */
+export function forgetHeldDirect(conversationIds: readonly string[]): void {
+  for (const id of conversationIds) gone.add(id);
+  const going = new Set(conversationIds);
+  const held = heldNow();
+  if (!held.some((entry) => going.has(entry.conversationId))) return;
+  for (const entry of held) if (going.has(entry.conversationId)) saveDraft(entry.scope, "", [], []);
+  writeIndex(held.filter((entry) => !going.has(entry.conversationId)));
 }
