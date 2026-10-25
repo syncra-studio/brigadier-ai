@@ -92,7 +92,8 @@ impl<W: AsyncWrite + Unpin> NewsWriter<W> {
     }
 
     /// Writes the news waiting as one frame, unflushed. A frame over the wire limit goes a
-    /// piece at a time, as each went before.
+    /// piece at a time, and a piece over it (a session's items merged) in halves, down to
+    /// one entry, as each went before.
     async fn write_news(&mut self) -> Result<(), Error> {
         self.due = None;
         if self.waiting.is_empty() {
@@ -106,16 +107,57 @@ impl<W: AsyncWrite + Unpin> NewsWriter<W> {
                 let ServerFrame::ThreadNews { news } = frame else {
                     unreachable!()
                 };
-                for one in news {
-                    self.frames
-                        .write_buffered(&ServerFrame::ThreadNews { news: vec![one] })
-                        .await?;
+                // What is left to write, the next piece last.
+                let mut left: Vec<ThreadNews> = news.into_iter().rev().collect();
+                while let Some(one) = left.pop() {
+                    let frame = ServerFrame::ThreadNews { news: vec![one] };
+                    match self.frames.write_buffered(&frame).await {
+                        Err(Error::FrameTooLarge(size)) => {
+                            let ServerFrame::ThreadNews { mut news } = frame else {
+                                unreachable!()
+                            };
+                            let mut one = news.remove(0);
+                            if one.entries.len() < 2 {
+                                return Err(Error::FrameTooLarge(size));
+                            }
+                            let (first, second) = halves(&mut one);
+                            left.push(second);
+                            left.push(first);
+                        }
+                        done => done?,
+                    }
                 }
                 Ok(())
             }
             done => done,
         }
     }
+}
+
+/// `news` in two, its entries halved: an opened turn says so first, the rest comes last.
+fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
+    let later = news.entries.split_off(news.entries.len() / 2);
+    let first = ThreadNews {
+        conversation_id: news.conversation_id.clone(),
+        entries: std::mem::take(&mut news.entries),
+        opened: news.opened,
+        ended: None,
+        context: None,
+        background: None,
+        mcp: None,
+        workers: None,
+    };
+    let second = ThreadNews {
+        conversation_id: news.conversation_id.clone(),
+        entries: later,
+        opened: false,
+        ended: news.ended.take(),
+        context: news.context.take(),
+        background: news.background.take(),
+        mcp: news.mcp.take(),
+        workers: news.workers.take(),
+    };
+    (first, second)
 }
 
 /// Whether `news` says only items: those can wait for the next frame.
@@ -337,5 +379,49 @@ mod tests {
                 frames.len()
             );
         }
+    }
+
+    /// Two 9 MiB deltas of one session in one interval, then its turn's end: merged, they'd be
+    /// over the wire limit, so they go as legal frames, every word in order, the end last.
+    /// Before, the merged piece was retried whole and the connection dropped.
+    #[tokio::test]
+    async fn a_sessions_items_over_the_limit_go_in_legal_frames() {
+        let big = "x".repeat(9 * 1024 * 1024);
+        let (send, recv) = tokio::io::duplex(1 << 20);
+        let reading = tokio::spawn(async move {
+            let mut reader = FrameReader::new(recv);
+            let mut frames = Vec::new();
+            while let Some(frame) = reader.read_server().await.unwrap() {
+                frames.push(frame);
+            }
+            frames
+        });
+        let mut writer = NewsWriter::new(FrameWriter::new(send));
+        let start = Instant::now();
+        writer.news_at(delta("a", "m", &big), start).await.unwrap();
+        writer
+            .news_at(delta("a", "m", "tail"), start)
+            .await
+            .unwrap();
+        writer.news_at(delta("a", "m", &big), start).await.unwrap();
+        writer.news_at(ended("a"), start).await.unwrap();
+        drop(writer);
+        let frames = reading.await.unwrap();
+        let news: Vec<&ThreadNews> = frames
+            .iter()
+            .flat_map(|frame| news_of(frame).iter())
+            .collect();
+        let words: Vec<usize> = news
+            .iter()
+            .flat_map(|one| one.entries.iter())
+            .map(|entry| match &entry.event {
+                ProviderEvent::MessageDelta { text, .. } => text.len(),
+                _ => 0,
+            })
+            .collect();
+        assert_eq!(words, [big.len(), 4, big.len()]);
+        assert!(frames.len() >= 2, "{} frames", frames.len());
+        assert_eq!(news.last().unwrap().ended, Some(TurnEnd::Done));
+        assert!(news[..news.len() - 1].iter().all(|one| one.ended.is_none()));
     }
 }
