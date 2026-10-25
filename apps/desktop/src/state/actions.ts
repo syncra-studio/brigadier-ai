@@ -43,7 +43,6 @@ import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { realActivity, onRealActivity } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
-import { unmergedRows } from "@/app/conversation/activity/workerState";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
   boardHeld,
@@ -1287,16 +1286,10 @@ function failureText(verb: string, failed: { conversation: Conversation; error: 
   return `Couldn't ${verb} ${naming(failed.map((entry) => entry.conversation))}: ${reasons.join("; ")}`;
 }
 
-/**
- * "Archived session", "Archived 3 chats"; with the titles of their workers whose work isn't
- * merged into them yet ("Archived session. Not merged: clamp util").
- */
+/** "Archived session", "Archived 3 chats": the noun only, never the titles. */
 function archivedText(list: Conversation[]): string {
   const noun = conversationNoun(list);
-  const text = list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
-  const { views } = useCliThread.getState();
-  const unmerged = list.flatMap((c) => unmergedRows(views[c.id]?.workers ?? []).map((row) => row.title));
-  return unmerged.length > 0 ? `${text}. Not merged: ${unmerged.join(", ")}` : text;
+  return list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
 }
 
 /** What each archive toast's Undo brings back, by toast. */

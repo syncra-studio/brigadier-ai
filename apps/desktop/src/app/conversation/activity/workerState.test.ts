@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { finishedCounts, finishedWords, QUIET_MS, rowNames, unmergedRows, workerStateOf } from "@/app/conversation/activity/workerState";
+import { finishedCounts, finishedWords, QUIET_MS, rowNames, workerStateOf } from "@/app/conversation/activity/workerState";
 import type { WorkerRow } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 
@@ -68,10 +68,8 @@ test("the finished ones count as N done · M stopped, failed among the stopped",
   assert.equal(finishedWords([row()], NOW), "");
 });
 
-test("rows are named by their titles, unique in the session in the order they came; unmerged ones are listed for archiving", () => {
+test("rows are named by their titles, unique in the session in the order they came", () => {
   const names = rowNames([row({ id: "b", number: 2, title: "Fix the login page" }), row({ id: "a", number: 1, title: "Fix the login page" })]);
   assert.equal(names.get("a"), "Fix the login page");
   assert.equal(names.get("b"), "Fix the login 2");
-  const unmerged = unmergedRows([row({ id: "x", ahead: 1 }), row({ id: "y", ahead: 1, merged: true }), row({ id: "z", diff: changed }), row({ id: "w" })]);
-  assert.deepEqual(unmerged.map((each) => each.id), ["x", "z"]);
 });
