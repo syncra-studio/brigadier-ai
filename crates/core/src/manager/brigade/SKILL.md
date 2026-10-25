@@ -103,7 +103,7 @@ A big job (several parts, risky, or the user asked) gets two reviews; a small ch
 
 - **Plan review** before the big job's first plan goes to workers; **code review** once at its end, on the integrated tree, never mid-run.
 - The reviewer is a `--lean` worker with `--work "Independent review"`, best on another vendor or model than the author. Its brief: break it; find what fails, is missing or is wrong, with evidence (file:line, a command and its output); never approve.
-- You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left.
+- You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left; never loop.
 - Before handing a derived document on (a plan, a brief, a report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".
 
 ## Gotchas
