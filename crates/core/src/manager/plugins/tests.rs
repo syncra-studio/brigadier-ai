@@ -36,7 +36,7 @@ fn states(item: &PluginItemView) -> Vec<AgentItemState> {
 }
 
 #[test]
-fn synced_skills_hide_anthropic_but_keep_the_users_own() {
+fn synced_only_skills_stay_hidden_whether_user_made_or_anthropic() {
     let home = home("synced-provenance");
     let account = home.join(".claude/skills/synced/org_account");
     for name in ["builtin", "personal"] {
@@ -55,12 +55,7 @@ fn synced_skills_hide_anthropic_but_keep_the_users_own() {
     let catalog = Catalog::read(&roots, None);
     assert_eq!(catalog.skills.len(), 2);
     let view = build(&catalog, &[], &[], &Unknown, None);
-    assert_eq!(view.items.len(), 1);
-    assert_eq!(item(&view, "skill:personal").skills, 1);
-    assert_eq!(
-        states(item(&view, "skill:personal")),
-        [AgentItemState::Ready, AgentItemState::Missing]
-    );
+    assert!(view.items.is_empty());
     assert!(view.elsewhere.is_empty());
     std::fs::remove_dir_all(home).unwrap();
 }

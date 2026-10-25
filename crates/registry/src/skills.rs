@@ -26,21 +26,26 @@ impl Skill {
         self.dir.join("SKILL.md")
     }
 
-    /// A display-only copy with provider-supplied entries removed. The catalog keeps all
-    /// entries so this never changes what an agent loads. A user copy of the same skill stays;
-    /// its id still identifies the original catalog entry.
+    /// A display-only copy with provider plugins removed and synced-only Claude skills hidden.
+    /// The catalog keeps all entries so this never changes what an agent loads. A local user
+    /// copy of the same skill stays; its id still identifies the original catalog entry.
     pub fn user_installed(&self) -> Option<Self> {
         let entries: Vec<_> = self
             .entries
             .iter()
-            .filter(|(root, path)| match root {
+            .filter(|(root, _)| match root {
                 SkillRoot::Plugin(plugin) => !plugin.provider_supplied(),
-                SkillRoot::ClaudeSynced(_) => !anthropic_synced(path),
                 _ => true,
             })
             .cloned()
             .collect();
         let (_, first_path) = entries.first()?;
+        if entries
+            .iter()
+            .all(|(root, _)| matches!(root, SkillRoot::ClaudeSynced(_)))
+        {
+            return None;
+        }
         let mut skill = self.clone();
         skill
             .roots
@@ -62,29 +67,6 @@ impl Skill {
         let first = plugins.next()??;
         plugins.all(|plugin| plugin.is_some()).then_some(first)
     }
-}
-
-/// Only an explicit Anthropic entry in this account's manifest is provider-supplied.
-/// Missing, unknown or malformed metadata leaves the skill visible.
-fn anthropic_synced(path: &Path) -> bool {
-    let Some(folder) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    path.parent()
-        .and_then(|account| std::fs::read(account.join("manifest.json")).ok())
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .is_some_and(|manifest| {
-            manifest
-                .get("skills")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|skills| {
-                    skills.iter().any(|skill| {
-                        skill.get("name").and_then(serde_json::Value::as_str) == Some(folder)
-                            && skill.get("creatorType").and_then(serde_json::Value::as_str)
-                                == Some("anthropic")
-                    })
-                })
-        })
 }
 
 /// A folder an agent finds skills in by itself.

@@ -930,7 +930,7 @@ fn copied_skills_merge_and_synced_skills_are_claudes() {
 }
 
 #[test]
-fn skills_for_display_hide_only_explicit_provider_entries() {
+fn skills_for_display_hide_synced_only_entries_but_keep_local_copies() {
     let home = fixture("skill-provenance");
     let synced = home.join(".claude/skills/synced");
     skill(&synced.join("org_a/builtin"), "renamed", "Provider skill.");
@@ -943,20 +943,13 @@ fn skills_for_display_hide_only_explicit_provider_entries() {
             "Same bytes.",
         );
     }
-    write(
-        &synced.join("org_a/manifest.json"),
-        r#"{"skills":[{"name":"builtin","creatorType":"anthropic"},
-            {"name":"personal","creatorType":"user"},
-            {"name":"shared","creatorType":"anthropic"}]}"#,
-    );
-    write(
-        &synced.join("org_b/manifest.json"),
-        r#"{"skills":[{"name":"shared","creatorType":"user"}]}"#,
-    );
+    for root in [home.join(".claude/skills"), synced.join("org_a")] {
+        skill(&root.join("local-copy"), "local-copy", "Same local bytes.");
+    }
     let catalog = Catalog::read(&roots(&home, &[]), None);
     let builtin = catalog.skill("claude:synced:org_a:builtin").unwrap();
     assert!(builtin.user_installed().is_none());
-    // Classification is display-only: Claude still finds the provider skill natively.
+    // Classification is display-only: Claude still finds synced skills natively.
     assert!(catalog.skill_native(
         builtin,
         &Session {
@@ -972,22 +965,15 @@ fn skills_for_display_hide_only_explicit_provider_entries() {
                 .skill(&format!("claude:synced:org_a:{name}"))
                 .unwrap()
                 .user_installed()
-                .is_some()
+                .is_none()
         );
     }
     let shared = catalog.skill("claude:synced:org_a:shared").unwrap();
     assert_eq!(shared.entries.len(), 2);
-    let visible = shared.user_installed().unwrap();
-    assert_eq!(visible.roots, [SkillRoot::ClaudeSynced("org_b".into())]);
-    assert_eq!(visible.entries.len(), 1);
-    assert_eq!(visible.dir, synced.join("org_b/shared"));
-    assert_eq!(shared.entries.len(), 2);
-
-    // Missing or broken metadata must not hide skills merely because they are synced.
-    write(&synced.join("org_a/manifest.json"), "not json");
-    assert!(builtin.user_installed().is_some());
-    std::fs::remove_file(synced.join("org_a/manifest.json")).unwrap();
-    assert!(builtin.user_installed().is_some());
+    assert!(shared.user_installed().is_none());
+    let local = catalog.skill("claude:user:local-copy").unwrap();
+    assert_eq!(local.entries.len(), 2);
+    assert_eq!(local.user_installed().as_ref(), Some(local));
 }
 
 #[test]
