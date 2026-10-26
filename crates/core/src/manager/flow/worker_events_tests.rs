@@ -751,13 +751,19 @@ fn worker_inputs(seen: &Seen, what: &str) -> usize {
 }
 
 /// Starts the `Hang-on` worker and waits until it works.
-async fn hanging_worker(flow: &Flow) {
+async fn hanging_worker(flow: &Flow, seen: &Seen) {
     flow.say("Start Hang-on.").await;
-    flow.until("the worker works", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.state == crate::work::TaskState::Running)
+    // Running is stored before the first send and may precede SessionStarted processing.
+    // Without its native session, recovery starts again on Hang-on instead of resuming
+    // the interrupted turn; that new hanging turn cannot report a finish.
+    flow.until("the worker's CLI session to be recorded", |board| {
+        board.tasks.values().any(|task| {
+            task.state == crate::work::TaskState::Running && task.native_session.is_some()
+        })
+    })
+    .await;
+    super::eventually("the worker to take its hanging input", || {
+        worker_inputs(seen, "Hang-on.") == 1
     })
     .await;
     flow.settled().await;
@@ -770,7 +776,7 @@ async fn hanging_worker(flow: &Flow) {
 async fn a_worker_cut_off_by_a_restart_goes_on_by_itself() {
     for crash in [true, false] {
         let (mut flow, seen) = flow("events-restart-resume", PermissionLevel::Full).await;
-        hanging_worker(&flow).await;
+        hanging_worker(&flow, &seen).await;
         if crash {
             flow.crash().await;
         } else {
@@ -801,6 +807,55 @@ async fn a_worker_cut_off_by_a_restart_goes_on_by_itself() {
     }
 }
 
+/// Running alone does not mean there is a native session to resume. Keep its provider
+/// events behind a gate to reproduce the old restart test's premature cutoff: recovery
+/// correctly starts the original hanging prompt again, which needs releasing to finish.
+#[tokio::test]
+async fn a_running_worker_without_a_recorded_session_starts_again_on_its_prompt() {
+    let (mut flow, seen) = flow("events-running-before-native", PermissionLevel::Full).await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release_events = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_worker_events.lock().unwrap() = Some((reached.clone(), release_events));
+    flow.say("Start Hang-on.").await;
+    reached.notified().await;
+    let board = flow
+        .until(
+            "the worker to be running before its events arrive",
+            |board| {
+                board
+                    .tasks
+                    .values()
+                    .any(|task| task.state == crate::work::TaskState::Running)
+            },
+        )
+        .await;
+    assert!(Flow::task(&board, 1).native_session.is_none());
+    super::eventually("the first hanging input", || {
+        worker_inputs(&seen, "Hang-on.") == 1
+    })
+    .await;
+    flow.settled().await;
+    flow.crash().await;
+    super::eventually("the original hanging prompt to be started again", || {
+        worker_inputs(&seen, "Hang-on.") == 2
+    })
+    .await;
+    assert_eq!(
+        worker_inputs(&seen, "check git status and git log first"),
+        0
+    );
+    assert!(seen.told().is_empty());
+
+    seen.release.store(true, Ordering::SeqCst);
+    let finished = ("Hang-on".to_owned(), "finished".to_owned());
+    super::eventually("the relaunched worker to finish after release", || {
+        seen.told().contains(&finished)
+    })
+    .await;
+    assert_eq!(seen.told(), [finished]);
+    flow.stop().await;
+}
+
 /// Cut off again while it went on by itself (by a crash, or a quit closing its CLI): it waits
 /// for its session's next message, as an interrupted turn leaves it, never paused for good;
 /// its parent hears it stopped once, with how it goes on, and a message carries it on (#559).
@@ -809,7 +864,7 @@ async fn a_worker_cut_off_twice_goes_on_when_its_session_sends_it_more() {
     for crash in [true, false] {
         let (mut flow, seen) = flow("events-restart-cut", PermissionLevel::Full).await;
         seen.hold_resumes.store(true, Ordering::SeqCst);
-        hanging_worker(&flow).await;
+        hanging_worker(&flow, &seen).await;
         flow.crash().await;
         super::eventually("the worker going on", || {
             worker_inputs(&seen, "Brigadier restarted while you were working") == 1

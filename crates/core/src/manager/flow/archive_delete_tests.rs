@@ -89,6 +89,21 @@ async fn retention(delete_directly: bool) {
     .await;
     let task = flow.core.tasks(&id).await.unwrap().remove(0);
     let dir = flow.manager.session_dir(&id);
+    // Reported is published before the worker's git facts are read and its completion
+    // event is persisted. Snapshot the record only once that event belongs to it too.
+    let events = dir.record().join(crate::manager::worker_events::FILE);
+    super::eventually("the worker's completion event to be recorded", || {
+        std::fs::read_to_string(&events)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .any(|line| {
+                line["line"] == "event"
+                    && line["task"] == task.id.0
+                    && line["event"]["event"] == "turn-ended"
+            })
+    })
+    .await;
     let worker = dir.worker(&task);
     let records = [dir.record(), worker.join("record")];
     let mut transcripts = Vec::new();
