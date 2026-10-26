@@ -773,7 +773,7 @@ fn literal_words(command: &str) -> Option<Vec<String>> {
 }
 
 const QUERY: &str = r#"query($owner:String!,$repo:String!,$number:Int!,$checks:String,$threads:String,$reviews:String,$requests:String){viewer{login} rateLimit{cost limit remaining resetAt} repository(owner:$owner,name:$repo){pullRequest(number:$number){number title url state isDraft headRefOid baseRefName mergeCommit{oid} author{login} mergedBy{login} reviewDecision mergeable mergeStateStatus reviewRequests(first:100,after:$requests){totalCount pageInfo{hasNextPage endCursor} nodes{requestedReviewer{... on User{login} ... on Team{name}}}} latestOpinionatedReviews(first:100,after:$reviews){totalCount pageInfo{hasNextPage endCursor} nodes{state author{login}}} reviewThreads(first:100,after:$threads){totalCount pageInfo{hasNextPage endCursor} nodes{isResolved}} commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100,after:$checks){totalCount pageInfo{hasNextPage endCursor} nodes{... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}}}}"#;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 async fn observe(
     gh: &super::gh::Gh,
     tracked: &TrackedPullRequest,
