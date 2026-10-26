@@ -79,6 +79,8 @@ impl SessionManager {
             then: args.then,
             link: args.link,
             done_at_ms: None,
+            done_note: None,
+            done_notice_delivered_at_ms: None,
             wake_delivered_at_ms: None,
         };
         let _guard = self.tracked_writes.lock().await;
@@ -91,6 +93,14 @@ impl SessionManager {
         id: &ConversationId,
         wait_id: &str,
     ) -> Result<WaitingOn> {
+        self.complete_waiting_on_with_note(id, wait_id, None).await
+    }
+    pub async fn complete_waiting_on_with_note(
+        &self,
+        id: &ConversationId,
+        wait_id: &str,
+        note: Option<String>,
+    ) -> Result<WaitingOn> {
         let _guard = self.tracked_writes.lock().await;
         let mut wait = self
             .tracked_work(id)
@@ -101,9 +111,13 @@ impl SessionManager {
             .ok_or_else(|| Error::NotFound("wait in this session".into()))?;
         if wait.done_at_ms.is_none() {
             wait.done_at_ms = Some(crate::now_ms());
+            wait.done_note = note;
             self.keep_tracked(id, &Change::Wait { wait: wait.clone() })
                 .await?;
         }
+        drop(_guard);
+        // A completion is durable before its notice is queued for the next turn.
+        self.deliver_waiting_wakes(id).await?;
         Ok(wait)
     }
     /// Scheduler contract: queue these with a durable dedupe key `waiting:<session>:<id>`,
@@ -201,9 +215,10 @@ impl SessionManager {
             .waiting_on
             .into_iter()
             .filter(|w| {
-                w.done_at_ms.is_none()
-                    && w.wake_delivered_at_ms.is_none()
-                    && w.due_at_ms.is_some_and(|d| d <= now)
+                (w.done_at_ms.is_some() && w.done_notice_delivered_at_ms.is_none())
+                    || (w.done_at_ms.is_none()
+                        && w.wake_delivered_at_ms.is_none()
+                        && w.due_at_ms.is_some_and(|d| d <= now))
             })
             .collect::<Vec<_>>();
         if due.is_empty() {
@@ -231,7 +246,12 @@ impl SessionManager {
             events.extend(page);
         }
         for mut wait in due {
-            let label = format!("waiting overdue {}", wait.id);
+            let completed = wait.done_at_ms.is_some();
+            let label = format!(
+                "waiting {} {}",
+                if completed { "completed" } else { "overdue" },
+                wait.id
+            );
             let mut queued = None;
             let mut taken = false;
             for event in &events {
@@ -261,7 +281,11 @@ impl SessionManager {
                 }
             }
             if taken {
-                wait.wake_delivered_at_ms = Some(now);
+                if completed {
+                    wait.done_notice_delivered_at_ms = Some(now);
+                } else {
+                    wait.wake_delivered_at_ms = Some(now);
+                }
                 self.keep_tracked(id, &Change::Wait { wait }).await?;
                 continue;
             }
@@ -269,15 +293,25 @@ impl SessionManager {
                 kind: InjectionKind::Reminder,
                 label,
                 task_id: None,
-                text: format!(
-                    "[Waiting on is overdue: {}. Due {} ({}). {} · durable wait {}. Check once; complete with brigadier waiting done {} when resolved.]",
-                    wait.text,
-                    wait.by.as_deref().unwrap_or("the recorded instant"),
-                    wait.timezone,
-                    wait.then.as_deref().unwrap_or(""),
-                    wait.id,
-                    wait.id
-                ),
+                text: if completed {
+                    format!(
+                        "[Waiting on marked done: {}. {} {} · durable wait {}.]",
+                        wait.text,
+                        wait.done_note.as_deref().unwrap_or(""),
+                        wait.then.as_deref().unwrap_or(""),
+                        wait.id
+                    )
+                } else {
+                    format!(
+                        "[Waiting on is overdue: {}. Due {} ({}). {} · durable wait {}. Check once; complete with brigadier waiting done {} when resolved.]",
+                        wait.text,
+                        wait.by.as_deref().unwrap_or("the recorded instant"),
+                        wait.timezone,
+                        wait.then.as_deref().unwrap_or(""),
+                        wait.id,
+                        wait.id
+                    )
+                },
             };
             let conv = match self.conv(id) {
                 Ok(conv) => conv,
@@ -300,8 +334,10 @@ impl SessionManager {
                 .queue_envelope_kept(id, envelope, Some(request.clone()), false)
                 .await
             {
-                self.settle_requests(id).await;
-                self.kick(&conv);
+                if !completed {
+                    self.settle_requests(id).await;
+                    self.kick(&conv);
+                }
             }
         }
         Ok(())
@@ -316,6 +352,63 @@ mod durable_wake_tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    #[tokio::test]
+    async fn a_done_notice_is_durable_until_the_next_turn_and_not_repeated() {
+        let notices = Arc::new(AtomicUsize::new(0));
+        let seen = notices.clone();
+        let mut flow = Flow::start(
+            "waiting-done-durable",
+            Options::default(),
+            Arc::new(move |turn| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    if turn.input.contains("Waiting on marked done:") {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Reply::text("Done")
+                })
+            }),
+        )
+        .await;
+        flow.say("Track an external dependency").await;
+        flow.idle().await;
+        let id = flow.conversation.clone();
+        let wait = flow
+            .manager
+            .add_waiting_on(
+                &id,
+                "session",
+                AddWaitingOn {
+                    text: "Eric restores the license".into(),
+                    by: None,
+                    timezone: Some("UTC".into()),
+                    then: Some("Re-run CI".into()),
+                    link: None,
+                },
+            )
+            .await
+            .unwrap();
+        let done = flow
+            .manager
+            .complete_waiting_on_with_note(&id, &wait.id, Some("License restored".into()))
+            .await
+            .unwrap();
+        assert_eq!(done.done_note.as_deref(), Some("License restored"));
+        assert_eq!(notices.load(Ordering::SeqCst), 0);
+        flow.restart().await;
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        assert_eq!(notices.load(Ordering::SeqCst), 0);
+        flow.say("Continue the work").await;
+        flow.idle().await;
+        assert_eq!(notices.load(Ordering::SeqCst), 1);
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        flow.restart().await;
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        flow.say("Anything else?").await;
+        flow.idle().await;
+        assert_eq!(notices.load(Ordering::SeqCst), 1);
+        flow.stop().await;
+    }
     #[tokio::test]
     async fn overdue_wake_survives_stop_and_restart_and_is_taken_once() {
         let wakes = Arc::new(AtomicUsize::new(0));

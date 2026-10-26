@@ -336,7 +336,7 @@ export function TrackedWorkSections({ sessionId, work, error, now = 0, fallback,
       {branch && <PullRequestRow pullRequest={branch} />}
       {prs.map((pr) => {
         const state = pr.pullRequest?.state ?? "open";
-        const look = pr.pullRequest ? pullRequestLook(pr.pullRequest) : null;
+        const look = pr.complete && pr.pullRequest ? pullRequestLook(pr.pullRequest) : null;
         const tone = look ? PULL_REQUEST_TONES[look.tone] : "text-muted-foreground";
         const url = `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`;
         return <SummaryRowButton key={url} data-slot="tracked-pr-row" title={`${pr.pullRequest?.title ?? url}\n${pr.actor} · ${pr.action}\n${pr.account ? `Account: ${pr.account}` : "Account needed"}`} icon={<span className={cn("flex", tone)}>{PULL_REQUEST_ICONS[state]}</span>} meta={<span className={cn("max-w-48 truncate", tone)}>{pr.status}</span>} onClick={() => openLink(url)}>{pr.identity.repo} #{pr.identity.number}</SummaryRowButton>;
@@ -359,7 +359,9 @@ export function TrackedWorkSections({ sessionId, work, error, now = 0, fallback,
 
 /** The pull request row: `#N`, its state in a word and a colour (failed checks red); a click opens it. */
 function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
-  const look = pullRequestLook(pullRequest);
+  const observed = pullRequestLook(pullRequest);
+  // Initial branch discovery has not fetched the complete canonical review/check pages.
+  const look = observed.word === "Ready" ? { word: "Checking status", tone: "quiet" as const } : observed;
   const tone = PULL_REQUEST_TONES[look.tone];
   return (
     <SummaryRowButton
