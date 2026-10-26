@@ -1443,6 +1443,18 @@ fn until(mut done: impl FnMut() -> bool) -> bool {
     done()
 }
 
+/// Each queued pass/job owns a clone of Setup.binary. Its last owner goes away only
+/// after the background work has finished using the fixture, including confirming passes.
+#[cfg(unix)]
+fn finish_background(setup: super::super::jobs::Setup) {
+    let running = std::sync::Arc::downgrade(&setup.binary);
+    drop(setup);
+    assert!(
+        until(|| running.strong_count() == 0),
+        "background work still owns this fixture"
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn review_removed_original_schedules_its_confirming_pass() {
@@ -1452,11 +1464,13 @@ fn review_removed_original_schedules_its_confirming_pass() {
     home.sync().unwrap();
     std::fs::remove_dir_all(home.home.join(".claude/skills/tidy")).unwrap();
     // One event only. No watcher, request, or hand-run second pass follows it.
-    super::super::jobs::request_sync(stub_job_setup(&home, "#!/bin/sh\nexit 0\n"), true);
+    let setup = stub_job_setup(&home, "#!/bin/sh\nexit 0\n");
+    super::super::jobs::request_sync(setup.clone(), true);
     assert!(
         until(|| home.library.entry("tidy").is_none()),
         "the confirming absent pass was never scheduled"
     );
+    finish_background(setup);
 }
 
 #[test]
@@ -1483,7 +1497,7 @@ fn review_stalled_background_cli_releases_the_job_queue() {
             .collect::<Vec<_>>()
     );
     let job = super::super::jobs::start(
-        setup,
+        setup.clone(),
         super::super::jobs::Action::Remove {
             key: "missing".into(),
         },
@@ -1493,6 +1507,7 @@ fn review_stalled_background_cli_releases_the_job_queue() {
         "a stalled background sync kept the queue"
     );
     assert!(super::super::jobs::job(&job).unwrap().error.is_some());
+    finish_background(setup);
 }
 
 #[test]
@@ -1589,27 +1604,41 @@ fn review_aliases_in_different_scopes_cover_both_agents_in_each_project() {
 fn review_project_change_during_sync_reads_the_latest_roots() {
     let _serial = BACKGROUND.lock().unwrap();
     let home = Home::new("review-latest-roots", &["one", "two"]);
-    write(&home.home.join(".claude.json"), CLAUDE_DOCS);
+    tidy(&home.home, "body");
     write(
         &home.projects[1].join(".mcp.json"),
         r#"{"mcpServers":{"second":{"url":"https://example.org/mcp"}}}"#,
     );
     approve(&home, &home.projects[1], "second");
-    let setup = stub_job_setup(
-        &home,
-        "#!/bin/sh\nif [ \"$1\" = secret ]; then : > \"$HOME/entered\"; exec /bin/sleep 30; fi\nexit 0\n",
-    );
+    let mut setup = stub_job_setup(&home, "#!/bin/sh\nexit 0\n");
+    let (started, entered) = std::sync::mpsc::channel();
+    let (release, proceed) = std::sync::mpsc::channel();
+    let gate = Mutex::new(Some(proceed));
+    let binary = setup.cli.clone();
+    // Hold the first pass inside its runner while queuing the new project list. A
+    // sleeping secret CLI can time out before its shell executes under concurrent load.
+    setup.binary = std::sync::Arc::new(move |_| {
+        if let Some(proceed) = gate.lock().unwrap().take() {
+            let _ = started.send(());
+            // A failed test drops release too, so it cannot strand the background thread.
+            let _ = proceed.recv();
+        }
+        Some(binary.clone())
+    });
     let mut first = setup.clone();
     first.projects.truncate(1);
     super::super::jobs::request_sync(first, true);
-    assert!(until(|| home.home.join("entered").exists()));
-    super::super::jobs::request_sync(setup, false);
+    entered
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the first sharing pass entered its runner");
+    super::super::jobs::request_sync(setup.clone(), false);
+    release.send(()).unwrap();
     assert!(
         until(|| home.library.entry("second").is_some()),
         "sync kept the old project's repository list"
     );
     let job = super::super::jobs::start(
-        stub_job_setup(&home, "#!/bin/sh\nexit 0\n"),
+        setup.clone(),
         super::super::jobs::Action::Remove {
             key: "missing".into(),
         },
@@ -1617,6 +1646,7 @@ fn review_project_change_during_sync_reads_the_latest_roots() {
     assert!(until(
         || super::super::jobs::job(&job).is_some_and(|job| job.finished)
     ));
+    finish_background(setup);
 }
 
 #[test]

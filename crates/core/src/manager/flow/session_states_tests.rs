@@ -537,6 +537,16 @@ async fn activity_keeps_a_sessions_live_workers_after_its_own_turn_ends() {
         "the reconnect's wire snapshot carries the bit"
     );
 
+    // The activity bit above needs only one open CLI turn. Before ending First,
+    // ensure the other two turns are open too, so they can keep that bit set.
+    super::eventually_async("all three workers' CLI turns to start", || async {
+        let tasks = flow.core.tasks(&flow.conversation).await.unwrap();
+        tasks.len() == 3
+            && tasks
+                .iter()
+                .all(|task| flow.manager.workers_working(std::slice::from_ref(task)))
+    })
+    .await;
     released.store(1, Ordering::SeqCst);
     flow.until("the first worker's turn to end", |board| {
         board.tasks.values().any(|task| {

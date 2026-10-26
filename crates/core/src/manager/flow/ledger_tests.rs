@@ -98,6 +98,11 @@ async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
         flow.say_to(&chat, "Keep your ledger.").await;
         flow.settled_in(&chat).await;
         let tasks = flow.core.tasks(&flow.conversation).await.unwrap();
+        // The parent's request settling does not wait for the worker's ledger calls.
+        super::eventually("all three roles to finish writing their ledgers", || {
+            seen.lock().unwrap().len() == 3
+        })
+        .await;
         {
             let seen = seen.lock().unwrap();
             assert_eq!(seen.len(), 3, "every role uses a different file: {seen:?}");

@@ -631,6 +631,9 @@ pub(crate) struct FakeBehavior {
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next worker's provider events wait until released, while its launch may already
+    /// publish Running and send its first input. Models a delayed SessionStarted pump.
+    pub hold_worker_events: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next turn's send signals the first once the CLI took its input, and waits for the
     /// second before its turn starts.
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
@@ -950,6 +953,33 @@ impl Provider for FakeCli {
                 steer_tx,
                 steers: Arc::new(tokio::sync::Mutex::new(steers)),
             });
+            let worker = self
+                .host
+                .get()
+                .and_then(Weak::upgrade)
+                .and_then(|host| host.grants().resolve(&session.grant))
+                .is_some_and(|role| matches!(role, crate::tools::Role::Worker { .. }));
+            let held = if worker {
+                self.behavior.hold_worker_events.lock().unwrap().take()
+            } else {
+                None
+            };
+            let events = if let Some((reached, release)) = held {
+                let (tx, delayed) = mpsc::channel(256);
+                tokio::spawn(async move {
+                    reached.notify_one();
+                    release.notified().await;
+                    let mut events = events;
+                    while let Some(event) = events.recv().await {
+                        if tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                delayed
+            } else {
+                events
+            };
             Ok(Started { session, events })
         })
     }
