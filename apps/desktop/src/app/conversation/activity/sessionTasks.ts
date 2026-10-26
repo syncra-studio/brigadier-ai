@@ -1,4 +1,5 @@
 import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
+import { persistentApp } from "@/app/conversation/persistentApps";
 import { taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords } from "@/app/conversation/liveStatus";
 import type { BackgroundTask, FileEntry } from "@/ipc/generated";
@@ -142,7 +143,7 @@ const commandName = (task: BackgroundTask) => (task.kind === "terminal" ? comman
  */
 export function checkLines(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): StripLines {
   const all = tasks.filter((task) => task.kind !== "agent" && task.status === "running").map((task) => ({ task, command: taskCommand(task, entries), cwd: commandCwd(task, entries) }));
-  const own = all;
+  const own = all.filter(({ command }) => !persistentApp(command ?? ""));
   const waits = new Map(own.map(({ task, command, cwd }) => [task.id, waitOf(task, command, cwd, own)] as const));
   const shown = own;
   void now;

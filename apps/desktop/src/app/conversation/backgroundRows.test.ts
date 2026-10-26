@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { appCommand, backgroundRows } from "@/app/conversation/backgroundRows";
-import type { Preview, PreviewState } from "@/ipc/generated";
+import type { Preview, PreviewState, BackgroundTask, FileEntry, WorkerRow } from "@/ipc/generated";
 
 const preview = (id: string, name: string, command: string, startedAtMs: number, state: PreviewState = { type: "running" }, extra: Partial<Preview> = {}): Preview =>
   ({ id, conversationId: "c", name, command, workdir: "/w", workspace: "/w", pid: 1, state, startedAtMs, endedAtMs: null, log: null, kind: "web", building: false, ...extra }) as Preview;
@@ -53,4 +53,26 @@ test("a row leaves as soon as its process ends: failed, finished or stopped alik
 test("rows sort newest first", () => {
   const sorted = backgroundRows([preview("preview-1", "Dev app", "pnpm dev", 25), preview("preview-2", "Docs", "pnpm docs", 20)], () => null);
   assert.deepEqual(sorted.map((row) => row.id), ["preview-1", "preview-2"]);
+});
+
+const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
+
+test("proven native apps use Background once, while unknown commands and waits remain Checks", async () => {
+  const { appTaskRows, workerAppTaskRows } = await import("./backgroundRows");
+  const { checkLines } = await import("./activity/sessionTasks");
+
+  const app = nativeApp("app", "Show the website"), tests = nativeApp("tests", "pnpm dev"), unknown = nativeApp("unknown", "pnpm dev");
+  const entries: FileEntry[] = [
+    { event: { type: "command", itemId: "call-app", command: "cd '/work/site app' && PORT=5173 pnpm dev", cwd: "/work", status: "completed", exitCode: null, output: null, durationMs: null } },
+    { event: { type: "command", itemId: "call-tests", command: "pnpm test", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
+  ];
+  const source = [app, tests, unknown];
+  const before = structuredClone(source);
+  assert.deepEqual(appTaskRows(source, entries, 20).map((row) => row.id), ["task:app"]);
+  assert.deepEqual(checkLines(source, entries, 20).lines.map((line) => line.id), ["tests", "unknown"]);
+  const worker = { id: "worker", background: [{ task: app, command: "next dev" }, { task: tests, command: "pnpm test" }] } as WorkerRow;
+  assert.deepEqual(workerAppTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:app", { id: "worker", name: "Site worker" }]]);
+  assert.deepEqual(appTaskRows([{ ...app, status: "completed" }], entries, 20), []);
+  assert.deepEqual(workerAppTaskRows([{ ...worker, background: [{ task: { ...app, status: "stopped" }, command: "next dev" }] }], () => "Site worker", 20), []);
+  assert.deepEqual(source, before, "native records/history stay intact");
 });

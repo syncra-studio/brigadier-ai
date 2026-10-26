@@ -1,3 +1,4 @@
+import { persistentApp } from "@/app/conversation/persistentApps";
 import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
 import { brigadierCalls } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
@@ -23,7 +24,7 @@ export type BackgroundRow =
    * One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`), or of a worker's
    * CLI (`worker`: its id and name).
    */
-  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState; worker: { id: string; name: string | null } | null };
+  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; command?: string | null; state: BackgroundState; worker: { id: string; name: string | null } | null };
 
 /** A CLI task's row state: running, or how it ended. */
 function taskState(task: BackgroundTask): BackgroundState {
@@ -72,16 +73,17 @@ export function runsBrigadier(command: string, sub: string): boolean {
  * a `command` item, as Claude's Bash always is (D38), or a tool call's `command` argument.
  */
 export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
-  if (task.kind === "terminal") return task.label;
-  if (task.kind !== "shell" || task.itemId === null) return null;
+  if (task.kind !== "shell" && task.kind !== "terminal") return null;
+  const fallback = task.kind === "terminal" ? task.label : null;
+  if (task.itemId === null) return fallback;
   const call = entries.find(({ event, parent }) => !parent && (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.event;
-  if (call?.type === "command") return call.command || null;
-  if (call?.type !== "toolCall") return null;
+  if (call?.type === "command") return call.command || fallback;
+  if (call?.type !== "toolCall") return fallback;
   try {
     const input = JSON.parse(call.input ?? "null") as { command?: unknown } | null;
-    return typeof input?.command === "string" ? input.command : null;
+    return typeof input?.command === "string" ? input.command || fallback : fallback;
   } catch {
-    return null;
+    return fallback;
   }
 }
 
@@ -91,7 +93,7 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
  */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
   return tasks.filter((task) => taskShown(task, now) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
-    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
+    type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
   }));
 }
 
@@ -103,10 +105,21 @@ export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskI
   return workers.flatMap((worker) => (worker.background ?? [])
     .filter(({ task, command }) => taskShown(task, now) && task.kind !== "agent"
       && !runsBrigadierWait(command ?? (task.kind === "terminal" ? task.label : "")))
-    .map(({ task }): BackgroundRow => ({
-      type: "task", id: `task:${worker.id}:${task.id}`, startedAtMs: task.startedAtMs, task, state: taskState(task),
+    .map(({ task, command }): BackgroundRow => ({
+      type: "task", id: `task:${worker.id}:${task.id}`, command, startedAtMs: task.startedAtMs, task, state: taskState(task),
       worker: { id: worker.id, name: workerName(worker.id) },
     })));
+}
+
+/** Only proven app invocations belong beside previews; labels never establish command evidence. */
+export function appTaskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
+  return taskRows(tasks, entries, now).filter((row) => row.type === "task" && persistentApp(taskCommand(row.task, entries) ?? ""));
+}
+
+export function workerAppTaskRows(workers: readonly WorkerRow[], workerName: (id: string) => string | null, now: number): BackgroundRow[] {
+  const apps = workers.map((worker) => ({ ...worker, background: (worker.background ?? []).filter(({ task, command }) =>
+    (task.kind === "shell" || task.kind === "terminal") && persistentApp(command ?? (task.kind === "terminal" ? task.label : ""))) }));
+  return workerTaskRows(apps, workerName, now);
 }
 
 /**

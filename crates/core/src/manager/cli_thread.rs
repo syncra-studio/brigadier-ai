@@ -164,6 +164,7 @@ impl SessionManager {
                     // owed until it starts, or the grace passes (D21).
                     let ended = task.status != BackgroundTaskStatus::Running
                         && task.kind != BackgroundTaskKind::Agent
+                        && !live.persistent_task(task)
                         && live.background.iter().any(|held| {
                             held.id == task.id && held.status == BackgroundTaskStatus::Running
                         });
@@ -686,6 +687,37 @@ impl SessionManager {
             base64::engine::general_purpose::STANDARD.encode(bytes),
             image.mime.clone(),
         ))
+    }
+
+    /// Proven app task ids from the same command evidence used by live Background placement.
+    pub(super) fn persistent_cli_tasks(
+        &self,
+        id: &ConversationId,
+    ) -> std::collections::HashSet<String> {
+        self.cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|live| live.persistent_tasks())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn running_cli_task_ids(
+        &self,
+        id: &ConversationId,
+    ) -> std::collections::HashSet<String> {
+        self.cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|live| {
+                live.background
+                    .iter()
+                    .filter(|task| task.status == BackgroundTaskStatus::Running)
+                    .map(|task| task.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Stops background task `task` of conversation `id`'s CLI, or of its worker `worker`'s,

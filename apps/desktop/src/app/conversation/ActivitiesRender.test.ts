@@ -107,3 +107,22 @@ test("only Background names truncate: building stays whole and shimmering, runni
   assert.equal(seen.hover.stopVisible, true);
   assert.equal(seen.hover.truncated && seen.hover.stateFits && seen.hover.shimmer, true, "hover leaves room for the whole building word and Stop");
 });
+
+
+test("raw session/worker apps use Background once and stop only their exact native invocation", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?apps=1", "activities-result", 60000)) as {
+    running: string[]; checks: string[]; workerName: string; output: string; ended: string[]; history: boolean;
+    stops: { id: string; worker: string | null; started: number }[]; expectedStarts: number[];
+  };
+  assert.deepEqual(seen.running, ["task:raw-browser", "task:raw-dev", "task:task-2:b7dev"]);
+  assert.deepEqual(seen.checks, ["raw-tests"], "native test command stays Checks despite a misleading dev label");
+  assert.equal(seen.workerName, "Demo of the fixes");
+  assert.match(seen.output, /^panel:output:task:raw-browser:\d+$/, "terminal output remains invocation-bound");
+  assert.deepEqual(seen.ended, [], "completed, failed and stopped apps leave immediately");
+  assert.equal(seen.history, true);
+  assert.deepEqual(seen.stops, [
+    { id: "raw-dev", worker: null, started: seen.expectedStarts[0] },
+    { id: "b7dev", worker: "task-2", started: seen.expectedStarts[1] },
+    { id: "raw-dev", worker: null, started: seen.expectedStarts[2] },
+  ]);
+});

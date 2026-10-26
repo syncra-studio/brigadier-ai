@@ -76,7 +76,7 @@ impl SessionManager {
         }
         let busy = {
             let state = conv.state.lock().await;
-            state.busy || state.hand_over.is_some() || (!state.waiting && state.has_cli_jobs())
+            state.busy || state.hand_over.is_some() || (!state.waiting && state.has_cli_work())
         };
         if busy && !after_turn {
             return Err(format!(

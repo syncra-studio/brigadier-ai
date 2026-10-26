@@ -348,6 +348,10 @@ pub struct CliTurn {
     pub turn_ended_at_ms: Option<i64>,
 }
 
+#[path = "persistent_apps.rs"]
+mod persistent_apps;
+pub(crate) use persistent_apps::persistent_app;
+
 /// A conversation's live turn: the stream's items since it began.
 #[derive(Debug, Default)]
 pub(crate) struct LiveTurn {
@@ -438,14 +442,32 @@ impl LiveTurn {
 
     /// The command background task `task` runs, when its CLI said it.
     fn command_of<'a>(&'a self, task: &'a BackgroundTask) -> Option<&'a str> {
-        if task.kind == BackgroundTaskKind::Terminal {
-            return Some(&task.label);
-        }
-        let item = task.item_id.as_deref()?;
-        self.commands
+        task.item_id
+            .as_deref()
+            .and_then(|item| {
+                self.commands
+                    .iter()
+                    .find(|(id, _)| id == item)
+                    .map(|(_, command)| command.as_str())
+            })
+            .or_else(|| (task.kind == BackgroundTaskKind::Terminal).then_some(task.label.as_str()))
+    }
+
+    pub(crate) fn persistent_task(&self, task: &BackgroundTask) -> bool {
+        matches!(
+            task.kind,
+            BackgroundTaskKind::Shell | BackgroundTaskKind::Terminal
+        ) && self.command_of(task).is_some_and(persistent_app)
+    }
+
+    pub(crate) fn persistent_tasks(&self) -> std::collections::HashSet<String> {
+        self.background
             .iter()
-            .find(|(id, _)| id == item)
-            .map(|(_, command)| command.as_str())
+            .filter(|task| {
+                task.status == BackgroundTaskStatus::Running && self.persistent_task(task)
+            })
+            .map(|task| task.id.clone())
+            .collect()
     }
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
@@ -456,6 +478,7 @@ impl LiveTurn {
             .filter(|task| {
                 task.status == BackgroundTaskStatus::Running
                     && task.kind != BackgroundTaskKind::Agent
+                    && !self.persistent_task(task)
                     && !self.command_of(task).is_some_and(|command| {
                         policy::runs_only_brigadier(command)
                             && (policy::runs_brigadier(command, "wait")

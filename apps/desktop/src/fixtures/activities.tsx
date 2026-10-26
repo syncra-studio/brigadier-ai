@@ -19,6 +19,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { checkLines } from "@/app/conversation/activity/sessionTasks";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
@@ -68,6 +69,7 @@ const send = (...events: EventEnvelope["event"][]) => applyBoardEvents(events.ma
   return { seq, stream: `conversation:${id}`, streamSeq: seq, atMs: Date.now(), event } as EventEnvelope;
 }));
 const calls: string[] = [];
+const appStops: { id: string; worker: string | null; started: number | undefined }[] = [];
 mockIPC((command, payload) => {
   if (command === "open_url") calls.push(`open_url ${(payload as { url: string }).url}`);
   if (command !== "ipc_request") return null;
@@ -76,6 +78,7 @@ mockIPC((command, payload) => {
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
+  if (req.method === "stopBackgroundTask") appStops.push({ id: req.taskId, worker: req.workerId ?? null, started: req.startedAtMs });
   if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}${req.workerId ? ` of ${req.workerId}` : ""}`);
   if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: req.workerId ? `${req.workerId} printed\n` : "sleeping\nmarker\n" };
   return { method: req.method };
@@ -268,6 +271,42 @@ async function driveWorkerTasks(): Promise<Record<string, unknown>> {
   return { running, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
+/** Raw apps have native lifecycle/identity: placement never invents a preview, URL or port. */
+async function driveApps(): Promise<Record<string, unknown>> {
+  const appTask = { ...sleep, id: "raw-dev", itemId: "call-dev", label: "Show the website", startedAtMs: now - 4000 };
+  const browser = { ...sleep, id: "raw-browser", itemId: "call-browser", kind: "terminal" as const, label: "chromium --headless --remote-debugging-port=0", startedAtMs: now - 3000 };
+  const tests = { ...sleep, id: "raw-tests", itemId: "call-tests", label: "pnpm dev" };
+  tasksSaid(appTask, browser, tests);
+  applyThreadNews({ conversationId: id, entries: [
+    { event: { type: "command", itemId: "call-dev", command: "cd '/work/site app' && PORT=5173 pnpm dev", cwd: "/work", status: "completed", exitCode: null, output: null, durationMs: null } },
+    { event: { type: "command", itemId: "call-tests", command: "pnpm test", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
+  ], opened: false });
+  const workerApp = { ...devApp, itemId: "call-worker-app", label: "Run the worker website" };
+  durableHistory.add(workerApp.id);
+  workerTasksSaid({ task: workerApp, command: "next dev" }, { task: { ...tests, id: "worker-test" }, command: "pnpm test" });
+  await until(() => ids().length === 3, 5000);
+  const running = ids();
+  const workerName = row("task:task-2:b7dev")?.querySelector("[data-activity-worker]")?.textContent;
+  const live = useCliThread.getState().views[id]!;
+  const checks = checkLines(live.background ?? [], live.entries, Date.now()).lines.map((line) => line.id);
+  row("task:raw-browser")?.click();
+  await frame();
+  const output = sessionTabs(id).active;
+  stop("task:raw-dev")?.click();
+  await until(() => appStops.length === 1, 3000);
+  stop("task:task-2:b7dev")?.click();
+  await until(() => appStops.length === 2, 3000);
+  tasksSaid({ ...appTask, status: "completed", endedAtMs: Date.now() }, { ...browser, status: "failed", endedAtMs: Date.now() }, tests);
+  workerTasksSaid({ task: { ...workerApp, status: "stopped", endedAtMs: Date.now() }, command: "next dev" });
+  await until(() => ids().length === 0, 3000);
+  const ended = ids();
+  tasksSaid({ ...appTask, startedAtMs: now + 10 }, tests);
+  await until(() => ids().length === 1, 3000);
+  stop("task:raw-dev")?.click();
+  await until(() => appStops.length === 3, 3000);
+  return { running, checks, workerName, output, ended, stops: appStops, expectedStarts: [appTask.startedAtMs, workerApp.startedAtMs, now + 10], history: !!document.querySelector('[data-slot="background-history-link"]') };
+}
+
 /** Long names use the available room; state words stay whole, directly beside short names. */
 async function readNames(): Promise<Record<string, unknown>> {
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
@@ -319,7 +358,8 @@ function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [result, setResult] = useState("");
   useEffect(() => {
-    if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
+    if (params.has("apps")) void driveApps().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("tasks")) void driveTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("workerTasks")) void driveWorkerTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));

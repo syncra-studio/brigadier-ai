@@ -315,6 +315,9 @@ struct ConvState {
     /// background): its end starts a turn of the CLI's own, and until that turn is over the
     /// request still works.
     background: Option<Background>,
+    /// Proven app invocations retain CLI/process ownership but never hold a request.
+    persistent_apps: HashSet<String>,
+    persistent_commands: HashSet<String>,
     /// Counts what the CLI said of its background jobs: a later word makes moot the wait
     /// armed for an earlier one's turn.
     background_timer: u64,
@@ -470,8 +473,22 @@ impl ConvState {
         self.holding.first().map(|(_, held)| held.clone())
     }
 
-    /// Whether the CLI's own jobs still run past their turn, or one that ended still owes its
-    /// turn (see `background` and `lingering_request`).
+    /// Work holding a request; proven apps retain process ownership independently below.
+    fn has_cli_work(&self) -> bool {
+        self.background.as_ref().is_some_and(|jobs| {
+            !jobs.owed.is_empty()
+                || jobs
+                    .running
+                    .iter()
+                    .any(|(id, _)| !self.persistent_apps.contains(id))
+        }) || self
+            .lingering
+            .keys()
+            .any(|item| !self.persistent_commands.contains(item))
+            || self.lingering_request.is_some()
+    }
+
+    /// Native process ownership: app-only CLIs must not be retired while their apps run.
     fn has_cli_jobs(&self) -> bool {
         self.background.as_ref().is_some_and(Background::waits)
             || !self.lingering.is_empty()
@@ -511,7 +528,7 @@ impl Background {
 
     /// Each request the jobs work for, and how many of its jobs still run (none: the turn of
     /// one's end is still to come).
-    fn requests(&self) -> HashMap<String, u32> {
+    fn requests(&self, apps: &HashSet<String>) -> HashMap<String, u32> {
         let mut requests: HashMap<String, u32> = self
             .owed
             .iter()
@@ -521,6 +538,7 @@ impl Background {
         for request in self
             .running
             .iter()
+            .filter(|(id, _)| !apps.contains(id))
             .filter_map(|(_, request)| request.clone())
         {
             *requests.entry(request).or_default() += 1;
@@ -531,11 +549,15 @@ impl Background {
     /// The request the turn the CLI starts on its own now serves, which it takes: the oldest
     /// ended job's, else that of every job still running when they all have the same (the turn
     /// came before the CLI said which job ended).
-    fn take_turn(&mut self) -> Option<String> {
+    fn take_turn(&mut self, apps: &HashSet<String>) -> Option<String> {
         if !self.owed.is_empty() {
             return self.owed.remove(0);
         }
-        let mut owners = self.running.iter().map(|(_, request)| request.clone());
+        let mut owners = self
+            .running
+            .iter()
+            .filter(|(id, _)| !apps.contains(id))
+            .map(|(_, request)| request.clone());
         let first = owners.next()?;
         if !owners.all(|request| request == first) {
             self.early_unknown += 1;
@@ -730,6 +752,10 @@ impl ConvLive {
     /// Whether its CLI's own jobs still run past their turn (see `ConvState::has_cli_jobs`).
     pub(crate) async fn has_cli_jobs(&self) -> bool {
         self.state.lock().await.has_cli_jobs()
+    }
+
+    async fn has_cli_work(&self) -> bool {
+        self.state.lock().await.has_cli_work()
     }
 
     /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
@@ -1034,7 +1060,7 @@ impl ConvLive {
             background: state
                 .background
                 .as_ref()
-                .map(Background::requests)
+                .map(|jobs| jobs.requests(&state.persistent_apps))
                 .unwrap_or_default(),
         }
     }
@@ -1412,7 +1438,7 @@ impl SessionManager {
         if !brigade {
             return false;
         }
-        if conv.has_cli_jobs().await || self.has_running_workers(&conv.id).await {
+        if conv.has_cli_work().await || self.has_running_workers(&conv.id).await {
             return true;
         }
         self.core
@@ -3638,9 +3664,57 @@ impl SessionManager {
         })
     }
 
+    async fn classify_persistent_apps(&self, conv: &Arc<ConvLive>) {
+        let apps = self.persistent_cli_tasks(&conv.id);
+        let running = self.running_cli_task_ids(&conv.id);
+        let changed = {
+            let mut state = conv.state.lock().await;
+            let before = state.has_cli_work();
+            let previous = state.persistent_apps.clone();
+            let held: HashSet<String> = state
+                .background
+                .as_ref()
+                .map(|jobs| jobs.running.iter().map(|(id, _)| id.clone()).collect())
+                .unwrap_or_default();
+            // Retain an ending app only until its existing native-list entry disappears.
+            // Running replacement metadata (including unknown commands) retires old app evidence.
+            state
+                .persistent_apps
+                .retain(|id| !running.contains(id) && held.contains(id));
+            state.persistent_apps.extend(apps);
+            let apps_changed = state.persistent_apps != previous;
+            // A late full command replaces an earlier partial/unknown Codex invocation.
+            let known: Vec<_> = state
+                .lingering
+                .iter()
+                .chain(state.command_words.iter())
+                .map(|(item, words)| (item.clone(), crate::thread_view::persistent_app(words)))
+                .collect();
+            for (item, app) in known {
+                if app {
+                    state.persistent_commands.insert(item);
+                } else {
+                    state.persistent_commands.remove(&item);
+                }
+            }
+            if !state
+                .lingering
+                .keys()
+                .any(|item| !state.persistent_commands.contains(item))
+            {
+                state.lingering_request = None;
+            }
+            apps_changed || before != state.has_cli_work()
+        };
+        if changed {
+            self.settle_requests(&conv.id).await;
+        }
+    }
+
     /// The conversation CLI's background jobs changed: the request whose turn started them
     /// works on until the turn their end starts is over.
     async fn background_jobs(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: Vec<String>) {
+        let apps = self.persistent_cli_tasks(&conv.id);
         let armed = {
             let mut state = conv.state.lock().await;
             let mut jobs = state
@@ -3664,6 +3738,7 @@ impl SessionManager {
             let ended: Vec<Option<String>> = jobs
                 .running
                 .extract_if(.., |(job, _)| !running.contains(job))
+                .filter(|(job, _)| !state.persistent_apps.contains(job))
                 .map(|(_, request)| request)
                 .collect();
             for request in ended {
@@ -3676,11 +3751,17 @@ impl SessionManager {
                 }
             }
             let owner = state.busy.then(|| state.request.clone()).flatten();
-            for job in running {
-                if !jobs.running.iter().any(|(known, _)| *known == job) {
-                    jobs.running.push((job, owner.clone()));
+            for job in &running {
+                if !jobs.running.iter().any(|(known, _)| known == job) {
+                    if apps.contains(job) {
+                        state.persistent_apps.insert(job.clone());
+                    } else {
+                        state.persistent_apps.remove(job);
+                    }
+                    jobs.running.push((job.clone(), owner.clone()));
                 }
             }
+            state.persistent_apps.retain(|id| running.contains(id));
             let owes = !state.busy && !state.unowned_turn && !jobs.owed.is_empty();
             state.background = jobs.waits().then_some(jobs);
             state.background_timer += 1;
@@ -3806,7 +3887,9 @@ impl SessionManager {
                         {
                             exited |= matches!(event, ProviderEvent::Exited { .. });
                             self.snapshot_event(&conv.id, &event).await;
+                            let classify = matches!(event, ProviderEvent::Command { .. } | ProviderEvent::ToolCall { .. } | ProviderEvent::BackgroundTask { .. });
                             crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
+                            if classify { self.classify_persistent_apps(&conv).await; }
                         }
                         if exited {
                             break;
@@ -3860,17 +3943,28 @@ impl SessionManager {
             let background = state.background.take_if(|jobs| jobs.of(&cli));
             state.unowned_turn = false;
             state.terminals.clear();
-            let mut words: Vec<String> =
-                std::mem::take(&mut state.lingering).into_values().collect();
+            let mut words: Vec<String> = std::mem::take(&mut state.lingering)
+                .into_values()
+                .map(|words| brigadier_providers::policy::unwrapped_command(&words))
+                .collect();
             words.sort();
             // Each request hears of its own jobs; the Codex commands go with the request they
             // served.
             let mut counts: Vec<(Option<String>, usize)> = Vec::new();
-            for (_, request) in background.map(|jobs| jobs.running).unwrap_or_default() {
+            for (job, request) in background.map(|jobs| jobs.running).unwrap_or_default() {
+                let request = if state.persistent_apps.contains(&job) {
+                    None
+                } else {
+                    request
+                };
                 match counts.iter_mut().find(|(of, _)| *of == request) {
                     Some((_, count)) => *count += 1,
                     None => counts.push((request, 1)),
                 }
+            }
+            if current {
+                state.persistent_apps.clear();
+                state.persistent_commands.clear();
             }
             let lingering = state.lingering_request.take();
             let mut jobs: Vec<(Vec<String>, u32, Option<String>)> = Vec::new();
@@ -4031,7 +4125,15 @@ impl SessionManager {
         {
             let mut state = conv.state.lock().await;
             if status == ItemStatus::InProgress {
-                let words = brigadier_providers::policy::unwrapped_command(command);
+                if crate::thread_view::persistent_app(command) {
+                    state.persistent_commands.insert(item.to_owned());
+                } else {
+                    state.persistent_commands.remove(item);
+                }
+                let words = command.to_owned();
+                if let Some(held) = state.lingering.get_mut(item) {
+                    held.clone_from(&words);
+                }
                 state
                     .command_words
                     .insert(item.to_owned(), words.to_owned());
@@ -4039,6 +4141,7 @@ impl SessionManager {
             }
             state.command_words.remove(item);
             if !state.lingering.contains_key(item) {
+                state.persistent_commands.remove(item);
                 return;
             }
         }
@@ -4096,13 +4199,22 @@ impl SessionManager {
             let Some(words) = state.lingering.remove(item) else {
                 return;
             };
-            let request = state.lingering_request.clone();
-            // Its message carries the request now.
-            if state.lingering.is_empty() {
+            let request = if state.persistent_commands.remove(item) {
+                None
+            } else {
+                state.lingering_request.clone()
+            };
+            // Apps retain process ownership, but their completion does not revive old work.
+            if !state
+                .lingering
+                .keys()
+                .any(|item| !state.persistent_commands.contains(item))
+            {
                 state.lingering_request = None;
             }
             (words, request)
         };
+        let words = brigadier_providers::policy::unwrapped_command(&words);
         let text = self.hide_secrets(&conv.id, tail.into_bytes()).await;
         let envelope = Envelope {
             kind: InjectionKind::BackgroundRun,
@@ -4549,8 +4661,9 @@ impl SessionManager {
                         .collect();
                     let own =
                         !state.busy && state.background.as_ref().is_some_and(|jobs| jobs.of(cli));
+                    let apps = state.persistent_apps.clone();
                     let adopted = match &mut state.background {
-                        Some(jobs) if own => jobs.take_turn(),
+                        Some(jobs) if own => jobs.take_turn(&apps),
                         _ => None,
                     };
                     // A turn of the CLI's own for a job's end, of a request or not: the turns
@@ -4867,7 +4980,11 @@ impl SessionManager {
             }
             // Codex commands still running keep this request working until each ended and
             // the thread heard of it; once none runs, the request is free of them.
-            if state.lingering.is_empty() {
+            if !state
+                .lingering
+                .keys()
+                .any(|item| !state.persistent_commands.contains(item))
+            {
                 state.lingering_request = None;
             } else if state.lingering_request.is_none() {
                 state.lingering_request.clone_from(&served);

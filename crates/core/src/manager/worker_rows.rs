@@ -410,9 +410,17 @@ fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
                                 .then_some(job.label.as_str())
                         })
                         .is_some_and(|command| {
-                            brigadier_providers::policy::runs_only_brigadier(command)
-                                && (brigadier_providers::policy::runs_brigadier(command, "preview")
-                                    || brigadier_providers::policy::runs_brigadier(command, "wait"))
+                            (matches!(
+                                job.kind,
+                                brigadier_providers::BackgroundTaskKind::Shell
+                                    | brigadier_providers::BackgroundTaskKind::Terminal
+                            ) && thread_view::persistent_app(command))
+                                || (brigadier_providers::policy::runs_only_brigadier(command)
+                                    && (brigadier_providers::policy::runs_brigadier(
+                                        command, "preview",
+                                    ) || brigadier_providers::policy::runs_brigadier(
+                                        command, "wait",
+                                    )))
                         })
             })
     }) && !task.state.is_final()
