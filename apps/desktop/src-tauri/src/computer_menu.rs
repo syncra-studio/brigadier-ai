@@ -290,7 +290,7 @@ fn show_app(session: &ComputerSession) {
 
 #[cfg(test)]
 mod tests {
-    use brigadier_core::PermissionState;
+    use brigadier_core::{ComputerPlatform, PermissionState};
 
     use super::*;
 
@@ -365,11 +365,13 @@ mod tests {
     fn the_item_shows_only_while_an_agent_is_using_apps() {
         let status = |sessions| ComputerUseStatus {
             available: true,
+            platform: ComputerPlatform::current(),
             accessibility: PermissionState::Granted,
             screen_recording: PermissionState::Granted,
             current: true,
             setup: ComputerSetup::Ready,
             sessions,
+            notes: Vec::new(),
         };
         let mut state = MenuState {
             shown: true,
