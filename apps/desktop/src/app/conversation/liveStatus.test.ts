@@ -127,8 +127,18 @@ test("quota waits are not the user's: they say when quota comes back, still", ()
   const resetsAtMs = Date.UTC(2026, 9, 7, 21, 10);
   const quotaWait = { reason: "Claude's 5-hour window resets", resetsAtMs, rule: null, ranking: null, sinceMs: 0 };
   // The lead's own messages wait for quota.
-  assert.deepEqual(head(input({}, { quotaWait })), { text: `Waiting for quota · resets ${formatTime(resetsAtMs)}`, tone: "still" });
-  assert.deepEqual(head(input({}, { quotaWait: { ...quotaWait, resetsAtMs: null } })), { text: "Waiting for quota", tone: "still" });
+  // The single strip above the composer owns the lead's wait.
+  assert.equal(head(input({}, { quotaWait })), null);
+  assert.equal(head(input({}, { quotaWait: { ...quotaWait, resetsAtMs: null } })), null);
+  for (const run of ["starting", "running"] as const) {
+    assert.equal(head(input({ run, runRequest: "r1", doing: "Reconnecting" }, { quotaWait })), null);
+    assert.equal(head(input({ run, runRequest: "r1" }, { quotaWait, thinkingLive: true })), null);
+    const workers = byId([task()]);
+    assert.deepEqual(head(input({ run, runRequest: "r1", tasks: workers }, { quotaWait })),
+      { text: "Waiting for a worker", tone: "busy" });
+    const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
+    assert.equal(head(input({ run, runRequest: "r1", questions: byId([question]) }, { quotaWait }))?.text, "Waiting for your answer");
+  }
   // Quota fallback paused the workers and made the request `waiting`: not the user's to do.
   const paused = [task({ state: "paused", quotaWait }), task({ state: "paused", quotaWait: { ...quotaWait, resetsAtMs: resetsAtMs + 60_000 } })];
   assert.deepEqual(head(input({ tasks: byId(paused) }, { state: "waiting" })),

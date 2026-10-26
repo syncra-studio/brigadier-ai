@@ -606,6 +606,8 @@ pub(crate) struct FakeBehavior {
     pub signed_out: Mutex<Vec<ProviderKind>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
+    /// Title-routing tests offer both small families, including an operate-only Haiku.
+    pub title_models: bool,
     /// An extra account's CLI also lists a model of its own (`<account>-model`), so a list
     /// tells whose it is.
     pub account_models: bool,
@@ -713,7 +715,17 @@ struct FakeCli {
 impl FakeCli {
     fn models(&self) -> Vec<ModelInfo> {
         let ids: &[(&str, &str)] = match self.kind {
+            ProviderKind::Claude if self.behavior.title_models => &[
+                ("claude-opus-5-5", "Opus 5.5"),
+                ("claude-haiku-5-5", "Haiku 5.5"),
+                ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+            ],
             ProviderKind::Claude => &[("claude-opus-5-5", "Opus 5.5")],
+            ProviderKind::Codex if self.behavior.title_models => &[
+                ("gpt-6-astra", "GPT-6-Astra"),
+                ("gpt-6-luna", "GPT-6-Luna"),
+                ("gpt-5.6-luna", "GPT-5.6-Luna"),
+            ],
             ProviderKind::Codex if self.behavior.light_model => {
                 &[("gpt-6-astra", "GPT-6-Astra"), ("gpt-6-luna", "GPT-6-Luna")]
             }

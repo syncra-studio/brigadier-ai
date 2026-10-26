@@ -88,6 +88,36 @@ impl SessionManager {
     }
 }
 
+/// Persist the scheduler's promise. Repeated failures back off instead of silently
+/// abandoning a subscription window's automatic recovery.
+pub(super) fn recovery(
+    reset: Option<i64>,
+    kind: Option<LimitKind>,
+    tries: u32,
+) -> crate::work::QuotaRecovery {
+    use crate::work::{QuotaRecovery, QuotaRecoveryMode as Mode};
+    if kind.is_some_and(|kind| kind != LimitKind::UsageWindow) {
+        return QuotaRecovery {
+            mode: Mode::ManualOnly,
+            next_check_at_ms: None,
+        };
+    }
+    let future = reset.filter(|at| *at > now_ms());
+    let delay = if future.is_none() && tries >= 4 {
+        WAIT_RETRY
+    } else {
+        retry_delay(future)
+    };
+    QuotaRecovery {
+        mode: if future.is_some() {
+            Mode::AutomaticAt
+        } else {
+            Mode::AutomaticProbe
+        },
+        next_check_at_ms: Some(now_ms() + delay.as_millis() as i64),
+    }
+}
+
 /// How long work waiting for quota sleeps before it looks again: until just after the reset
 /// that could free it (spread at random over the minute after it), and at most [`WAIT_RETRY`].
 pub(super) fn retry_delay(resets_at_ms: Option<i64>) -> Duration {

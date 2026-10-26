@@ -436,7 +436,7 @@ impl SessionManager {
                     && crate::accounts::ready(
                         &settings,
                         choice.provider,
-                        None,
+                        choice.model.as_deref(),
                         &self.runtime.account_candidates(choice.provider),
                         &[],
                         now,
@@ -516,6 +516,8 @@ impl SessionManager {
         *orchestrator = to;
         if let Err(err) = self.core.set_setup(conv.id.clone(), setup).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not move the session to another agent"; conversation = %conv.id, error = %err);
+            self.fail_quota_handover(conv, "Could not record the provider handoff.")
+                .await;
             return;
         }
         let file = self.read_seam_of(&conv.id).await;
@@ -533,8 +535,14 @@ impl SessionManager {
             .as_ref()
             .is_some_and(|over| over.stopped);
         if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
-            self.close_seam(conv, file, nudged, Some(death), stopped)
-                .await;
+            if !self
+                .close_seam(conv, file, nudged, Some(death), stopped)
+                .await
+            {
+                self.fail_quota_handover(conv, "Could not record the provider handoff.")
+                    .await;
+                return;
+            }
         }
         // The messages the old CLI had taken are in the thread already: the successor is given
         // them again, and its first message doesn't show them twice (#562). Those of a turn
@@ -557,6 +565,7 @@ impl SessionManager {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not record what the thread shows already"; conversation = %conv.id, error = %err);
             }
         }
+        conv.close_cli().await;
         let stopped = {
             let mut state = conv.state.lock().await;
             // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
@@ -572,7 +581,6 @@ impl SessionManager {
             }
             stopped
         };
-        conv.close_cli().await;
         if stopped {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }

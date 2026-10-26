@@ -400,6 +400,121 @@ impl SessionManager {
             .filter(|row| same_work(&row.work, work))
             .collect())
     }
+    /// Conversation titles use normal Work rows, scoped rules, model switches and account
+    /// routing. Shipped rows name small families; never widen them to a default/strong model.
+    /// The registry's tier and short-text rating are qualitative cost/suitability advice, not
+    /// an account price. A user's rows replace these candidates with their explicit order.
+    pub(super) async fn title_route(
+        &self,
+    ) -> Result<Option<(crate::model::ModelChoice, crate::accounts::AccountRef)>> {
+        use brigadier_router::{Heat, QualityTier, TaskCategory};
+        const WORK: &str = "Conversation titles";
+        let rows = self.work_rows(WORK)?;
+        let inputs = self.routing_inputs(now_ms()).await;
+        let settings = self.core.settings();
+        let mut candidates = Vec::new();
+        for (position, row) in rows.into_iter().enumerate() {
+            let provider = match row.agent {
+                Agent::Claude => ProviderKind::Claude,
+                Agent::Codex => ProviderKind::Codex,
+            };
+            // A default model can silently become a frontier model: there is no implicit
+            // default fallback for this chore, even when a light model is unavailable.
+            if row.model.trim().is_empty()
+                || row.model.eq_ignore_ascii_case("default")
+                || !self.provider_ready(provider)
+            {
+                continue;
+            }
+            let shipped = row.source == "shipped";
+            let selected = self.listed_model(provider, &row.model);
+            let models = inputs.models.iter().filter(|rated| {
+                rated.provider == provider
+                    && if shipped {
+                        brigadier_router::is_model(rated, &inputs.registry, &row.model)
+                            || rated
+                                .family
+                                .as_deref()
+                                .is_some_and(|f| f.eq_ignore_ascii_case(&row.model))
+                            || rated
+                                .id
+                                .split(['-', '_'])
+                                .any(|word| word.eq_ignore_ascii_case(&row.model))
+                    } else {
+                        brigadier_router::is_model(rated, &inputs.registry, &selected)
+                    }
+            });
+            for rated in models {
+                let model = &rated.id;
+                if rated.excluded
+                    || rated
+                        .only
+                        .as_ref()
+                        .is_some_and(|only| !only.contains_key(&TaskCategory::GitText))
+                    || (shipped
+                        && !matches!(rated.tier, QualityTier::Light | QualityTier::Standard))
+                    || !crate::routing::availability::model_available(&settings, provider, model)
+                    || self
+                        .model_refusal(provider, Some(model), row.effort.as_deref(), Some(WORK))?
+                        .is_some()
+                {
+                    continue;
+                }
+                let account = self.runtime.launch_account(provider, Some(model));
+                let choice = crate::model::ModelChoice {
+                    provider,
+                    model: Some(model.clone()),
+                    effort: row.effort.clone(),
+                    fast: None,
+                    account: account.account.clone(),
+                };
+                if !self.account_frees_choice(&choice, &account).await {
+                    continue;
+                }
+                let quota = self.runtime.account_usage(&account, now_ms());
+                let heat = quota
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|q| &q.windows)
+                    .filter(|w| {
+                        brigadier_router::window_applies(&w.window, rated, &inputs.registry)
+                            && w.window.resets_at_ms.is_none_or(|reset| reset > now_ms())
+                    })
+                    .map(|w| w.heat)
+                    .max()
+                    .unwrap_or(Heat::Cool);
+                let suitability = rated
+                    .strengths
+                    .get(&TaskCategory::GitText)
+                    .copied()
+                    .unwrap_or(5.0);
+                if suitability <= 0.0 {
+                    continue;
+                }
+                candidates.push((
+                    if shipped { heat } else { Heat::Cool },
+                    if shipped {
+                        rated.tier
+                    } else {
+                        QualityTier::Light
+                    },
+                    if shipped {
+                        -(suitability * 100.0) as i64
+                    } else {
+                        0
+                    },
+                    position,
+                    choice,
+                    account,
+                ));
+            }
+        }
+        candidates.sort_by_key(|(heat, tier, fit, position, _, _)| (*heat, *tier, *fit, *position));
+        Ok(candidates
+            .into_iter()
+            .next()
+            .map(|(_, _, _, _, choice, account)| (choice, account)))
+    }
     /// The `Fallback` rows of the user's routing, in its order (else the shipped ones), as the
     /// choices a session moves to another agent with (S38, D25, D34). A `default` model is the
     /// CLI's own default, as the row says.

@@ -41,6 +41,7 @@ impl SessionManager {
             return Err("the session hasn't started yet: pick its model instead".into());
         };
         let conv = self.conv(id).map_err(|err| err.to_string())?;
+        let _retrying = conv.retry.lock().await;
         let mut file = self.read_seam_of(id).await;
         if orchestrator.provider == to {
             // Asked back before a move came: it stays.
@@ -75,7 +76,7 @@ impl SessionManager {
         }
         let busy = {
             let state = conv.state.lock().await;
-            state.busy || state.hand_over.is_some() || state.has_cli_jobs()
+            state.busy || state.hand_over.is_some() || (!state.waiting && state.has_cli_jobs())
         };
         if busy && !after_turn {
             return Err(format!(
@@ -84,6 +85,21 @@ impl SessionManager {
                 cli_word(to)
             ));
         }
+        let request = {
+            let state = conv.state.lock().await;
+            state
+                .waited_request
+                .clone()
+                .or_else(|| state.request.clone())
+        };
+        self.prepare_provider_transition(
+            &conv,
+            orchestrator.clone(),
+            choice.clone(),
+            crate::work::ProviderTransitionCause::ManualSwitch,
+            request,
+        )
+        .await;
         file.moving = Some(choice.clone());
         self.write_seam_of(id, file)
             .await
@@ -145,7 +161,10 @@ impl SessionManager {
                 return;
             }
             if conv.state.lock().await.waiting {
-                self.stop_waiting(conv).await;
+                if let Err(err) = self.stop_waiting(conv).await {
+                    tracing::error!(error = %err, "could not end quota wait for manual move");
+                    return;
+                }
             }
             self.seam_to_agent(conv, from.provider, to, Vec::new(), false)
                 .await;
