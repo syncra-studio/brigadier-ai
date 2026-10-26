@@ -119,6 +119,13 @@ pub enum Step {
         edit: TomlEdit,
         shared: bool,
     },
+    /// Claude Code's per-project off flags (`disabledMcpServers`, what `/mcp` writes) in each of
+    /// its config `files`: the user's own and each extra account's; none named, the user's own
+    /// ([`crate::Roots::claude_json`]).
+    ClaudeFlags {
+        files: Vec<PathBuf>,
+        flags: Vec<crate::claude_config::OffFlag>,
+    },
 }
 
 /// One MCP server as a CLI's own list reports it.

@@ -673,8 +673,13 @@ impl Catalog {
                             == claude_config::project_key(session.cwd)
                     })
             }
+            // A team server turned down (`disabledMcpjsonServers`) never loads; one waiting for
+            // approval loads in a session that runs without a terminal (2.1.310), as
+            // Brigadier's do.
             (Source::ClaudeProject, Agent::Claude) => {
-                project == session.project && !claude_off(&server.name)
+                project == session.project
+                    && !claude_off(&server.name)
+                    && self.claude_approval(&server.name) != Some(claude_config::Approval::Denied)
             }
             // Codex loads a project's layers only where the user trusts it in Codex.
             (Source::CodexProject, Agent::Codex) => {

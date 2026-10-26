@@ -1,7 +1,8 @@
 //! Claude Code: its own `plugin` and `mcp` commands, each with its own scope (`user`, `local`
-//! for one project and this user, `project` for the team). It has no per-project off for a
-//! server of the user's own config: that one goes into the Library first, then its plugin is
-//! switched off for the project (D9).
+//! for one project and this user, `project` for the team). Any server, the user's own or a
+//! plugin's, is switched off in one project by that project's off flags in Claude Code's config
+//! file (`disabledMcpServers`, what `/mcp` writes), which Brigadier writes itself: Claude Code
+//! has no command for them.
 
 use std::path::Path;
 
@@ -172,10 +173,26 @@ impl AgentAdapter for Claude {
         Ok(vec![Step::Run(plugin_call(&["plugin", verb], id, place))])
     }
 
-    fn set_server(&self, _: &str, _: &Place, _: bool) -> Result<Vec<Step>, Unsupported> {
-        Err(Unsupported(
-            "Claude Code can turn it on or off per project once it's in your Library.".to_owned(),
-        ))
+    fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {
+        match place {
+            Place::Project {
+                path,
+                shared: false,
+            } => Ok(vec![Step::ClaudeFlags {
+                files: Vec::new(),
+                flags: vec![crate::claude_config::OffFlag {
+                    folder: path.clone(),
+                    name: name.to_owned(),
+                    off: !on,
+                }],
+            }]),
+            Place::Project { shared: true, .. } => Err(Unsupported(
+                "Claude Code switches a server off for you alone, never for the team.".to_owned(),
+            )),
+            Place::Everywhere => Err(Unsupported(
+                "Claude Code switches a server off one project at a time.".to_owned(),
+            )),
+        }
     }
 
     fn login(&self, name: &str, project: Option<&Path>) -> CliCall {

@@ -208,6 +208,29 @@ fn holds(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
 
 /// One locked edit: read, splice, and rename only if the file is still what was read.
 fn write_once(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
+    rewrite_locked(file, |before| {
+        let mut after = if before.trim().is_empty() {
+            "{}\n".to_owned()
+        } else {
+            before.to_owned()
+        };
+        for (key, flag) in keyed {
+            after = splice::set_flag(&after, key, &flag.name, flag.off)
+                .map_err(|err| unreadable(file, &err))?;
+        }
+        Ok((after != before).then_some(after))
+    })
+}
+
+/// Rewrites Claude Code's config file `file` (through a symlink, keeping its permissions) to
+/// what `edit` makes of its text (`""` when it isn't there; `None`: nothing to change), under
+/// Claude Code's lock, and only if the file is still what `edit` read: when Claude Code wrote it
+/// meanwhile (it doesn't always take its lock), `edit` runs again on what it wrote. Whether
+/// the file changed.
+pub fn rewrite_locked(
+    file: &Path,
+    mut edit: impl FnMut(&str) -> Result<Option<String>, String>,
+) -> Result<bool, String> {
     let target = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
     let _lock = Lock::take(&target)?;
     for _ in 0..RACES {
@@ -216,15 +239,9 @@ fn write_once(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String>
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(err) => return Err(unreadable(&target, &err.to_string())),
         };
-        let mut after = if before.trim().is_empty() {
-            "{}\n".to_owned()
-        } else {
-            before.clone()
+        let Some(after) = edit(&before)? else {
+            return Ok(false);
         };
-        for (key, flag) in keyed {
-            after = splice::set_flag(&after, key, &flag.name, flag.off)
-                .map_err(|err| unreadable(&target, &err))?;
-        }
         if after == before {
             return Ok(false);
         }
