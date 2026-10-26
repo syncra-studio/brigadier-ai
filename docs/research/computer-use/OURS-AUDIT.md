@@ -440,3 +440,115 @@ context filling"). Each item names the measurement behind it.
 Not hotspots: cold start (375 to 434 ms to the first screenshot), the shim/socket hop (~5 ms),
 cu-layer's per-call guard (in-memory checks plus about one window list), and the watchdog
 (20 to 40 ms every 2 s).
+
+## After phase 1 (re-measured 2026-10-26, branch at `4caf2350b`)
+
+The user's check (L10): phase 1 must not lose anything on reliability or quality. Same apps,
+windows and tasks as above, measured before and after in the same sitting.
+
+**Method.** The helper was built from `4caf2350b`. A freshly built binary has no Accessibility
+or Screen Recording grant (its `check_permissions` said so). I didn't raise a grant prompt on
+the user's screen. The installed, granted helper only talks to peers signed like it, so the new
+shim couldn't reach it directly.
+
+Phase 1 changes only the MCP shim on macOS: `lean.rs` and its calls in `proxy.rs`. The daemon
+and driver are unchanged. So the setup was:
+
+- **After:** the newly built `brigadier-cu mcp`, with `BRIGADIER_CU_AUDIENCE=brigadier` as
+  Brigadier sets it. It talked to a small scratch relay on its home's socket, which answered
+  the daemon protocol and forwarded each tool call to the installed helper.
+- **Before:** the installed shim, talking to that same installed helper.
+- **Homes:** both ran in scratch homes, as in the cold-start test above.
+
+The relay costs nothing measurable (warm `list_windows`: 10–11 ms on both paths). Tokens are
+estimated as before: bytes / 4 of what Claude Code shows the model (`structuredContent`, or the
+text on errors), plus `w × h / 750` per image. Everything ran in the background under the focus
+lock; the front app never changed. All scratch files, windows, apps and the scratch helper were
+closed afterwards.
+
+### Context
+
+| Item | Before | After | Target |
+| --- | ---: | ---: | --- |
+| Tool list (bytes / 4) | 40 tools, 95,899 B, **~23,974** | 20 tools, 27,451 B, **~6,862** | ≤ 7,000: met |
+| Skill body (bytes / 4) | 13,415 B, ~3,354 | 4,798 B, **~1,200** | ≤ 1,200: met (just) |
+| Server instructions | 134 B | 134 B | – |
+
+A GUI worker now pays ~8.1k tokens up front instead of ~27.4k. All 11 tools real agents used
+are kept; the largest schemas are now get_window_state at 3,273 B and run_steps at 2,564 B.
+
+### One read, by app (default `get_window_state`, median of 3)
+
+| App | Before: text + image = ~tok | After: text + image = ~tok | Change | ms before → after |
+| --- | --- | --- | ---: | --- |
+| TextEdit, scratch doc | 439 + 1,476 = 1,915 | 459 + 1,476 = 1,935 | **+1%** | 64 → 118 |
+| Finder, scratch folder | 2,407 + 1,177 = 3,584 | 2,427 + 1,177 = 3,604 | **+1%** | 167 → 220 |
+| Safari, example.com | 1,156 + 1,766 = 2,922 | 1,087 + 0 = 1,087 | **−63%** | 171 → 60 |
+| System Settings › About | 2,213 + 2,018 = 4,231 | 2,143 + 0 = 2,143 | **−49%** | 281 → 178 |
+
+The `since: "latest"` check read with no change goes from 1,975 to 140 tokens on Safari and from
+2,251 to 163 on Settings. On TextEdit (1,714 → 1,734) and Finder (1,409 → 1,429) it is unchanged.
+
+**Why TextEdit and Finder save nothing: the thin-tree check misfires on native macOS
+windows** (`lean.rs` `thin_tree`):
+
+- It counts a row as readable only if its role starts with `statictext`, `textarea` and so
+  on. macOS rows are `AXStaticText` and `AXTextArea`, so the `ax` prefix means no native text
+  row ever counts (Safari escapes only through `axlink`).
+- Any `AXImage` (the title bar's document icon, Finder's file icons), or the word "document"
+  anywhere in a row (it matched the scratch file's own text), then makes the whole window
+  "media without readable text".
+
+Both windows are judged thin, and every read, `since` diffs included, gets the automatic
+screenshot: a second capture call, +~55 ms, and the full image cost. The text the model sees is
+otherwise the same as before plus a ~20-token `screenshot_note`. This is a cost bug, not a
+quality loss: the agent still gets everything it got before.
+
+### Tasks A/B/C, replaying each skill's loop (5 runs each, medians)
+
+| Task | Calls before → after | Tool ms before → after | ~Tok before → after | Success before / after |
+| --- | --- | --- | --- | --- |
+| A. Type into a TextEdit doc and save | 3 → 3 | 641 → 642 | 2,530 → **981 (−61%)** | 5/5 / 5/5 * |
+| B. Find a file in a Finder folder | 2 → 2 | 1,877 → 1,898 (+1%) | 3,817 → **3,837 (+1%)** | 5/5 / 5/5 |
+| C. Open a URL and read a value | 2 → 2 | 584 → 453 (−22%) | 3,231 → **1,397 (−57%)** | 5/5 / 5/5 |
+
+\* One "before" run of A saved its file after the 1.5 s check (the audit's F5: ⌘S answers
+before the write). All ten files held the right text afterwards.
+
+**Against the plan's targets:**
+- Tokens: A and C are ≥ 50% lower; B is not.
+- Calls: the same on each task. Only the default read changed; launch and action replies didn't.
+- Tool time: within +10% everywhere.
+
+In task A the new document's tree wasn't judged thin, so its read came without an image. B
+lands on Finder, where the misfire puts the image back. With the thin check fixed, B would be
+~2,640 tokens (−31%). Phase 1 can't take B further: the rest of B is Finder's 2.4k-token tree,
+noise pruning that phase 3 owns.
+
+### Visual-only cases: does the agent still get the picture when text can't answer?
+
+| Case | What the tree says | After: image? |
+| --- | --- | --- |
+| V1. Bar chart (PNG, no text) in Preview | Toolbar buttons only, nothing about the chart | **Yes**, automatically ("Thin accessibility tree; screenshot included automatically"): 629 + 1,489 tokens, the same image as before |
+| V2. Canvas-drawn chart page in Safari | A web area with no text | **Yes**, automatically: 353 + 1,264 tokens |
+| V3. Finder's icon-only view switcher ("which view is on?") | Four `AXRadioButton (icon view)` … `(gallery view)` rows, with no selected state | Today yes, but only because of the misfire above. With it fixed, the text can't answer, and the agent must ask for `include_screenshot: true`, which the skill tells it to do when text can't answer: one more call (~1.2k image tokens) |
+
+So nothing visual is lost today. Fixing the misfire must keep V1 and V2 (canvas, image-only
+document) thin and leave V3 to the agent's explicit request.
+
+### Verdict per task
+
+- **A (type and save):** same success (5/5), same 3 calls, same speed, **61% fewer tokens**. No
+  quality loss found.
+- **B (find a file in Finder):** same success, calls and speed. **No token saving (+1%)**,
+  because of the thin-check misfire. No quality loss; a cost bug to fix (about −31% once fixed).
+- **C (read a web page):** same success, same calls, 22% faster, **57% fewer tokens**. No
+  quality loss: the page text answers, and the screenshot was never needed.
+- **Context:** the GUI worker's up-front load goes from ~27.4k to ~8.1k tokens, with every tool
+  real agents used still there.
+- **Reliability:** no tool errors on either path in 30 task runs, 54 read-test calls or 6 visual reads.
+  Error results keep their text, which is what Claude Code shows for errors.
+
+**One fix to make, in `lean.rs` `thin_tree`:** match roles with or without the `AX` prefix, and
+don't let the word "document" in row text, or a lone `AXImage` icon, mark a window that has
+readable text rows as media. Then rerun B, V1, V2 and V3.
