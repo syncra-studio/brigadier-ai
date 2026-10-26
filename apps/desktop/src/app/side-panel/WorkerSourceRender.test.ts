@@ -6,7 +6,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 /** The fixture's JSON as the page's DOM escaped it. */
 const unescape = (dump: string) => dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
 
-test("a worker's +N −N opens Source on its changes, read only; the switch goes back to the session's and on to another worker", { timeout: 60000 }, async (t) => {
+test("a worker's +N −N opens Source on its changes, read only; the switch goes back to the session's and on to another worker; a gone worker falls back quietly", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(unescape(await renderFixturePage(t, "worker-source.html", "worker-source-result", 8000))) as Record<string, unknown>;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   // Before: the session's own checkout, as Source showed it, the switch over it.
@@ -40,4 +40,9 @@ test("a worker's +N −N opens Source on its changes, read only; the switch goes
   assert.deepEqual(seen.menu, ["This session", "Cart fixes+12 −3", "Readme fixes+4 −0"]);
   assert.deepEqual(seen.parent, { switch: "This session", groups: ["Changes1"], box: true });
   assert.deepEqual(seen.other, { switch: "Readme fixes", files: ["README.md+4 −0M"] });
+
+  // A worker that is gone closes its Review tab and leaves the session's scope, with no error.
+  assert.deepEqual(seen.reviewGone, { active: "chat", error: "" });
+  assert.deepEqual(seen.sourceGone, { switch: "This session", scope: null, error: "" });
+  assert.deepEqual(seen.closedGone, { switch: "This session", scope: null });
 });
