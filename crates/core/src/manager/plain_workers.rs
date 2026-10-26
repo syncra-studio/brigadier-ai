@@ -392,6 +392,7 @@ impl SessionManager {
         let plain = PlainWorker {
             quota_policy: Some(quota_policy),
             permission,
+            inherited: start.permission.is_none(),
             local: start.local,
             repo: place,
             base: base.clone(),

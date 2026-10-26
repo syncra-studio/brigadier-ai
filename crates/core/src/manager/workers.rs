@@ -43,9 +43,9 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
-    ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, MockupPart,
-    OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind, TaskState,
-    TaskWorkspace, WorkerAccess, WorkerStepKind,
+    ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, CardState,
+    MockupPart, OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind,
+    TaskState, TaskWorkspace, WorkerAccess, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
 
@@ -78,6 +78,8 @@ pub(crate) struct Workspace {
 /// A worker's CLI session as [`SessionManager::worker_session`] makes it.
 pub(crate) struct WorkerSession {
     pub spec: SessionSpec,
+    /// The level it runs at ([`SessionManager::worker_level`]).
+    pub level: PermissionLevel,
     /// Where its CLI runs.
     pub cwd: PathBuf,
     pub outputs: PathBuf,
@@ -94,6 +96,8 @@ mod seam;
 #[derive(Default)]
 struct TaskLiveState {
     cli: Option<Arc<Cli>>,
+    /// The level its CLI was started at: its permission mode is fixed then.
+    level: Option<PermissionLevel>,
     /// A turn is running.
     busy: bool,
     /// The current turn's last assistant message, for its session's `brigadier wait`.
@@ -246,6 +250,32 @@ impl SessionManager {
             }
             _ => PermissionLevel::default(),
         }
+    }
+
+    /// The level `task`'s worker runs at now: the one it was started with when `--permission`
+    /// gave one (Q8), else its session's as that changes; Ask in a folder the user doesn't
+    /// trust.
+    pub(crate) fn worker_level(&self, task: &Task) -> PermissionLevel {
+        match &task.plain {
+            _ if self.repo_trust(&task.conversation_id) == Some(false) => PermissionLevel::Ask,
+            Some(plain) if !plain.inherited => plain.permission,
+            _ => self.permission(&task.conversation_id),
+        }
+    }
+
+    /// Whether `task`'s worker's level went to Full access while `cli` runs at a lower one.
+    /// Its mode is fixed when it starts, and it starts again at the new level only between
+    /// turns ([`Self::deliver_to_worker`]); until then what it asks goes, as Full access lets it.
+    async fn worker_raised_to_full(&self, live: &TaskLive, task: &Task, cli: &Arc<Cli>) -> bool {
+        let level = {
+            let state = live.state.lock().await;
+            if !state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli)) {
+                return false;
+            }
+            state.level
+        };
+        level.is_some_and(|level| level != PermissionLevel::Full)
+            && self.worker_level(task) == PermissionLevel::Full
     }
 
     /// Whether the session is in plan mode (see [`Setup::Session`]).
@@ -676,15 +706,8 @@ impl SessionManager {
             })
             .await?;
         }
-        // It runs at the level it was started with (Q8), Ask in a folder the user doesn't
-        // trust.
-        let access = match &task.plain {
-            _ if self.repo_trust(&task.conversation_id) == Some(false) => {
-                PermissionLevel::Ask.access()
-            }
-            Some(plain) => plain.permission.access(),
-            None => self.permission(&task.conversation_id).access(),
-        };
+        let level = self.worker_level(task);
+        let access = level.access();
         if let (Some(worktree), true) = (&workspace.worktree, setup) {
             self.run_setup_script(
                 &conversation_id,
@@ -815,6 +838,7 @@ impl SessionManager {
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
             spec,
+            level,
             cwd,
             outputs,
             redactor,
@@ -842,6 +866,7 @@ impl SessionManager {
         let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
         let WorkerSession {
             spec,
+            level,
             cwd,
             outputs,
             redactor,
@@ -896,6 +921,7 @@ impl SessionManager {
         {
             let mut state = live.state.lock().await;
             state.cli = Some(cli.clone());
+            state.level = Some(level);
             state.cwd = Some(cwd);
             state.worktree = worktree;
             state.outputs = Some(outputs);
@@ -1726,16 +1752,23 @@ impl SessionManager {
 
     /// B7 for worker approvals: what the user already allowed "for this session" in this
     /// conversation goes; anything else asks the user (the CLI asks only what its level
-    /// leaves to the user).
+    /// leaves to the user). A worker raised to Full access since its CLI started asks nobody.
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
         cli: &Arc<Cli>,
         mut request: ApprovalRequest,
     ) {
+        let raised = self.worker_raised_now(live, cli).await;
         let worktree = live.state.lock().await.worktree.clone();
-        if !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref()) {
+        if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
+        {
             self.ask_user_for_worker(live, cli, request).await;
+            // Raised while its card opened, after the waiting cards were looked at: it goes.
+            if self.worker_raised_now(live, cli).await {
+                self.allow_workers_waiting_at_full(&live.conversation_id)
+                    .await;
+            }
             return;
         }
         let decision = ApprovalDecision::Allow;
@@ -1747,8 +1780,75 @@ impl SessionManager {
             tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
             return;
         }
-        self.record_worker_resolution(&live.id, request.id, decision, Decider::User)
+        let by = if raised {
+            Decider::Policy
+        } else {
+            Decider::User
+        };
+        self.record_worker_resolution(&live.id, request.id, decision, by)
             .await;
+    }
+
+    /// [`Self::worker_raised_to_full`] for the worker `live` as its task reads now.
+    async fn worker_raised_now(&self, live: &TaskLive, cli: &Arc<Cli>) -> bool {
+        match self.task_by_id(&live.conversation_id, &live.id).await {
+            Ok(task) => self.worker_raised_to_full(live, &task, cli).await,
+            Err(_) => false,
+        }
+    }
+
+    /// The session went to Full access: the requests its inheriting workers' CLIs wait on go
+    /// now, as those they ask from now on do ([`Self::worker_raised_to_full`]).
+    pub(crate) async fn allow_workers_waiting_at_full(&self, id: &ConversationId) {
+        let board = match self.core.board(id).await {
+            Ok(board) => board,
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not read the waiting requests");
+                return;
+            }
+        };
+        for approval in board.approvals.values() {
+            let (Some(task_id), ApprovalSubject::Cli { request }) =
+                (&approval.task_id, &approval.subject)
+            else {
+                continue;
+            };
+            if approval.state != CardState::Pending {
+                continue;
+            }
+            let (Some(task), Some(live)) =
+                (board.tasks.get(task_id), self.existing_task_live(task_id))
+            else {
+                continue;
+            };
+            let Some(cli) = live.cli().await else {
+                continue;
+            };
+            // Lowered again meanwhile, or a worker at a level of its own: the user answers.
+            if !self.worker_raised_to_full(&live, task, &cli).await {
+                continue;
+            }
+            let decision = ApprovalDecision::Allow;
+            if let Err(err) = cli
+                .session
+                .answer(request.id.clone(), decision.clone())
+                .await
+            {
+                tracing::warn!(task = %task_id, error = %err, "could not answer an approval");
+                continue;
+            }
+            self.record_worker_resolution(task_id, request.id.clone(), decision, Decider::Policy)
+                .await;
+            self.set_task_blocked(task_id, None).await;
+            self.settle_approval(
+                approval,
+                CardState::Allowed {
+                    by: Decider::Policy,
+                    similar: false,
+                },
+            )
+            .await;
+        }
     }
 
     /// The user's card for the worker CLI's request, while that CLI runs; the worker shows it
@@ -1956,6 +2056,7 @@ impl SessionManager {
             return Err(Error::Invalid(format!("worker {} has ended", task.number)));
         }
         let live = self.task_live(task);
+        self.retire_outdated_worker(&live, task).await;
         let mut state = live.state.lock().await;
         // Handing off (D14): its successor's first input carries it.
         if state.seam.as_ref().is_some_and(|seam| seam.holds()) {
@@ -1988,6 +2089,36 @@ impl SessionManager {
             tracing::warn!(task = %task.id, error = %err, "could not record a messaged worker running");
         }
         Ok(())
+    }
+
+    /// The worker's CLI was started at another level than it has now (an inheriting worker's
+    /// session changed its level): close it while no turn runs, so the next input resumes the
+    /// same CLI session at the new level, as the thread starts again between turns. One that
+    /// could not be resumed keeps its CLI.
+    async fn retire_outdated_worker(&self, live: &Arc<TaskLive>, task: &Task) {
+        let outdated = |state: &TaskLiveState| {
+            !state.busy
+                && state.cli.is_some()
+                && state.seam.is_none()
+                && state
+                    .level
+                    .is_some_and(|level| level != self.worker_level(task))
+        };
+        if !outdated(&*live.state.lock().await) || self.last_worker_native_id(task).await.is_none()
+        {
+            return;
+        }
+        let _handing = live.reroute.lock().await;
+        let cli = {
+            let mut state = live.state.lock().await;
+            if !outdated(&state) {
+                return;
+            }
+            TaskLive::detach_cli(&mut state)
+        };
+        tracing::info!(task = %task.id, level = ?self.worker_level(task), "the worker starts again for its new level");
+        TaskLive::end_cli(cli).await;
+        live.allow_revival().await;
     }
 
     /// Stops a worker for good (`brigadier close`, or the user's stop button). Unfinished
