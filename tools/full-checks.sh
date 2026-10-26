@@ -110,9 +110,9 @@ if $cross; then
     --all-targets -- -D warnings
   run cargo clippy --locked --target x86_64-pc-windows-gnu "${crates[@]}" \
     --all-targets -- -D warnings
-  # The desktop crate's Windows-only code. Its build wants the daemon's Windows sidecar beside
-  # it; none is built here, so an empty stand-in takes its place (binaries/ is ignored) and goes
-  # again after.
+  # The desktop crate's Windows-only code. Its build wants the Windows sidecars beside it (the
+  # daemon, the command and the computer-use helper, as tauri.windows.conf.json lists them); none
+  # is built here, so empty stand-ins take their place (binaries/ is ignored) and go again after.
   stand_in() {
     if [ ! -e "$1" ]; then
       mkdir -p "$(dirname "$1")"
@@ -120,12 +120,16 @@ if $cross; then
       stand_ins+=("$1")
     fi
   }
-  stand_in apps/desktop/src-tauri/binaries/brigadierd-x86_64-pc-windows-gnu.exe
+  for sidecar in brigadierd brigadier brigadier-cu; do
+    stand_in "apps/desktop/src-tauri/binaries/$sidecar-x86_64-pc-windows-gnu.exe"
+  done
   run cargo clippy --locked --target x86_64-pc-windows-gnu -p brigadier-desktop \
     --all-targets -- -D warnings
   # The desktop crate's Linux-only code, the same way. Its GTK and WebKit libraries aren't here,
   # and clippy links nothing, so a pkg-config that finds every library with no flags stands in.
-  stand_in apps/desktop/src-tauri/binaries/brigadierd-x86_64-unknown-linux-gnu
+  for sidecar in brigadierd brigadier brigadier-cu; do
+    stand_in "apps/desktop/src-tauri/binaries/$sidecar-x86_64-unknown-linux-gnu"
+  done
   mkdir -p target/linux-pkg-config
   printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = --modversion ] && echo 99.0; done\nexit 0\n' \
     > target/linux-pkg-config/pkg-config
