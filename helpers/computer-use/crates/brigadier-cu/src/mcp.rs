@@ -166,7 +166,7 @@ async fn handle_request(
                         if let Some(fallback) = view.fallback_arguments(
                             &call.name,
                             &call.args,
-                            &value,
+                            &mut value,
                             brigadier_audience(),
                         ) {
                             let image =

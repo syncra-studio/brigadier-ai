@@ -1,0 +1,159 @@
+{
+  "window_title": "text",
+  "tree_markdown": "- [0] AXMenuBar [id=_NS:834 actions=[cancel]] (menus collapsed: run an item with invoke_menu path, or pass query to search menu items)\n  - [1] AXMenuBarItem \"text\" [actions=[cancel,press,pick]]\n  - [2] AXMenuBarItem \"text\" [id=_NS:839 actions=[cancel,press,pick]]\n  - [3] AXMenuBarItem \"text\" [id=_NS:861 actions=[cancel,press,pick]]\n  - [4] AXMenuBarItem \"text\" [id=_NS:887 actions=[cancel,press,pick]]\n  - [5] AXMenuBarItem \"text\" [id=_NS:946 actions=[cancel,press,pick]]\n  - [6] AXMenuBarItem \"text\" [id=_NS:979 actions=[cancel,press,pick]]\n  - [7] AXMenuBarItem \"text\" [id=_NS:989 actions=[cancel,press,pick]]\n  - [8] AXMenuBarItem \"text\" [id=_NS:999 actions=[cancel,press,pick]]\n- [9] AXWindow \"text\" [id=_NS:31 actions=[raise]]\n  - [10] AXTextArea = \"This scratch document contains readable text.\nSecond line.\" [id=First Text View]\n  - [11] AXButton [actions=[press]]\n  - [12] AXButton [help=\"text\" actions=[press,zoomwindow]]\n  - [13] AXButton [actions=[press]]\n  - AXMenuButton (document actions)\n  - AXImage \"text\"\n",
+  "elements": [
+    {
+      "depth": 0,
+      "element_index": 0,
+      "enabled": true,
+      "frame": {
+        "h": 33.0,
+        "w": 1728.0,
+        "x": 0.0,
+        "y": 0.0
+      },
+      "label": "text",
+      "role": "AXMenuBar",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 1,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 2,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 3,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 4,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 5,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 6,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 7,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 1,
+      "element_index": 8,
+      "enabled": true,
+      "label": "text",
+      "parent_index": 0,
+      "role": "AXMenuBarItem",
+      "selected": false
+    },
+    {
+      "depth": 0,
+      "element_index": 9,
+      "frame": {
+        "h": 422.0,
+        "w": 656.0,
+        "x": 185.0,
+        "y": 83.0
+      },
+      "label": "text",
+      "role": "AXWindow"
+    },
+    {
+      "depth": 1,
+      "element_index": 10,
+      "frame": {
+        "h": 384.0,
+        "w": 656.0,
+        "x": 185.0,
+        "y": 115.0
+      },
+      "label": "text",
+      "parent_index": 9,
+      "role": "AXTextArea",
+      "value": "text"
+    },
+    {
+      "depth": 1,
+      "element_index": 11,
+      "enabled": true,
+      "frame": {
+        "h": 16.0,
+        "w": 16.0,
+        "x": 193.0,
+        "y": 91.0
+      },
+      "parent_index": 9,
+      "role": "AXButton"
+    },
+    {
+      "depth": 1,
+      "element_index": 12,
+      "enabled": true,
+      "frame": {
+        "h": 16.0,
+        "w": 16.0,
+        "x": 239.0,
+        "y": 91.0
+      },
+      "parent_index": 9,
+      "role": "AXButton"
+    },
+    {
+      "depth": 1,
+      "element_index": 13,
+      "enabled": true,
+      "frame": {
+        "h": 16.0,
+        "w": 16.0,
+        "x": 216.0,
+        "y": 91.0
+      },
+      "parent_index": 9,
+      "role": "AXButton"
+    }
+  ],
+  "element_count": 14,
+  "tree_format": "both"
+}

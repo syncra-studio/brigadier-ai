@@ -10,11 +10,13 @@ use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Small diffs do not tell us whether a canvas changed visually. Remember the
-/// last full tree for each window so thin surfaces keep getting fresh pixels.
+#[path = "read_quality.rs"]
+mod read_quality;
+
+/// Remember the full view only for diffs which report an actual change.
 #[derive(Default)]
 pub struct View {
-    thin_windows: HashMap<(i64, i64), bool>,
+    windows: HashMap<(i64, i64), read_quality::Quality>,
 }
 
 const ROSTER: &[&str] = &[
@@ -187,6 +189,7 @@ fn property_description(name: &str) -> Option<&'static str> {
 /// false. Screenshot-only reads and screenshot_out_file implicitly ask for pixels.
 pub fn arguments(name: &str, mut args: Value, brigadier: bool) -> Value {
     if brigadier && name == "get_window_state" {
+        let geometry = geometry_for_classification(&args);
         if let Some(object) = args.as_object_mut() {
             let pixels_requested = object.get("include_accessibility_tree")
                 == Some(&Value::Bool(false))
@@ -196,9 +199,38 @@ pub fn arguments(name: &str, mut args: Value, brigadier: bool) -> Value {
             object
                 .entry("include_screenshot")
                 .or_insert(Value::Bool(pixels_requested));
+            if geometry {
+                object.insert("tree_format".into(), "both".into());
+            }
+        }
+    } else if brigadier && name == "run_steps" {
+        if let Some(observe) = args.get_mut("observe").filter(|value| value.is_object()) {
+            if geometry_for_classification(observe) {
+                observe["tree_format"] = "both".into();
+            }
         }
     }
     args
+}
+
+fn geometry_for_classification(args: &Value) -> bool {
+    args["include_accessibility_tree"] != false
+        && args["full_output"] != true
+        && matches!(args["tree_format"].as_str(), None | Some("markdown"))
+}
+
+fn restore_read_format(original: &Value, read: &mut Value) {
+    if geometry_for_classification(original) {
+        if let Some(state) = read
+            .get_mut("structuredContent")
+            .and_then(Value::as_object_mut)
+        {
+            state.remove("elements");
+            if state.get("tree_format").is_some() {
+                state.insert("tree_format".into(), "markdown".into());
+            }
+        }
+    }
 }
 
 /// Keep structured trees (both tested clients expose them). Remove only exact
@@ -289,7 +321,7 @@ impl View {
         &mut self,
         name: &str,
         original: &Value,
-        read: &Value,
+        read: &mut Value,
         brigadier: bool,
     ) -> Option<Value> {
         if brigadier && name == "run_steps" {
@@ -310,27 +342,38 @@ impl View {
             if let Some(session) = original.get("session") {
                 args["session"] = session.clone();
             }
-            let observed = serde_json::json!({"structuredContent":state,"content":read["content"]});
-            return self.fallback_arguments("get_window_state", &args, &observed, true);
+            let mut observed =
+                serde_json::json!({"structuredContent":state,"content":read["content"]});
+            let fallback = self.fallback_arguments("get_window_state", &args, &mut observed, true);
+            read["structuredContent"]["observation"]["state"] =
+                observed["structuredContent"].take();
+            return fallback;
         }
         if !brigadier || name != "get_window_state" || read["isError"] == true {
             return None;
         }
         let window = (original["pid"].as_i64()?, original["window_id"].as_i64()?);
         let state = &read["structuredContent"];
-        let is_diff = matches!(state["since_status"].as_str(), Some("diff" | "no_change"));
-        let thin = if is_diff {
-            // A diff cannot prove the rest of the window is text-complete.
-            // Navigation can introduce a canvas after a previously rich read.
-            let thin = self.thin_windows.get(&window).copied().unwrap_or(true)
-                || state["tree_diff"].as_str().is_some_and(has_visual_surface);
-            self.thin_windows.insert(window, thin);
+        if state["since_status"] == "no_change" {
+            restore_read_format(original, read);
+            return None;
+        }
+        let thin = if state["since_status"] == "diff" {
+            let previous = self.windows.get(&window).copied();
+            let thin = read_quality::changed_needs_pixels(state, previous);
+            let mut quality = previous.unwrap_or_else(|| read_quality::assess(state));
+            quality.thin = thin;
+            self.windows.insert(window, quality);
             thin
         } else {
-            let thin = thin_state(state);
-            self.thin_windows.insert(window, thin);
-            thin
+            let quality = read_quality::assess(state);
+            if quality.unlabelled_controls > 0 {
+                read["structuredContent"]["visual_hint"] = format!("{} controls are unlabelled; a screenshot would show them (include_screenshot:true).", quality.unlabelled_controls).into();
+            }
+            self.windows.insert(window, quality);
+            quality.thin
         };
+        restore_read_format(original, read);
         if original.get("include_screenshot").is_some()
             || original["include_accessibility_tree"] == false
             || original.get("screenshot_out_file").is_some()
@@ -348,126 +391,6 @@ impl View {
         args["include_accessibility_tree"] = false.into();
         Some(args)
     }
-}
-
-fn thin_state(state: &Value) -> bool {
-    // A partial walk may omit the entire rendered body after a rich toolbar.
-    if state["truncated"] == true {
-        return true;
-    }
-    if let Some(markdown) = state["tree_markdown"].as_str() {
-        thin_tree(markdown)
-    } else if let Some(elements) = state["elements"].as_array() {
-        let markdown = elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| {
-                format!(
-                    "[{index}] {} {:?} value={:?}\n",
-                    element["role"].as_str().unwrap_or_default(),
-                    element
-                        .get("label")
-                        .or_else(|| element.get("title"))
-                        .or_else(|| element.get("name"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    element
-                        .get("value")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                )
-            })
-            .collect::<String>();
-        thin_tree(&markdown)
-    } else {
-        // Missing/unknown tree shapes cannot establish readable content.
-        true
-    }
-}
-
-// Audit §2: the smallest useful normal read is TextEdit (14 rows), then
-// Safari (32), Finder (97), Settings (99). Use a conservative lower threshold
-// of fewer than four labelled rows, not total nodes: container-only trees
-// can have many rows. Media containers need actual readable content as well.
-fn thin_tree(markdown: &str) -> bool {
-    if has_visual_surface(markdown) {
-        return true;
-    }
-    let mut labelled = 0;
-    let mut media = false;
-    let mut readable = false;
-    for line in markdown.lines() {
-        let Some((_, rest)) = line.split_once(']') else {
-            continue;
-        };
-        let lower = rest.to_lowercase();
-        let label = rest.split('"').nth(1).unwrap_or_default().trim();
-        let has_text = !label.is_empty()
-            || rest
-                .split_once("value=")
-                .is_some_and(|(_, v)| !v.trim_matches([' ', '"']).is_empty());
-        labelled += usize::from(has_text);
-        media |= [
-            "axwebarea",
-            "webarea",
-            "web area",
-            "document",
-            "canvas",
-            "drawing area",
-            "drawingarea",
-            "aximage",
-            " image",
-        ]
-        .iter()
-        .any(|role| lower.contains(role));
-        readable |= has_text
-            && [
-                "statictext",
-                "textarea",
-                "textfield",
-                "axlink",
-                "hyperlink",
-                "link",
-                "entry",
-                "label",
-                "paragraph",
-                " text",
-                " edit",
-            ]
-            .iter()
-            .any(|role| lower.trim_start().starts_with(role.trim_start()));
-    }
-    labelled < 4 || (media && !readable)
-}
-
-/// Readable browser chrome or captions do not describe the pixels of a
-/// drawing, photo, video, chart or embedded surface. Look only at the role,
-/// so ordinary prose containing "image" does not trigger a capture.
-fn has_visual_surface(markdown: &str) -> bool {
-    markdown.lines().any(|line| {
-        let Some((_, rest)) = line.split_once(']') else {
-            return false;
-        };
-        let role = rest
-            .split('"')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        [
-            "canvas",
-            "drawingarea",
-            "drawing area",
-            "image",
-            "video",
-            "chart",
-            "graphic",
-            "embedded",
-            "map",
-        ]
-        .iter()
-        .any(|visual| role.trim_start_matches("ax").starts_with(visual))
-    })
 }
 
 pub fn merge_screenshot(read: &mut Value, image: Value) {
@@ -578,7 +501,7 @@ mod tests {
         read: &Value,
         brigadier: bool,
     ) -> Option<Value> {
-        View::default().fallback_arguments(name, original, read, brigadier)
+        View::default().fallback_arguments(name, original, &mut read.clone(), brigadier)
     }
 
     fn read(markdown: &str) -> Value {
@@ -624,7 +547,10 @@ mod tests {
         }
         for explicit in [true, false] {
             let args = json!({"include_screenshot":explicit});
-            assert_eq!(arguments("get_window_state", args.clone(), true), args);
+            assert_eq!(
+                arguments("get_window_state", args, true)["include_screenshot"],
+                explicit
+            );
         }
         for args in [
             json!({"include_accessibility_tree":false}),
@@ -752,7 +678,10 @@ mod tests {
         for status in ["diff", "no_change"] {
             let mut diff = read("");
             diff["structuredContent"]["since_status"] = status.into();
-            assert!(fallback_arguments("get_window_state", &original, &diff, true).is_some());
+            assert_eq!(
+                fallback_arguments("get_window_state", &original, &diff, true).is_some(),
+                status == "diff"
+            );
         }
     }
 
@@ -784,64 +713,48 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_canvas_still_gets_pixels_without_affecting_other_windows() {
+    fn unchanged_canvas_never_automatically_attaches_pixels() {
         let mut view = View::default();
         let window = json!({"pid":1,"window_id":2});
         assert!(view
             .fallback_arguments(
                 "get_window_state",
                 &window,
-                &read("[1] AXWebArea \"Canvas\""),
+                &mut read("[1] AXWebArea \"Canvas\""),
                 true
             )
             .is_some());
-        let diff =
+        let mut diff =
             json!({"structuredContent":{"since_status":"no_change","tree_diff":"no change"}});
         assert!(view
-            .fallback_arguments("get_window_state", &window, &diff, true)
-            .is_some());
+            .fallback_arguments("get_window_state", &window, &mut diff, true)
+            .is_none());
         assert!(view
             .fallback_arguments(
                 "get_window_state",
                 &json!({"pid":1,"window_id":3}),
-                &diff,
+                &mut diff,
                 true
             )
-            .is_some());
+            .is_none());
     }
 
     #[test]
     fn visual_content_is_not_explained_by_toolbar_or_caption_text() {
-        let chrome = "[1] AXTextField \"Address\"\n[2] AXStaticText \"Ready\"\n[3] AXButton \"Save\"\n[4] AXButton \"Open\"\n";
-        for role in [
-            "AXImage",
-            "AXCanvas",
-            "Image",
-            "drawing area",
-            "video",
-            "chart",
-        ] {
-            assert!(
-                thin_tree(&format!("{chrome}[5] {role} \"content\"")),
-                "{role}"
-            );
-        }
-        assert!(!thin_tree(&format!(
-            "{chrome}[5] AXStaticText \"image processing\""
-        )));
         let original = json!({"pid":1,"window_id":2});
         let mut view = View::default();
+        let mut rich = json!({"structuredContent":serde_json::from_str::<Value>(include_str!("fixtures/lean-textedit.json")).unwrap()});
         assert!(view
-            .fallback_arguments("get_window_state", &original, &read(chrome), true)
+            .fallback_arguments("get_window_state", &original, &mut rich, true)
             .is_none());
-        let diff = json!({"structuredContent":{"since_status":"diff", "tree_diff":"+ [5] AXImage \"Photo\""}});
+        let mut diff = json!({"structuredContent":{"since_status":"diff", "tree_diff":"+ [5] AXImage \"Photo\"", "elements":[{"element_index":5,"role":"AXImage","frame":{"x":200,"y":160,"w":400,"h":240}}]}});
         assert!(view
-            .fallback_arguments("get_window_state", &original, &diff, true)
+            .fallback_arguments("get_window_state", &original, &mut diff, true)
             .is_some());
-        let unchanged = json!({"structuredContent":{"since_status":"no_change"}});
+        let mut unchanged = json!({"structuredContent":{"since_status":"no_change"}});
         assert!(view
-            .fallback_arguments("get_window_state", &original, &unchanged, true)
-            .is_some());
+            .fallback_arguments("get_window_state", &original, &mut unchanged, true)
+            .is_none());
     }
 
     #[test]
@@ -870,7 +783,7 @@ mod tests {
         let original =
             json!({"session":"owned","observe":{},"steps":[{"click":{"pid":99,"window_id":100}}]});
         let fallback = View::default()
-            .fallback_arguments("run_steps", &original, &batch, true)
+            .fallback_arguments("run_steps", &original, &mut batch, true)
             .unwrap();
         assert_eq!(fallback["pid"], 12);
         assert_eq!(fallback["window_id"], 34);
@@ -893,22 +806,149 @@ mod tests {
         assert_eq!(batch["isError"], true);
         let explicit = json!({"observe":{"include_screenshot":false}});
         assert!(View::default()
-            .fallback_arguments("run_steps", &explicit, &batch, true)
+            .fallback_arguments("run_steps", &explicit, &mut batch, true)
             .is_none());
     }
 
     #[test]
-    fn native_windows_and_linux_roles_are_classified_without_ax_prefixes() {
-        let chrome = "[1] Button \"Back\"\n[2] Button \"Forward\"\n[3] Button \"Reload\"\n[4] Button \"Menu\"\n";
-        assert!(thin_tree(&format!("{chrome}[5] Document \"Canvas\"")));
-        assert!(thin_tree(&format!("{chrome}[5] document web \"Game\"")));
-        for role in ["Text", "Edit", "entry", "link", "paragraph"] {
+    fn real_app_fixtures_preserve_visual_only_reads_without_screenshots_on_text_reads() {
+        for (name, fixture, expected) in [
+            (
+                "TextEdit",
+                include_str!("fixtures/lean-textedit.json"),
+                false,
+            ),
+            ("Finder", include_str!("fixtures/lean-finder.json"), false),
+            ("Safari", include_str!("fixtures/lean-safari.json"), false),
+            (
+                "Safari canvas",
+                include_str!("fixtures/lean-safari-canvas.json"),
+                true,
+            ),
+            ("Preview", include_str!("fixtures/lean-preview.json"), true),
+        ] {
+            let mut full = json!({"structuredContent":serde_json::from_str::<Value>(fixture).unwrap(),"content":[]});
+            let mut view = View::default();
+            let args = json!({"pid":1,"window_id":2});
+            assert_eq!(
+                view.fallback_arguments("get_window_state", &args, &mut full, true)
+                    .is_some(),
+                expected,
+                "{name}"
+            );
             assert!(
-                !thin_tree(&format!(
-                    "{chrome}[5] document web \"Page\"\n[6] {role} \"Readable content\""
-                )),
-                "{role}"
+                full["structuredContent"].get("elements").is_none(),
+                "{name}: internal geometry leaked"
+            );
+            let mut unchanged =
+                json!({"structuredContent":{"since_status":"no_change"},"content":[]});
+            assert!(
+                view.fallback_arguments("get_window_state", &args, &mut unchanged, true)
+                    .is_none(),
+                "{name}: no-change diff captured pixels"
             );
         }
+    }
+
+    #[test]
+    fn unlabelled_finder_toolbar_suggests_an_image_without_capturing_one() {
+        let mut state: Value =
+            serde_json::from_str(include_str!("fixtures/lean-finder.json")).unwrap();
+        // Variant of the captured toolbar: remove the four view descriptions,
+        // modelling a toolkit that exposes neither labels nor descriptions.
+        let mut markdown = state["tree_markdown"].as_str().unwrap().to_owned();
+        for description in ["icon view", "list view", "column view", "gallery view"] {
+            markdown = markdown.replace(&format!("AXRadioButton ({description})"), "AXRadioButton");
+        }
+        state["tree_markdown"] = markdown.into();
+        for element in state["elements"].as_array_mut().unwrap() {
+            if element["role"] == "AXRadioButton" {
+                element.as_object_mut().unwrap().remove("label");
+            }
+        }
+        let mut reply = json!({"structuredContent":state,"content":[]});
+        assert!(View::default()
+            .fallback_arguments(
+                "get_window_state",
+                &json!({"pid":1,"window_id":2}),
+                &mut reply,
+                true
+            )
+            .is_none());
+        assert_eq!(
+            reply["structuredContent"]["visual_hint"],
+            "4 controls are unlabelled; a screenshot would show them (include_screenshot:true)."
+        );
+        assert!(reply["content"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn internal_geometry_preserves_explicit_public_tree_formats() {
+        for format in [None, Some("markdown"), Some("elements"), Some("both")] {
+            let mut args = json!({"pid":1,"window_id":2});
+            if let Some(format) = format {
+                args["tree_format"] = format.into();
+            }
+            let prepared = arguments("get_window_state", args.clone(), true);
+            assert_eq!(
+                prepared["tree_format"],
+                format.filter(|f| *f == "elements").unwrap_or("both")
+            );
+            let mut reply = json!({"structuredContent":serde_json::from_str::<Value>(include_str!("fixtures/lean-textedit.json")).unwrap()});
+            View::default().fallback_arguments("get_window_state", &args, &mut reply, true);
+            assert_eq!(
+                reply["structuredContent"].get("elements").is_some(),
+                matches!(format, Some("elements" | "both"))
+            );
+        }
+        let full = json!({"full_output":true});
+        assert!(arguments("get_window_state", full, true)
+            .get("tree_format")
+            .is_none());
+    }
+
+    #[test]
+    fn batch_observation_geometry_is_internal_and_no_change_never_captures() {
+        let args = json!({"observe":{}});
+        assert_eq!(
+            arguments("run_steps", args.clone(), true)["observe"]["tree_format"],
+            "both"
+        );
+        assert_eq!(arguments("run_steps", args.clone(), false), args);
+        let mut batch = json!({"structuredContent":{"observation":{"ok":true,"state":serde_json::from_str::<Value>(include_str!("fixtures/lean-textedit.json")).unwrap()}},"content":[]});
+        batch["structuredContent"]["observation"]["state"]["pid"] = 1.into();
+        batch["structuredContent"]["observation"]["state"]["window_id"] = 2.into();
+        assert!(View::default()
+            .fallback_arguments("run_steps", &args, &mut batch, true)
+            .is_none());
+        assert!(batch
+            .pointer("/structuredContent/observation/state/elements")
+            .is_none());
+        batch["structuredContent"]["observation"]["state"]["since_status"] = "no_change".into();
+        assert!(View::default()
+            .fallback_arguments("run_steps", &args, &mut batch, true)
+            .is_none());
+    }
+
+    #[test]
+    fn partial_read_still_gets_pixels_but_explicit_false_and_no_change_win() {
+        let mut reply = json!({"structuredContent":serde_json::from_str::<Value>(include_str!("fixtures/lean-textedit.json")).unwrap()});
+        reply["structuredContent"]["truncated"] = true.into();
+        let args = json!({"pid":1,"window_id":2});
+        assert!(View::default()
+            .fallback_arguments("get_window_state", &args, &mut reply.clone(), true)
+            .is_some());
+        assert!(View::default()
+            .fallback_arguments(
+                "get_window_state",
+                &json!({"pid":1,"window_id":2,"include_screenshot":false}),
+                &mut reply.clone(),
+                true
+            )
+            .is_none());
+        reply["structuredContent"]["since_status"] = "no_change".into();
+        assert!(View::default()
+            .fallback_arguments("get_window_state", &args, &mut reply, true)
+            .is_none());
     }
 }
