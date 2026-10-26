@@ -97,9 +97,7 @@ impl SessionManager {
                             choice.effort.as_deref(),
                             Some(crate::manager::models::FALLBACK_WORK),
                         )
-                        .ok()
-                        .flatten()
-                        .is_none()
+                        .is_ok_and(|refusal| refusal.is_none())
             }));
         }
         choices

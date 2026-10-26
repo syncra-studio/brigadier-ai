@@ -1,7 +1,6 @@
-//! What a CLI's error means for its work, and the waits for quota. A worker's usage limit
-//! pauses it and its session hears it (`brigadier wait`); Brigadier moves no work to another
-//! model (G18). Conversations waiting for a model look again whenever a provider's state is
-//! recorded.
+//! What a CLI's error means for its work, and durable quota recovery. Sessions and workers
+//! try eligible accounts/providers under their routing restrictions; otherwise they wait.
+//! Provider observations and reset timers recheck those waits without a new user message.
 
 use std::time::Duration;
 
@@ -85,6 +84,7 @@ impl SessionManager {
     /// or a provider's state changed (a login, a fresh usage read).
     pub async fn retry_waiting_work(&self) {
         self.retry_waiting_conversations().await;
+        self.retry_waiting_workers().await;
     }
 }
 

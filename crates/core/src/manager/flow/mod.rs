@@ -614,6 +614,7 @@ pub(crate) struct FakeBehavior {
     /// The next this many model lists fail, whichever CLI reads them.
     pub models_failing: Mutex<u32>,
     pub refuse_steers: bool,
+    pub refuse_sends: Mutex<Vec<ProviderKind>>,
     /// A message steered into a turn that its script never read is taken in once the script
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
     /// Off, it is dropped.
@@ -1160,6 +1161,17 @@ impl ProviderSession for FakeSession {
 
     fn send(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         Box::pin(async move {
+            if self
+                .behavior
+                .refuse_sends
+                .lock()
+                .unwrap()
+                .contains(&self.kind)
+            {
+                return Err(brigadier_providers::Error::Invalid(
+                    "turn send refused".into(),
+                ));
+            }
             let Some(tx) = self.sender() else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
             };
@@ -2532,6 +2544,8 @@ mod user_setup_tests;
 mod warm_session_tests;
 #[cfg(unix)]
 mod worker_events_tests;
+#[cfg(unix)]
+mod worker_quota_tests;
 #[cfg(unix)]
 mod worker_seam_tests;
 #[cfg(unix)]

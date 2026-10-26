@@ -1,6 +1,4 @@
-import { STRIP_TAIL_MS } from "@/app/conversation/activity/sessionTasks";
 import { rowFinished, rowWaiting, workerStateOf } from "@/app/conversation/activity/workerState";
-import { AGENT_STAYS_MS } from "@/app/conversation/backgroundTasks";
 import { isNativeWorker } from "@/state/nativeWorkers";
 import type { WorkerRow } from "@/ipc/generated";
 
@@ -65,10 +63,9 @@ export type SubagentsView = {
  */
 export function subagentsStrip(rows: readonly WorkerRow[], now: number): SubagentsView | null {
   const native = rows.filter(isNativeWorker);
-  const ago = (row: WorkerRow) => now - (row.lastEventAtMs ?? now);
-  const shown = native.filter((row) => !rowFinished(row, now) || ago(row) < AGENT_STAYS_MS)
+  const shown = native.filter((row) => !rowFinished(row, now))
     .toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.number - b.number);
-  if (!shown.some((row) => !rowFinished(row, now) || ago(row) < STRIP_TAIL_MS)) return null;
+  if (shown.length === 0) return null;
   const count = (kinds: readonly string[]) => shown.filter((row) => kinds.includes(workerStateOf(row, now).kind)).length;
   const waiting = shown.filter((row) => rowWaiting(row, now)).length;
   return {

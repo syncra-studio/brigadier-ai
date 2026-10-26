@@ -130,6 +130,7 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
 export function stepKey(step: LeadStep): string {
   const { kind } = step;
   if (kind.type === "tool") return `step:${kind.itemId}`;
+  if (kind.type === "providerTransition") return `step:transition:${kind.id}`;
   if (kind.type === "peerSent" && kind.messageIds[0] !== undefined) return `step:peer:${kind.messageIds[0]}`;
   const of = "taskId" in kind ? `:${kind.taskId}` : "";
   return step.atMs === undefined ? `step:${kind.type}${of}:at-${step.position}` : `step:${kind.type}${of}:${step.atMs}`;

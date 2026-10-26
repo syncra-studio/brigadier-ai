@@ -1,5 +1,6 @@
 import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
+import { transitionSteps } from "@/app/conversation/providerTransitions";
 import type {
   AttachmentRef,
   Compaction,
@@ -441,7 +442,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       row: { type: "task", taskId: step.taskId, kind: step.kind, position: step.position },
       atMs: step.atMs });
   }
-  for (const step of board.orchestratorSteps) {
+  for (const step of transitionSteps(board.orchestratorSteps)) {
     // The CLI's calls are in its file.
     if (step.kind.type === "tool") continue;
     // The user's answer to a feedback offer shows on the offer itself.
@@ -452,7 +453,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
     if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
     items.push({
       kind: "orchestrator",
       position: step.position,
@@ -601,7 +602,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...(source.nudges ?? []).map((position) => ({ kind: "nudge" as const, position })),
     ...(source.taskNotices ?? []).map((notice) => ({ kind: "taskNotice" as const, ...notice })),
     // A proof shows with the merge message, under the answer, not in the work.
-    ...source.orchestratorSteps.filter((step) => step.kind.type !== "proof").map((step) => ({
+    ...transitionSteps(source.orchestratorSteps).filter((step) => step.kind.type !== "proof").map((step) => ({
       kind: "orchestrator" as const,
       steps: [step],
       position: step.position,
@@ -660,7 +661,7 @@ function gaps(entries: SequenceEntry[], texts: SequenceSource["texts"]): Sequenc
   for (const entry of entries) {
     const { from, to } = entryTimes(entry, texts);
     // Where a usage limit reset, its own divider says when the work went on, not a time line (#128).
-    if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "quotaResumed")) {
+    if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "quotaResumed" || step.kind.type === "providerTransition")) {
       if (from !== undefined) reached = Math.max(reached ?? from, from);
       out.push(entry);
       continue;
@@ -783,7 +784,7 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

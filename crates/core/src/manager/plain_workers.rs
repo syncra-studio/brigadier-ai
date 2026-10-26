@@ -102,7 +102,10 @@ fn permission_word(level: PermissionLevel) -> cli::Permission {
 /// A worker's title: the one `--title` gives or, without one, the prompt's; either kept to a
 /// few plain words (`short_title`).
 fn title_of(given: Option<&str>, prompt: &str) -> String {
-    [given.unwrap_or_default(), prompt]
+    if let Some(given) = given.map(str::trim).filter(|title| !title.is_empty()) {
+        return given.to_owned();
+    }
+    [prompt]
         .into_iter()
         .map(short_title)
         .find(|title| !title.is_empty())
@@ -291,6 +294,19 @@ impl SessionManager {
                 }
             }
         };
+        let quota_policy = crate::work::WorkerQuotaPolicy {
+            work: work.clone(),
+            pin: brigadier_router::Pin {
+                provider: start.agent.map(provider_of),
+                model: start.model.clone(),
+                effort: start.effort.clone(),
+                by_user: false,
+            },
+            avoid_providers: review
+                .as_ref()
+                .map(|authors| authors.providers.clone())
+                .unwrap_or_default(),
+        };
         let mut picked = Vec::new();
         let agent = start.agent.or_else(|| {
             let row = row.as_ref()?;
@@ -357,6 +373,10 @@ impl SessionManager {
             Ok(mcps) => mcps,
             Err(message) => return Ok(CliReply::error(ErrorCode::NotFound, message)),
         };
+        let unnamed = start
+            .title
+            .as_deref()
+            .is_none_or(|title| title.trim().is_empty());
         let title = title_of(start.title.as_deref(), &start.prompt);
         let prompt = match &review {
             Some(authors) => format!("{}\n\n{}", start.prompt, authors.brief_line()),
@@ -370,6 +390,7 @@ impl SessionManager {
             account: None,
         };
         let plain = PlainWorker {
+            quota_policy: Some(quota_policy),
             permission,
             local: start.local,
             repo: place,
@@ -391,6 +412,9 @@ impl SessionManager {
             )
         })
         .await?;
+        if unnamed {
+            self.title_unnamed_worker(&task);
+        }
         self.orchestrator_step(
             &caller.conversation_id,
             crate::work::OrchestratorStepKind::Created {
@@ -719,6 +743,10 @@ impl SessionManager {
         status: TurnStatus,
     ) {
         let cutoff = live.take_cutoff().await;
+        if let Some(AttemptEnd::Limit { limit }) = &cutoff {
+            self.pause_worker_for_quota(live, task, limit.clone()).await;
+            return;
+        }
         let message = live.last_message().await;
         let (state, blocked, kind) = match (&cutoff, status) {
             (Some(AttemptEnd::Limit { .. }), _) => (
@@ -1376,7 +1404,7 @@ mod tests {
                 Some("Implement direct worker messaging between the thread and its workers"),
                 "x"
             ),
-            "Implement direct worker messaging"
+            "Implement direct worker messaging between the thread and its workers"
         );
         assert_eq!(title_of(Some("  "), "Fix it"), "Fix it");
         assert_eq!(title_of(None, "   "), "Worker");
