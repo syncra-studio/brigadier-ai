@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { isLive, isRunRequest } from "@/app/conversation/blocks";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { latestRequest } from "@/app/conversation/rework";
+import { leadTransitions } from "@/app/conversation/providerTransitions";
 import { cutOff, describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { UsageLimitDivider } from "@/app/conversation/UsageLimitDivider";
 import { useAction } from "@/app/conversation/useAction";
@@ -16,15 +17,23 @@ import { useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
 
 /** Scope the conversation's current wait to its latest request; historical failures keep their diagnostics. */
-export function useBlockQuotaWait(meta: BlockMeta | undefined) {
+export function useBlockQuotaRecovery(meta: BlockMeta | undefined) {
   const conversation = useViewConversation();
   const latest = useAuiState((s) => s.message.isLast);
+  const error = useAuiState((s) => {
+    const status = s.message.status;
+    return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;
+  });
   const nativeLimit = useCliThread((s) => {
     if (!meta || !conversation) return false;
-    const turn = s.views[conversation.id]?.turns.at(-1);
-    return !!turn?.limit && (turn.requests.some((id) => meta.requestIds.includes(id)) || turn.userMessage === meta.requestId);
+    const turn = s.views[conversation.id]?.turns.findLast((candidate) => candidate.requests.some((id) => meta.requestIds.includes(id)) || candidate.userMessage === meta.requestId);
+    return turn?.end === "failed" && !!turn.limit;
   });
-  return latest && meta && (isLive(meta.state) || nativeLimit) ? conversation?.quotaWait ?? null : null;
+  const quotaFailure = nativeLimit || (error !== null && describeTurnError(error).limit === true);
+  const wait = latest && meta && (isLive(meta.state) || quotaFailure) ? conversation?.quotaWait ?? null : null;
+  const recovered = !!meta && quotaFailure && leadTransitions(meta.orchestratorSteps)
+    .some((transition) => transition.startedAtMs >= (meta.endedAtMs ?? meta.startedAtMs));
+  return { wait, recovered };
 }
 
 /**

@@ -3,7 +3,8 @@ import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "rea
 
 import { ActivityItems } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
-import { BlockError, useBlockQuotaWait } from "@/app/conversation/BlockError";
+import { BlockError, useBlockQuotaRecovery } from "@/app/conversation/BlockError";
+import { leadTransitions, transitionCoversSeam } from "@/app/conversation/providerTransitions";
 import { CompactionBlock } from "@/app/conversation/CompactionBlock";
 import { SeamDivider } from "@/app/conversation/SeamRows";
 import { ContinuedFrom } from "@/app/conversation/ContinuedFrom";
@@ -150,7 +151,7 @@ export const RequestBlock: FC = () => {
   useEffect(() => {
     if (holds) show();
   }, [holds, show]);
-  const quotaWait = useBlockQuotaWait(meta);
+  const { wait: quotaWait, recovered: quotaRecovered } = useBlockQuotaRecovery(meta);
   const requestIds = meta?.requestIds;
   const changed = useTurnChanged(requestIds ?? []);
   const workersActive = useBoard((s) =>
@@ -178,10 +179,11 @@ export const RequestBlock: FC = () => {
   if (!meta) return null;
 
   const held = holding > 0 || commands > 0;
-  const live = isLive(meta.state) || held || quotaWait !== null;
+  const live = isLive(meta.state) || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  const finished = blockFinished(meta.state) && !held && quotaWait === null;
+  const finished = blockFinished(meta.state) && !held && quotaWait === null && !(quotaRecovered && turnRuns);
+  const transitions = leadTransitions(meta.orchestratorSteps);
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
   // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
   // Until then a reply streams in place.
@@ -232,7 +234,7 @@ export const RequestBlock: FC = () => {
       data-state={meta.state}
       className="group/answer gap-answer-actions-gap relative flex flex-col px-2"
     >
-      <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />
+      <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} transitions={transitions} />
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       {/* A feedback offer waits for the turn that made it to end: never mid-turn (#486). */}
@@ -247,7 +249,8 @@ export const RequestBlock: FC = () => {
         )}
         {header && (
           <WorkHeader
-            meta={quotaWait && meta.state === "failed" ? { ...meta, state: "waiting" } : meta}
+            meta={meta.state === "failed" && (quotaWait || quotaRecovered)
+              ? { ...meta, state: quotaWait ? "waiting" : turnRuns ? "working" : "done" } : meta}
             open={open}
             foldable={foldable}
             quota={quotaWait !== null}
@@ -343,7 +346,7 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <TurnEnd meta={meta} />}
-      <BlockError meta={meta} live={live} quotaCovered={quotaWait !== null} />
+      <BlockError meta={meta} live={live} quotaCovered={quotaWait !== null || quotaRecovered} />
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}
@@ -363,7 +366,7 @@ export const RequestBlock: FC = () => {
         .map((compaction) => (
           <CompactionBlock key={compaction.id} compaction={compaction} />
         ))}
-      {meta.seams.map((seam) => (
+      {meta.seams.filter((seam) => !transitions.some((transition) => transitionCoversSeam(transition, seam))).map((seam) => (
         <SeamDivider key={seam.n} seam={seam} />
       ))}
     </MessagePrimitive.Root>

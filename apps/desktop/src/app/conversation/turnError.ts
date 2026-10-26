@@ -12,7 +12,7 @@ const RATE = /rate.?limit|too many requests|\b429\b/i;
 const CONTEXT = /context (window|length)|prompt is too long|too long for the (model|context)|maximum context|context_length_exceeded|out of context/i;
 const AUTH = /not (logged|signed) in|log ?in again|sign ?in again|unauthori[sz]ed|\b401\b|invalid (api|x-api) key|authentication_error|oauth token (has )?expired/i;
 const OVERLOADED = /overloaded|\b529\b/i;
-const LIMIT = /usage limit|hit your limit|limit (was )?reached|limit exceeded|quota|out of (usage|credits)/i;
+const LIMIT = /usage limit|hit your (?:(?:session|weekly) )?limit|limit (was )?reached|limit exceeded|quota|out of (usage|credits)/i;
 const NETWORK = /network|connection|disconnected|\beconn\w*|enetunreach|enotfound|etimedout|eai_again|timed? ?out|timeout|fetch failed|socket hang up|getaddrinfo|offline/i;
 const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service unavailable|invalid_request|authentication_error/i;
 
