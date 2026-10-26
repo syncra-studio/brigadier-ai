@@ -352,6 +352,14 @@ struct ConvState {
     /// still Deciding: each joins by itself after [`queue_judging::DECIDING_WAIT`], or when its
     /// turn completes.
     deciding: Vec<String>,
+    /// Those of them given to the session on a turn of their own, woken to judge them while
+    /// its work held with no turn running: the pending message that starts that turn is the
+    /// queued one, not yet the user's message of a request, and never goes again.
+    woken: HashSet<String>,
+    /// The running turn started with a message the user sent while the session's work still
+    /// held (its workers or its CLI's background commands): it goes on with that work, in its
+    /// block ([`crate::thread_view::ThreadTurn::joins`]).
+    turn_joins: bool,
     /// The turn's judging is settled, even while the rest of its end is being recorded.
     judging_ended: bool,
     /// Those being handed to a worker right now: no timer, turn end or pump settles them.
@@ -619,9 +627,11 @@ impl ConvLive {
         self.state.lock().await.cli.clone()
     }
 
-    /// Brigadier's requests its running turn carries ([`ConvState::carried_requests`]).
-    pub(super) async fn carried_requests(&self) -> Vec<String> {
-        self.state.lock().await.carried_requests()
+    /// Brigadier's requests its running turn carries ([`ConvState::carried_requests`]), and
+    /// whether that turn joins the work before it ([`ConvState::turn_joins`]).
+    pub(super) async fn carried_turn(&self) -> (Vec<String>, bool) {
+        let state = self.state.lock().await;
+        (state.carried_requests(), state.turn_joins)
     }
 
     /// Tests: the request the rest of the turn answers, as a queued message joining it sets it.
@@ -1223,7 +1233,7 @@ impl SessionManager {
                 // A Chat judges it too, as a session does (run2-D46); a side chat doesn't.
                 drop(state);
                 return self
-                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, false)
                     .await;
             }
             let item = self
@@ -1338,7 +1348,15 @@ impl SessionManager {
         if busy && !paused {
             // The session judges it, as it waits Deciding (run2-D40).
             return self
-                .queue_to_judge(conv, text, attachments, mentions, queue_index)
+                .queue_to_judge(conv, text, attachments, mentions, queue_index, false)
+                .await;
+        }
+        // No turn runs, but the session's work still holds (its workers, its CLI's background
+        // commands): the message joins that work all the same, Deciding, on a turn that wakes
+        // the session to judge it now. A Steer still goes straight in.
+        if !steer && !paused && self.work_holds(conv).await {
+            return self
+                .queue_to_judge(conv, text, attachments, mentions, queue_index, true)
                 .await;
         }
         if busy || paused {
@@ -1364,6 +1382,23 @@ impl SessionManager {
 
     /// Sends `message` into the running turn, which the thread shows it inside; else (the
     /// turn just ended, or is still starting) the next turn carries it.
+    /// Whether a session's work still holds while no turn of its CLI runs: one of its workers
+    /// still works (its own background commands count), or a background command of its CLI
+    /// still runs or owes the turn its end starts. Its block stays open meanwhile, and what the
+    /// user sends goes on in it.
+    pub(super) async fn work_holds(&self, conv: &ConvLive) -> bool {
+        if conv.kind != ConversationKind::Session {
+            return false;
+        }
+        if conv.has_cli_jobs().await || self.has_running_workers(&conv.id).await {
+            return true;
+        }
+        self.core
+            .tasks(&conv.id)
+            .await
+            .is_ok_and(|tasks| self.workers_working(&tasks))
+    }
+
     pub(super) async fn join_working(&self, conv: &Arc<ConvLive>, message: Message) {
         let mut state = conv.state.lock().await;
         let cli = state
@@ -2242,6 +2277,9 @@ impl SessionManager {
         if session {
             self.look_at_user_rebase(&conv.id).await;
         }
+        // The session's work still holds with no turn running (its workers, its CLI's background
+        // commands): a message of the user's starting this turn goes on with that work.
+        let holds = session && self.work_holds(&conv).await;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;
@@ -2362,7 +2400,14 @@ impl SessionManager {
                 state.outcomes.remove(request);
                 state.stopped_open.remove(request);
             }
-            state.in_turn = users.clone();
+            state.turn_joins = holds && !users.is_empty();
+            // A queued message woken to be judged is no user message of a request yet: nothing
+            // sends it again (it is in the queue, Deciding).
+            state.in_turn = users
+                .iter()
+                .filter(|message| !state.woken.contains(&message.id))
+                .cloned()
+                .collect();
             state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
@@ -2542,7 +2587,12 @@ impl SessionManager {
                     },
                 );
             }
-            let mut pending = users;
+            // A queued message woken to be judged waits in the queue instead (`end_judging`).
+            let woken = std::mem::take(&mut state.woken);
+            let mut pending: Vec<Message> = users
+                .into_iter()
+                .filter(|message| !woken.contains(&message.id))
+                .collect();
             pending.append(&mut state.pending);
             state.pending = pending;
             // Back in front, kept so under the inbox's lock.

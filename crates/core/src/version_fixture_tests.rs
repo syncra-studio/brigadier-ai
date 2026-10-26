@@ -202,6 +202,7 @@ fn turn_records(
                         requests: vec![],
                         limit: None,
                         context_window: None,
+                        joins: false,
                     });
                 }
             }

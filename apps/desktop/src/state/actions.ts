@@ -41,7 +41,7 @@ import { providerForSetting } from "@/state/providerDestination";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
-import { realActivity, onRealActivity } from "@/state/activity";
+import { onRealActivity, realActivity, workHolds } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
@@ -657,8 +657,10 @@ export async function send(
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const target = useApp.getState().conversations[conversationId];
   const session = target?.kind === "session";
-  // A session's message waits in the queue while its CLI's turn is open.
-  const working = session && board !== null && (!!realActivity(conversationId)?.turnOpen || starting);
+  // A session's message waits in the queue while its CLI's turn is open, or while its work
+  // still holds with no turn running (its workers, its CLI's background commands).
+  const activity = realActivity(conversationId);
+  const working = session && board !== null && (!!activity?.turnOpen || starting || workHolds(activity));
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.

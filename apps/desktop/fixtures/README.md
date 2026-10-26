@@ -207,3 +207,11 @@ reads Continue and the Commit menu offers Abort Rebase; the tab says "Rebasing 2
 resolves the conflict in the tab, stages it, continues to the next commit's conflicts and aborts,
 writing what it saw as JSON into `#source-rebase-result`; `SourceRebaseRender.test.ts` checks it.
 Add `?still` to stay at the first stop. This entry is absent from the production build.
+
+# Held block
+
+`http://localhost:1426/fixtures/held-block.html` backs `src/app/conversation/HeldBlockRender.test.ts`:
+a session's lead starts a worker and ends its turn, the user writes twice while the workers work (each
+turn joins the block, the second starts another worker), then the workers finish one by one. The one
+block reads "Waiting for 2 workers", then "Waiting for a worker", then "Worked for" on the clock. This
+standalone entry is absent from the production build.

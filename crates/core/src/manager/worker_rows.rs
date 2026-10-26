@@ -387,13 +387,21 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
         requests: Vec::new(),
         limit: None,
         context_window: None,
+        joins: false,
     }
 }
 
-/// The sidebar and worker row agree on whether this worker has work under way.
+/// The sidebar and worker row agree on whether this worker has work under way: its CLI's turn
+/// is open, or its turn ended while background commands of its own still run (a test run and
+/// a wait on it), whose end it takes up again.
 fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
-    cli.is_some_and(|cli| cli.open)
-        && !task.state.is_final()
+    cli.is_some_and(|cli| {
+        cli.open
+            || cli
+                .background
+                .iter()
+                .any(|job| job.status == brigadier_providers::BackgroundTaskStatus::Running)
+    }) && !task.state.is_final()
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
 }
 
