@@ -621,6 +621,8 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         }
     }
     let count = starts.len();
+    // The end the turn before was recorded with, as the daemon followed it.
+    let mut before: Option<&TurnRecord> = None;
     starts
         .iter()
         .enumerate()
@@ -659,8 +661,21 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 _ => None,
             });
             let noted = recorded.remove(id.as_str());
+            // A turn no record names that began before the turn before it ended ran inside that
+            // one, as the stream said it: Claude writes Brigadier's `/compact` after the
+            // compaction, which the stream said in the turn before. It ended as that one did.
+            let within = before.filter(|record| {
+                noted.is_none()
+                    && record
+                        .ended_at_ms
+                        .zip(turn.started_at_ms)
+                        .is_some_and(|(ended, started)| started <= ended)
+            });
             let cut = noted.as_ref().is_some_and(|(_, end)| end.is_none());
             let (requests, record) = noted.unwrap_or_default();
+            if within.is_none() {
+                before = record;
+            }
             turn.requests = requests;
             turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
             if let Some(record) = record {
@@ -669,6 +684,10 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 turn.ended_at_ms = record.ended_at_ms;
             } else if last && running {
                 turn.ended_at_ms = None;
+            } else if let Some(record) = within {
+                turn.end = record.end;
+                turn.error = error;
+                turn.ended_at_ms = record.ended_at_ms;
             } else if cut {
                 turn.end = Some(TurnEnd::Interrupted);
                 turn.error = error;
@@ -912,5 +931,50 @@ mod tests {
             &[ended(10)],
         );
         assert_eq!(next.turns[0].end, Some(TurnEnd::Done));
+    }
+
+    /// Brigadier's `/compact` after a turn: the stream said the compaction in that turn, so its
+    /// record names that turn alone; Claude's file then holds the `/compact` as a turn of its
+    /// own. It ended with that turn, and never reads as cut off. A turn begun after that one's
+    /// end that nothing recorded still does.
+    #[test]
+    fn a_turn_the_records_never_named_inside_the_turn_before_ends_as_that_one_did() {
+        let at = |at: i64, entry: FileEntry| FileEntry {
+            at_ms: Some(at),
+            ..entry
+        };
+        let ended = |at: i64| TurnRecord {
+            user_message: Some("u1".into()),
+            end: Some(TurnEnd::Done),
+            error: None,
+            ended_at_ms: Some(at),
+            requests: vec!["r1".into()],
+            limit: None,
+            context_window: None,
+        };
+        let compaction = entry(ProviderEvent::CompactionEnded {
+            automatic: false,
+            tokens_before: Some(200),
+            tokens_after: Some(20),
+            error: None,
+            native_id: None,
+        });
+        let file = vec![
+            at(1, message("u1", Role::User)),
+            at(2, message("a1", Role::Assistant)),
+            at(9, compaction),
+            at(3, message("/compact", Role::User)),
+        ];
+        let records = [ended(2), ended(10)];
+        let view = view(vec![Arc::new(file.clone())], None, &records);
+        assert_eq!(view.turns.len(), 2);
+        assert_eq!(view.turns[1].end, Some(TurnEnd::Done));
+        assert_eq!(view.turns[1].error, None);
+        assert_eq!(view.turns[1].ended_at_ms, Some(10));
+        assert!(view.turns[1].requests.is_empty());
+        let mut later = file;
+        later.push(at(20, message("u3", Role::User)));
+        let cut = super::view(vec![Arc::new(later)], None, &records);
+        assert_eq!(cut.turns[2].end, Some(TurnEnd::Interrupted));
     }
 }

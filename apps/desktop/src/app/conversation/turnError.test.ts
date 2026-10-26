@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
-import type { Notice } from "@/ipc/generated";
+import { cutOff, describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
+import type { Notice, UserRequest } from "@/ipc/generated";
 
 const summary = (raw: string, provider?: string) => describeTurnError(raw, provider).summary;
 
@@ -70,4 +70,28 @@ test("a turn Brigadier quit during reads interrupted, also one still starting, w
   assert.equal(summary("Brigadier quit before this started."), "Interrupted: Brigadier quit before this started. Continue sends it again.");
   assert.equal(interruptedByQuit("Brigadier quit before this started."), true);
   assert.equal(interruptedByQuit("The CLI session ended unexpectedly."), false);
+});
+
+const request = (id: string, state: UserRequest["state"]) => ({ id, state });
+
+test("a turn the thread says was cut reads by its requests: a quit, with Continue, only when its request was cut by one", () => {
+  const quit = "Brigadier quit while this was running.";
+  const cut = request("r1", { type: "failed", error: quit });
+  // Brigadier quit under the newest request: Continue picks it up.
+  assert.deepEqual(cutOff(quit, [cut], cut), { error: quit, resumable: true });
+  const started = request("r1", { type: "failed", error: "Brigadier quit before this started." });
+  assert.deepEqual(cutOff(quit, [started], started), { error: "Brigadier quit before this started.", resumable: true });
+  // A request after it: still a quit, but the daemon resumes only the newest.
+  assert.deepEqual(cutOff(quit, [cut], request("r2", { type: "done" })), { error: quit, resumable: false });
+  // The CLI went away under it, Brigadier ran on: its request's own words, no Continue.
+  const ended = request("r1", { type: "failed", error: "The CLI session ended unexpectedly." });
+  assert.deepEqual(cutOff(quit, [ended], ended), { error: "The CLI session ended unexpectedly.", resumable: false });
+  assert.equal(summary(cutOff(quit, [ended], ended).error), "Claude stopped unexpectedly.");
+  // A turn of Brigadier's own (its `/compact`, the freelogo thread at 11:08), or one whose request
+  // was answered: no quit, and nothing for Continue to pick up.
+  const done = request("r1", { type: "done" });
+  assert.deepEqual(cutOff(quit, [], done), { error: "The CLI session ended unexpectedly.", resumable: false });
+  assert.deepEqual(cutOff(quit, [done], done), { error: "The CLI session ended unexpectedly.", resumable: false });
+  // Any other error is the turn's own.
+  assert.deepEqual(cutOff("The API refused it.", [cut], cut), { error: "The API refused it.", resumable: false });
 });
