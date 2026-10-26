@@ -456,6 +456,20 @@ impl McpLogins {
         Ok(listed)
     }
 
+    /// Reads every CLI's own list for `project` now, all at once, and keeps them: the first
+    /// agent's error, in their order, if one failed.
+    pub(crate) fn list_every(&self, clis: &Clis, project: Option<&Path>) -> Result<(), String> {
+        std::thread::scope(|scope| {
+            let reads =
+                adapters().map(|adapter| scope.spawn(move || self.list(clis, adapter, project)));
+            reads.into_iter().try_for_each(|read| {
+                read.join()
+                    .unwrap_or_else(|_| Err("reading the list stopped".to_owned()))
+                    .map(drop)
+            })
+        })
+    }
+
     /// `agent`'s last list for `project`, as read; one older than [`LIST_FRESH`] (or none) is
     /// read again in the background.
     pub(crate) fn listed(

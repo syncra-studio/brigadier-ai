@@ -333,6 +333,53 @@ fn a_list_read_before_a_sign_in_ended_does_not_undo_it() {
     assert!(listed[0].needs_sign_in, "{listed:?}");
 }
 
+/// Asked again, the agents' lists are read at once: each stand-in list here waits for the
+/// other's to start, and gives up alone.
+#[cfg(unix)]
+#[test]
+fn asking_again_reads_every_list_at_once() {
+    let fake = fake::fake("again");
+    for agent in ["claude", "codex"] {
+        let listed = match agent {
+            "claude" => "plugin:p:srv: http://127.0.0.1:1/mcp (HTTP) - ✔ Connected",
+            _ => r#"[{"name":"srv","auth_status":"o_auth"}]"#,
+        };
+        std::fs::write(
+            fake.dir.join(agent),
+            format!(
+                "#!/bin/sh
+echo {agent} >> \"$STATE/lists\"
+n=0
+until [ \"$(wc -l < \"$STATE/lists\")\" -ge 2 ]; do
+  n=$((n + 1)); [ $n -gt 100 ] && {{ echo 'Error: read alone' >&2; exit 1; }}
+  sleep 0.05
+done
+echo '{listed}'
+"
+            ),
+        )
+        .unwrap();
+    }
+    let logins = McpLogins::default();
+    logins.list_every(&fake.clis, None).unwrap();
+    for agent in [Agent::Claude, Agent::Codex] {
+        let (_, listed) = lock(&logins.lists).get(&(agent, None)).cloned().unwrap();
+        assert_eq!(listed.len(), 1, "{agent:?} {listed:?}");
+        assert!(!listed[0].needs_sign_in);
+    }
+    // One that fails says why, in its CLI's words.
+    std::fs::write(fake.dir.join("lists"), "").unwrap();
+    std::fs::write(
+        fake.dir.join("codex"),
+        "#!/bin/sh\necho codex >> \"$STATE/lists\"\necho 'Error: no config' >&2; exit 1\n",
+    )
+    .unwrap();
+    assert_eq!(
+        logins.list_every(&fake.clis, None),
+        Err("no config".to_owned())
+    );
+}
+
 /// Who waits for a sign-in hears it finished the moment it does, not at its next look.
 #[cfg(unix)]
 #[test]
