@@ -26,7 +26,7 @@ export function cliMenuCommands(
 ): ComposerCommand[] {
   const taken = new Set(own.map((command) => command.id.toLowerCase()));
   return listed
-    .filter((command) => !taken.has(command.name.toLowerCase()))
+    .filter((command) => command.name.toLowerCase() !== "fusion" && !taken.has(command.name.toLowerCase()))
     .toSorted((a, b) => a.name.localeCompare(b.name))
     .map((command) => {
       // No description: what it takes instead.

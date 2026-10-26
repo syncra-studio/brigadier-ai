@@ -612,6 +612,7 @@ pub(crate) struct ConvLive {
     /// Serializes its session offers: an offer's duplicate check and write, and a Start's
     /// checks, start and record (`offer_session`, Start as session).
     pub(super) session_offer: tokio::sync::Mutex<()>,
+    pub(super) fusion_offer: tokio::sync::Mutex<()>,
     /// The landing lock of the session's checkout: held around Brigadier's own writes to its
     /// branch, so two never interleave.
     pub(super) merge_lock: tokio::sync::Mutex<()>,
@@ -683,6 +684,7 @@ impl ConvLive {
             user_wrote: tokio::sync::Mutex::new(0),
             feedback_offer: tokio::sync::Mutex::new(()),
             session_offer: tokio::sync::Mutex::new(()),
+            fusion_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             pr_merge: tokio::sync::Mutex::new(()),
             pr_watch: std::sync::atomic::AtomicBool::new(false),
@@ -1181,6 +1183,7 @@ impl SessionManager {
         queue_index: Option<u32>,
     ) -> Result<SendOutcome> {
         self.admit()?;
+        let text = self.normalize_fusion_message(&id, text)?;
         let conversation = self.core.conversation(&id)?;
         match conversation.lifecycle {
             Lifecycle::Archived => {

@@ -339,12 +339,20 @@ pub struct OfferSession {
     pub title: Option<String>,
 }
 
+/// A Fusion offer: the user must click Ask before any consult starts.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfferFusion {
+    pub question: String,
+}
+
 /// A tool call from an orchestrator.
 #[derive(Debug, Clone)]
 pub enum OrchestratorCall {
     RequestApproval(RequestApproval),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
+    OfferFusion(OfferFusion),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
@@ -363,6 +371,7 @@ impl OrchestratorCall {
             Self::RequestApproval(_) => "request_approval",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
+            Self::OfferFusion(_) => "offer_fusion",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",

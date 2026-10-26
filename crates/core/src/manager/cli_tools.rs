@@ -151,6 +151,8 @@ fn tool_call(
         (Tool::Report, "save") if chat => ToolCall::Chat(ChatCall::SaveReport(args(given)?)),
         (Tool::Report, "save") => ToolCall::Orchestrator(O::SaveReport(args(given)?)),
         (Tool::Feedback, "offer") => ToolCall::Orchestrator(O::OfferFeedback(args(given)?)),
+        (Tool::Fusion, _) if !chat => return Err(not_theirs()),
+        (Tool::Fusion, "offer") => ToolCall::Orchestrator(O::OfferFusion(args(given)?)),
         (Tool::Session, "propose") => ToolCall::Orchestrator(O::OfferSession(args(given)?)),
         (Tool::Approval, "request") => ToolCall::Orchestrator(O::RequestApproval(args(given)?)),
         (_, other) => return Err(usage(format!("no action {other:?}"))),

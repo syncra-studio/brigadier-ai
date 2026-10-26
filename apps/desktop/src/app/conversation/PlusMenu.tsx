@@ -11,12 +11,14 @@ import { updateDraft } from "@/app/conversation/draftSetup";
 import { useAction } from "@/app/conversation/useAction";
 import { TooltipIconButton } from "@/components/controls";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, MenuRow, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/icons";
+import { ArrowUpRight, Chat, Folder, Lightbulb, PullRequestMerged as Merge, Paperclip, Plus } from "@/components/icons";
 import type { Mention } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { select, updateSetup } from "@/state/actions";
 import { armBackgroundSend, useBackgroundArmed } from "@/state/backgroundSend";
+import { NEW_CHAT_SCOPE } from "@/state/drafts";
+import { armFusionSend, FUSION_HINT, isFusionChat, useFusionReady } from "@/state/fusionSend";
 import { useApp } from "@/state/store";
 
 /** Other conversations the menu offers to mention, as the `@` menu shows them. */
@@ -67,6 +69,7 @@ export const PlusMenu: FC = () => {
   const target = useContext(ComposerTargetContext);
   const aui = useAui();
   const plan = usePlanMode(target);
+  const fusionReady = useFusionReady();
   const action = useAction();
   const trigger = useRef<HTMLButtonElement>(null);
   const [placement, setPlacement] = useState<Placement | null>(null);
@@ -160,6 +163,11 @@ export const PlusMenu: FC = () => {
               <MenuRow icon={<Paperclip />} title="Files" />
             </DropdownMenuItem>
           </ComposerPrimitive.AddAttachment>
+          {(target.conversation ? isFusionChat(target.conversation) : draftChat) && (
+            <DropdownMenuItem disabled={!fusionReady} onSelect={() => armFusionSend(conversationId ?? NEW_CHAT_SCOPE, true)}>
+              <MenuRow icon={<Merge />} title="Fusion" detail={fusionReady ? "Ask every installed CLI, then merge" : FUSION_HINT} />
+            </DropdownMenuItem>
+          )}
           {plan.available && (
             <DropdownMenuItem onSelect={() => action.run(() => plan.set(!plan.on))}>
               <MenuRow

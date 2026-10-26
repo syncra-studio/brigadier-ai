@@ -53,3 +53,10 @@ test("a CLI that reports nothing adds nothing, and an unknown CLI's rows go with
   assert.deepEqual(cliMenuCommands([], own, { name: "Claude Code", icon: null }), []);
   assert.equal(cliMenuCommands([command("x", "/x")], own, { name: undefined, icon: null })[0]?.group, undefined);
 });
+
+// Fusion has one control in +; the skill remains typeable.
+test("Fusion is not repeated in the CLI's slash menu", () => {
+  for (const text of ["/fusion", "$fusion"]) {
+    assert.deepEqual(cliMenuCommands([command("fusion", text)], own, { name: "CLI", icon: null }), []);
+  }
+});

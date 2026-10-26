@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
+import { fusionProviders } from "@/fixtures/fusionProviders";
 import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationView as View, Mention, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
@@ -31,6 +32,7 @@ const project = { id: "p1", name: "menus", createdAtMs: start, repos: [{ path: "
 
 const sends: { text: string; mentions: Mention[] }[] = [];
 const listings: string[] = [];
+const fusionSends: { fusion: boolean; text: string }[] = [];
 let sequence = 10;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
@@ -53,14 +55,15 @@ mockIPC((command, payload) => {
       return { method: req.method, files: FILES, truncated: false };
     case "listCliCommands":
       // As the session's CLI reports them: one of the user's skills.
-      return { method: req.method, commands: [{ name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
+      return { method: req.method, commands: [{ name: "fusion", text: "/fusion", description: "Fusion", argumentHint: null }, { name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
     case "listProjectFiles":
       listings.push(`project:${req.projectId}`);
       return { method: req.method, files: FILES, truncated: false };
     case "sendMessage": {
       sends.push({ text: req.text, mentions: req.mentions });
+      if (req.fusion) fusionSends.push({ fusion: req.fusion, text: req.text });
       const message = {
-        id: `sent-${sequence}`, conversationId: req.conversationId, seq: sequence++, role: "user", text: req.text, blob: null,
+        id: `sent-${sequence}`, conversationId: req.conversationId, seq: sequence++, role: "user", text: req.fusion ? `$fusion ${req.text}` : req.text, blob: null,
         attachments: req.attachments, mentions: req.mentions, createdAtMs: Date.now(), model: null,
         requestId: `sent-request-${sequence}`, parentId: null,
       };
@@ -196,6 +199,46 @@ async function exercise(mode: "rich" | "plain") {
   await type("@men");
   await until("the new session's files", () => menu().includes("menu.ts"));
   seen.newSession = listings.includes("project:p1");
+  await key("Escape");
+  await clear();
+  // Fusion is absent in sessions, including their drafts.
+  const plus = () => document.querySelector<HTMLButtonElement>('[data-slot="plus-trigger"]');
+  const plusRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="plus-menu"] [role=menuitem]')];
+  const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusion"));
+  const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
+  await openPlus();
+  seen.sessionFusion = !!fusionRow();
+  await key("Escape");
+  const old = field();
+  show({ type: "conversation", id: other.id }, mode);
+  await until("the Chat field", () => field() !== null && field() !== old);
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders.slice(0, 1), sessions: [], fixtures: [] } } }));
+  await openPlus();
+  seen.fusionDisabled = fusionRow()?.getAttribute("aria-disabled") === "true";
+  seen.fusionHint = fusionRow()?.textContent?.includes("Needs two ready CLIs");
+  await key("Escape");
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
+  await openPlus();
+  fusionRow()!.click();
+  await until("the Fusion chip", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
+  document.querySelector<HTMLButtonElement>('[data-slot="fusion-chip"]')!.click();
+  await until("Fusion turned off", () => document.querySelector('[data-slot="fusion-chip"]') === null);
+  seen.fusionOff = true;
+  await openPlus();
+  fusionRow()!.click();
+  await until("the Fusion chip again", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
+  field()!.focus();
+  await type("Compare the options.");
+  await key("Enter");
+  await until("the Fusion send", () => fusionSends.length > 0 && document.querySelector('[data-slot="fusion-chip"]') === null);
+  seen.fusionSend = fusionSends.at(-1);
+  await until("the Fusion pill", () => document.querySelector('[data-slot="fusion-message-pill"]') !== null);
+  seen.fusionPill = document.querySelector('[data-slot="fusion-message-pill"]')?.textContent;
+  seen.rawFusion = document.querySelector('[data-role="user"]')?.textContent?.includes("$fusion");
+  await until("an empty field after Fusion", () => typed() === "");
+  await type("/");
+  await until("the Chat / menu", () => commands() !== null);
+  seen.fusionSlashRow = commands()?.textContent?.includes("Fusion");
   await key("Escape");
   await clear();
   return seen;

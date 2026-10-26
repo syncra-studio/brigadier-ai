@@ -976,6 +976,21 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/feedback.schema.json"),
     },
     Command {
+        name: "fusion",
+        summary: "Offer Fusion in a top-level Chat; only the user starts it.",
+        details: "`offer <question>`: offer one answer from every installed CLI, merged into one reply. Nothing starts until the user clicks Ask. Only top-level Chats; refused in sessions, side chats, tab chats and workers. The question may come from standard input.",
+        args: &[
+            action(&["offer"], "What to do."),
+            rest(
+                "question",
+                "The question to ask every installed CLI.",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/fusion.schema.json"),
+    },
+    Command {
         name: "session",
         summary: "Propose work that should run apart as a new session, on a card.",
         details: "`propose --title <title> <task…>`: work that should run as a session of its \

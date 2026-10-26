@@ -9,6 +9,7 @@ import { ProviderTransitionDivider } from "@/app/conversation/activity/ProviderT
 import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
+import { FusionOffer } from "@/app/conversation/FusionOffer";
 import { SessionOffer } from "@/app/conversation/SessionOffer";
 
 /**
@@ -29,6 +30,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
+  if (kind.type === "fusionOffered") return <FusionOffer id={kind.id} question={kind.question} />;
   if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;
   if (kind.type === "merged") return <MergedRow kind={kind} />;
   return null;

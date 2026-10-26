@@ -473,6 +473,22 @@ test("the lead's session offer stays in view as its card; Start as session shows
   assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), [offer]);
 });
 
+// A Fusion offer saved before its card was taken out (a041169da) shows again, answered or not.
+test("the lead's Fusion offer stays in view as its card; Ask shows no row", () => {
+  const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
+  const offer = { type: "fusionOffered", id: "o1", question: "Find why uploads stall at 99%." } as const;
+  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
+    orchestratorSteps: [
+      teamStep(3, offer),
+      teamStep(4, { type: "fusionOfferTaken", id: "o1" }),
+    ] };
+  const entries = sequence(blocksOf([user], replay)[0]!);
+  const shown = entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
+  assert.deepEqual(shown, [offer]);
+  const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
+  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), [offer]);
+});
+
 // The user's session of 2026-10-09 (a grill, then the right sidebar and tabs built), from its
 // stored events. Its last request ended twice, the same merge question each time: once when the
 // work landed, again after a late review's fix landed, while it was kept waiting, unfolded.

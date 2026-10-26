@@ -444,7 +444,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
     // The CLI's calls are in its file.
     if (step.kind.type === "tool") continue;
     // The user's answer to a feedback or session offer shows on the offer itself.
-    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
+    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken" || step.kind.type === "fusionOfferTaken") continue;
     // Old records of what Brigadier no longer does: not shown. A suggestion of Full access (from
     // when it had a sandbox of its own), a suggested setting, a CI watch.
     if (OLD_RECORDS.has(step.kind.type)) continue;
@@ -781,7 +781,7 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "fusionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

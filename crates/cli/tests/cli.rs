@@ -998,6 +998,7 @@ fn every_subcommands_json_output_fits_its_schema() {
             "It",
             "spins.",
         ],
+        &["fusion", "offer", "--json", "Which", "approach?"],
         &[
             "session",
             "propose",
@@ -1264,6 +1265,55 @@ fn wrong_arguments_exit_2_with_the_usage() {
     assert_fits(ERROR_SCHEMA, &output, "usage");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("missing <id>") && stderr.contains("usage: brigadier read"));
+}
+
+#[test]
+fn fusion_offer_reads_its_question_from_stdin() {
+    fn fusion(request: &CliRequest) -> CliReply {
+        let CliRequest::Tool {
+            tool: Tool::Fusion,
+            action,
+            args,
+        } = request
+        else {
+            panic!("{request:?}")
+        };
+        assert_eq!(action, "offer");
+        assert_eq!(
+            args["question"],
+            "Compare the options.\nUse the existing design.\n"
+        );
+        CliReply::ok(&ToolOutput {
+            action: action.clone(),
+            text: "Offered.\n".into(),
+            images: vec![],
+            saved: vec![],
+        })
+    }
+    let dir = DataDir::new("fusion-stdin");
+    let daemon = stand_in_daemon(&dir.0, 2, fusion);
+    for words in [vec!["fusion", "offer"], vec!["fusion", "offer", "-"]] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_brigadier"))
+            .args(words)
+            .env("BRIGADIER_DATA_DIR", &dir.0)
+            .env(SESSION_ENV, SESSION)
+            .env(GRANT_ENV, GRANT)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"Compare the options.\nUse the existing design.\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(stdout(&output), "Offered.\n");
+    }
+    daemon.join().unwrap();
 }
 
 #[test]

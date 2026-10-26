@@ -474,6 +474,11 @@ pub enum Request {
         conversation_id: ConversationId,
         offer_id: String,
     },
+    /// The user clicked Ask on a Fusion offer in a top-level Chat.
+    StartOfferedFusion {
+        conversation_id: ConversationId,
+        offer_id: String,
+    },
     /// "Fork chat from here": a new conversation with the thread up to the answer
     /// `message_id`; a session's fork works from the commit current then, in `place`.
     ForkConversation {
@@ -510,6 +515,10 @@ pub enum Request {
         mentions: Vec<Mention>,
         #[serde(default)]
         steer: bool,
+        /// The user armed Fusion in a top-level Chat.
+        #[serde(default)]
+        #[ts(as = "Option<bool>", optional)]
+        fusion: bool,
         /// Queue it at this slot whenever it would wait (a turn runs, an answer works, or the
         /// queue is paused): a queued message pulled into the composer to edit, or a deleted
         /// one restored, goes back where it was. Without `steer` only.
@@ -1644,6 +1653,9 @@ pub enum Response {
         conversation: Box<Conversation>,
         outcome: SendOutcome,
     },
+    StartOfferedFusion {
+        outcome: SendOutcome,
+    },
     ForkConversation {
         conversation: Box<Conversation>,
     },
@@ -2644,7 +2656,7 @@ mod send_defaults_tests {
                 .extend(extra.as_object().unwrap().clone());
             let request: Request = serde_json::from_value(value).unwrap();
             assert!(
-                matches!(request, Request::SendMessage { mentions, steer: false, queue_index: None, .. } if mentions.is_empty())
+                matches!(request, Request::SendMessage { mentions, steer: false, fusion: false, queue_index: None, .. } if mentions.is_empty())
             );
         }
     }

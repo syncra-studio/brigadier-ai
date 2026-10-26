@@ -114,7 +114,7 @@ pr?: number,
 /**
  * The requests whose work it merged.
  */
-requests?: Array<string>, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, results?: Array<FeedbackSent>, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
+requests?: Array<string>, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, results?: Array<FeedbackSent>, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "fusionOffered", id: string, question: string, } | { "type": "fusionOfferTaken", id: string, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

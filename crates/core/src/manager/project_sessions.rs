@@ -156,7 +156,7 @@ impl SessionManager {
     }
 
     /// Records the thread's step `kind` in `id`'s request `request`, failing if it can't.
-    async fn store_step(
+    pub(super) async fn store_step(
         &self,
         id: &ConversationId,
         request: Option<String>,
@@ -176,7 +176,7 @@ impl SessionManager {
 
     /// Whether a step of `id`'s `board` is in view, as the thread shows it: not from a request's
     /// earlier attempt (before a Try again), nor from a message the user edited away.
-    async fn in_view<'a>(
+    pub(super) async fn in_view<'a>(
         &self,
         id: &ConversationId,
         board: &'a Board,

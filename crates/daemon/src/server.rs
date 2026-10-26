@@ -1284,6 +1284,16 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 outcome: send_outcome(outcome),
             }
         }
+        Request::StartOfferedFusion {
+            conversation_id,
+            offer_id,
+        } => Response::StartOfferedFusion {
+            outcome: send_outcome(
+                sessions
+                    .start_offered_fusion(&conversation_id, &offer_id)
+                    .await?,
+            ),
+        },
         Request::GetSettledTabs => {
             let (tabs, landed) = sessions.tab_marks().await;
             Response::GetSettledTabs { tabs, landed }
@@ -1422,6 +1432,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             ),
         },
         request @ (Request::StartSession { .. }
+        | Request::StartOfferedFusion { .. }
         | Request::StartOfferedSession { .. }
         | Request::GetSettledTabs
         | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
@@ -1456,22 +1467,30 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             attachments,
             mentions,
             steer,
+            fusion,
             queue_index,
-        } => Response::SendMessage {
-            outcome: send_outcome(
-                heap(|| {
-                    sessions.send_message(
-                        conversation_id,
-                        text,
-                        attachments,
-                        mentions,
-                        steer,
-                        queue_index,
-                    )
-                })
-                .await?,
-            ),
-        },
+        } => {
+            let text = if fusion {
+                sessions.fusion_message(&conversation_id, text)?
+            } else {
+                text
+            };
+            Response::SendMessage {
+                outcome: send_outcome(
+                    heap(|| {
+                        sessions.send_message(
+                            conversation_id,
+                            text,
+                            attachments,
+                            mentions,
+                            steer,
+                            queue_index,
+                        )
+                    })
+                    .await?,
+                ),
+            }
+        }
         Request::EditQueued {
             conversation_id,
             item_id,
@@ -3035,6 +3054,7 @@ mod tests {
             Request::SendMessage {
                 conversation_id: id(),
                 text: "Also add CSV.".into(),
+                fusion: false,
                 attachments: Vec::new(),
                 mentions: Vec::new(),
                 steer: false,

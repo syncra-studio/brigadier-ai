@@ -30,6 +30,20 @@ impl ProviderKind {
         }
     }
 
+    /// A skill invoked in this CLI's own message syntax.
+    pub fn skill_invocation(self, skill: &str, question: &str) -> String {
+        let prefix = match self {
+            Self::Claude => "/",
+            Self::Codex => "$",
+        };
+        let question = question.trim();
+        if question.is_empty() {
+            format!("{prefix}{skill}")
+        } else {
+            format!("{prefix}{skill} {question}")
+        }
+    }
+
     /// The binary name looked up on the login shell's PATH.
     pub fn binary(self) -> &'static str {
         match self {
