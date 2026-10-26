@@ -3,6 +3,7 @@ import { type FC, useEffect } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
+import { branchMarkdown, latestAnswer, storedBranch } from "@/app/conversation/storedBranch";
 import { NameDialog } from "@/app/shell/NameDialog";
 import { TooltipIconButton } from "@/components/controls";
 import {
@@ -41,19 +42,14 @@ function useThreadMarkdown(title: string): () => string {
   const aui = useAui();
   // The whole branch: assistant-ui holds only some of a long one.
   const list = useThreadListSource();
-  return () => {
-    const parts = [`# ${title}`];
-    for (const message of list?.get().messages ?? aui.thread().getState().messages) {
-      const text = message.content
-        .map((part) => (part.type === "text" ? part.text : ""))
-        .filter(Boolean)
-        .join("\n\n")
-        .trim();
-      if (!text) continue;
-      parts.push(`## ${message.role === "user" ? "User" : "Assistant"}`, text);
-    }
-    return `${parts.join("\n\n")}\n`;
-  };
+  return () =>
+    branchMarkdown(
+      title,
+      (list?.get().messages ?? aui.thread().getState().messages).map((message) => ({
+        role: message.role === "user" ? "user" : "assistant",
+        texts: message.content.map((part) => (part.type === "text" ? part.text : "")),
+      })),
+    );
 }
 
 function fail(cause: unknown) {
@@ -77,8 +73,8 @@ export const ChatActions: FC<{
   /** Its ⋯ as a small button inside a tab. */
   compact?: boolean;
   /**
-   * Its ⋯ as a sidebar row's hover action. No thread is around a row, so Fork and Copy as
-   * Markdown aren't offered there, and the conversation's shortcuts stay with its open view.
+   * Its ⋯ as a sidebar row's hover action. No thread is around a row: its Fork and Copy as
+   * Markdown read the conversation's thread when chosen, and its shortcuts stay with its open view.
    */
   row?: boolean;
   className?: string;
@@ -180,10 +176,15 @@ export const ChatActions: FC<{
             >
               Copy {noun} id
             </DropdownMenuItem>
-            {!row && <CopyMarkdownItem title={conversation.title} />}
+            {row ? <StoredMarkdownItem conversation={conversation} /> : <CopyMarkdownItem title={conversation.title} />}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        {!row && !archived && <ForkSub conversation={conversation} />}
+        {!archived &&
+          (row ? (
+            <ForkSub conversation={conversation} onFork={(place) => void forkStored(conversation, place).catch(fail)} />
+          ) : (
+            <ThreadForkSub conversation={conversation} />
+          ))}
         {directory && (
           <>
             <DropdownMenuSeparator />
@@ -232,47 +233,70 @@ function shortId(id: string): string {
   return id.slice(-8);
 }
 
+const copiedMarkdown = () => toast("Copied conversation as Markdown");
+const markdownFailed = () => toast("Failed to copy conversation as Markdown", { tone: "error" });
+
 /** Copy › Copy as Markdown: the thread around, as it shows. */
 const CopyMarkdownItem: FC<{ title: string }> = ({ title }) => {
   const markdown = useThreadMarkdown(title);
   return (
-    <DropdownMenuItem
-      onSelect={() =>
-        void copy(markdown(), "Copied conversation as Markdown").catch(() =>
-          toast("Failed to copy conversation as Markdown", { tone: "error" }),
-        )
-      }
-    >
+    <DropdownMenuItem onSelect={() => void copy(markdown(), "Copied conversation as Markdown").catch(markdownFailed)}>
       Copy as Markdown
     </DropdownMenuItem>
   );
 };
 
-/** Fork ›, from the thread's latest answer; none before there is one. */
-const ForkSub: FC<{ conversation: Conversation }> = ({ conversation }) => {
+/**
+ * A row's Copy › Copy as Markdown: the conversation's thread is read first. The clipboard write
+ * starts during the click and takes the text once read: WebKit refuses one begun after a wait.
+ */
+const StoredMarkdownItem: FC<{ conversation: Conversation }> = ({ conversation }) => (
+  <DropdownMenuItem
+    onSelect={() => {
+      const text = storedBranch(conversation).then(
+        (messages) => new Blob([branchMarkdown(conversation.title, messages)], { type: "text/plain" }),
+      );
+      void navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).then(copiedMarkdown, markdownFailed);
+    }}
+  >
+    Copy as Markdown
+  </DropdownMenuItem>
+);
+
+/** A row's Fork: from the latest answer of the conversation's thread, read first. */
+async function forkStored(conversation: Conversation, place: ForkPlace): Promise<void> {
+  const answer = latestAnswer(await storedBranch(conversation));
+  if (!answer) throw new Error(`Nothing to fork yet: the ${conversation.kind === "chat" ? "chat" : "session"} has no answer.`);
+  await forkConversation(conversation.id, answer, place);
+}
+
+/** Fork › of the thread around, from its latest answer; none before there is one. */
+const ThreadForkSub: FC<{ conversation: Conversation }> = ({ conversation }) => {
   const answer = useLatestAnswer();
   if (!answer) return null;
-  const fork = (place: ForkPlace) => void forkConversation(conversation.id, answer, place).catch(fail);
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <BranchAlt />
-        Fork
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        {conversation.kind === "chat" ? (
-          <DropdownMenuItem onSelect={() => fork("workspace")}>Fork chat</DropdownMenuItem>
-        ) : (
-          FORK_PLACES.map(({ place, title }) => (
-            <DropdownMenuItem key={place} onSelect={() => fork(place)}>
-              {title}
-            </DropdownMenuItem>
-          ))
-        )}
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
+  return <ForkSub conversation={conversation} onFork={(place) => void forkConversation(conversation.id, answer, place).catch(fail)} />;
 };
+
+/** Fork ›: where the fork goes. */
+const ForkSub: FC<{ conversation: Conversation; onFork: (place: ForkPlace) => void }> = ({ conversation, onFork }) => (
+  <DropdownMenuSub>
+    <DropdownMenuSubTrigger>
+      <BranchAlt />
+      Fork
+    </DropdownMenuSubTrigger>
+    <DropdownMenuSubContent>
+      {conversation.kind === "chat" ? (
+        <DropdownMenuItem onSelect={() => onFork("workspace")}>Fork chat</DropdownMenuItem>
+      ) : (
+        FORK_PLACES.map(({ place, title }) => (
+          <DropdownMenuItem key={place} onSelect={() => onFork(place)}>
+            {title}
+          </DropdownMenuItem>
+        ))
+      )}
+    </DropdownMenuSubContent>
+  </DropdownMenuSub>
+);
 
 /** The rename dialog the header's title and ⌥⌘R open. */
 export const RenameDialog: FC<{

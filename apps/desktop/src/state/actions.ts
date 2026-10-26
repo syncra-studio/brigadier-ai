@@ -1189,12 +1189,6 @@ export async function answerQuestion(
   await request({ method: "answerQuestion", conversationId, cardId, answers, input });
 }
 
-/** "Close workspace": removes the session's own worktree; says what went and what stayed. */
-export async function closeWorkspace(conversationId: string): Promise<string> {
-  const { text } = await request({ method: "closeWorkspace", conversationId });
-  return text;
-}
-
 /**
  * The user's answer to the thread's feedback offer: opened on GitHub (`sent`, with what became of
  * its reports, kept for the card after a restart) or dismissed.

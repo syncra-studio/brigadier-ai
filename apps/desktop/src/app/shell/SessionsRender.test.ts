@@ -49,10 +49,25 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
 
   test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Archive⇧⌘A", "Permanently delete"]);
-    assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id"]);
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
   });
 }
+
+test("a row's ⋯, its session not open, reads the thread to copy it as Markdown and fork its latest answer; with no answer there is nothing to fork", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "sessions.html?rowThread=1", "sessions-result", 30000)) as {
+    error?: string; open: string; menu: string[]; markdown: string; forks: unknown[]; read: string[]; toasts: string[]; forksAfter: number;
+  };
+  assert.equal(seen.error, undefined);
+  assert.equal(seen.open, "none", "no session is open");
+  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+  assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
+  assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
+  // Read once, for Copy; Fork finds it held.
+  assert.deepEqual(seen.read, ["getConversation w2-a", "threadView w2-a"]);
+  assert.ok(seen.toasts.includes("Nothing to fork yet: the session has no answer."), JSON.stringify(seen.toasts));
+  assert.equal(seen.forksAfter, 1);
+});
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
 // with its own title and state, those that need the user first,
