@@ -616,27 +616,18 @@ impl SessionManager {
             }
             _ => return Ok(None),
         };
-        let base_name = base.clone();
         blocking(move || {
             let repo = git.open(Path::new(&repo)).map_err(git_error)?;
-            let (Some(base), Some(tip)) = (
+            let (Some(_), Some(tip)) = (
                 repo.branch_tip(&base).map_err(git_error)?,
                 repo.branch_tip(&branch).map_err(git_error)?,
             ) else {
                 return Ok(None);
             };
-            let mut fork = repo.merge_base(&base, &tip).map_err(git_error)?;
-            let mut from = base;
-            // The branch merged in the base's upstream, newer than the local base (#233): what
-            // it changed is counted from there, not from where it first left the base.
-            if let Some(upstream) = repo.upstream_tip(&base_name).map_err(git_error)?
-                && let Ok(newer) = repo.merge_base(&upstream, &tip)
-                && newer != fork
-                && repo.ancestor(&fork, &newer).map_err(git_error)?
-            {
-                fork = newer;
-                from = upstream;
-            }
+            // A stale local base uses its containing upstream as last fetched (#233).
+            // Local commits take precedence when the base and upstream diverge.
+            let (from, _) = repo.newer_tip(&base).map_err(git_error)?;
+            let fork = repo.merge_base(&from, &tip).map_err(git_error)?;
             // Its worktree as it stands, while it has the branch checked out; else the branch.
             let to = path
                 .and_then(|path| git.open(Path::new(&path)).ok())
