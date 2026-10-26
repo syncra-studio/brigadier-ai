@@ -46,6 +46,7 @@ mod journal;
 mod lifecycle;
 mod mcp;
 mod owner_watch;
+mod peer_auth;
 #[cfg(target_os = "macos")]
 mod process_name;
 // Process facts the supervisor needs on Windows and Linux.

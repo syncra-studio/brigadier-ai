@@ -50,6 +50,11 @@ pub async fn connect(socket_path: &str) -> io::Result<(Reader, Writer)> {
     #[cfg(unix)]
     {
         let stream = tokio::net::UnixStream::connect(socket_path).await?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            validate_unix_server(stream.as_raw_fd())?;
+        }
         let (reader, writer) = stream.into_split();
         Ok((Box::new(reader), Box::new(writer)))
     }
@@ -69,6 +74,8 @@ pub async fn connect(socket_path: &str) -> io::Result<(Reader, Writer)> {
                 Err(error) => return Err(error),
             }
         };
+        use std::os::windows::io::AsRawHandle;
+        pipe_server::validate_server(client.as_raw_handle())?;
         let (reader, writer) = tokio::io::split(client);
         Ok((Box::new(reader), Box::new(writer)))
     }
@@ -90,9 +97,13 @@ impl Stream {
     pub fn connect(socket_path: &str) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            Ok(Self {
-                inner: std::os::unix::net::UnixStream::connect(socket_path)?,
-            })
+            let inner = std::os::unix::net::UnixStream::connect(socket_path)?;
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::fd::AsRawFd;
+                validate_unix_server(inner.as_raw_fd())?;
+            }
+            Ok(Self { inner })
         }
         #[cfg(windows)]
         {
@@ -104,7 +115,11 @@ impl Stream {
                     .write(true)
                     .open(&name)
                 {
-                    Ok(inner) => return Ok(Self { inner }),
+                    Ok(inner) => {
+                        use std::os::windows::io::AsRawHandle;
+                        pipe_server::validate_server(inner.as_raw_handle())?;
+                        return Ok(Self { inner });
+                    }
                     Err(error)
                         if error.raw_os_error() == Some(ERROR_PIPE_BUSY)
                             && Instant::now() < until =>
@@ -136,6 +151,34 @@ impl Stream {
             Ok(())
         }
     }
+}
+
+/// Authenticate the server before sending it any capability token. A
+/// predictable socket/pipe name is not evidence of the server's identity.
+#[cfg(target_os = "linux")]
+pub(crate) fn validate_unix_server(fd: std::os::fd::RawFd) -> io::Result<()> {
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of_val(&credentials) as libc::socklen_t;
+    // SAFETY: a live socket descriptor and correctly sized writable buffer.
+    let status = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if credentials.uid != unsafe { libc::geteuid() } {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "computer-use server runs as another user",
+        ));
+    }
+    crate::peer_auth::validate(u32::try_from(credentials.pid).ok())
 }
 
 impl io::Read for Stream {
@@ -240,6 +283,24 @@ mod pipe_server {
     use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
     use super::{Reader, Writer};
+
+    pub(super) fn validate_server(handle: std::os::windows::io::RawHandle) -> io::Result<()> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+        let mut pid = 0;
+        // SAFETY: the caller owns a live connected pipe handle.
+        unsafe { GetNamedPipeServerProcessId(HANDLE(handle), &mut pid) }
+            .map_err(io::Error::other)?;
+        if !matches!((security::current_user_sid(), security::process_user_sid(pid)),
+            (Some(own), Some(peer)) if own.eq_ignore_ascii_case(&peer))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "computer-use server runs as another user",
+            ));
+        }
+        crate::peer_auth::validate(Some(pid))
+    }
 
     /// Consecutive failures to create or connect an instance before the
     /// daemon gives up, so its supervisor can start a fresh one.
@@ -501,5 +562,35 @@ mod tests {
             a,
             pipe_name(r"c:\users\ME\appdata\roaming\brigadier\computer\CU.SOCK")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_clients_authenticate_the_kernel_server_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("test.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        // Both clients verify the peer before writing anything to it.
+        assert!(super::Stream::connect(socket.to_str().unwrap()).is_ok());
+        assert!(super::connect(socket.to_str().unwrap()).await.is_ok());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_pipe_checks_the_server_and_client_before_exchange() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let path = format!("transport-test-path-{}", uuid::Uuid::new_v4());
+        let mut listener = super::PipeListener::bind(&super::pipe_name(&path)).unwrap();
+        let server = tokio::spawn(async move {
+            let (connection, ()) = listener.accept().await.unwrap();
+            assert_eq!(connection.client_pid(), Some(std::process::id()));
+            let (mut reader, mut writer) = connection.into_split();
+            assert_eq!(reader.read_u8().await.unwrap(), b'A');
+            writer.write_u8(b'B').await.unwrap();
+        });
+        let (mut reader, mut writer) = super::connect(&path).await.unwrap();
+        writer.write_u8(b'A').await.unwrap();
+        assert_eq!(reader.read_u8().await.unwrap(), b'B');
+        server.await.unwrap();
     }
 }

@@ -1613,6 +1613,12 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
 
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|e| anyhow::Error::new(NotDelivered(format!("connect to {socket_path}: {e}"))))?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        crate::transport::validate_unix_server(stream.as_raw_fd())
+            .map_err(|e| anyhow::Error::new(NotDelivered(e.to_string())))?;
+    }
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     // Per-read timeout acts as a liveness poll, NOT a hard cap on the whole
     // response: an AX-heavy `get_window_state` (slow tree walk) or a multi-MB
@@ -1923,6 +1929,17 @@ pub async fn run_serve_with_owner(
                     .and_then(|pid| u32::try_from(pid).ok());
                 #[cfg(windows)]
                 let activity_peer_pid = stream.client_pid();
+                #[cfg(not(target_os = "macos"))]
+                if let Err(refusal) = crate::peer_auth::validate(activity_peer_pid) {
+                    eprintln!("brigadier-cu: refused daemon peer: {refusal}");
+                    let (_, mut writer) = stream.into_split();
+                    tokio::spawn(async move {
+                        let line = serde_json::json!({"ok":false,"refused":true,"error":refusal.to_string()});
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(1),
+                            writer.write_all(format!("{line}\n").as_bytes())).await;
+                    });
+                    continue;
+                }
                 let external_permission_ready = external_permission_ready.clone();
 
                 tokio::spawn(async move {

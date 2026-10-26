@@ -69,6 +69,13 @@ pub fn probe(socket_path: &str) -> Health {
     let Ok(mut stream) = UnixStream::connect(socket_path) else {
         return Health::Absent;
     };
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        if crate::transport::validate_unix_server(stream.as_raw_fd()).is_err() {
+            return Health::Refused;
+        }
+    }
     let request = DaemonRequest {
         method: "health".into(),
         name: None,
