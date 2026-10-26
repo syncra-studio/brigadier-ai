@@ -655,10 +655,8 @@ mod tests {
     use std::ffi::OsString;
 
     /// A fresh folder, removed after the test however it ends.
-    #[cfg(unix)]
     struct Temp(PathBuf);
 
-    #[cfg(unix)]
     impl std::ops::Deref for Temp {
         type Target = Path;
         fn deref(&self) -> &Path {
@@ -666,14 +664,12 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    #[cfg(unix)]
     fn scratch(name: &str) -> Temp {
         let dir = std::env::temp_dir().join(format!(
             "brigadier-accounts-{name}-{}-{}",
