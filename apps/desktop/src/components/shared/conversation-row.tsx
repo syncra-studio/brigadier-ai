@@ -35,7 +35,7 @@ const besideStatus = "group-has-data-[slot=status-word]/row:mask-none group-has-
 const hideOnRowHover =
   "group-hover/row:invisible group-focus-within/row:invisible group-has-data-[state=open]/row:invisible";
 
-/** Project session titles reclaim the state word's space when the actions replace it. */
+/** Titles reclaim the state word's space when the row's actions replace it. */
 const removeOnRowHover =
   "group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden";
 
@@ -72,7 +72,6 @@ export const ConversationRow = memo(function ConversationRow({
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
-  const projectSession = nested && conversation.kind === "session";
   const noun = conversation.kind === "chat" ? "chat" : "session";
   const togglePin = () =>
     void setPinned(conversation.id, !pinned).catch((error: unknown) =>
@@ -110,7 +109,7 @@ export const ConversationRow = memo(function ConversationRow({
               "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
               roomForActions,
               nested && "ps-8",
-              projectSession && !picked && "group-hover/row:bg-foreground/8",
+              !picked && "group-hover/row:bg-foreground/8",
             )}
             onClick={(event) => {
               if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
@@ -122,7 +121,7 @@ export const ConversationRow = memo(function ConversationRow({
             <span data-slot="row-title" className={cn("mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap", besideStatus)}>
               {title}
             </span>
-            <RowStatus conversationId={conversation.id} reclaimSpace={projectSession} />
+            <RowStatus conversationId={conversation.id} reclaimSpace />
           </NavRow>
         </ContextMenuTrigger>
         {targets.length > 1 ? (
