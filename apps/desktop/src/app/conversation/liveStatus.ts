@@ -112,7 +112,7 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   const { board, requestIds, state, quotaWait } = input;
   const none: ThreadStatusView = { head: null };
   if (state !== "working" && state !== "waiting") return none;
-  const leadRunning = board.runRequest !== null && requestIds.includes(board.runRequest)
+  const leadRunning = !quotaWait && board.runRequest !== null && requestIds.includes(board.runRequest)
     && (board.run === "running" || board.run === "starting");
   const live = Object.values(board.tasks)
     .filter((task) => task.requestId !== null && requestIds.includes(task.requestId) && !isFinal(task))
@@ -121,8 +121,10 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
 
   const needs = needsYou(input, leadRunning, live);
   if (needs) return { head: needs };
+  // The recovery strip owns the lead's quota wait, including stale running/retry snapshots.
+  // Independent workers still describe their real activity below.
+  if (quotaWait && !working) return none;
   if (leadRunning) return { head: leadHead(input) };
-  if (quotaWait && !working) return { head: { text: quotaWords(quotaWait.resetsAtMs), tone: "still" } };
   if (live.length > 0) {
     const quota = live.every((task) => task.quotaWait);
     if (quota) {

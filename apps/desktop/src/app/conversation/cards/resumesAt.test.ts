@@ -24,3 +24,11 @@ test("credits or a spend limit say so, with no time, and never resume on their o
   assert.deepEqual(resumesAt(limit("credits"), null), { title: "Out of credits", reason: null, atMs: null, resumes: false });
   assert.deepEqual(resumesAt(null, wait({ limitKind: "spendControl" })), { title: "Spend limit reached", reason: "Claude's 5-hour window resets", atMs: null, resumes: false });
 });
+
+test("a current unknown reset and kind never inherit the previous turn's limit", () => {
+  const current = wait({ resetsAtMs: null });
+  assert.deepEqual(resumesAt(limit("usageWindow"), current), {
+    title: "Resumes when the limit resets", reason: current.reason, atMs: null, resumes: true,
+  });
+  assert.equal(resumesAt(limit("credits"), current)?.resumes, true);
+});

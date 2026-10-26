@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { isRunRequest } from "@/app/conversation/blocks";
+import { isLive, isRunRequest } from "@/app/conversation/blocks";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { latestRequest } from "@/app/conversation/rework";
 import { cutOff, describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
@@ -13,6 +13,19 @@ import type { UserRequest } from "@/ipc/generated";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { resume, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
+
+/** Scope the conversation's current wait to its latest request; historical failures keep their diagnostics. */
+export function useBlockQuotaWait(meta: BlockMeta | undefined) {
+  const conversation = useViewConversation();
+  const latest = useAuiState((s) => s.message.isLast);
+  const nativeLimit = useCliThread((s) => {
+    if (!meta || !conversation) return false;
+    const turn = s.views[conversation.id]?.turns.at(-1);
+    return !!turn?.limit && (turn.requests.some((id) => meta.requestIds.includes(id)) || turn.userMessage === meta.requestId);
+  });
+  return latest && meta && (isLive(meta.state) || nativeLimit) ? conversation?.quotaWait ?? null : null;
+}
 
 /**
  * The block's error as its requests have it (`cutOff`): a turn the thread says was cut by a quit
@@ -40,7 +53,7 @@ const TRY_AGAIN = "Try again.";
  * can be: a Chat answers again; a session's last turn gets "Try again." sent as the user's
  * message, the way the composer sends it. An overnight run's turn has none: the run goes on.
  */
-export const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
+export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boolean }> = ({ meta, live, quotaCovered = false }) => {
   const failed = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error"
@@ -52,7 +65,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live 
   const conversation = useViewConversation();
   const aui = useAui();
   const action = useAction();
-  if (read === null) return null;
+  if (read === null || quotaCovered) return null;
   const { error, resumable } = read;
   const model = meta.texts.at(-1)?.model ?? meta.picked;
   const { summary, limit } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);

@@ -1,6 +1,7 @@
 import { type FC } from "react";
 
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
+import { LeadPaused } from "@/app/conversation/activity/groupContext";
 import { type Activity, type LeadStep, joinExchanges, thinkingLabel } from "@/app/conversation/activity/group";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
@@ -44,7 +45,7 @@ export const ActivityItems: FC<{
   // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
     ? null
-    : (head ?? (thought === null ? (unjoined.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thinkingLabel(thought) || "Thinking", tone: "busy", thought: true }));
+    : (head ?? (live.quotaWait ? null : thought === null ? (unjoined.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thinkingLabel(thought) || "Thinking", tone: "busy", thought: true }));
   // A message to another session says how its exchange stands itself: the line stays under it.
   const newest = unjoined.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
@@ -54,7 +55,7 @@ export const ActivityItems: FC<{
   // the turn never shrinks under the user's message.
   const leadRunning = useBoard((s) => {
     const board = s.board;
-    return !!live && !!board?.runRequest && live.requestIds.includes(board.runRequest) && (board.run === "running" || board.run === "starting");
+    return !!live && !live.quotaWait && !!board?.runRequest && live.requestIds.includes(board.runRequest) && (board.run === "running" || board.run === "starting");
   });
   const tasks = useBoard((s) => s.board?.tasks);
   const approvals = useBoard((s) => s.board?.approvals);
@@ -85,13 +86,13 @@ export const ActivityItems: FC<{
     return denied(step) ? { ...timed, kind: { ...step.kind, status: "declined" } } : timed;
   };
   return (
-    <>
+    <LeadPaused value={!!live?.quotaWait}>
       {activity.map((item, index) =>
         item.type === "group" ? (
           <KeptScope key={`group:${item.key}`} name={`group:${item.key}`}>
             <ActivityGroup
               items={item.items}
-              live={!!live && index === activity.length - 1}
+              live={!!live && (!live.quotaWait || !!line) && index === activity.length - 1}
               liveLabel={inGroup && index === activity.length - 1 ? line : null}
               summary={summary}
               describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
@@ -109,6 +110,6 @@ export const ActivityItems: FC<{
         ),
       )}
       {!inGroup && shownLine && (shownLine.thought && thought !== null ? <ThinkingLine text={thought} /> : <StatusLine head={shownLine} />)}
-    </>
+    </LeadPaused>
   );
 };
