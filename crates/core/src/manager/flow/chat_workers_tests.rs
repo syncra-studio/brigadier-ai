@@ -530,3 +530,79 @@ async fn a_chats_repo_worker_shows_committed_changes_against_its_chosen_base() {
     assert!(!rows[0].merged);
     flow.stop().await;
 }
+
+/// The Source panel's worker scope lists what the worker's +N −N counts, committed and not, and
+/// the Review tab shows that diff; neither reads the session's own checkout.
+#[tokio::test]
+async fn a_workers_source_lists_its_committed_and_uncommitted_files_against_its_base() {
+    let script: Script = Arc::new(move |turn| {
+        Box::pin(async move {
+            if turn.worker().is_some() {
+                turn.write("worker.txt", "one\ntwo\n");
+                turn.git(&["add", "worker.txt"]);
+                turn.git(&["commit", "-m", "Add worker file"]);
+                return Reply::text("Committed.");
+            }
+            let Some(repo) = turn.input.strip_prefix("Work in ") else {
+                return Reply::text("ok");
+            };
+            let answer = brigadier(
+                &turn,
+                started(Some(repo), false, Some("worker-base"), "Write."),
+            )
+            .await;
+            wait_for(&turn, &[id_of(&answer).as_str()], 1).await;
+            Reply::text("Done.")
+        })
+    });
+    let flow = Flow::start("worker-source", Options::default(), script).await;
+    super::git(&flow.repo, &["branch", "worker-base", "main"]);
+    std::fs::write(flow.repo.join("unrelated.txt"), "elsewhere\n").unwrap();
+    super::git(&flow.repo, &["add", "unrelated.txt"]);
+    super::git(&flow.repo, &["commit", "-m", "Advance checkout"]);
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, &format!("Work in {}", flow.repo.display()))
+        .await;
+    answered(&flow, &chat).await;
+    let task = flow.core.tasks(&chat).await.unwrap().remove(0);
+    let worktree = PathBuf::from(task.workspace.as_ref().unwrap().worktree.clone().unwrap());
+    std::fs::write(worktree.join("loose.txt"), "not committed\n").unwrap();
+
+    let source = flow.manager.worker_source(&chat, &task.id).await.unwrap();
+    assert_eq!(source.base, "worker-base");
+    assert_eq!(source.branch, task.workspace.as_ref().unwrap().branch);
+    let files: Vec<_> = source
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.status, file.insertions))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("loose.txt", crate::work::ReviewFileStatus::Untracked, 1),
+            ("worker.txt", crate::work::ReviewFileStatus::Added, 2),
+        ]
+    );
+    assert_eq!((source.insertions, source.deletions), (3, 0));
+
+    let review = flow
+        .manager
+        .review_diff(
+            &chat,
+            crate::work::ReviewScope::Worker {
+                task_id: task.id.clone(),
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(review.files, source.files);
+    assert!(review.patch.contains("+not committed"), "{}", review.patch);
+    assert!(!review.patch.contains("elsewhere"), "{}", review.patch);
+    assert_eq!(review.base.as_deref(), Some("worker-base"));
+
+    let missing = crate::model::TaskId("no-such-worker".into());
+    assert!(flow.manager.worker_source(&chat, &missing).await.is_err());
+    flow.stop().await;
+}

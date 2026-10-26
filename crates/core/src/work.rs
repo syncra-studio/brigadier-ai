@@ -2694,6 +2694,9 @@ pub enum ReviewScope {
     },
     /// The session's branch since it left its base.
     Branch,
+    /// A worker's branch since it left the branch it merges into, committed and not, as its
+    /// worktree stands.
+    Worker { task_id: TaskId },
 }
 
 /// How a file changed, for the Review tab's badge.
@@ -2749,6 +2752,20 @@ pub struct ReviewDiff {
     /// The branch compared ("Branch") and the one it left.
     pub branch: Option<String>,
     pub base: Option<String>,
+}
+
+/// A worker's changes as the Source panel lists them: its branch since it left the branch it
+/// merges into, committed and not (its +N −N), each file with its counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerSource {
+    /// Its own branch; none while its worktree has none checked out.
+    pub branch: Option<String>,
+    /// The branch it merges into.
+    pub base: String,
+    pub files: Vec<ReviewFile>,
+    pub insertions: u32,
+    pub deletions: u32,
 }
 
 /// A file of a session's checkout, as the Files tab shows it.

@@ -483,6 +483,7 @@ export type { WorkerPage } from "./WorkerPage";
 export type { WorkerRef } from "./WorkerRef";
 export type { WorkerRole } from "./WorkerRole";
 export type { WorkerRow } from "./WorkerRow";
+export type { WorkerSource } from "./WorkerSource";
 export type { WorkerStep } from "./WorkerStep";
 export type { WorkerStepKind } from "./WorkerStepKind";
 export type { WorkerTask } from "./WorkerTask";

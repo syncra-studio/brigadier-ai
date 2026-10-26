@@ -33,7 +33,12 @@ export type ReviewTarget =
    */
   | { type: "lastTurn"; requestId: string | null; path?: string; staged: false }
   /** Everything not committed: staged, unstaged and new files together (Q90). */
-  | { type: "uncommitted"; staged: false };
+  | { type: "uncommitted"; staged: false }
+  /**
+   * A worker's branch since it left the session's, committed and not, in its own worktree: its
+   * +N −N. With `path`, only that file's part (a row of Source's worker scope).
+   */
+  | { type: "worker"; taskId: string; path?: string; staged: false };
 
 /** The changes `target` compares. */
 export function reviewScope(target: ReviewTarget): ReviewScope {
@@ -42,6 +47,7 @@ export function reviewScope(target: ReviewTarget): ReviewScope {
     case "branch": return { type: "branch" };
     case "lastTurn": return { type: "lastTurn", requestId: target.requestId };
     case "uncommitted": return { type: "uncommitted" };
+    case "worker": return { type: "worker", taskId: target.taskId };
     default: return { type: target.staged ? "staged" : "unstaged" };
   }
 }
@@ -782,7 +788,7 @@ export function selectTabNumber(conversationId: string, number: number): void {
   if (id) selectTab(conversationId, id);
 }
 
-const REVIEW_TARGETS = new Set<string>(["changes", "file", "commit", "branch", "lastTurn", "uncommitted"] satisfies ReviewTarget["type"][]);
+const REVIEW_TARGETS = new Set<string>(["changes", "file", "commit", "branch", "lastTurn", "uncommitted", "worker"] satisfies ReviewTarget["type"][]);
 
 /** Turns an old document's file name into a page title. */
 export function draftTitle(name: string): string {

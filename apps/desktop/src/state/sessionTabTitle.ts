@@ -9,11 +9,12 @@ function baseName(path: string): string {
 export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
     // A Changes card's file row: the file's part of a commit's or a turn's change.
-    if ((tab.target.type === "commit" || tab.target.type === "lastTurn") && tab.target.path) return `${baseName(tab.target.path)} (diff)`;
+    if ((tab.target.type === "commit" || tab.target.type === "lastTurn" || tab.target.type === "worker") && tab.target.path) return `${baseName(tab.target.path)} (diff)`;
     if (tab.target.type === "changes") return tab.target.staged ? "Staged Changes" : "Changes";
     if (tab.target.type === "branch") return "Changes";
     if (tab.target.type === "lastTurn") return "Last turn";
     if (tab.target.type === "uncommitted") return "Uncommitted changes";
+    if (tab.target.type === "worker") return "Worker changes";
     if (tab.target.type === "commit") return `Merge ${tab.target.commit.slice(0, 7)}`;
     return `${baseName(tab.target.path)} (diff)`;
   }

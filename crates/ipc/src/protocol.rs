@@ -26,8 +26,8 @@ use brigadier_core::{
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
-    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkerSource,
+    WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -442,6 +442,12 @@ pub enum Request {
     /// the Workers summary while it works.
     GetWorkerDiffs {
         conversation_id: ConversationId,
+    },
+    /// The files a worker of the conversation changed, as its +N −N counts them: the Source
+    /// panel's worker scope. It only reads.
+    GetWorkerSource {
+        conversation_id: ConversationId,
+        task_id: TaskId,
     },
     /// Creates a session (with a project) or a chat (without). The setup comes from the
     /// composer; sessions need one to run, and their project remembers it.
@@ -1577,6 +1583,9 @@ pub enum Response {
     },
     GetWorkerDiffs {
         diffs: Vec<WorkerDiff>,
+    },
+    GetWorkerSource {
+        source: WorkerSource,
     },
     CreateConversation {
         conversation: Box<Conversation>,

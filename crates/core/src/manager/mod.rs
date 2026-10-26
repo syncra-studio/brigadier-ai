@@ -114,6 +114,7 @@ mod watchdog;
 mod work_facts;
 mod worker_events;
 mod worker_rows;
+mod worker_source;
 mod workers;
 pub mod workspace;
 
