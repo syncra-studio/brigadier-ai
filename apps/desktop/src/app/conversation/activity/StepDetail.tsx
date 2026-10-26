@@ -76,7 +76,7 @@ function Colored({ text }: { text: string }) {
  * A command's box: "Shell", `$ command` (two lines, all of it on a click) and everything it printed
  * in colour, newest line in view, then how it ended. Output the daemon cut short says so.
  */
-export function ShellBox({ command, output, status, exit, stopped = false, notes = [] }: {
+export function ShellBox({ command, output, status, exit, stopped = false, notes = [], outcome, emptyOutput = "No output" }: {
   command: string;
   output: string | null;
   status: ItemStatus;
@@ -85,6 +85,9 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   stopped?: boolean | undefined;
   /** What Brigadier did after the command, each on a line under its output: the commit a check made. */
   notes?: string[];
+  /** Explicit lifecycle wording for historical evidence whose exit may be unknown. */
+  outcome?: string | undefined;
+  emptyOutput?: string | undefined;
 }) {
   const [whole, setWhole] = useKeptState("whole", false);
   // A command still running when the user's Stop ended its thread was stopped.
@@ -98,7 +101,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   }
   const { kept, more } = clippedOutput(output?.trimEnd() ?? "");
   const printed = kept.replace(/^(?:[^\S\r\n]*\r?\n)+/, "").trimEnd();
-  const end = ending(status, exit, stopped);
+  const end = outcome === undefined ? ending(status, exit, stopped) : { text: outcome };
   const shown = unwrapCommand(command);
   return (
     <div data-slot="shell-card" className={cn(SHELL, "group/shell relative")}>
@@ -128,7 +131,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
         {/* Its newest line in view, the older ones fading out above it. */}
         {(printed || status !== "inProgress") && (
           <div data-slot="shell-output" className="max-h-shell-output scroll-edge-fade flex flex-col-reverse overflow-y-auto px-3 py-2 [--spacing-scroll-fade-bottom:0] [--spacing-scroll-fade-top:var(--spacing-shell-fade)]">
-            <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Colored text={printed} /> : "No output"}</pre>
+            <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Colored text={printed} /> : emptyOutput}</pre>
           </div>
         )}
         {printed && <CopyButton text={stripAnsi(printed)} tooltip="Copy output" size="xs" className="text-muted-foreground absolute end-1 top-1 opacity-0 group-hover/shell:opacity-100 focus-visible:opacity-100" />}

@@ -10,6 +10,8 @@ import { pausePreview, previewLogTail, resumePreview, stopBackgroundTask, stopPr
 import { useBoard } from "@/state/board";
 import { useCliThread, workerRowIn } from "@/state/cliThread";
 import { openLink } from "@/state/links";
+import { findHistoricalOutput, readHistoryOutput, type BackgroundHistoryOutput, type BackgroundHistoryRecord } from "@/state/backgroundHistory";
+import { openPanelTab } from "@/state/sessionTabs";
 import type { PanelView } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
@@ -23,18 +25,18 @@ const READ_EVERY_MS = 2000;
  * the thing ends, with what it printed last.
  */
 export function OutputTab({ conversationId, view }: { conversationId: string; view: Extract<PanelView, { type: "output" }> }) {
-  const preview = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "preview" ? s.board.previews[view.id] : undefined));
+  const preview = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "preview" ? s.board.previews[view.id]?.startedAtMs === (view.startedAtMs ?? s.board.previews[view.id]?.startedAtMs) ? s.board.previews[view.id] : undefined : undefined));
   const task = useCliThread((s) => {
     if (view.source !== "task") return undefined;
-    if (view.worker === undefined) return s.views[conversationId]?.background?.find((held) => held.id === view.id);
-    return workerRowIn(s.views, view.worker)?.row.background?.find((held) => held.task.id === view.id)?.task;
+    if (view.worker === undefined) return s.views[conversationId]?.background?.find((held) => held.id === view.id && (view.startedAtMs === undefined || held.startedAtMs === view.startedAtMs));
+    return workerRowIn(s.views, view.worker)?.row.background?.find((held) => held.task.id === view.id && (view.startedAtMs === undefined || held.task.startedAtMs === view.startedAtMs))?.task;
   });
   return (
     <div data-slot="output-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="max-w-thread mx-auto flex w-full flex-col gap-3 px-5 pt-6 pb-10">
-        {preview ? <PreviewOutput preview={preview} /> : task ? <TaskOutput conversationId={conversationId} task={task} worker={view.worker} /> : (
-          <p className="text-muted-foreground text-sm">It has ended, and what it printed is gone.</p>
-        )}
+        {view.source === "history" ? <HistoricalOutput conversationId={conversationId} recordId={view.id} />
+          : preview ? <PreviewOutput preview={preview} /> : task ? <TaskOutput conversationId={conversationId} task={task} worker={view.worker} />
+          : <HistoricalFallback conversationId={conversationId} view={view} />}
       </div>
     </div>
   );
@@ -116,10 +118,70 @@ function TaskOutput({ conversationId, task, worker }: { conversationId: string; 
       </Header>
       {action.error && <p role="alert" className="text-destructive text-sm">{action.error}</p>}
       {error && <p className="text-destructive text-sm">{error}</p>}
+      <p className="text-muted-foreground text-xs">Latest output · up to 256 KiB</p>
       <ShellBox command={task.label} output={text || null} status={status} exit={null}
         stopped={task.status === "stopped"} notes={running && !text ? ["No output yet"] : []} />
     </>
   );
+}
+
+function HistoricalFallback({ conversationId, view }: { conversationId: string; view: Extract<PanelView, { type: "output" }> }) {
+  const [result, setResult] = useState<{ data: BackgroundHistoryOutput | null; error: string | null; loaded: boolean }>({ data: null, error: null, loaded: false });
+  useEffect(() => {
+    let current = true;
+    if (view.source === "history") return;
+    findHistoricalOutput(conversationId, view.source, view.id, view.worker, view.startedAtMs).then(
+      (data) => { if (current) setResult({ data, error: null, loaded: true }); },
+      (error: unknown) => { if (current) setResult({ data: null, error: error instanceof Error ? error.message : String(error), loaded: true }); },
+    );
+    return () => { current = false; };
+  }, [conversationId, view.source, view.id, view.worker, view.startedAtMs]);
+  if (result.data) return <HistoricalOutput conversationId={conversationId} recordId={result.data.record.id} initial={result.data.record} />;
+  return <p role={result.error ? "alert" : "status"} className="text-muted-foreground text-sm">{result.error ? `Couldn't load historical output: ${result.error}` : result.loaded ? "No historical output was recorded for this activity." : "Loading historical output…"}</p>;
+}
+
+/** Opens a durable record even after the CLI, worker, preview or provider output file is gone. */
+export function HistoricalOutput({ conversationId, recordId, initial, inline = false }: { conversationId: string; recordId: string; initial?: BackgroundHistoryRecord; inline?: boolean }) {
+  const [result, setResult] = useState<{ data: BackgroundHistoryOutput | null; error: string | null }>({ data: null, error: null });
+  const [retry, setRetry] = useState(0);
+  const state = result.data?.record.status ?? initial?.status;
+  useEffect(() => {
+    let current = true;
+    void retry;
+    const once = () => readHistoryOutput(conversationId, recordId).then(
+      (data) => { if (current) setResult({ data, error: null }); },
+      (error: unknown) => { if (current) setResult((shown) => ({ ...shown, error: error instanceof Error ? error.message : String(error) })); },
+    );
+    void once();
+    const timer = state === "running" ? setInterval(() => void once(), READ_EVERY_MS) : null;
+    return () => { current = false; if (timer !== null) clearInterval(timer); };
+  // Retry deliberately starts a fresh read after a failed request.
+  // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [conversationId, recordId, state, retry]);
+  const record = result.data?.record ?? initial;
+  const action = useAction();
+  if (!record) return <p role={result.error ? "alert" : "status"} className="text-muted-foreground text-sm">{result.error ?? "Loading historical output…"}</p>;
+  const running = record.status === "running";
+  const itemStatus: ItemStatus = running ? "inProgress" : record.status === "failed" ? "failed" : "completed";
+  return <>
+    {!inline && <Header title={record.purpose} state={record.status === "unknown" ? "End not observed" : record.status} />}
+    {!inline && <p className="text-muted-foreground text-sm">{record.purpose}</p>}
+    {record.cwd && <p className="text-muted-foreground text-xs break-all">{record.cwd}</p>}
+    {record.summary && <p className="text-muted-foreground text-xs">{record.summary}</p>}
+    {result.error && <div role="alert" className="flex items-center gap-2 text-sm"><p className="text-destructive">Couldn't load output: {result.error}</p><Button size="xs" variant="ghost" onClick={() => setRetry((n) => n + 1)}>Retry</Button></div>}
+    {record.status === "unknown" && record.outputAvailable && <p className="text-muted-foreground text-xs">Last saved output; further output may be missing.</p>}
+    {record.outputTruncated && <p className="text-muted-foreground text-xs">Output truncated · latest 1 MiB of {record.outputBytes.toLocaleString()} bytes</p>}
+    {result.data?.unavailableReason && <p className="text-muted-foreground text-xs">{result.data.unavailableReason}</p>}
+    {!result.data && !result.error && <p role="status" className="text-muted-foreground text-xs">Loading output…</p>}
+    <ShellBox command={record.command ?? (record.kind === "agent" ? "Subagent" : "Command not recorded")} output={result.data?.text ?? null}
+      status={itemStatus} exit={record.exitCode} stopped={record.status === "stopped"} outcome={record.status === "unknown" ? "End not observed" : record.status === "completed" ? (record.exitCode === null ? "Finished" : `Finished · exit ${record.exitCode}`) : undefined} emptyOutput={record.outputAvailable ? "No output recorded" : "Output unavailable"} />
+    <div className="flex flex-wrap gap-2">
+      {inline && <Button size="xs" variant="ghost" onClick={() => openPanelTab(conversationId, { type: "output", source: "history", id: record.id }, record.purpose)}>Open output in a tab</Button>}
+      {running && record.kind !== "preview" && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, record.taskId, record.workerId ?? undefined))}>Stop</Button>}
+      {running && record.kind === "preview" && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopPreview(conversationId, record.taskId))}>Stop</Button>}
+    </div>
+    {action.error && <p role="alert" className="text-destructive text-sm">{action.error}</p>}
+  </>;
 }
 
 function Header({ title, state, children }: { title: string; state: string; children?: ReactNode }) {

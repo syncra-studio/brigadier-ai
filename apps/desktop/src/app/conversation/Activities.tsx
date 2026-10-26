@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows } from "@/app/conversation/backgroundRows";
 import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { rowName } from "@/app/conversation/activity/workerState";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
-import { Terminal } from "@/components/icons";
+import { Clock, Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
-import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
+import type { BackgroundTask, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
+import { useBackgroundHistoryCount } from "@/state/backgroundHistory";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
@@ -37,8 +38,6 @@ const label = (activity: Activity) =>
 
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
-/** No thread entries. */
-const NO_ENTRIES: readonly FileEntry[] = [];
 /** No previews. */
 const NO_PREVIEWS: readonly Preview[] = [];
 
@@ -58,7 +57,6 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
   const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
-  const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
@@ -68,20 +66,25 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
   // A task that ended keeps its row a while, read against the card's clock.
-  const workerTasks = workerTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now);
-  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries, clock.now), ...workerTasks].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const activities = rows;
+  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs]), cliTasks.map((task) => [task.id, task.startedAtMs]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs])])]);
+  const historyCount = useBackgroundHistoryCount(conversationId, changed);
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
     const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
     return () => clearInterval(timer);
   }, [ticking]);
-  if (activities.length === 0) return null;
+  if (activities.length === 0 && historyCount === 0) return null;
   return (
     <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length}>
       {activities.map((activity) => (
         <BackgroundRow key={activity.id} conversationId={conversationId} activity={activity} now={clock.now} />
       ))}
+      <SummaryRowButton data-slot="background-history-link" icon={<Clock />} meta={historyCount === null ? undefined : String(historyCount)}
+        onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
+        History
+      </SummaryRowButton>
     </SummarySection>
   );
 }
@@ -115,7 +118,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
     ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
   ].filter(Boolean).join("\n");
   const stop = () => stopPreview(conversationId, activity.id);
-  const output = () => openPanelTab(conversationId, { type: "output", source: "preview", id: activity.id }, name);
+  const output = () => openPanelTab(conversationId, { type: "output", source: "preview", id: activity.id, startedAtMs: activity.startedAtMs }, name);
   const url = activity.preview.kind === "web" && activity.preview.state.type === "running" ? activity.preview.url : undefined;
   return (
     <SummaryRowButton

@@ -61,7 +61,9 @@ useApp.setState({
   connection: { status: "connected", daemon: null, reason: null },
 });
 let seq = 0;
+const durableHistory = new Set<string>();
 const send = (...events: EventEnvelope["event"][]) => applyBoardEvents(events.map((event) => {
+  if (event.type === "previewUpdated") durableHistory.add(event.preview.id);
   seq += 1;
   return { seq, stream: `conversation:${id}`, streamSeq: seq, atMs: Date.now(), event } as EventEnvelope;
 }));
@@ -70,6 +72,7 @@ mockIPC((command, payload) => {
   if (command === "open_url") calls.push(`open_url ${(payload as { url: string }).url}`);
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "getBackgroundHistory") return { method: req.method, history: { records: [], next: null, total: durableHistory.size } };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
@@ -148,6 +151,7 @@ async function readStates(): Promise<Record<string, unknown>> {
 async function drive(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  await until(() => !section(), 3000);
   seen.empty = !section();
   send({ type: "previewUpdated", preview: page }, { type: "previewUpdated", preview: app });
   await frame();
@@ -231,7 +235,7 @@ const sleep: BackgroundTask = { id: "bdza4j3ng", itemId: "toolu_bash", kind: "sh
   startedAtMs: now - 8_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/bdza4j3ng.output", summary: null, lastLine: "sleeping" };
 const helper: BackgroundTask = { id: "a0c79", itemId: "toolu_agent", kind: "agent", label: "Reply with hi", status: "running",
   startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
-const tasksSaid = (...background: BackgroundTask[]) => applyThreadNews({ conversationId: id, entries: [], opened: false, background });
+const tasksSaid = (...background: BackgroundTask[]) => { background.forEach((task) => durableHistory.add(task.id)); applyThreadNews({ conversationId: id, entries: [], opened: false, background }); };
 /** Frames until `done` holds, up to `ms`; how long it took. */
 async function until(done: () => boolean, ms: number): Promise<number> {
   const start = Date.now();
@@ -240,69 +244,28 @@ async function until(done: () => boolean, ms: number): Promise<number> {
 }
 
 async function driveTasks(): Promise<Record<string, unknown>> {
-  const seen: Record<string, unknown> = {};
-  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  useCliThread.setState({ views: { [id]: { entries: [], turns: [] } } });
   tasksSaid(sleep, helper);
-  await until(() => ids().length === 1, 3000);
-  seen.running = ids();
-  seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
-  seen.stops = ids().map((activity) => text(stop(activity!)));
-  seen.buttons = ids().map((activity) => row(activity!)?.tagName ?? null);
-  seen.nativeWorkers = [...document.querySelectorAll('[data-slot="workers-summary-worker"]')].map((element) => element.textContent);
-  // A command opens its output in a tab; agents are listed in Workers.
-  row("task:bdza4j3ng")?.click();
   await frame();
-  seen.opened = sessionTabs(id).active;
-  seen.output = await until(() => !!document.querySelector('[data-slot="output-tab"]')?.textContent?.includes("marker"), 3000) < 3000;
-  stop("task:bdza4j3ng")?.click();
-  await until(() => calls.length > 0, 3000);
-  seen.calls = calls.toSorted();
-  // A command that just completed says how, with no Stop, for about 5 min. Native agents stay in Workers.
-  tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now(), summary: 'Background command "sleep 20; echo marker" completed (exit code 0)' },
-    { ...helper, status: "completed", endedAtMs: Date.now(), summary: "hi" });
+  const running = ids();
+  tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now() }, { ...helper, status: "stopped", endedAtMs: Date.now() });
   await frame();
-  seen.completed = ids().map((activity) => [activity, read(activity!)?.state ?? null, !!stop(activity!)]);
-  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...sleep, id: "b3", startedAtMs: now - 6_000, status: "failed", endedAtMs: Date.now() },
-    { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });
-  await frame();
-  seen.stoppedOrFailed = ids().map((activity) => [activity, read(activity!)?.state ?? null]);
-  // Five minutes on, they are gone.
-  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() - 5 * MIN - 1000 }, { ...sleep, id: "b3", status: "failed", endedAtMs: Date.now() - 5 * MIN - 1000 });
-  await frame();
-  seen.later = ids();
-  seen.section = !!section();
-  return seen;
+  return { running, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** A worker's CLI's background tasks, as its row carries them. */
 const devApp: BackgroundTask = { id: "b7dev", itemId: "toolu_dev", kind: "shell", label: "Run the dev app", status: "running",
   startedAtMs: now - 30_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/b7dev.output", summary: null, lastLine: "VITE ready" };
-const workerWait: BackgroundTask = { ...devApp, id: "b7wait", itemId: "toolu_wait", label: "Wait for my helper", outputFile: null };
+
 const workerTasksSaid = (...background: { task: BackgroundTask; command: string | null }[]) => showRows(id, [rowOf(worker, { background })]);
 
 async function driveWorkerTasks(): Promise<Record<string, unknown>> {
-  const seen: Record<string, unknown> = {};
-  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  workerTasksSaid({ task: devApp, command: "pnpm tauri:dev" }, { task: workerWait, command: "brigadier wait w3" });
-  await until(() => ids().length === 1, 3000);
-  seen.running = ids();
-  seen.row = read("task:task-2:b7dev");
-  seen.worker = text(row("task:task-2:b7dev")?.querySelector("[data-activity-worker]"));
-  row("task:task-2:b7dev")?.click();
+  durableHistory.add(devApp.id);
+  workerTasksSaid({ task: devApp, command: "pnpm tauri:dev" });
   await frame();
-  seen.opened = sessionTabs(id).active;
-  seen.output = await until(() => !!document.querySelector('[data-slot="output-tab"]')?.textContent?.includes("task-2 printed"), 3000) < 3000;
-  stop("task:task-2:b7dev")?.click();
-  await until(() => calls.length > 0, 3000);
-  seen.calls = calls.toSorted();
+  const running = ids();
   workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() }, command: "pnpm tauri:dev" });
   await frame();
-  seen.ended = ids().map((activity) => [activity, read(activity!)?.state ?? null]);
-  workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() - 5 * MIN - 1000 }, command: "pnpm tauri:dev" });
-  await frame();
-  seen.later = ids();
-  return seen;
+  return { running, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** Long names use the available room; state words stay whole, directly beside short names. */
@@ -342,7 +305,7 @@ async function readNames(): Promise<Record<string, unknown>> {
   for (const width of [800, 420]) {
     await fixtureInput({ type: "viewport", width, height: 976 });
     await frame();
-    seen[width] = Object.fromEntries(["preview-2", "long-building", "long-running", "task:bdza4j3ng", "task:plain-task"].map((activity) => [activity, measure(activity)]));
+    seen[width] = Object.fromEntries(["preview-2", "long-building", "long-running"].map((activity) => [activity, measure(activity)]));
   }
   // Hover replaces time with Stop; the full state word still fits in the narrower name space.
   const rect = row("long-building")!.getBoundingClientRect();

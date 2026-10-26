@@ -1,5 +1,5 @@
 import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
-import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
+import { taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords } from "@/app/conversation/liveStatus";
 import type { BackgroundTask, FileEntry } from "@/ipc/generated";
 
@@ -12,7 +12,7 @@ import type { BackgroundTask, FileEntry } from "@/ipc/generated";
  */
 
 /** How long a strip stays after the last thing in it ended, so its end can be read. */
-export const STRIP_TAIL_MS = 10_000;
+export const STRIP_TAIL_MS = 0;
 
 export type StripLineState = "running" | "queued" | "done" | "failed" | "stopped";
 
@@ -35,52 +35,96 @@ export type StripLine = {
   command: string | null;
   /** Whether a click opens what it printed. */
   output: boolean;
+  wait: boolean;
   /** The running tasks its Stop stops: itself, and a queued command's wait. */
   stops: string[];
 };
 
 /** The strip's rows, and what its closed line says first. */
-export type StripLines = { lines: StripLine[]; waitingOn: string | null };
+export type StripLines = { lines: StripLine[]; waitingOn: string | null; stops?: string[] };
 
 const NONE: StripLines = { lines: [], waitingOn: null };
-
-/** Whether a strip with these tasks shows at `now`: something runs, or the last end is a moment ago. */
-function live(tasks: readonly BackgroundTask[], now: number): boolean {
-  return tasks.some((task) => task.status === "running" || now - (task.endedAtMs ?? now) < STRIP_TAIL_MS);
-}
 
 /** A shell loop that waits for something, and what runs after it: `until grep -q … f; do sleep 10; done; cat f`. */
 const WAIT_LOOP = /^\s*(?:until|while)\s+([^]+?);\s*do\s+sleep\s+[\d.]+[smh]?\s*;?\s*done\s*(?:(?:;|&&)\s*([^]*))?$/;
 
 /** The files a command writes what it prints to: `> f`, `>> f`, `tee f`; never a device (`/dev/null`). */
 function writtenFiles(command: string): string[] {
-  return [...command.matchAll(/(?:\d?>>?|\btee(?:\s+-a)?)\s*(["']?)([^\s"';|&<>]+)\1/g)].map((match) => match[2]!).filter((file) => !file.startsWith("/dev/"));
+  const tokens = command.match(/'[^']*'|"[^"]*"|>>?|[;&|]+|[^\s'"<>;&|]+/g) ?? [];
+  return tokens.flatMap((token, index) => {
+    if (token !== ">" && token !== ">>" && token !== "tee") return [];
+    const operand = tokens[index + 1]?.replace(/^(['"])([^]*)\1$/, "$2");
+    return operand && !operand.startsWith("-") && !operand.startsWith("&") && !operand.startsWith("/dev/") ? [operand] : [];
+  });
 }
 
-/** Commands that only show what a command printed, as a wait's last step. */
-const READERS = new Set(["cat", "tail", "head", "echo", "grep", "wc", "ls", "true", "printf"]);
+/** Parse literal words only. Expansions, substitutions and shell operators are uncertain. */
+function literalWords(text: string): string[] | null {
+  if (/[`$\\|&;<>\n]/.test(text)) return null;
+  const tokens = text.match(/'[^']*'|"[^"]*"|[^\s'"]+/g) ?? [];
+  if (tokens.join(" ").replace(/\s+/g, " ") !== text.trim().replace(/\s+/g, " ")) return null;
+  return tokens.map((token) => token.replace(/^(['"])([^]*)\1$/, "$2"));
+}
 
-/** Whether `rest` (what runs after a wait loop) only reads what was printed. */
-const onlyReads = (rest: string) =>
-  rest.split(/;|&&|\|\||\|/).map((part) => part.trim()).filter(Boolean).every((part) => READERS.has(part.split(/\s+/)[0] ?? ""));
+/** Resolve only known literal absolute paths, or relative operands with an observed cwd. */
+function pathOf(file: string, cwd: string | null): string | null {
+  if (!file || /[$`*?{}~]/.test(file) || file.startsWith("/dev/")) return null;
+  const absolute = file.startsWith("/") ? file : cwd?.startsWith("/") ? `${cwd}/${file}` : null;
+  if (!absolute) return null;
+  const parts: string[] = [];
+  for (const part of absolute.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part && part !== ".") parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
 
+function commandCwd(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
+  const call = entries.find(({ event, parent }) => !parent && event.type === "command" && event.itemId === task.itemId)?.event;
+  return call?.type === "command" ? call.cwd : null;
+}
+
+/** A narrow, proven file-read condition; more complex loops retain their own row. */
+function watchedFile(condition: string, cwd: string | null): string | null {
+  const words = literalWords(condition.replace(/\s+2>\/dev\/null\s*$/, ""));
+  if (!words) return null;
+  if (words[0] === "!") words.shift();
+  if (words[0] === "test" && words[1] === "-s" && words.length === 3) return pathOf(words[2]!, cwd);
+  if (!["grep", "rg"].includes(words[0] ?? "")) return null;
+  let index = 1;
+  while (/^-[qEFiInse]+$/.test(words[index] ?? "")) {
+    // -e/-f have operands, so do not infer their meaning here.
+    if (/[ef]/.test(words[index]!)) return null;
+    index++;
+  }
+  if (words.length !== index + 2) return null;
+  return pathOf(words[index + 1]!, cwd);
+}
+
+/** A continuation may fold only when it merely prints that same file. */
+function onlyReads(rest: string, file: string, cwd: string | null): boolean {
+  if (!rest.trim()) return true;
+  const words = literalWords(rest);
+  return words !== null && ["cat", "tail", "head", "wc"].includes(words[0] ?? "")
+    && words.slice(1, -1).every((word) => /^-(?:n?\d+|[nqc]+)$/.test(word))
+    && pathOf(words.at(-1) ?? "", cwd) === file;
+}
+
+type Candidate = { task: BackgroundTask; command: string | null; cwd: string | null };
 type Wait = { target: BackgroundTask; after: string | null };
 
-/**
- * What a wait waits on, when its loop names one other command's output for sure: that command's
- * output file, its `tasks/<id>.output`, or a file only its command writes to. `after` is what
- * runs after the loop when that is more than reading the output (a command queued behind it).
- */
-function waitOf(task: BackgroundTask, command: string | null, others: readonly { task: BackgroundTask; command: string | null }[]): Wait | null {
+function waitOf(task: BackgroundTask, command: string | null, cwd: string | null, others: readonly Candidate[]): Wait | null {
   const loop = command?.match(WAIT_LOOP);
   if (!loop) return null;
   const [, condition = "", rest = ""] = loop;
+  const file = watchedFile(condition, cwd);
+  if (!file) return null;
   const named = others.filter((other) => other.task.id !== task.id && (
-    (other.task.outputFile !== null && condition.includes(other.task.outputFile))
-    || condition.includes(`/tasks/${other.task.id}.output`)
-    || (other.command !== null && writtenFiles(other.command).some((file) => condition.includes(file)))));
+    pathOf(other.task.outputFile ?? "", other.cwd) === file
+    || (other.command !== null && !/[$`]|\bcd\s/.test(other.command)
+      && writtenFiles(other.command).some((name) => pathOf(name, other.cwd) === file))));
   if (named.length !== 1) return null;
-  return { target: named[0]!.task, after: rest.trim() && !onlyReads(rest) ? rest.trim() : null };
+  return { target: named[0]!.task, after: onlyReads(rest, file, cwd) ? null : rest.trim() };
 }
 
 /** A command's name: the CLI's description of it, or the command itself when that is all it said. */
@@ -93,17 +137,18 @@ const commandName = (task: BackgroundTask) => (task.kind === "terminal" ? comman
  * command, queued until the first ends. `brigadier wait` belongs to the Workers strip.
  */
 export function checkLines(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): StripLines {
-  const all = tasks.filter((task) => task.kind !== "agent").map((task) => ({ task, command: taskCommand(task, entries) }));
-  const own = all.filter(({ command }) => !runsBrigadier(command ?? "", "wait"));
-  const waits = new Map(own.map(({ task, command }) => [task.id, waitOf(task, command, own)] as const));
-  const shown = own.filter(({ task }) => taskShown(task, now));
+  const all = tasks.filter((task) => task.kind !== "agent" && task.status === "running").map((task) => ({ task, command: taskCommand(task, entries), cwd: commandCwd(task, entries) }));
+  const own = all;
+  const waits = new Map(own.map(({ task, command, cwd }) => [task.id, waitOf(task, command, cwd, own)] as const));
+  const shown = own;
+  void now;
   // A pure wait folds into what it waits on while that has its row; else it is a row of its own.
   const visible = shown.filter(({ task }) => {
     const wait = waits.get(task.id);
     return !wait || wait.after !== null || !shown.some((other) => other.task.id === wait.target.id);
   });
   const folded = (id: string) => !visible.some(({ task }) => task.id === id);
-  if (!live(visible.map(({ task }) => task), now) && !shown.some(({ task }) => task.status === "running")) return NONE;
+  if (shown.length === 0) return NONE;
   const lines = visible.toSorted((a, b) => a.task.startedAtMs - b.task.startedAtMs).map(({ task, command }): StripLine => {
     const wait = waits.get(task.id) ?? null;
     const queued = task.status === "running" && wait !== null && wait.target.status === "running";
@@ -112,7 +157,7 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
     const word = queued
       ? `starts after ${commandName(wait.target)}`
       : end === null ? null
-      : end.word === "finished" ? (end.exit === 0 ? "passed" : "finished")
+      : end.word === "finished" ? ("finished")
       : end.word === "failed" && end.exit !== null ? `failed · exit ${end.exit}`
       : end.word;
     const watchers = own.filter((other) => other.task.status === "running" && folded(other.task.id) && waits.get(other.task.id)?.target.id === task.id);
@@ -126,11 +171,12 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
       endedAtMs: task.endedAtMs,
       waitedOn: task.status === "running" && watchers.length > 0,
       command,
-      output: task.kind === "shell" && task.outputFile !== null,
-      stops: task.status === "running" ? [task.id, ...watchers.map((other) => other.task.id)] : [],
+      wait: !queued && (runsBrigadier(command ?? "", "wait") || WAIT_LOOP.test(command ?? "") || /^\s*sleep\s+[\d.]+[smh]?\s*$/.test(command ?? "")),
+      output: (task.kind === "shell" || task.kind === "terminal") && task.outputFile !== null,
+      stops: task.status === "running" ? [task.id] : [],
     };
   });
-  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? null };
+  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? lines.find((line) => runsBrigadier(line.command ?? "", "wait") || (line.state !== "queued" && WAIT_LOOP.test(line.command ?? "")))?.name.replace(/^wait(?:ing)?\s+(?:for|on)\s+/i, "") ?? null, stops: own.map(({ task }) => task.id) };
 }
 
 /**
@@ -139,7 +185,7 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
  */
 export function checkWords({ lines, waitingOn }: StripLines): string {
   const [one, many, at] = ["check", "checks", "running"];
-  const count = (test: (line: StripLine) => boolean) => lines.filter(test).length;
+  const count = (test: (line: StripLine) => boolean) => lines.filter((line) => !line.wait && test(line)).length;
   const counts: [number, string][] = [
     [count((line) => line.state === "running"), at],
     [count((line) => line.state === "queued"), "queued"],
