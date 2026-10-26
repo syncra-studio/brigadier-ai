@@ -5,7 +5,9 @@
 //! structuredContent and images; Claude Code errors expose text only. See the
 //! live-client evidence recorded with this change. Error text always survives.
 
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Small diffs do not tell us whether a canvas changed visually. Remember the
@@ -295,7 +297,12 @@ impl View {
         let state = &read["structuredContent"];
         let is_diff = matches!(state["since_status"].as_str(), Some("diff" | "no_change"));
         let thin = if is_diff {
-            self.thin_windows.get(&window).copied().unwrap_or(false)
+            // A diff cannot prove the rest of the window is text-complete.
+            // Navigation can introduce a canvas after a previously rich read.
+            let thin = self.thin_windows.get(&window).copied().unwrap_or(true)
+                || state["tree_diff"].as_str().is_some_and(has_visual_surface);
+            self.thin_windows.insert(window, thin);
+            thin
         } else {
             let thin = thin_state(state);
             self.thin_windows.insert(window, thin);
@@ -346,7 +353,8 @@ fn thin_state(state: &Value) -> bool {
             .collect::<String>();
         thin_tree(&markdown)
     } else {
-        state["element_count"] == 0 || state["returned_element_count"] == 0
+        // Missing/unknown tree shapes cannot establish readable content.
+        true
     }
 }
 
@@ -355,6 +363,9 @@ fn thin_state(state: &Value) -> bool {
 // of fewer than four labelled rows, not total nodes: container-only trees
 // can have many rows. Media containers need actual readable content as well.
 fn thin_tree(markdown: &str) -> bool {
+    if has_visual_surface(markdown) {
+        return true;
+    }
     let mut labelled = 0;
     let mut media = false;
     let mut readable = false;
@@ -400,6 +411,36 @@ fn thin_tree(markdown: &str) -> bool {
             .any(|role| lower.trim_start().starts_with(role.trim_start()));
     }
     labelled < 4 || (media && !readable)
+}
+
+/// Readable browser chrome or captions do not describe the pixels of a
+/// drawing, photo, video, chart or embedded surface. Look only at the role,
+/// so ordinary prose containing "image" does not trigger a capture.
+fn has_visual_surface(markdown: &str) -> bool {
+    markdown.lines().any(|line| {
+        let Some((_, rest)) = line.split_once(']') else {
+            return false;
+        };
+        let role = rest
+            .split('"')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        [
+            "canvas",
+            "drawingarea",
+            "drawing area",
+            "image",
+            "video",
+            "chart",
+            "graphic",
+            "embedded",
+            "map",
+        ]
+        .iter()
+        .any(|visual| role.trim_start_matches("ax").starts_with(visual))
+    })
 }
 
 pub fn merge_screenshot(read: &mut Value, image: Value) {
@@ -459,10 +500,7 @@ fn compact_apps(result: &mut Value) {
         .iter()
         .map(|app| {
             let name = app["name"].to_string(); // Quotes/escapes keep each record on one line.
-            let identity = app
-                .get("bundle_id")
-                .filter(|v| v.is_string())
-                .or_else(|| app.get("launch_path").filter(|v| v.is_string()));
+            let identity = app.get("bundle_id").filter(|v| v.is_string());
             let identity = identity.map(|id| format!(" {id}")).unwrap_or_default();
             let state = if app["running"] == true {
                 format!(
@@ -473,11 +511,25 @@ fn compact_apps(result: &mut Value) {
             } else {
                 " installed".to_owned()
             };
-            Value::String(format!("{name}{identity}{state}"))
+            // Retain launch_path even when bundle_id exists: on Linux the
+            // driver ignores bundle_id, and Windows shortcuts carry arguments.
+            // Windows, capabilities and future fields are useful evidence too.
+            let extra = app
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        "name" | "bundle_id" | "running" | "active" | "pid"
+                    )
+                })
+                .map(|(key, value)| format!(" {key}={value}"))
+                .collect::<String>();
+            Value::String(format!("{name}{identity}{state}{extra}"))
         })
         .collect();
-    result["content"] =
-        json!([{"type":"text", "text":format!("{} apps (running and installed).", lines.len())}]);
+    // Keep text diagnostics, annotations and other content blocks intact.
     result["structuredContent"]["apps"] = lines.into();
 }
 
@@ -665,7 +717,7 @@ mod tests {
         for status in ["diff", "no_change"] {
             let mut diff = read("");
             diff["structuredContent"]["since_status"] = status.into();
-            assert!(fallback_arguments("get_window_state", &original, &diff, true).is_none());
+            assert!(fallback_arguments("get_window_state", &original, &diff, true).is_some());
         }
     }
 
@@ -720,7 +772,61 @@ mod tests {
                 &diff,
                 true
             )
+            .is_some());
+    }
+
+    #[test]
+    fn visual_content_is_not_explained_by_toolbar_or_caption_text() {
+        let chrome = "[1] AXTextField \"Address\"\n[2] AXStaticText \"Ready\"\n[3] AXButton \"Save\"\n[4] AXButton \"Open\"\n";
+        for role in [
+            "AXImage",
+            "AXCanvas",
+            "Image",
+            "drawing area",
+            "video",
+            "chart",
+        ] {
+            assert!(
+                thin_tree(&format!("{chrome}[5] {role} \"content\"")),
+                "{role}"
+            );
+        }
+        assert!(!thin_tree(&format!(
+            "{chrome}[5] AXStaticText \"image processing\""
+        )));
+        let original = json!({"pid":1,"window_id":2});
+        let mut view = View::default();
+        assert!(view
+            .fallback_arguments("get_window_state", &original, &read(chrome), true)
             .is_none());
+        let diff = json!({"structuredContent":{"since_status":"diff", "tree_diff":"+ [5] AXImage \"Photo\""}});
+        assert!(view
+            .fallback_arguments("get_window_state", &original, &diff, true)
+            .is_some());
+        let unchanged = json!({"structuredContent":{"since_status":"no_change"}});
+        assert!(view
+            .fallback_arguments("get_window_state", &original, &unchanged, true)
+            .is_some());
+    }
+
+    #[test]
+    fn app_compaction_preserves_launch_commands_windows_and_diagnostics() {
+        let full = json!({"content":[{"type":"text","text":"partial inventory warning"}, {"type":"image","data":"icon"}],
+            "structuredContent":{"apps":[{"name":"Editor","running":true,"pid":42,"bundle_id":"editor.desktop","launch_path":"editor --new-window","windows":[{"window_id":123,"title":"Unsaved"}],"future_field":{"important":true}}]}});
+        let small = result("list_apps", full.clone(), true);
+        assert_eq!(small["content"], full["content"]);
+        let line = small["structuredContent"]["apps"][0].as_str().unwrap();
+        for expected in [
+            "editor.desktop",
+            "editor --new-window",
+            "window_id",
+            "123",
+            "Unsaved",
+            "future_field",
+            "important",
+        ] {
+            assert!(line.contains(expected), "{expected}: {line}");
+        }
     }
 
     #[test]
