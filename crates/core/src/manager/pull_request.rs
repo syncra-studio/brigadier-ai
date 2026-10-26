@@ -37,9 +37,6 @@ struct GhPullRequest {
     base_ref_name: Option<String>,
     #[serde(default)]
     merge_commit: Option<GhCommit>,
-    /// Set while GitHub's auto-merge waits to merge it (`gh pr merge --auto`).
-    #[serde(default)]
-    auto_merge_request: Option<serde_json::Value>,
     /// The card's lookup only: its checks, review decision and whether it merges cleanly.
     #[serde(default)]
     status_check_rollup: Option<Vec<GhCheck>>,
@@ -72,8 +69,6 @@ struct FoundPr {
     base: Option<String>,
     head: Option<String>,
     merge_commit: Option<String>,
-    /// GitHub's auto-merge is on for it.
-    auto_merge: bool,
 }
 
 /// A card lookup distinguishes a signed-out CLI from a branch without a pull request.
@@ -96,7 +91,7 @@ impl SessionManager {
             });
         };
         let git = self.git.clone();
-        blocking(move || {
+        let status = blocking(move || {
             let branch = git
                 .open(&checkout)
                 .and_then(|repo| repo.state())
@@ -139,7 +134,11 @@ impl SessionManager {
                 auth_required,
             })
         })
-        .await
+        .await?;
+        if let Some(pr) = &status.pull_request {
+            self.observe_own_branch_pr(id, pr).await?;
+        }
+        Ok(status)
     }
 }
 
@@ -190,6 +189,9 @@ impl SessionManager {
     /// between its turns reaches its row. A turn's start and end look it up anyway
     /// ([`Self::reconcile_pr_merge`]).
     pub(super) fn refresh_pull_request_soon(&self, id: &ConversationId) {
+        if !self.app.is_open() {
+            return;
+        }
         {
             let mut looked_up = self.pr_looked_up.lock().unwrap();
             if looked_up
@@ -339,6 +341,7 @@ impl SessionManager {
             tracing::debug!(conversation = %id, error = %err, "could not record a pull request");
         }
         let found = found.and_then(|found| found.ok()).flatten()?;
+        let _ = self.observe_own_branch_pr(id, &found.pr).await;
         Some(SessionPr {
             found,
             repo,
@@ -393,6 +396,41 @@ impl SessionManager {
                 }
                 return;
             }
+            if let Some(branch_pr) = &board.pull_request
+                && let Ok(work) = self.tracked_work(&conv.id).await
+                && let Some(tracked) = work
+                    .pull_requests
+                    .iter()
+                    .find(|p| p.identity.url() == branch_pr.url && p.account.is_some())
+            {
+                // The central account-aware poller owns observations of canonical PRs.
+                if tracked
+                    .pull_request
+                    .as_ref()
+                    .is_some_and(|p| p.state == PullRequestState::Merged)
+                {
+                    conv.pr_merge_due
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.kick(conv);
+                    return;
+                }
+                if tracked
+                    .pull_request
+                    .as_ref()
+                    .is_some_and(|p| p.state == PullRequestState::Closed)
+                {
+                    return;
+                }
+                wait = if start.elapsed() < PR_WATCH_SOON_FOR {
+                    soon
+                } else {
+                    later
+                };
+                continue;
+            }
+            if !self.app.is_open() {
+                continue;
+            }
             let Some(SessionPr { found, base, .. }) = self.session_pr(&conv.id).await else {
                 // `gh` failed this time, or the branch has no pull request (any more).
                 wait = later;
@@ -409,7 +447,7 @@ impl SessionManager {
                     return;
                 }
                 PullRequestState::Open | PullRequestState::Draft => {
-                    wait = if found.auto_merge || start.elapsed() < PR_WATCH_SOON_FOR {
+                    wait = if start.elapsed() < PR_WATCH_SOON_FOR {
                         soon
                     } else {
                         later
@@ -567,8 +605,7 @@ fn run_gh(
     session_started_at_ms: i64,
 ) -> std::result::Result<Option<FoundPr>, String> {
     let mut fields =
-        "number,title,url,state,isDraft,createdAt,headRefOid,baseRefName,mergeCommit,autoMergeRequest"
-            .to_owned();
+        "number,title,url,state,isDraft,createdAt,headRefOid,baseRefName,mergeCommit".to_owned();
     if card {
         fields.push_str(",statusCheckRollup,reviewDecision,mergeable");
     }
@@ -603,9 +640,6 @@ fn found_pr(pr: GhPullRequest, session_started_at_ms: i64) -> Option<FoundPr> {
         base: pr.base_ref_name.clone(),
         head: pr.head_ref_oid,
         merge_commit: merge_commit.clone(),
-        auto_merge: pr
-            .auto_merge_request
-            .is_some_and(|request| !request.is_null()),
         pr: PullRequest {
             number: pr.number,
             title: pr.title,

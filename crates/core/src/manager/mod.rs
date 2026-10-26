@@ -72,6 +72,7 @@ mod page_tools;
 mod past_projects;
 mod plain_workers;
 pub mod plugins;
+mod pr_tracking;
 mod preview;
 mod preview_ready;
 mod project_removal;
@@ -102,6 +103,7 @@ mod thread_items;
 mod thread_metrics;
 mod tool_output;
 mod tools;
+mod tracked_work;
 mod trust;
 mod turn_changes;
 mod uninstall;
@@ -109,6 +111,7 @@ pub(super) mod upgrade;
 mod usage;
 mod usage_view;
 mod user_rebase;
+mod waiting;
 pub mod warm;
 mod watchdog;
 mod work_facts;
@@ -223,6 +226,8 @@ pub struct SessionManager {
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,
+    tracked_writes: tokio::sync::Mutex<()>,
+    pr_poll: pr_tracking::Poller,
     /// Send feedback's GitHub sign-in at work, if any.
     feedback_sign_in: Mutex<Option<feedback::GhSignIn>>,
     /// A stand-in `gh` for tests.
@@ -411,6 +416,8 @@ impl SessionManager {
             stoppables: setup_script::Stoppables::default(),
             previews: preview::Previews::default(),
             pr_looked_up: Mutex::default(),
+            tracked_writes: tokio::sync::Mutex::new(()),
+            pr_poll: Default::default(),
             #[cfg(test)]
             gh_override: Mutex::default(),
             #[cfg(test)]
@@ -448,6 +455,7 @@ impl SessionManager {
             trust_home: std::sync::OnceLock::new(),
             activity: Arc::default(),
         });
+        manager.start_tracked_polling();
         manager.install_worktree_remover();
         // Each step's future is polled from the heap: made in this frame, they took half a
         // MiB of an unoptimized build's stack at once.

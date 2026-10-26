@@ -134,6 +134,7 @@ pub enum CliRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContextPart {
+    Waiting,
     Brief,
     Decisions,
     Open,
@@ -148,8 +149,9 @@ pub enum ContextPart {
 
 impl ContextPart {
     /// Every part, in the order the overview lists them.
-    pub const ALL: [ContextPart; 10] = [
+    pub const ALL: [ContextPart; 11] = [
         Self::Brief,
+        Self::Waiting,
         Self::Decisions,
         Self::Open,
         Self::Ledger,
@@ -164,6 +166,7 @@ impl ContextPart {
     /// Its subcommand's word.
     pub fn word(self) -> &'static str {
         match self {
+            Self::Waiting => "waiting",
             Self::Brief => "brief",
             Self::Decisions => "decisions",
             Self::Open => "open",
@@ -194,6 +197,8 @@ pub struct AskItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tool {
+    Pr,
+    Waiting,
     Preview,
     Browser,
     App,
@@ -212,6 +217,8 @@ pub enum Tool {
 impl Tool {
     /// Every tool, in the order help lists their subcommands.
     pub const ALL: &[Tool] = &[
+        Self::Pr,
+        Self::Waiting,
         Self::Preview,
         Self::Browser,
         Self::App,
@@ -230,6 +237,8 @@ impl Tool {
     /// Its subcommand's name.
     pub fn command(self) -> &'static str {
         match self {
+            Self::Pr => "pr",
+            Self::Waiting => "waiting",
             Self::Preview => "preview",
             Self::Browser => "browser",
             Self::App => "app",
