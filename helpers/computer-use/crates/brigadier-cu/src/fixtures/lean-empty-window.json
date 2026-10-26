@@ -1,0 +1,17 @@
+{
+  "content": [{"type": "text", "text": "TextEdit: accessibility tree unavailable for this window."}],
+  "isError": false,
+  "structuredContent": {
+    "app_name": "TextEdit",
+    "pid": 1,
+    "window_id": 2,
+    "degraded": true,
+    "degraded_reason": "ax_window_unresolved",
+    "element_count": 0,
+    "elements": [],
+    "elements_complete": false,
+    "returned_element_count": 0,
+    "total_element_count": 0,
+    "truncated": false
+  }
+}

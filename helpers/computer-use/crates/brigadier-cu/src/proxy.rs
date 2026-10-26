@@ -138,6 +138,7 @@ pub async fn run_proxy(
     let stdout = tokio::io::stdout();
     let mut lines = BufReader::new(stdin).lines();
     let mut writer = tokio::io::BufWriter::new(stdout);
+    let mut view = crate::mcp::lean::View::default();
 
     loop {
         // The persistent control connection is also the authoritative daemon
@@ -169,7 +170,14 @@ pub async fn run_proxy(
 
         let mut journal_call: Option<(String, Option<serde_json::Value>, std::time::Instant)> =
             None;
-        let response = match serde_json::from_str::<Request>(trimmed) {
+        let request = serde_json::from_str::<Request>(trimmed);
+        let requested_list = request.as_ref().is_ok_and(|req| req.method == "tools/list");
+        let call_name = request
+            .as_ref()
+            .ok()
+            .and_then(|req| req.tool_call().ok())
+            .map(|call| call.name);
+        let mut response = match request {
             Err(e) => {
                 error!("JSON parse error: {e}");
                 Response::parse_error()
@@ -234,7 +242,10 @@ pub async fn run_proxy(
                                             &socket_path,
                                             &session_id,
                                             &control_ready_rx,
-                                            read_only,
+                                            ForwardOptions {
+                                                read_only,
+                                                view: &mut view,
+                                            },
                                         )
                                         .await;
                                         match first {
@@ -277,7 +288,10 @@ pub async fn run_proxy(
                                                         &socket_path,
                                                         &session_id,
                                                         &control_ready_rx,
-                                                        read_only,
+                                                        ForwardOptions {
+                                                            read_only,
+                                                            view: &mut view,
+                                                        },
                                                     )
                                                     .await
                                                     {
@@ -301,6 +315,7 @@ pub async fn run_proxy(
                         tools_list,
                         &session_id,
                         &control_ready_rx,
+                        &mut view,
                     )
                     .await
                 };
@@ -308,6 +323,18 @@ pub async fn run_proxy(
                 platform_response
             }
         };
+
+        // Only the outward stdio reply is lean. The cache remains the daemon's
+        // full contract for validation, admission and lifecycle recovery.
+        if let cua_driver_core::protocol::ResponseBody::Result { result } = &mut response.body {
+            if let Some(name) = &call_name {
+                *result =
+                    crate::mcp::lean::result(name, result.take(), crate::mcp::brigadier_audience());
+            } else if requested_list {
+                *result =
+                    crate::mcp::lean::tools_list(result.take(), crate::mcp::brigadier_audience());
+            }
+        }
 
         if let Some((tool, args, started)) = journal_call {
             if let Ok(value) = serde_json::to_value(&response) {
@@ -1150,6 +1177,7 @@ async fn handle_proxy_request(
     cached_tools_list: &serde_json::Value,
     session_id: &str,
     control_ready: &tokio::sync::watch::Receiver<ControlConnectionState>,
+    view: &mut crate::mcp::lean::View,
 ) -> Response {
     match req.method.as_str() {
         "initialize" => Response::ok(
@@ -1170,7 +1198,7 @@ async fn handle_proxy_request(
                     socket_path,
                     session_id,
                     control_ready,
-                    read_only,
+                    ForwardOptions { read_only, view },
                 )
                 .await
                 {
@@ -1204,6 +1232,11 @@ enum Forwarded {
     Lost(Response),
 }
 
+struct ForwardOptions<'a> {
+    read_only: bool,
+    view: &'a mut crate::mcp::lean::View,
+}
+
 /// Forward a single MCP `tools/call` to the daemon as a `call`
 /// request, then translate the `DaemonResponse` back into an MCP
 /// `CallTool.Result` envelope.
@@ -1224,7 +1257,7 @@ async fn forward_tool_call(
     socket_path: &str,
     session_id: &str,
     control_ready: &tokio::sync::watch::Receiver<ControlConnectionState>,
-    read_only: bool,
+    options: ForwardOptions<'_>,
 ) -> Forwarded {
     if let Err(error) = wait_for_control_connection(control_ready.clone()).await {
         return Forwarded::Lost(Response::error(
@@ -1238,9 +1271,33 @@ async fn forward_tool_call(
     let managed_session = configured_default_session()
         .is_some_and(|base| session_id.starts_with(&format!("{base}-mcp-")));
     let args = enforce_proxy_session_identity(args, session_id, managed_session);
-    match call_daemon_tool(socket_path, session_id, &name, args).await {
-        Ok(response) => Forwarded::Done(daemon_response_to_mcp(id, &name, response)),
-        Err(failure) if read_only || !failure.delivered => {
+    let prepared =
+        crate::mcp::lean::arguments(&name, args.clone(), crate::mcp::brigadier_audience());
+    match call_daemon_tool(socket_path, session_id, &name, prepared).await {
+        Ok(mut response) => {
+            if response.ok {
+                if let Some(read) = response.result.as_mut() {
+                    if let Some(fallback) = options.view.fallback_arguments(
+                        &name,
+                        &args,
+                        read,
+                        crate::mcp::brigadier_audience(),
+                    ) {
+                        let image = match call_daemon_tool(socket_path, session_id, &name, fallback)
+                            .await
+                        {
+                            Ok(reply) => reply.result.unwrap_or_else(|| serde_json::json!({
+                                "isError":true,"content":[{"type":"text","text":reply.error.unwrap_or_else(|| "screenshot unavailable".into())}]
+                            })),
+                            Err(failure) => serde_json::json!({"isError":true,"content":[{"type":"text","text":failure.message}]}),
+                        };
+                        crate::mcp::lean::merge_screenshot(read, image);
+                    }
+                }
+            }
+            Forwarded::Done(daemon_response_to_mcp(id, &name, response))
+        }
+        Err(failure) if options.read_only || !failure.delivered => {
             Forwarded::Lost(Response::error(id, -32603, failure.message))
         }
         // Sending it again could repeat an action that already happened.
