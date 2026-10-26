@@ -26,4 +26,6 @@ Use it only when the user starts it in a top-level Chat: a `/fusion <question>` 
 
 Write one answer yourself, as your own reply, in 3 to 5 short lines with no headings: the call and why; where the models agreed and where they differed, and which side you take; what fact or result would flip it; the models consulted, by name.
 
+When the options compare on several points (prices, fees, scores, pros and cons, steps), add a visual below those lines: a table, a chart or a small tool, as `brigadier app visuals` says. Fusion runs only in top-level Chats, where visuals draw inline.
+
 You judge; never count votes. If a consult failed or ran out of quota, say so, and answer from the remaining consults plus your own reading.
