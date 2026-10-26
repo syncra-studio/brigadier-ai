@@ -1,5 +1,7 @@
 //! Scrolling a text area stops at its end, with a fake driver scroll and a
 //! fake text area: no permission grant, no real app.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use std::sync::{Arc, Mutex};
 

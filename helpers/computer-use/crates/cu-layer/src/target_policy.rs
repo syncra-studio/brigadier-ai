@@ -12,8 +12,14 @@
 //!   it is working on);
 //! - other terminal apps (Terminal, Ghostty, iTerm2, Warp, kitty, ...);
 //! - the helper itself and the embedding host (`BRIGADIER_CU_HOST_BUNDLE_ID`);
-//! - macOS authentication and security surfaces (SecurityAgent, Keychain
-//!   Access, Passwords, System Settings, ...).
+//! - authentication and security surfaces (SecurityAgent, Keychain Access,
+//!   Passwords, System Settings, ...; on Windows the credential and sign-in
+//!   prompts; on Linux the polkit and keyring prompts). The system's settings
+//!   app may be opened and read, never changed.
+//!
+//! Windows and Linux have no bundle ids: an app's id there is its
+//! executable's lower-cased name without `.exe` ([`crate::lookup`]), and the
+//! lists below name those too.
 //!
 //! A caller may unlock exact bundle ids with
 //! [`ALLOWED_TARGET_BUNDLE_IDS_ENV`] on the process that serves the MCP
@@ -55,7 +61,7 @@ pub enum RefusalReason {
     Terminal,
     /// The driver, its helper, or the embedding host.
     Driver,
-    /// A macOS authentication or security surface.
+    /// An authentication or security surface of the operating system.
     SecuritySurface,
 }
 
@@ -200,7 +206,19 @@ fn is_settings(identity: &TargetIdentity) -> bool {
     let bundle = identity.bundle_id.as_deref().unwrap_or_default();
     let name = identity.name.trim().to_ascii_lowercase();
     bundle.eq_ignore_ascii_case("com.apple.systempreferences")
-        || (bundle.is_empty() && matches!(name.as_str(), "system settings" | "system preferences"))
+        // Windows Settings, KDE System Settings and GNOME Settings.
+        || matches!(
+            bundle.to_ascii_lowercase().as_str(),
+            "systemsettings" | "gnome-control-center"
+        )
+        || bundle
+            .to_ascii_lowercase()
+            .starts_with("windows.immersivecontrolpanel")
+        || (bundle.is_empty()
+            && matches!(
+                name.as_str(),
+                "system settings" | "system preferences" | "settings"
+            ))
 }
 
 /// The refusal reason for `identity`, or `None` when it may be targeted.
@@ -239,6 +257,7 @@ fn is_driver(bundle: &str, name: &str) -> bool {
         bundle,
         "ai.brigadier.computer-use" | "ai.brigadier.dev.computer-use"
     ) || bundle.starts_with("ai.brigadier.computer-use.")
+        || bundle == "brigadier-cu"
         || matches!(name, "brigadier-cu" | "brigadier computer use")
 }
 
@@ -249,6 +268,9 @@ fn is_brigadier(bundle: &str, name: &str, running: bool) -> bool {
     // the installed app, which runs from its bundle (#510).
     bundle == "ai.brigadier.app"
         || bundle.starts_with("ai.brigadier.app.")
+        // Windows and Linux: the installed app's executables (a development
+        // build runs from a Cargo build folder and has no id).
+        || matches!(bundle, "brigadier" | "brigadier-app" | "brigadierd")
         || (bundle.is_empty() && !running && name == "brigadier")
 }
 
@@ -264,6 +286,7 @@ fn is_security_surface(bundle: &str, name: &str) -> bool {
             | "com.apple.systempreferences"
     ) || bundle.starts_with("com.apple.localauthentication.")
         || bundle.starts_with("com.apple.authenticationservices.")
+        || is_windows_or_linux_security_surface(bundle)
         || matches!(
             name,
             "loginwindow"
@@ -276,6 +299,33 @@ fn is_security_surface(bundle: &str, name: &str) -> bool {
                 | "system settings"
                 | "system preferences"
         )
+}
+
+/// Windows sign-in, credential and elevation prompts; Linux polkit agents,
+/// keyring and PIN prompts and password managers that ship with the desktop.
+/// Settings apps are here too, so they can be read but not changed.
+fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
+    matches!(
+        bundle,
+        "consent"
+            | "credentialuibroker"
+            | "logonui"
+            | "lockapp"
+            | "userpackagemanager"
+            | "systemsettings"
+            | "gnome-control-center"
+            | "lxpolkit"
+            | "gcr-prompter"
+            | "gcr-viewer"
+            | "seahorse"
+            | "kwalletd5"
+            | "kwalletd6"
+            | "kwalletmanager5"
+            | "ksecretd"
+    ) || bundle.starts_with("windows.immersivecontrolpanel")
+        || bundle.starts_with("polkit-")
+        || bundle.starts_with("pinentry")
+        || bundle.ends_with("-authentication-agent-1")
 }
 
 /// Terminal apps other than Brigadier.
@@ -291,6 +341,7 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
             | "co.zeit.hyper"
             | "co.vercel.hyper"
     ) || bundle.starts_with("dev.warp.")
+        || is_windows_or_linux_terminal(bundle)
         || matches!(
             name,
             "terminal"
@@ -303,7 +354,59 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
                 | "alacritty"
                 | "wezterm"
                 | "hyper"
+                | "windows terminal"
+                | "command prompt"
+                | "powershell"
+                | "konsole"
+                | "xterm"
+                | "gnome terminal"
+                | "console"
+                | "ptyxis"
         )
+}
+
+/// Terminals and shells on Windows (executables and the Windows Terminal
+/// package id) and Linux.
+fn is_windows_or_linux_terminal(bundle: &str) -> bool {
+    matches!(
+        bundle,
+        "windowsterminal"
+            | "wt"
+            | "openconsole"
+            | "conhost"
+            | "cmd"
+            | "powershell"
+            | "powershell_ise"
+            | "pwsh"
+            | "mintty"
+            | "wezterm-gui"
+            | "alacritty"
+            | "kitty"
+            | "gnome-terminal"
+            | "gnome-terminal-server"
+            | "kgx"
+            | "ptyxis"
+            | "ptyxis-agent"
+            | "konsole"
+            | "xterm"
+            | "uxterm"
+            | "urxvt"
+            | "rxvt"
+            | "st"
+            | "xfce4-terminal"
+            | "mate-terminal"
+            | "lxterminal"
+            | "qterminal"
+            | "terminator"
+            | "tilix"
+            | "foot"
+            | "footclient"
+            | "ghostty"
+            | "warp"
+            | "terminology"
+            | "cool-retro-term"
+            | "blackbox"
+    ) || bundle.starts_with("microsoft.windowsterminal")
 }
 
 /// `launch_app` accepts a display name or an app path; compare the app name.
@@ -322,6 +425,39 @@ fn url_opens_brigadier(url: &str) -> bool {
     scheme == "brigadier" || scheme.starts_with("brigadier-") || scheme.starts_with("brigadier+")
 }
 
+#[cfg(target_os = "macos")]
+const SETTINGS_REFUSAL: &str =
+    "System Settings can be opened and read, never clicked or typed into. To read a \
+     pane, open it directly: launch_app with bundle_id com.apple.systempreferences and \
+     urls [\"x-apple.systempreferences:<pane id>\"], for example \
+     com.apple.SystemProfiler.AboutExtension (General › About, the macOS version), \
+     com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
+     com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
+     com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
+     setting, ask the user to do this step.";
+#[cfg(target_os = "windows")]
+const SETTINGS_REFUSAL: &str =
+    "Settings can be opened and read, never clicked or typed into. To read a page, open it \
+     directly: launch_app with urls [\"ms-settings:<page>\"], for example ms-settings:about \
+     (the Windows version), ms-settings:windowsupdate, ms-settings:display or \
+     ms-settings:network, then get_window_state. To change a setting, ask the user to do \
+     this step.";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const SETTINGS_REFUSAL: &str =
+    "The system settings can be opened and read, never clicked or typed into: open them \
+     with launch_app, then get_window_state. To change a setting, ask the user to do this \
+     step.";
+
+#[cfg(target_os = "macos")]
+const SECURITY_REFUSAL: &str =
+    "Brigadier Computer Use does not act on macOS authentication or security surfaces \
+     (System Settings can be opened and read, not changed). Ask the user to do this step.";
+#[cfg(not(target_os = "macos"))]
+const SECURITY_REFUSAL: &str =
+    "Brigadier Computer Use does not act on the system's sign-in, password, credential or \
+     elevation prompts (Settings can be opened and read, not changed). Ask the user to do \
+     this step.";
+
 /// The typed refusal returned to the model.
 pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> ToolResult {
     let bundle = identity.bundle_id.as_deref().unwrap_or("unknown bundle");
@@ -338,20 +474,8 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         RefusalReason::Driver => {
             "Brigadier Computer Use does not act on itself or on the app that hosts it."
         }
-        RefusalReason::SecuritySurface if is_settings(identity) => {
-            "System Settings can be opened and read, never clicked or typed into. To read a \
-             pane, open it directly: launch_app with bundle_id com.apple.systempreferences and \
-             urls [\"x-apple.systempreferences:<pane id>\"], for example \
-             com.apple.SystemProfiler.AboutExtension (General › About, the macOS version), \
-             com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
-             com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
-             com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
-             setting, ask the user to do this step."
-        }
-        RefusalReason::SecuritySurface => {
-            "Brigadier Computer Use does not act on macOS authentication or security surfaces \
-             (System Settings can be opened and read, not changed). Ask the user to do this step."
-        }
+        RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
+        RefusalReason::SecuritySurface => SECURITY_REFUSAL,
     };
     let message = format!(
         "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
@@ -639,5 +763,73 @@ mod tests {
                 "com.apple.terminal".to_owned()
             ]
         );
+    }
+
+    /// On Windows and Linux an app's id is its executable's name.
+    #[test]
+    fn windows_and_linux_apps_are_named_by_their_executables() {
+        let exe = |name: &str| TargetIdentity {
+            name: name.to_owned(),
+            bundle_id: Some(name.to_ascii_lowercase()),
+            pid: Some(42),
+        };
+        let reason = |name: &str| classify(&exe(name), &[]).map(RefusalReason::as_str);
+        for brigadier in ["Brigadier", "brigadier-app", "brigadierd"] {
+            assert_eq!(reason(brigadier), Some("user_brigadier"), "{brigadier}");
+        }
+        assert_eq!(reason("brigadier-cu"), Some("driver"));
+        for terminal in [
+            "WindowsTerminal",
+            "cmd",
+            "pwsh",
+            "powershell",
+            "gnome-terminal-server",
+            "konsole",
+            "kgx",
+            "xterm",
+        ] {
+            assert_eq!(reason(terminal), Some("terminal"), "{terminal}");
+        }
+        for prompt in [
+            "consent",
+            "CredentialUIBroker",
+            "LogonUI",
+            "polkit-gnome-authentication-agent-1",
+            "polkit-kde-authentication-agent-1",
+            "gcr-prompter",
+            "pinentry-gnome3",
+        ] {
+            assert_eq!(reason(prompt), Some("security_surface"), "{prompt}");
+        }
+        for app in ["notepad", "gedit", "firefox", "chrome"] {
+            assert_eq!(reason(app), None, "{app}");
+        }
+        // Windows Terminal launched by its package id.
+        assert_eq!(
+            classify(
+                &TargetIdentity {
+                    name: "x".into(),
+                    bundle_id: Some("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into()),
+                    pid: None,
+                },
+                &[]
+            ),
+            Some(RefusalReason::Terminal)
+        );
+        // A development build (no id) stays targetable; a terminal unlocks
+        // by its executable's name.
+        let dev = TargetIdentity {
+            name: "brigadier-app".into(),
+            bundle_id: None,
+            pid: Some(7),
+        };
+        assert_eq!(classify(&dev, &[]), None);
+        assert_eq!(classify(&exe("konsole"), &["konsole".to_owned()]), None);
+        // The settings apps can be opened and read, not changed.
+        for settings in ["SystemSettings", "gnome-control-center"] {
+            assert!(check("get_window_state", &exe(settings), &[]).is_ok());
+            assert!(check("launch_app", &exe(settings), &[]).is_ok());
+            assert!(check("click", &exe(settings), &[]).is_err());
+        }
     }
 }

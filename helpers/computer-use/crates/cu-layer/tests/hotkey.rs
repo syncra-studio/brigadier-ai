@@ -1,5 +1,7 @@
 //! A ⌘ shortcut for an app in the background presses its menu item, with a
 //! fake driver hotkey and a fake menu bar: no permission grant, no real app.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use std::sync::{Arc, Mutex};
 

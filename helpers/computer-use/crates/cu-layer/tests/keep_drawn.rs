@@ -1,5 +1,7 @@
 //! Which windows are kept drawn and when they get their setting back, with a
 //! fake window server: no real window is touched.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

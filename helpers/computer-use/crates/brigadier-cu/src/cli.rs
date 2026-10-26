@@ -750,10 +750,61 @@ pub fn launch_daemon(socket_path: &str, claude_code_compat: bool) -> anyhow::Res
     Ok(())
 }
 
+/// Windows and Linux: start the daemon as a detached process of this same
+/// helper (`brigadier-cu serve --home <home>`), which outlives the shim or
+/// CLI that started it. Brigadier sets `BRIGADIER_CU_DAEMON_APP` to the
+/// placed helper; otherwise this executable is used. These platforms have no
+/// permission attribution to keep, so no launcher stands in between.
+#[cfg(not(target_os = "macos"))]
+pub fn launch_daemon(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()> {
+    use std::process::{Command as Cmd, Stdio};
+
+    let program = std::env::var_os("BRIGADIER_CU_DAEMON_APP")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+        .map_or_else(std::env::current_exe, Ok)?;
+    let home = crate::home::home();
+    let mut command = Cmd::new(&program);
+    command.arg("serve").arg("--home").arg(&home);
+    if socket_path != crate::serve::default_socket_path() {
+        command.arg("--socket").arg(socket_path);
+    }
+    if claude_code_compat {
+        command.arg("--claude-code-computer-use-compat");
+    }
+    if crate::bundle::is_env_truthy(crate::lifecycle::EXTERNAL_SETUP_ENV) {
+        command.arg("--no-permissions-gate");
+        command.arg(crate::lifecycle::EXTERNAL_SETUP_FLAG);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Its own process group: a signal to the shim's group never reaches it.
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    command
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("could not start {}: {e}", program.display()))?;
+    Ok(())
+}
+
 /// Run the MCP proxy path: enter `crate::proxy::run_proxy` against the daemon
 /// socket, allowing its macOS implementation to start or wait for the daemon
 /// lazily. Builds its own tokio runtime — same shape as the other `run_*`
 /// helpers in this file that own their event loop.
+#[cfg(target_os = "macos")]
 pub fn run_mcp_via_daemon_proxy(
     socket: Option<String>,
     claude_code_compat: bool,
@@ -808,10 +859,7 @@ pub fn run_call(
     let socket_path = if let Some(s) = socket_override {
         s
     } else {
-        #[cfg(not(target_os = "windows"))]
-        {
-            crate::serve::default_socket_path()
-        }
+        crate::serve::default_socket_path()
     };
     // macOS: `check_permissions` with prompt:true raises a TCC dialog. Run
     // in-process from a terminal, that dialog attributes to the *terminal*

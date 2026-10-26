@@ -428,6 +428,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 fn private_options() -> OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut options = OpenOptions::new();
     #[cfg(unix)]
     {
@@ -453,6 +454,12 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
             .recursive(true)
             .mode(0o700)
             .create(path)
+    }
+    // Windows: the folder inherits the user profile's ACL, which already
+    // keeps other users out.
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)
     }
 }
 

@@ -23,6 +23,10 @@
 
 // A refusal is the driver's own `ToolResult`, returned as is to the agent.
 #![allow(clippy::result_large_err)]
+// On Windows and Linux the MCP shim serves in-process until its daemon proxy
+// is cross-platform; the proxy's helpers (journal, dispatch checks, setup
+// notes) have no caller there until then.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 // Moved whole from the old core; a few of its items have no caller here yet.
 #[allow(dead_code)]
@@ -48,16 +52,25 @@ mod mcp;
 mod owner_watch;
 #[cfg(target_os = "macos")]
 mod process_name;
+// Process facts the supervisor needs on Windows and Linux.
+#[cfg(not(target_os = "macos"))]
+mod process;
 // Moved whole from the old driver crate; a few of its items have no caller
 // here yet.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod permissions;
+// The MCP shim's daemon proxy is macOS-only for now; on Windows and Linux
+// `mcp` serves in-process (see `run_in_process_mcp`).
+#[cfg(target_os = "macos")]
 mod proxy;
 mod responsibility;
 mod scope_args;
 mod serve;
 mod supervisor;
+// Used by the daemon on Windows; the clients switch to it with the proxy.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod transport;
 
 use std::sync::Arc;
 
@@ -78,7 +91,6 @@ fn init_logging() {
 /// Build the tool registry the one way every entry point does
 /// (`cu_layer::registry::build`). Exits when the driver's settings are
 /// invalid: no tool could run.
-#[cfg(target_os = "macos")]
 pub(crate) fn build_registry(
     cursor: cursor_overlay::CursorConfig,
     compat: bool,
@@ -101,7 +113,6 @@ pub(crate) fn build_registry(
 }
 
 /// The registry for an entry point that never shows the agent cursor.
-#[cfg(target_os = "macos")]
 pub(crate) fn one_shot_registry(compat: bool) -> Arc<ToolRegistry> {
     build_registry(
         cursor_overlay::CursorConfig {
@@ -465,4 +476,122 @@ fn run_in_process_mcp(claude_code_compat: bool) {
     // Main thread: AppKit overlay or plain event loop. Browser automation
     // requires main-queue dispatch even when `--no-overlay` is set.
     run_main_thread(mcp_handle, overlay_owns_main, has_graphic_access);
+}
+
+// ── Windows and Linux entry point ─────────────────────────────────────────
+
+/// Windows and Linux: no AppKit main thread, so every command runs here.
+/// `serve` is the daemon Brigadier talks to; `mcp` serves in-process.
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    apply_home_flag();
+    // The driver keeps its state under the helper's home. Changes the
+    // environment, so it runs before logging and before any thread.
+    cu_layer::configure_environment(&crate::home::home());
+    init_logging();
+
+    match cli::parse_command() {
+        cli::Command::ListTools => cli::run_list_tools(&one_shot_registry(false)),
+        cli::Command::Describe(name) => cli::run_describe(&one_shot_registry(false), &name),
+        cli::Command::Complain {
+            text,
+            tool,
+            session,
+        } => journal::run_complain(text, tool, session),
+        cli::Command::Host { subcommand, args } => host::run(&subcommand, &args),
+        cli::Command::Journal { subcommand, args } => journal::run_journal(&subcommand, &args),
+        cli::Command::Call {
+            tool,
+            json_args,
+            screenshot_out_file,
+            socket,
+        } => cli::run_call(
+            one_shot_registry(false),
+            &tool,
+            json_args,
+            screenshot_out_file,
+            socket,
+        ),
+        cli::Command::Serve {
+            socket,
+            no_permissions_gate,
+            claude_code_compat,
+            owner_pid,
+        } => {
+            // Windows and Linux have no permission prompts to gate on.
+            let _ = no_permissions_gate;
+            let reg = build_registry(cli::cursor_config(), claude_code_compat);
+            let pid_path = cli::daemon_pid_file_path(socket.as_deref());
+            let sp = cli::daemon_socket_path(socket);
+            // run_serve_cmd builds its own runtime, so it runs on a thread of
+            // its own.
+            let exit_code = std::thread::Builder::new()
+                .name("cu-serve".into())
+                .spawn(move || {
+                    serve::run_serve_cmd(
+                        reg,
+                        &sp,
+                        Some(&pid_path),
+                        serve::DaemonProfile::Native,
+                        owner_pid,
+                    );
+                })
+                .expect("spawn serve thread")
+                .join()
+                .map_or(101, |()| 0);
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }
+        cli::Command::Stop { socket } => serve::run_stop_cmd(&cli::daemon_socket_path(socket)),
+        cli::Command::Status { socket } => {
+            let pid_path = cli::daemon_pid_file_path(socket.as_deref());
+            serve::run_status_cmd(&cli::daemon_socket_path(socket), &pid_path);
+        }
+        cli::Command::Recording {
+            subcommand,
+            args,
+            socket,
+        } => cli::run_recording_cmd(&subcommand, &args, socket.as_deref()),
+        cli::Command::Doctor { json } => cli::run_doctor_cmd(json),
+        cli::Command::Diagnose => cli::run_diagnose_cmd(one_shot_registry(false)),
+        cli::Command::Permissions { subcommand, json } => {
+            cli::run_permissions_cmd(one_shot_registry(false), &subcommand, json)
+        }
+        cli::Command::Config {
+            subcommand,
+            key,
+            value,
+            socket,
+        } => cli::run_config_cmd(
+            one_shot_registry(false),
+            subcommand.as_deref(),
+            key.as_deref(),
+            value.as_deref(),
+            socket.as_deref(),
+        ),
+        cli::Command::Mcp {
+            no_daemon_relaunch,
+            socket,
+            claude_code_compat,
+        } => {
+            let _ = (no_daemon_relaunch, socket);
+            run_in_process_mcp(claude_code_compat);
+        }
+    }
+}
+
+/// The in-process MCP server on Windows and Linux.
+#[cfg(not(target_os = "macos"))]
+fn run_in_process_mcp(claude_code_compat: bool) {
+    let registry = build_registry(cli::cursor_config(), claude_code_compat);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    runtime.block_on(async move {
+        if let Err(error) = crate::mcp::run(registry).await {
+            tracing::error!("MCP server error: {error}");
+        }
+    });
 }

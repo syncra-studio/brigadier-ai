@@ -12,14 +12,17 @@
 //!    after checking that the recorded PID still names our helper binary and
 //!    that the process started before the PID file was written, so a reused
 //!    PID is never signalled.
-//! 4. Launch a fresh daemon through LaunchServices and wait for it to answer.
+//! 4. Launch a fresh daemon (through LaunchServices on macOS, as a detached
+//!    process on Windows and Linux) and wait for it to answer.
 //!
 //! A healthy daemon from another build (the app was updated while it ran)
 //! is replaced the same way. Brigadier's watchdog uses [`probe`] and
 //! [`restart`]; turning computer use off goes through [`set_off`], under the
 //! same lock, so no shim starts a daemon while it is off.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -61,6 +64,7 @@ impl Health {
 }
 
 /// Probe the daemon socket once, never waiting longer than [`PROBE_DEADLINE`].
+#[cfg(unix)]
 pub fn probe(socket_path: &str) -> Health {
     let Ok(mut stream) = UnixStream::connect(socket_path) else {
         return Health::Absent;
@@ -98,6 +102,25 @@ pub fn probe(socket_path: &str) -> Health {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => return Health::Hung,
         }
+    }
+}
+
+/// Probe the daemon's pipe once, never waiting longer than [`PROBE_DEADLINE`].
+#[cfg(windows)]
+pub fn probe(socket_path: &str) -> Health {
+    let request = DaemonRequest {
+        method: "health".into(),
+        name: None,
+        args: None,
+        session_id: None,
+    };
+    let Ok(line) = serialize_request(&request) else {
+        return Health::Hung;
+    };
+    match crate::transport::exchange_within(socket_path, &line, PROBE_DEADLINE) {
+        None => Health::Absent,
+        Some(Ok(answer)) => health_from_answer(&answer),
+        Some(Err(_)) => Health::Hung,
     }
 }
 
@@ -257,6 +280,7 @@ fn lock_path(socket_path: &str) -> PathBuf {
 struct LifecycleLock(std::fs::File);
 
 impl LifecycleLock {
+    #[cfg(unix)]
     fn acquire(path: &Path) -> anyhow::Result<Self> {
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
@@ -285,12 +309,45 @@ impl LifecycleLock {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    /// Windows: the same exclusive lock through the file system's own
+    /// locking, released when the file closes.
+    #[cfg(windows)]
+    fn acquire(path: &Path) -> anyhow::Result<Self> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("open {}: {e}", path.display()))?;
+        let until = Instant::now() + LAUNCH_DEADLINE + Duration::from_secs(10);
+        loop {
+            if file.try_lock().is_ok() {
+                return Ok(Self(file));
+            }
+            if Instant::now() >= until {
+                anyhow::bail!("timed out waiting for another Computer Use start to finish");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
+#[cfg(unix)]
 impl Drop for LifecycleLock {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
         unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for LifecycleLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
     }
 }
 
@@ -321,6 +378,7 @@ fn recorded_daemon(pid_file: &str) -> Option<u32> {
 /// (`<bundle>/Contents/MacOS/brigadier-cu`), whatever the bundle is called now:
 /// Brigadier swaps an update in by exchanging the two folders, so the old
 /// daemon's bundle ends up under a temporary name.
+#[cfg(target_os = "macos")]
 fn is_helper_executable(path: &std::path::Path) -> bool {
     let mut parts = path.components().rev().map(|part| part.as_os_str());
     parts.next() == Some("brigadier-cu".as_ref())
@@ -329,8 +387,19 @@ fn is_helper_executable(path: &std::path::Path) -> bool {
         && parts.next().is_some()
 }
 
+/// Windows and Linux: whether `path` is the helper's executable,
+/// `brigadier-cu` (`brigadier-cu.exe`), wherever Brigadier placed it.
+#[cfg(not(target_os = "macos"))]
+fn is_helper_executable(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        name == "brigadier-cu" || name.eq_ignore_ascii_case("brigadier-cu.exe")
+    })
+}
+
 /// Stop the daemon recorded in `pid_file`, if it is still ours. Sends
 /// SIGTERM, then SIGKILL after a short grace period, and waits for exit.
+#[cfg(target_os = "macos")]
 pub fn stop_recorded_daemon(pid_file: &str) {
     let Some(pid) = recorded_daemon(pid_file) else {
         return;
@@ -355,6 +424,41 @@ pub fn stop_recorded_daemon(pid_file: &str) {
     }
 }
 
+/// Windows and Linux: stop the daemon recorded in `pid_file`, if it is still
+/// ours: politely first where the platform has a way, then for good.
+#[cfg(not(target_os = "macos"))]
+pub fn stop_recorded_daemon(pid_file: &str) {
+    let Some(pid) = recorded_daemon(pid_file) else {
+        return;
+    };
+    crate::process::terminate(pid, false);
+    let gone = |deadline: Duration| {
+        let until = Instant::now() + deadline;
+        while Instant::now() < until {
+            if !crate::process::is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+    if !gone(Duration::from_secs(1)) {
+        crate::process::terminate(pid, true);
+        let _ = gone(Duration::from_secs(2));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    crate::process::executable(pid)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_start_time(pid: u32) -> Option<SystemTime> {
+    crate::process::start_time(pid)
+}
+
+#[cfg(target_os = "macos")]
 fn process_executable(pid: u32) -> Option<PathBuf> {
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let written = unsafe {
@@ -371,6 +475,7 @@ fn process_executable(pid: u32) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8(buffer).ok()?))
 }
 
+#[cfg(target_os = "macos")]
 fn process_start_time(pid: u32) -> Option<SystemTime> {
     let identity = crate::serve::macos_process_identity(pid)?;
     let seconds = u64::try_from(identity.start_seconds).ok()?;
