@@ -211,6 +211,7 @@ pub enum Tool {
     Library,
     Report,
     Feedback,
+    Session,
     Approval,
 }
 
@@ -231,6 +232,7 @@ impl Tool {
         Self::Library,
         Self::Report,
         Self::Feedback,
+        Self::Session,
         Self::Approval,
     ];
 
@@ -251,6 +253,7 @@ impl Tool {
             Self::Library => "library",
             Self::Report => "report",
             Self::Feedback => "feedback",
+            Self::Session => "session",
             Self::Approval => "approval",
         }
     }

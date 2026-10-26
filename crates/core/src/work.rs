@@ -1923,8 +1923,8 @@ pub enum OrchestratorStepKind {
         #[ts(as = "Option<Vec<crate::feedback::FeedbackSent>>", optional)]
         results: Vec<crate::feedback::FeedbackSent>,
     },
-    /// Work outside the request the thread offered as a session of its own
-    /// (`offer_session`): a card with one "Start as session" button. Open until a
+    /// Work the thread offered to run as a session of its own (`brigadier session propose`,
+    /// `offer_session` before it): a card with one "Start as session" button. Open until a
     /// `SessionOfferTaken` with its `id`.
     SessionOffered {
         id: String,

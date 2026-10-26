@@ -325,11 +325,26 @@ pub struct OfferFeedback {
     pub asked: bool,
 }
 
+/// `offer_session` (`brigadier session propose`): work that should run as a session of its own;
+/// the user sees it as a card with one "Start as session" button, which starts it as a session
+/// of its own (own branch and worktree). The thread never starts it itself.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfferSession {
+    /// What the session is to do, as its first message: complete on its own ("Fix the date
+    /// parser in src/dates.rs: it drops the time zone").
+    pub task: String,
+    /// A short name for the card ("Fix the date parser"); the task's start when left out.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
 /// A tool call from an orchestrator.
 #[derive(Debug, Clone)]
 pub enum OrchestratorCall {
     RequestApproval(RequestApproval),
     OfferFeedback(OfferFeedback),
+    OfferSession(OfferSession),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
@@ -347,6 +362,7 @@ impl OrchestratorCall {
         match self {
             Self::RequestApproval(_) => "request_approval",
             Self::OfferFeedback(_) => "offer_feedback",
+            Self::OfferSession(_) => "offer_session",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",

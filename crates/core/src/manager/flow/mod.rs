@@ -487,6 +487,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     match name {
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
+        "offer_session" => ToolCall::Orchestrator(O::OfferSession(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),

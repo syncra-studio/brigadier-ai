@@ -999,6 +999,15 @@ fn every_subcommands_json_output_fits_its_schema() {
             "spins.",
         ],
         &[
+            "session",
+            "propose",
+            "--title",
+            "CI and nightly",
+            "--json",
+            "Fix",
+            "CI.",
+        ],
+        &[
             "approval",
             "request",
             "--action",

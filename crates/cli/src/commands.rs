@@ -976,6 +976,29 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/feedback.schema.json"),
     },
     Command {
+        name: "session",
+        summary: "Propose work that should run apart as a new session, on a card.",
+        details: "`propose --title <title> <task…>`: work that should run as a session of its \
+                  own (a request outside this one, or one the user wants run apart). The user \
+                  sees a card with Start as session; one click starts it on its own branch and \
+                  worktree in this project, with the task as its first message. Nothing starts \
+                  until they click: never start it yourself or do it here. task: complete on \
+                  its own, as that session's first message. With no task, or `-`, it comes from \
+                  standard input. The same task once a request.",
+        args: &[
+            action(&["propose"], "What to do."),
+            flag(
+                "title",
+                "TEXT",
+                "A short name for the card (\"Fix CI and run nightly\"); the task's start by \
+                 default.",
+            ),
+            rest("task", "What the new session is to do.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/session.schema.json"),
+    },
+    Command {
         name: "approval",
         summary: "Ask the user to approve what only they may decide.",
         details: "`request --action <what> <details…>`: spending money, handling credentials \
