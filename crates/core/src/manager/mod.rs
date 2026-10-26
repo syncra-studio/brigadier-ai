@@ -40,6 +40,7 @@ mod models;
 mod open_in_app;
 mod orphans;
 mod terminal_run;
+mod titles;
 pub use computer_host::ComputerNews;
 mod computer_use;
 mod conversation;
@@ -457,6 +458,7 @@ impl SessionManager {
         });
         manager.start_tracked_polling();
         manager.install_worktree_remover();
+        manager.install_titles();
         // Each step's future is polled from the heap: made in this frame, they took half a
         // MiB of an unoptimized build's stack at once.
         // Cleanups a quit cut off finish before anything of those conversations resumes.
@@ -926,7 +928,12 @@ impl SessionManager {
             }
             return self.core.set_setup(id, setup).await;
         }
+        let before = current.as_ref().map(|setup| setup.choice().clone());
+        let selected = setup.choice().clone();
         let conversation = self.core.set_setup(id.clone(), setup).await?;
+        if let Some(before) = before.filter(|before| before != &selected) {
+            self.model_selected(&id, before, selected).await?;
+        }
         // Raised to Full access mid-turn: what its thread waits on goes now.
         self.allow_waiting_at_full(&id).await;
         Ok(conversation)
