@@ -126,6 +126,9 @@ pub fn enforce(
             if checked_pid != Some(owner) {
                 check_pid(tool, owner, own_pid, allowed, resolver)?;
             }
+        } else {
+            #[cfg(not(target_os = "macos"))]
+            return Err(unresolved_identity(tool));
         }
     }
     // `launch_app` and `page` may name their app by bundle id alone.
@@ -180,8 +183,23 @@ fn check_pid(
     }
     match identity {
         Some(identity) => check(tool, &identity, allowed),
-        None => Ok(()),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                Ok(())
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(unresolved_identity(tool))
+            }
+        }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn unresolved_identity(tool: &str) -> ToolResult {
+    ToolResult::error(format!("target_identity_unavailable: {tool} could not identify the target process/window; refresh list_windows and use an identifiable app. No action was attempted."))
+        .with_structured(json!({"code":"target_identity_unavailable"}))
 }
 
 /// Check one resolved identity.
@@ -211,7 +229,8 @@ fn is_settings(identity: &TargetIdentity) -> bool {
         // Windows Settings, KDE System Settings and GNOME Settings.
         || matches!(
             bundle.to_ascii_lowercase().as_str(),
-            "systemsettings" | "gnome-control-center"
+            "systemsettings" | "systemsettings5" | "systemsettings6" | "gnome-control-center"
+                | "xfce4-settings-manager" | "xfce4-settings-editor" | "mate-control-center" | "cinnamon-settings"
         )
         || bundle
             .to_ascii_lowercase()
@@ -310,6 +329,7 @@ fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
     matches!(
         bundle,
         "consent"
+            | "applicationframehost"
             | "credentialuibroker"
             | "logonui"
             | "lockapp"
@@ -935,6 +955,17 @@ mod tests {
             };
             assert!(check("click", &identity, &[]).is_err(), "{settings}");
             assert!(check("type_text", &identity, &[]).is_err(), "{settings}");
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn native_targets_fail_closed_when_the_process_cannot_be_identified() {
+        let resolver = TargetResolver { app_for_pid: &|_| None, pid_for_window: &|_| None };
+        for args in [json!({"pid":4242}), json!({"window_id":123})] {
+            let error = enforce("click", &args, &[], &resolver).unwrap_err();
+            assert_eq!(error.structured_content.unwrap()["code"], "target_identity_unavailable");
+            assert!(enforce("list_windows", &args, &[], &resolver).is_ok());
         }
     }
 }
