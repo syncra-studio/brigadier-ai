@@ -27,7 +27,7 @@ export function StopWorker({ row, name }: { row: WorkerRow; name: string }) {
         onClick={(event) => {
           event.stopPropagation();
           stop.run(() => isNativeWorker(row)
-            ? stopBackgroundTask(row.native.conversationId, row.native.backgroundId!)
+            ? stopBackgroundTask(row.native.conversationId, row.native.backgroundId!, undefined, row.startedAtMs)
             : stopTask(row.id));
         }}
         className="text-foreground/60 hover:text-foreground shrink-0"

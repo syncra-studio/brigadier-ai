@@ -67,6 +67,7 @@ const poll = async () => {
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "getTrackedWork") return { method: req.method, work: { pullRequests: [], prHistory: [], waitingOn: [] } };
   if (req.method === "getPullRequest") {
     reads += 1;
     return { method: req.method, pullRequest: STATES[prState] ?? null, authRequired: prState === "signed-out" };
@@ -93,7 +94,9 @@ function tokenColour(token: string): string {
 }
 
 async function drive() {
-  for (let tries = 0; tries < 200 && !row() && !document.querySelector('[data-slot="pull-request-auth"]'); tries++) await wait(50);
+  if (prState !== "merged" && prState !== "closed") {
+    for (let tries = 0; tries < 200 && !row() && !document.querySelector('[data-slot="pull-request-auth"]'); tries++) await wait(50);
+  }
   await wait(200);
   const shown = row();
   const word = shown?.querySelector<HTMLElement>('[data-slot="pull-request-state"]');

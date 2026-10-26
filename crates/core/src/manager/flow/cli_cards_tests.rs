@@ -450,6 +450,12 @@ async fn plan_first_leaves_a_message_mid_build_as_it_is() {
     flow.core.update_settings(settings).await.unwrap();
     assert!(flow.manager.has_running_workers(&flow.conversation).await);
     flow.say("How is it going?").await;
+    // A held worker's follow-up wakes asynchronously to judge the queue item. Until it
+    // joins, the previous request is still the only settled request on the board.
+    flow.until("the follow-up's native turn", |_| {
+        behavior.plan_modes.lock().unwrap().len() == 2
+    })
+    .await;
     flow.settled().await;
     assert_eq!(*behavior.plan_modes.lock().unwrap(), [false, false]);
     release.notify_waiters();

@@ -136,6 +136,7 @@ async fn a_thread_and_its_worker_pull_their_context() {
 
                     let [
                         brief,
+                        waiting,
                         decisions,
                         open,
                         ledger_part,
@@ -145,8 +146,9 @@ async fn a_thread_and_its_worker_pull_their_context() {
                         _,
                         project,
                         routing,
-                    ] = <[Value; 10]>::try_from(every_part(&turn).await).unwrap();
+                    ] = <[Value; 11]>::try_from(every_part(&turn).await).unwrap();
                     assert_eq!(brief["text"], format!("{REQUEST}\n"));
+                    assert_eq!(waiting["text"], "No explicit waits.\n");
                     assert_eq!(ids(&decisions, "session"), ["L1", "L2"]);
                     assert!(
                         decisions["text"]
@@ -168,8 +170,20 @@ async fn a_thread_and_its_worker_pull_their_context() {
                 }
 
                 // The worker: its own brief, its session's ledger read-only, then its own.
-                let [brief, decisions, open, _, checkpoint, _, _, mcps, _, _] =
-                    <[Value; 10]>::try_from(every_part(&turn).await).unwrap();
+                let [
+                    brief,
+                    waiting,
+                    decisions,
+                    open,
+                    _,
+                    checkpoint,
+                    _,
+                    _,
+                    mcps,
+                    _,
+                    _,
+                ] = <[Value; 11]>::try_from(every_part(&turn).await).unwrap();
+                assert_eq!(waiting["text"], "No explicit waits.\n");
                 assert_eq!(brief["text"], format!("{SPEC}\n"));
                 assert_eq!(ids(&decisions, "session"), ["L1", "L2"]);
                 assert!(

@@ -496,6 +496,18 @@ impl SessionManager {
             let account = self.runtime.account_for(chosen);
             return Ok((chosen.clone(), account, None));
         }
+        // A Git writer's saved account is a preference: its existing contract retries the
+        // same selected model on another account before choosing a different model.
+        if let Some(chosen) = chosen
+            && self.provider_ready(chosen.provider)
+            && switched_on(chosen)
+            && !excluded(chosen.provider, chosen.model.as_deref())
+            && let Some(account) = self
+                .runtime
+                .switch_target(&self.runtime.account_for(chosen), chosen.model.as_deref())
+        {
+            return Ok((chosen.clone(), account, None));
+        }
         let ready = ProviderKind::ALL
             .into_iter()
             .filter(|provider| self.provider_ready(*provider));

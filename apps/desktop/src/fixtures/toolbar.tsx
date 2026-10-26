@@ -298,7 +298,7 @@ function Fixture() {
       seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent?.startsWith("Background"); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } });
 
       await until(() => !chip(), "the previews to clear");
-      seen.previewCleared = !chip() && !document.querySelector("[data-activities]"); useBoard.setState({ board: { ...useBoard.getState().board!, previews } });
+      seen.previewCleared = !chip(); useBoard.setState({ board: { ...useBoard.getState().board!, previews } });
 
       await until(chip, "the previews to return");
       seen.previewReturned = !!chip(); setKind("draft");

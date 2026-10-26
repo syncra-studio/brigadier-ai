@@ -45,6 +45,7 @@ export function stripWords({ working, waiting }: Pick<StripView, "working" | "wa
 
 /** What the Subagents strip on the composer shows: the session CLI's own agents, as worker rows. */
 export type SubagentsView = {
+  stopStarts?: Record<string, number>;
   /** Its rows, by row id, oldest first: those at work, and those that ended a moment ago. */
   rows: string[];
   working: number;
@@ -75,6 +76,7 @@ export function subagentsStrip(rows: readonly WorkerRow[], now: number): Subagen
     done: count(["done", "doneNotMerged", "merged"]),
     failed: count(["failed"]),
     stopped: count(["stopped"]),
+    stopStarts: Object.fromEntries(shown.filter(isNativeWorker).map((row) => [row.native.backgroundId ?? "", row.startedAtMs])),
     stops: shown.filter((row) => !row.gone && !rowFinished(row, now) && row.native.backgroundId !== null).map((row) => row.native.backgroundId!),
   };
 }

@@ -61,7 +61,8 @@ impl Gh {
                         | "GH_ENTERPRISE_TOKEN"
                         | "GITHUB_ENTERPRISE_TOKEN"
                         | "GH_HOST"
-                        | "GH_REPO" | "GH_DEBUG"
+                        | "GH_REPO"
+                        | "GH_DEBUG"
                 )
             )
         });

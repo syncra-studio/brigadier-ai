@@ -41,7 +41,7 @@ export type StripLine = {
 };
 
 /** The strip's rows, and what its closed line says first. */
-export type StripLines = { lines: StripLine[]; waitingOn: string | null; stops?: string[] };
+export type StripLines = { lines: StripLine[]; waitingOn: string | null; stops?: string[]; stopStarts?: Record<string, number> };
 
 const NONE: StripLines = { lines: [], waitingOn: null };
 
@@ -50,9 +50,13 @@ const WAIT_LOOP = /^\s*(?:until|while)\s+([^]+?);\s*do\s+sleep\s+[\d.]+[smh]?\s*
 
 /** The files a command writes what it prints to: `> f`, `>> f`, `tee f`; never a device (`/dev/null`). */
 function writtenFiles(command: string): string[] {
+  // Shell comments, input redirects and substitutions need a real shell parser. Retain
+  // the independent wait on uncertainty rather than infer a writer from an argument.
+  if (/[#$`\\<\n]/.test(command)) return [];
   const tokens = command.match(/'[^']*'|"[^"]*"|>>?|[;&|]+|[^\s'"<>;&|]+/g) ?? [];
   return tokens.flatMap((token, index) => {
     if (token !== ">" && token !== ">>" && token !== "tee") return [];
+    if (token === "tee" && index !== 0 && !/^[;&|]+$/.test(tokens[index - 1]!)) return [];
     const operand = tokens[index + 1]?.replace(/^(['"])([^]*)\1$/, "$2");
     return operand && !operand.startsWith("-") && !operand.startsWith("&") && !operand.startsWith("/dev/") ? [operand] : [];
   });
@@ -176,7 +180,7 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
       stops: task.status === "running" ? [task.id] : [],
     };
   });
-  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? lines.find((line) => runsBrigadier(line.command ?? "", "wait") || (line.state !== "queued" && WAIT_LOOP.test(line.command ?? "")))?.name.replace(/^wait(?:ing)?\s+(?:for|on)\s+/i, "") ?? null, stops: own.map(({ task }) => task.id) };
+  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? lines.find((line) => runsBrigadier(line.command ?? "", "wait") || (line.state !== "queued" && WAIT_LOOP.test(line.command ?? "")))?.name.replace(/^wait(?:ing)?\s+(?:for|on)\s+/i, "") ?? null, stops: own.map(({ task }) => task.id), stopStarts: Object.fromEntries(own.map(({ task }) => [task.id, task.startedAtMs])) };
 }
 
 /**

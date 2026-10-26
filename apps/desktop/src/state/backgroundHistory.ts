@@ -71,6 +71,8 @@ export async function readHistoryOutput(id: string, recordId: string): Promise<B
 
 /** Resolve old Output tabs after a CLI/worker went away, without relying on a live task cache. */
 export async function findHistoricalOutput(id: string, source: "task" | "preview", taskId: string, worker?: string, startedAtMs?: number): Promise<BackgroundHistoryOutput | null> {
+  // Legacy tabs without invocation identity cannot safely address a reused native id.
+  if (startedAtMs === undefined) return null;
   let before: string | undefined;
   do {
     const { history } = await request({ method: "getBackgroundHistory", conversationId: id, limit: 100, ...(before && { before }) });

@@ -1097,8 +1097,8 @@ export async function stopPreview(conversationId: string, previewId: string | nu
 
 /** Stops one of the thread's CLI's background tasks, as the CLI's own Stop does. */
 /** Stops a background task of the session's CLI, or of its worker `workerId`'s. */
-export async function stopBackgroundTask(conversationId: string, taskId: string, workerId?: string): Promise<void> {
-  await request({ method: "stopBackgroundTask", conversationId, taskId, ...(workerId !== undefined && { workerId }) });
+export async function stopBackgroundTask(conversationId: string, taskId: string, workerId?: string, startedAtMs?: number): Promise<void> {
+  await request({ method: "stopBackgroundTask", conversationId, taskId, ...(workerId !== undefined && { workerId }), ...(startedAtMs !== undefined && { startedAtMs }) });
 }
 
 export async function pausePreview(conversationId: string, previewId: string): Promise<void> {

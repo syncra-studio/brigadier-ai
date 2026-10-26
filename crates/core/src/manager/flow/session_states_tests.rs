@@ -114,6 +114,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = flow.repo.parent().unwrap().to_path_buf();
     scratch.set(root.clone()).unwrap();
     let origin = root.join("origin.git");
@@ -182,6 +183,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         .await;
     assert_eq!(seen(&board), Some(PullRequestState::Closed));
     flow.restart().await;
+    let _reopened_app = flow.manager.app.subscribe();
     assert_eq!(
         seen(&flow.board().await),
         Some(PullRequestState::Closed),

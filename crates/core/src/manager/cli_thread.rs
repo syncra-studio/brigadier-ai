@@ -695,6 +695,7 @@ impl SessionManager {
         id: &ConversationId,
         worker: Option<&TaskId>,
         task: String,
+        started_at_ms: Option<i64>,
     ) -> Result<()> {
         let cli = match worker {
             None => self.conv(id)?.live_cli().await,
@@ -704,6 +705,28 @@ impl SessionManager {
             },
         };
         let cli = cli.ok_or_else(|| Error::Invalid("its CLI isn't running".into()))?;
+        if let Some(started) = started_at_ms {
+            let matches = |held: &BackgroundTask| {
+                (held.id == task
+                    && held.started_at_ms == started
+                    && held.status == BackgroundTaskStatus::Running)
+                    .then(String::new)
+            };
+            let current = match worker {
+                None => self
+                    .cli_threads
+                    .lock()
+                    .unwrap()
+                    .get(id)
+                    .and_then(|live| live.background.iter().find_map(matches)),
+                Some(worker) => self.worker_background_file(worker, matches),
+            };
+            if current.is_none() {
+                return Err(Error::Invalid(
+                    "That background invocation is no longer running".into(),
+                ));
+            }
+        }
         cli.session
             .stop_task(task.clone())
             .await
@@ -719,10 +742,12 @@ impl SessionManager {
         id: &ConversationId,
         worker: Option<&TaskId>,
         task: &str,
+        started_at_ms: Option<i64>,
     ) -> Result<String> {
         use std::io::{Read, Seek, SeekFrom};
         let shell = |held: &BackgroundTask| {
             (held.id == task
+                && started_at_ms.is_none_or(|started| held.started_at_ms == started)
                 && matches!(
                     held.kind,
                     BackgroundTaskKind::Shell | BackgroundTaskKind::Terminal
@@ -1011,6 +1036,68 @@ mod tests {
             text: r#"Background command "sleep 20" completed (exit code 0)"#.into(),
         }));
     }
+    #[tokio::test]
+    async fn stale_background_invocation_cannot_read_or_stop_a_reused_native_id() {
+        use crate::manager::flow::{Flow, Options, Reply, Script};
+        let script: Script = std::sync::Arc::new(|_| Box::pin(async { Reply::text("Done") }));
+        let flow = Flow::start("reused-background-actions", Options::default(), script).await;
+        flow.say("Start the native CLI").await;
+        flow.settled().await;
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let output = flow
+            .manager
+            .session_dir(&flow.conversation)
+            .record()
+            .join("replacement.output");
+        std::fs::write(&output, "replacement invocation output").unwrap();
+        let task = BackgroundTask {
+            id: "reused".into(),
+            item_id: Some("replacement-call".into()),
+            kind: BackgroundTaskKind::Shell,
+            label: "Replacement".into(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: 200,
+            ended_at_ms: None,
+            output_file: Some(output.to_string_lossy().into_owned()),
+            summary: None,
+            last_line: None,
+        };
+        flow.manager
+            .follow_cli_thread(&conv, Some(&ProviderEvent::BackgroundTask { task }))
+            .await;
+        assert!(
+            flow.manager
+                .background_task_output(&flow.conversation, None, "reused", Some(100))
+                .is_err()
+        );
+        assert_eq!(
+            flow.manager
+                .background_task_output(&flow.conversation, None, "reused", Some(200))
+                .unwrap(),
+            "replacement invocation output"
+        );
+        let error = flow
+            .manager
+            .stop_background_task(&flow.conversation, None, "reused".into(), Some(100))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invocation is no longer running"),
+            "{error}"
+        );
+        assert!(
+            flow.manager
+                .thread_view(&flow.conversation)
+                .unwrap()
+                .background
+                .iter()
+                .any(|task| task.id == "reused" && task.status == BackgroundTaskStatus::Running)
+        );
+        flow.stop().await;
+    }
+
     #[tokio::test]
     async fn typed_internal_result_and_reminder_inputs_hide_only_the_bound_native_message() {
         use crate::manager::flow::{Flow, Options, Reply, Script};

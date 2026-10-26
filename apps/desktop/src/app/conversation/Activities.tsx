@@ -164,13 +164,13 @@ function TaskRow({ conversationId, task, worker, name, meta, state }: {
     title: worker?.name ? `${said}\nFrom ${worker.name}` : said,
     icon: <StateIcon state={state} />,
     meta,
-    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id)} /> : undefined,
+    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id, task.startedAtMs)} /> : undefined,
   };
   const end = taskEnd(task);
   const words = <ActivityLabel name={name} state={state} worker={worker?.name} {...(end && { word: endWords(end) })} />;
   if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
   return (
-    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, ...(worker && { worker: worker.id }) }, name)}>
+    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, startedAtMs: task.startedAtMs, ...(worker && { worker: worker.id }) }, name)}>
       {words}
     </SummaryRowButton>
   );

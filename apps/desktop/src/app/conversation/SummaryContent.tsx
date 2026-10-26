@@ -341,7 +341,7 @@ export function TrackedWorkSections({ sessionId, work, error, now = 0, fallback,
         const url = `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`;
         return <SummaryRowButton key={url} data-slot="tracked-pr-row" title={`${pr.pullRequest?.title ?? url}\n${pr.actor} · ${pr.action}\n${pr.account ? `Account: ${pr.account}` : "Account needed"}`} icon={<span className={cn("flex", tone)}>{PULL_REQUEST_ICONS[state]}</span>} meta={<span className={cn("max-w-48 truncate", tone)}>{pr.status}</span>} onClick={() => openLink(url)}>{pr.identity.repo} #{pr.identity.number}</SummaryRowButton>;
       })}
-      {authRequired && prs.length === 0 && <SummaryRow muted icon={<PullRequestOpen />}>gh auth login for PR status</SummaryRow>}
+      {authRequired && prs.length === 0 && <SummaryRow data-slot="pull-request-auth" muted icon={<PullRequestOpen />}>gh auth login for PR status</SummaryRow>}
       {error && <SummaryRow muted>Pull request status unavailable</SummaryRow>}
       {work.prHistory.length > 0 && <SummaryRowButton muted icon={<PullRequestClosed />} onClick={() => openPanelTab(sessionId, { type: "pr-history" }, "Pull request history")}>View history</SummaryRowButton>}
     </SummarySection>}

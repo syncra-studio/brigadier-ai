@@ -111,7 +111,7 @@ export const SubagentsStrip: FC<{ conversationId: string; view: SubagentsView }>
     words={subagentWords(view)}
     stops={view.stops}
     stopTip="Stop every subagent still working"
-    onStop={() => Promise.all(view.stops.map((id) => stopBackgroundTask(conversationId, id)))}
+    onStop={() => Promise.all(view.stops.map((id) => stopBackgroundTask(conversationId, id, undefined, view.stopStarts?.[id])))}
   >
     {view.rows.map((id) => <StripRow key={id} conversationId={conversationId} taskId={id} />)}
   </Strip>
@@ -130,7 +130,7 @@ export const ChecksStrip: FC<{ conversationId: string; view: StripLines }> = ({ 
       words={checkWords(view)}
       stops={stops}
       stopTip="Stop every check still running"
-      onStop={() => Promise.all(stops.map((id) => stopBackgroundTask(conversationId, id)))}
+      onStop={() => Promise.all(stops.map((id) => stopBackgroundTask(conversationId, id, undefined, view.stopStarts?.[id])))}
     >
       {view.lines.map((line) => <CheckRow key={line.id} conversationId={conversationId} line={line} />)}
     </Strip>
@@ -199,7 +199,7 @@ const CheckRow = memo(function CheckRow({ conversationId, line }: { conversation
               aria-label={`Stop ${line.name}`}
               data-slot="check-stop"
               disabled={stop.busy}
-              onClick={() => stop.run(() => Promise.all(line.stops.map((id) => stopBackgroundTask(conversationId, id))))}
+              onClick={() => stop.run(() => Promise.all(line.stops.map((id) => stopBackgroundTask(conversationId, id, undefined, line.startedAtMs))))}
               className="text-foreground/60 hover:text-foreground shrink-0"
             >
               <StopCircle />

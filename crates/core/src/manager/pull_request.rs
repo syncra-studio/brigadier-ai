@@ -396,6 +396,9 @@ impl SessionManager {
                 }
                 return;
             }
+            if !self.app.is_open() {
+                continue;
+            }
             if let Some(branch_pr) = &board.pull_request
                 && let Ok(work) = self.tracked_work(&conv.id).await
                 && let Some(tracked) = work
@@ -428,9 +431,21 @@ impl SessionManager {
                 };
                 continue;
             }
-            // Unknown account provenance remains unresolved. Display observations come
-            // exclusively from the central named-account scheduler; a later explicit
-            // watch resolves it. Turn-boundary reconciliation below still records merges.
+            // Review identity stays unresolved, but a queued merge of our own branch must
+            // still settle. This existing branch/head/base lookup supplies merge facts only;
+            // it never infers a reviewer or readiness from an ambient account's access.
+            if let Some(session) = self.session_pr(&conv.id).await {
+                match session.found.pr.state {
+                    PullRequestState::Merged => {
+                        conv.pr_merge_due
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.kick(conv);
+                        return;
+                    }
+                    PullRequestState::Closed => return,
+                    _ => {}
+                }
+            }
             wait = later;
         }
     }

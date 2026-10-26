@@ -696,6 +696,10 @@ pub enum Request {
         #[ts(optional)]
         worker_id: Option<TaskId>,
         task_id: String,
+        // Invocation shown by the caller; reject an id reused by a later task.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        started_at_ms: Option<i64>,
     },
     /// What a background command of the thread's CLI, or of its worker `worker_id`'s CLI,
     /// printed so far: the end of its output file, up to 256 KiB.
@@ -705,6 +709,9 @@ pub enum Request {
         #[ts(optional)]
         worker_id: Option<TaskId>,
         task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        started_at_ms: Option<i64>,
     },
     /// The thread as its CLI keeps it (S9, S10): its CLI session files' items, the live
     /// stream's after them, and its turns. `threadNews` frames extend it.

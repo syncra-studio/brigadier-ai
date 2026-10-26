@@ -129,7 +129,7 @@ result.textContent = JSON.stringify({
   rules: dividers.map((divider) => divider.querySelectorAll(":scope > [data-rule]").length),
   inWork: dividers.filter((divider) => divider.closest("[data-slot=request-work]")).length,
   answers: blocks().map((block) => text(block.querySelector("[data-slot=aui_assistant-message-content][data-answer]"))),
-  bubbles: [...document.querySelectorAll("[data-role=user]")].map(text),
+  bubbles: [...document.querySelectorAll("[data-role=user]")].map((bubble) => text(bubble.querySelector(".aui-user-message-content")) ?? text(bubble)),
   // The thread top to bottom: the user's messages, the answers and the dividers.
   order: [...document.querySelectorAll("[data-role=user], [data-slot=compaction], [data-slot=aui_assistant-message-content][data-answer]")].map((element) =>
     element.matches("[data-role=user]") ? "user" : element.matches("[data-slot=compaction]") ? "divider" : "answer",

@@ -89,3 +89,13 @@ test("relative paths need an observed cwd, and ambiguous producers never link", 
   assert.deepEqual(checkLines([build, wait], [observed("b", "cargo build > build.log"), observed("w", command)], NOW).lines.map((line) => line.id), ["b"]);
   assert.equal(checkLines([build, task("c", "Other writer"), wait], [observed("b", "cargo build > build.log"), observed("c", "echo other > build.log"), observed("w", command)], NOW).lines.length, 3);
 });
+
+// A word that looks like a writer is not proof that a shell invoked one.
+test("literal tee arguments, comments and tee input redirects do not prove an output writer", () => {
+  const build = task("b", "Build"), wait = task("w", "Wait");
+  for (const producer of ["echo tee /tmp/build.log", "cargo build # > /tmp/build.log", "cat < /tmp/build.log", "echo x | tee < /tmp/build.log"]) {
+    const view = checkLines([build, wait], [bash("b", producer), bash("w", "until grep -q ready /tmp/build.log; do sleep 1; done")], NOW);
+    assert.deepEqual(view.lines.map((line) => line.id), ["b", "w"], producer);
+    assert.equal(view.lines[0]?.waitedOn, false, producer);
+  }
+});

@@ -25,9 +25,9 @@ const READ_EVERY_MS = 2000;
  * the thing ends, with what it printed last.
  */
 export function OutputTab({ conversationId, view }: { conversationId: string; view: Extract<PanelView, { type: "output" }> }) {
-  const preview = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "preview" ? s.board.previews[view.id]?.startedAtMs === (view.startedAtMs ?? s.board.previews[view.id]?.startedAtMs) ? s.board.previews[view.id] : undefined : undefined));
+  const preview = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "preview" ? view.startedAtMs !== undefined && s.board.previews[view.id]?.startedAtMs === view.startedAtMs ? s.board.previews[view.id] : undefined : undefined));
   const task = useCliThread((s) => {
-    if (view.source !== "task") return undefined;
+    if (view.source !== "task" || view.startedAtMs === undefined) return undefined;
     if (view.worker === undefined) return s.views[conversationId]?.background?.find((held) => held.id === view.id && (view.startedAtMs === undefined || held.startedAtMs === view.startedAtMs));
     return workerRowIn(s.views, view.worker)?.row.background?.find((held) => held.task.id === view.id && (view.startedAtMs === undefined || held.task.startedAtMs === view.startedAtMs))?.task;
   });
@@ -43,19 +43,19 @@ export function OutputTab({ conversationId, view }: { conversationId: string; vi
 }
 
 /** What a preview or a CLI's background command (of worker `worker`'s CLI, when given) has printed so far. */
-function readOutput(source: "preview" | "task", conversationId: string, id: string, worker?: string): Promise<string> {
+function readOutput(source: "preview" | "task", conversationId: string, id: string, worker?: string, startedAtMs?: number): Promise<string> {
   return source === "preview"
     ? previewLogTail(conversationId, id).then(({ tail }) => tail)
-    : request({ method: "readBackgroundTaskOutput", conversationId, taskId: id, ...(worker !== undefined && { workerId: worker }) }).then(({ output }) => output);
+    : request({ method: "readBackgroundTaskOutput", conversationId, taskId: id, ...(worker !== undefined && { workerId: worker }), ...(startedAtMs !== undefined && { startedAtMs }) }).then(({ output }) => output);
 }
 
 /** Reads what it printed now, and again every 2 s while `running`; the last text read stays shown. */
-function useOutput(source: "preview" | "task", conversationId: string, id: string, state: string, running: boolean, worker?: string): { text: string | null; error: string | null } {
+function useOutput(source: "preview" | "task", conversationId: string, id: string, state: string, running: boolean, worker?: string, startedAtMs?: number): { text: string | null; error: string | null } {
   const [output, setOutput] = useState<{ text: string | null; error: string | null }>({ text: null, error: null });
   useEffect(() => {
     let current = true;
     const once = () =>
-      readOutput(source, conversationId, id, worker).then(
+      readOutput(source, conversationId, id, worker, startedAtMs).then(
         (text) => current && setOutput({ text, error: null }),
         (cause: unknown) => current && setOutput((shown) => ({ ...shown, error: cause instanceof Error ? cause.message : String(cause) })),
       );
@@ -67,7 +67,7 @@ function useOutput(source: "preview" | "task", conversationId: string, id: strin
     };
     // A new state (it started, held or ended) reads it once more.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [source, conversationId, id, state, running, worker]);
+  }, [source, conversationId, id, state, running, worker, startedAtMs]);
   return output;
 }
 
@@ -104,14 +104,14 @@ function PreviewOutput({ preview }: { preview: Preview }) {
 
 function TaskOutput({ conversationId, task, worker }: { conversationId: string; task: BackgroundTask; worker?: string | undefined }) {
   const running = task.status === "running";
-  const { text, error } = useOutput("task", conversationId, task.id, task.status, running, worker);
+  const { text, error } = useOutput("task", conversationId, task.id, task.status, running, worker, task.startedAtMs);
   const action = useAction();
   const status: ItemStatus = running ? "inProgress" : task.status === "completed" ? "completed" : "failed";
   return (
     <>
       <Header title={task.label} state={running ? "Running" : task.status === "completed" ? "Finished" : task.status === "stopped" ? "Stopped" : "Failed"}>
         {running && (
-          <Button variant="ghost" size="xs" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, task.id, worker))}>
+          <Button variant="ghost" size="xs" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, task.id, worker, task.startedAtMs))}>
             Stop
           </Button>
         )}
@@ -177,7 +177,7 @@ export function HistoricalOutput({ conversationId, recordId, initial, inline = f
       status={itemStatus} exit={record.exitCode} stopped={record.status === "stopped"} outcome={record.status === "unknown" ? "End not observed" : record.status === "completed" ? (record.exitCode === null ? "Finished" : `Finished · exit ${record.exitCode}`) : undefined} emptyOutput={record.outputAvailable ? "No output recorded" : "Output unavailable"} />
     <div className="flex flex-wrap gap-2">
       {inline && <Button size="xs" variant="ghost" onClick={() => openPanelTab(conversationId, { type: "output", source: "history", id: record.id }, record.purpose)}>Open output in a tab</Button>}
-      {running && record.kind !== "preview" && (record.kind !== "agent" || record.taskId !== record.callId) && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, record.taskId, record.workerId ?? undefined))}>Stop</Button>}
+      {running && record.kind !== "preview" && (record.kind !== "agent" || record.taskId !== record.callId) && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, record.taskId, record.workerId ?? undefined, record.startedAtMs))}>Stop</Button>}
       {running && record.kind === "preview" && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopPreview(conversationId, record.taskId))}>Stop</Button>}
     </div>
     {action.error && <p role="alert" className="text-destructive text-sm">{action.error}</p>}

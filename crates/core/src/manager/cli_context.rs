@@ -280,6 +280,11 @@ impl SessionManager {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
+                if output.text.is_empty() {
+                    output.text = "No explicit waits.\n".into();
+                } else {
+                    output.text.push('\n');
+                }
             }
             ContextPart::Brief => output.text = self.context_brief(whose).await?,
             ContextPart::Decisions | ContextPart::Open | ContextPart::Ledger => {

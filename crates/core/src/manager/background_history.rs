@@ -285,6 +285,24 @@ impl Journal {
                 }
             }
             Some(ProviderEvent::BackgroundTask { task }) => {
+                // Native ids (and output paths) can be reused within one CLI session.
+                // The new start proves the previous invocation is no longer addressable;
+                // retain its last snapshot, without inventing how or when it ended.
+                for entry in &mut self.records {
+                    if entry.record.worker_id.as_deref().unwrap_or("") == owner
+                        && entry.record.generation == generation.id
+                        && entry.record.task_id == task.id
+                        && entry.record.started_at_ms != task.started_at_ms
+                        && entry.record.status == "running"
+                        && !(entry.record.kind == "agent"
+                            && task.item_id.is_some()
+                            && entry.record.call_id == task.item_id)
+                    {
+                        entry.record.status = "unknown".into();
+                        entry.record.summary =
+                            Some("Native task id reused; end was not observed".into());
+                    }
+                }
                 let existing = self.records.iter().position(|entry| {
                     entry.record.worker_id.as_deref().unwrap_or("") == owner
                         && ((entry.record.generation == generation.id
@@ -1128,6 +1146,32 @@ mod tests {
         let on_exit = journal.apply("session", "", None, 600, Generation::default(), None);
         assert_eq!(on_exit.len(), 1);
         assert_ne!(on_exit[0].0, old_id);
+    }
+
+    #[test]
+    fn reused_running_task_id_retires_the_old_output_source() {
+        let mut journal = Journal::default();
+        let mut first = task(BackgroundTaskStatus::Running);
+        if let ProviderEvent::BackgroundTask { task } = &mut first {
+            task.output_file = Some("/provider/reused.output".into());
+        }
+        apply(&mut journal, "", Some(&first));
+        let mut second = first.clone();
+        if let ProviderEvent::BackgroundTask { task } = &mut second {
+            task.started_at_ms += 100;
+        }
+        apply(&mut journal, "", Some(&second));
+        assert_eq!(journal.records.len(), 2);
+        assert_eq!(journal.records[0].record.status, "unknown");
+        assert_eq!(journal.records[0].record.ended_at_ms, None);
+        assert_eq!(journal.records[1].record.status, "running");
+        let sources = journal.apply("session", "", None, 600, Generation::default(), None);
+        assert_eq!(
+            sources.len(),
+            1,
+            "exit must not read a reused source into the old record"
+        );
+        assert_eq!(sources[0].0, journal.records[1].record.id);
     }
 
     #[test]

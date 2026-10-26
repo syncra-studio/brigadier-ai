@@ -1252,7 +1252,11 @@ print('HTTP/2.0 200\r\n\r\n'+(root/('page-'+str(i)+'.json')).read_text())
             !results[1].as_ref().unwrap().account_failed,
             "a PR permission error is retried independently from its healthy account peers"
         );
-        assert_eq!(results[1].as_ref().unwrap().next, 0, "a PR alias error sets no account-wide deadline");
+        assert_eq!(
+            results[1].as_ref().unwrap().next,
+            0,
+            "a PR alias error sets no account-wide deadline"
+        );
         assert_eq!(std::fs::read_to_string(dir.join("count")).unwrap(), "1");
         std::fs::remove_dir_all(dir).unwrap();
     }

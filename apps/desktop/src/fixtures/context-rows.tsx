@@ -92,6 +92,7 @@ const asked: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "getTrackedWork") return { method: req.method, work: { pullRequests: [], prHistory: [], waitingOn: [] } };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "getSessionDiff") return { method: req.method, stat: { files: [], insertions: 380, deletions: 2 }, commits: 4 };
   if (req.method === "continueWaiting" || req.method === "dontResume") {
