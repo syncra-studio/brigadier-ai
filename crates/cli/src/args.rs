@@ -963,6 +963,15 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             put("asked", Some(json!(args.switch("asked"))));
             Tool::Feedback
         }
+        "session" => {
+            let task = args.text("task");
+            if task.trim().is_empty() {
+                return Err(error("missing <task>: what the new session is to do"));
+            }
+            put("task", Some(json!(task)));
+            put("title", flag("title"));
+            Tool::Session
+        }
         _ => {
             let Some(what) = args.flag("action") else {
                 return Err(error("--action: what would happen, in one line"));
@@ -1580,6 +1589,27 @@ mod tests {
         );
         assert_eq!(
             tool(&[
+                "session",
+                "propose",
+                "--title",
+                "CI and nightly",
+                "Fix",
+                "CI",
+                "on",
+                "main."
+            ]),
+            (
+                Tool::Session,
+                "propose".into(),
+                json!({"task": "Fix CI on main.", "title": "CI and nightly"})
+            )
+        );
+        assert_eq!(
+            tool(&["session", "propose", "Fix", "CI."]),
+            (Tool::Session, "propose".into(), json!({"task": "Fix CI."}))
+        );
+        assert_eq!(
+            tool(&[
                 "approval",
                 "request",
                 "--action",
@@ -1609,6 +1639,8 @@ mod tests {
         assert!(fails(&["report", "save", "text"]).contains("--title"));
         assert!(fails(&["feedback", "offer", "--title", "T", "b"]).contains("--kind"));
         assert!(fails(&["feedback", "offer", "--kind", "rant", "b"]).contains("one of: bug"));
+        assert!(fails(&["session", "propose", "--title", "T"]).contains("missing <task>"));
+        assert!(fails(&["session", "start", "x"]).contains("not one of"));
         assert!(fails(&["approval", "request", "why"]).contains("--action"));
         assert!(fails(&["approval", "request", "--action", "Pay"]).contains("missing <details>"));
     }
