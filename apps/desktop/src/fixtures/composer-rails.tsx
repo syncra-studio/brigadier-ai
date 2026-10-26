@@ -1,205 +1,220 @@
 /* oxlint-disable brigadier/no-raw-design-values -- Fixed widths stand in for the thread column. */
 /**
- * Mockup only, a standalone Vite entry excluded from the production build: the strips above the
- * composer with a Subagents strip and a Checks strip (the session's own tests, builds,
- * verifications and waits) beside the real Workers strip, in three ways of stacking them.
- * `?board=1..7` picks a board of scenes; nothing reaches a daemon.
+ * A standalone Vite entry, excluded from the production build: the strips above the composer
+ * (`ComposerStatusSlot` in a real rail over the composer's card) from synthetic thread views:
+ * the session's workers, its own subagents (its CLI's Agent calls, as worker rows) and its own commands, with a wait folded into the
+ * test it watches and a command queued behind a build. `?scene=` shows one of them alone
+ * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, opens a check's
+ * output, presses a Stop and Stop all, and writes what it saw as JSON into
+ * `#composer-rails-result`; `ComposerRailsRender.test.ts` checks it. IPC stays mocked.
  */
-import { type ComponentProps, type FC, type ReactNode, useEffect, useRef } from "react";
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { type FC, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { WorkersStrip, useWorkersStrip } from "@/app/conversation/activity/WorkersStrip";
 import { ComposerCard } from "@/app/conversation/ComposerCard";
+import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
-import { ComposerRail, ComposerRailItem } from "@/components/conversation";
+import { ComposerRail } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import { MockGroupedStrip, type MockLine, MockSplitStrip, MockStrip, type WorkersPart } from "@/fixtures/composer-rails-strips";
 import { rowOf, showRows } from "@/fixtures/workerRows";
-import type { Task, WorkerRow } from "@/ipc/generated";
+import type { BackgroundTask, FileEntry, Request, Task, WorkerRow } from "@/ipc/generated";
+import { sessionTabs } from "@/state/sessionTabs";
 
 const now = Date.now();
+const query = new URLSearchParams(location.search);
+
+/** The worker or subagent whose thread a strip row opened. */
+let panelOpened: string | null | undefined;
+
+/** Every request the page made, by method and task. */
+const calls: string[] = [];
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}`);
+  if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: "ok\n" };
+  return { method: req.method };
+});
+
 const worker = (conversationId: string, id: string, number: number, title: string, agoMs: number, patch: Partial<WorkerRow>): WorkerRow =>
   rowOf({ id, number, title, conversationId, state: "running", createdAtMs: now - agoMs, updatedAtMs: now - 5_000, route: null } as unknown as Task, patch);
 
-// The session's workers, as the real strip reads them.
-const SHORT = "rails";
-const LONG = "rails-long";
-showRows(SHORT, [
-  worker(SHORT, "w1", 1, "Parser fix", 312_000, { doing: { type: "call", step: { name: "shell", detail: "pnpm test parser" } }, diff: { insertions: 42, deletions: 7, files: [] } }),
-  worker(SHORT, "w2", 2, "Readme draft", 95_000, { waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
-]);
-showRows(LONG, [
-  worker(LONG, "l1", 1, "Rework the composer's attachment tray so pasted screenshots keep their order", 1_212_000, { doing: { type: "said", line: "Checking every attachment path in the composer and the rich composer input before changing the order" } }),
-  worker(LONG, "l2", 2, "Investigate why the nightly updater sometimes reports a finished download twice", 455_000, { doing: { type: "thinking" } }),
-]);
-const workersPart = (conversationId: string, rows: string[]): WorkersPart => ({ conversationId, rows, working: 1, waiting: 1 });
-const SHORT_WORKERS = workersPart(SHORT, ["w1", "w2"]);
-const LONG_WORKERS = workersPart(LONG, ["l1", "l2"]);
+const task = (id: string, kind: BackgroundTask["kind"], label: string, agoMs: number, patch: Partial<BackgroundTask> = {}): BackgroundTask => ({
+  id, itemId: `call-${id}`, kind, label, status: "running", startedAtMs: now - agoMs, endedAtMs: null,
+  outputFile: kind === "shell" ? `/private/tmp/cli/session/tasks/${id}.output` : null, summary: null, lastLine: null, ...patch,
+});
+const ended = (status: BackgroundTask["status"], agoMs: number, summary: string | null = null): Partial<BackgroundTask> => ({ status, endedAtMs: now - agoMs, summary });
 
-// The session's own subagents.
-const SUBAGENTS: MockLine[] = [
-  { id: "s1", name: "Explore", doing: "Finding where the composer strips are drawn", state: "working", time: "48s" },
-  { id: "s2", name: "Code review", doing: "Reading the parser change for mistakes", state: "working", time: "1m 3s" },
-  { id: "s3", name: "Plan", doing: "Outlined the three migration steps", state: "done", word: "done", time: "2m 10s" },
-];
-const SUBAGENTS_FAILED: MockLine[] = [
-  ...SUBAGENTS,
-  { id: "s4", name: "Explore", doing: "Searching old crash logs", state: "failed", word: "failed: hit the usage limit", time: "34s" },
-];
-const SUBAGENTS_LONG: MockLine[] = [
-  { id: "s1", name: "Explore the desktop app's conversation folder", doing: "Finding every place the composer rail decides which strips to show and in what order", state: "working", time: "2m 48s" },
-  { id: "s2", name: "Security review", doing: "Reading the whole change to the approval cards for anything that could run a command without asking", state: "working", time: "4m 3s" },
-  { id: "s3", name: "Plan", doing: "Outlined how the old stored sessions move to the new thread format without losing a message", state: "done", word: "done", time: "6m 10s" },
-];
+/** The calls that started them, as the session's thread holds them. */
+const calledAs = (id: string, name: string, input: Record<string, unknown>): FileEntry => ({
+  event: { type: "toolCall", itemId: `call-${id}`, name, input: JSON.stringify(input), status: "inProgress", output: null },
+});
+const bash = (id: string, command: string, description: string) => calledAs(id, "Bash", { command, description, run_in_background: true });
+const agent = (id: string, type: string, description: string) => calledAs(id, "Agent", { description, prompt: "…", subagent_type: type, run_in_background: true });
 
-// The session's own commands: what each is, what it is for, and the one the session waits on.
-const CHECKS: MockLine[] = [
-  { id: "c1", name: "Core tests", doing: "Full run, to prove the parser change broke nothing", state: "working", time: "2m 14s", waitedOn: true, command: "pnpm --filter core test" },
-  { id: "c2", name: "Type check", doing: "Makes sure the app still compiles after the rename", state: "passed", word: "passed", time: "41s", command: "pnpm typecheck" },
+const SUBAGENTS = [
+  task("sa1", "agent", "Find where the composer strips are drawn", 48_000),
+  task("sa2", "agent", "Read the parser change for mistakes", 63_000),
+  task("sa3", "agent", "Outline the three migration steps", 130_000, ended("completed", 4_000)),
+  task("sa4", "agent", "Search the old crash logs", 34_000, ended("failed", 3_000)),
 ];
-const CHECKS_ALL: MockLine[] = [
-  CHECKS[0]!,
-  { id: "c3", name: "Desktop build", doing: "Builds the app the screenshots are taken from", state: "working", time: "58s", command: "pnpm --filter desktop build" },
-  { id: "c4", name: "Smoke test", doing: "Opens the built app and clicks through the composer", state: "queued", word: "starts after Desktop build", command: "pnpm smoke" },
-  { id: "c5", name: "Lint", doing: "Style rules on the changed files", state: "failed", word: "failed: 2 problems", time: "12s", command: "pnpm lint" },
-  { id: "c6", name: "Pause", doing: "Then checks the preview is up", state: "pausing", word: "1m 20s left", command: "sleep 120" },
+const SUBAGENT_CALLS = [agent("sa1", "Explore", "Find where the composer strips are drawn"), agent("sa2", "code-review", "Read the parser change for mistakes"),
+  agent("sa3", "Plan", "Outline the three migration steps"), agent("sa4", "Explore", "Search the old crash logs")];
+
+const tests = task("ct1", "shell", "Run full core tests", 134_000, { lastLine: "✓ parser/reader.test.ts (48 tests) 2.1s" });
+const CHECKS = [
+  tests,
+  // Watches the tests' own output: folded into their row.
+  task("ct2", "shell", "Wait for the full core tests to finish", 120_000),
+  task("ct3", "shell", "Build the desktop app", 58_000, { lastLine: "transforming (812) src/app/conversation/Composer.tsx" }),
+  // Waits for the build's log, then runs the smoke test: queued behind it.
+  task("ct4", "shell", "Smoke test the built app", 50_000),
+  task("ct5", "shell", "Lint the changed files", 30_000, { ...ended("completed", 4_000, "Background command completed (exit code 1)"), lastLine: "2 problems (2 errors, 0 warnings)" }),
+  // Waits on a process by its number: nothing says which command that is, so a row of its own.
+  task("ct6", "shell", "Wait for the benchmark process to exit", 20_000),
+  task("ct7", "shell", "Type check", 90_000, ended("completed", 2_000, "Background command completed (exit code 0)")),
 ];
-const CHECKS_LONG: MockLine[] = [
-  { id: "c1", name: "Core tests with the slow integration suite", doing: "Full run against a fresh database, to prove the migration of stored sessions broke nothing", state: "working", time: "12m 14s", waitedOn: true, command: "pnpm --filter core test --integration --database fresh" },
-  { id: "c2", name: "Desktop production build", doing: "Builds the signed app the release notes' screenshots are taken from", state: "queued", word: "starts after Core tests with the slow integration suite" },
-  { id: "c3", name: "Type check", doing: "Makes sure every package still compiles after the rename of the thread types", state: "passed", word: "passed", time: "1m 41s" },
+const CHECK_CALLS = [
+  bash("ct1", "pnpm --filter core test 2>&1; echo \"test exit $?\"", "Run full core tests"),
+  bash("ct2", `until grep -q "^test exit" /private/tmp/cli/session/tasks/ct1.output 2>/dev/null; do sleep 10; done; cat /private/tmp/cli/session/tasks/ct1.output`, "Wait for the full core tests to finish"),
+  bash("ct3", "pnpm --filter desktop build > /tmp/rails/build.log 2>&1", "Build the desktop app"),
+  bash("ct4", "until grep -q 'built in' /tmp/rails/build.log; do sleep 5; done && pnpm smoke", "Smoke test the built app"),
+  bash("ct5", "pnpm lint", "Lint the changed files"),
+  bash("ct6", "while kill -0 25996 2>/dev/null; do sleep 20; done; tail -30 /tmp/w16/bench-full.log", "Wait for the benchmark process to exit"),
+  bash("ct7", "pnpm typecheck", "Type check"),
 ];
 
-/** Opens the real Workers strip of a scene, as a click on its count does. */
-function useOpenWorkers(open: boolean) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (open) ref.current?.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded="false"]')?.click();
-  }, [open]);
-  return ref;
+const LONG_SUBAGENTS = [
+  task("ls1", "agent", "Find every place the composer rail decides which strips to show and in what order", 168_000),
+  task("ls2", "agent", "Read the whole change to the approval cards for anything that could run a command without asking", 243_000),
+];
+const LONG_CHECKS = [
+  task("lc1", "shell", "Run the core tests with the slow integration suite against a fresh database", 734_000, { lastLine: "✓ migrations/stored-sessions.test.ts (212 tests) 48.2s — moving 1,204 stored sessions to the new thread format" }),
+  task("lc2", "shell", "Wait for the slow integration suite", 700_000),
+];
+const LONG_CALLS = [
+  agent("ls1", "general-purpose", "Find every place the composer rail decides which strips to show and in what order"),
+  agent("ls2", "security-review", "Read the whole change to the approval cards for anything that could run a command without asking"),
+  bash("lc1", "pnpm --filter core test --integration --database fresh", "Run the core tests with the slow integration suite against a fresh database"),
+  bash("lc2", "until grep -q '^exit' /private/tmp/cli/session/tasks/lc1.output; do sleep 20; done; tail -40 /private/tmp/cli/session/tasks/lc1.output", "Wait for the slow integration suite"),
+];
+
+const SCENES = {
+  subagents: { caption: "Subagents alone: two working, one done, one failed", workers: [], background: SUBAGENTS, entries: SUBAGENT_CALLS },
+  checks: { caption: "Checks alone: the wait folded into the tests, a smoke test queued behind the build, a failed lint", workers: [], background: CHECKS, entries: CHECK_CALLS },
+  all: {
+    caption: "All three, Checks nearest the composer",
+    workers: [
+      worker("all", "w1", 1, "Parser fix", 312_000, { doing: { type: "call", step: { name: "shell", detail: "pnpm test parser" } }, diff: { insertions: 42, deletions: 7, files: [] } }),
+      worker("all", "w2", 2, "Readme draft", 95_000, { waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
+    ],
+    background: [...SUBAGENTS.slice(0, 3), tests, CHECKS[1]!, CHECKS[6]!],
+    entries: [...SUBAGENT_CALLS, ...CHECK_CALLS],
+  },
+  long: {
+    caption: "Long names",
+    workers: [worker("long", "l1", 1, "Rework the composer's attachment tray so pasted screenshots keep their order", 1_212_000, { doing: { type: "said", line: "Checking every attachment path in the composer before changing the order" } })],
+    background: [...LONG_SUBAGENTS, ...LONG_CHECKS],
+    entries: LONG_CALLS,
+  },
+  // What ended a while ago: no strip.
+  empty: {
+    caption: "Nothing live: no strips",
+    workers: [],
+    background: [task("e1", "agent", "Plan the steps", 200_000, ended("completed", 40_000)), task("e2", "shell", "Type check", 200_000, ended("completed", 60_000, "Background command completed (exit code 0)"))],
+    entries: [],
+  },
+} satisfies Record<string, { caption: string; workers: WorkerRow[]; background: BackgroundTask[]; entries: FileEntry[] }>;
+type Scene = keyof typeof SCENES;
+
+for (const [id, scene] of Object.entries(SCENES)) showRows(id, scene.workers, { background: scene.background, entries: scene.entries });
+
+const asked = query.get("scene") as Scene | null;
+const shown = (asked && asked in SCENES ? [asked] : Object.keys(SCENES)) as Scene[];
+
+/** One session's rail over its composer, at a thread column's width. */
+const Stage: FC<{ id: Scene }> = ({ id }) => (
+  <figure className="flex w-[720px] flex-col gap-2" data-scene={id}>
+    <figcaption className="text-foreground/60 text-xs">{SCENES[id].caption}</figcaption>
+    <div className="flex flex-col">
+      <ComposerRail>
+        <ComposerStatusSlot conversationId={id} />
+      </ComposerRail>
+      <ComposerCard>
+        <p className="text-foreground/40 min-h-16 px-2 py-1 text-sm">Ask for follow-up changes</p>
+      </ComposerCard>
+    </div>
+  </figure>
+);
+
+const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+const scene = (id: Scene) => document.querySelector<HTMLElement>(`[data-scene="${id}"]`)!;
+const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? null;
+
+/** Opens every strip of a scene and reads it: each strip's closed line, then its rows. */
+async function read(id: Scene) {
+  const strips = [...scene(id).querySelectorAll<HTMLElement>('[data-slot="composer-rail-item"]')];
+  const closed = strips.map((strip) => text(strip.querySelector("button[aria-expanded]")));
+  for (const strip of strips) strip.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')?.click();
+  await frame();
+  return {
+    order: strips.map((strip) => strip.getAttribute("aria-label")),
+    closed,
+    subagents: [...scene(id).querySelectorAll('[data-slot="subagents-strip"] [data-slot="workers-strip-row"]')].map((row) => ({
+      state: row.getAttribute("data-worker-state"),
+      text: text(row),
+      stop: !!row.parentElement?.querySelector('[data-slot="worker-stop"]'),
+    })),
+    checks: [...scene(id).querySelectorAll('[data-slot="checks-strip"] [data-slot="check-row"]')].map((row) => ({
+      state: row.getAttribute("data-state"),
+      text: text(row),
+      waitedOn: !!row.querySelector('[data-slot="strip-waited-on"]'),
+      stop: !!row.parentElement?.querySelector('[data-slot="check-stop"]'),
+      opens: row.tagName === "BUTTON",
+    })),
+  };
 }
 
-/** The real Workers strip, in its own rail item, as `ComposerStatusSlot` puts it. */
-const RealWorkers: FC<{ conversationId: string }> = ({ conversationId }) => {
-  const view = useWorkersStrip(conversationId);
-  return view ? (
-    <ComposerRailItem label="Live work">
-      <WorkersStrip conversationId={conversationId} view={view} />
-    </ComposerRailItem>
-  ) : null;
-};
+async function drive() {
+  await frame();
+  const seen: Record<string, unknown> = {
+    emptyItems: scene("empty").querySelectorAll('[data-slot="composer-rail-item"]').length,
+    all: await read("all"),
+    subagents: await read("subagents"),
+    checks: await read("checks"),
+  };
+  // A check's row opens what it printed, as the summary card's Background row does.
+  [...scene("checks").querySelectorAll<HTMLButtonElement>('[data-slot="checks-strip"] button[data-slot="check-row"]')].find((row) => row.textContent?.includes("Lint"))?.click();
+  await frame();
+  seen.opened = sessionTabs("checks").active;
+  // A subagent's row opens its transcript, as a worker's does.
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="workers-strip-row"]')?.click();
+  await frame();
+  seen.panel = panelOpened;
+  // The tests' Stop stops them and the wait folded into them.
+  scene("checks").querySelector<HTMLButtonElement>('[aria-label="Stop Run full core tests"]')?.click();
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip-stop-all"]')?.click();
+  await frame();
+  seen.calls = calls.toSorted();
+  return seen;
+}
 
-/** A rail over the composer, at a thread column's width. */
-const Scene: FC<{ caption: string; note?: string; openWorkers?: boolean; children: ReactNode }> = ({ caption, note, openWorkers = false, children }) => {
-  const ref = useOpenWorkers(openWorkers);
+function Fixture() {
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    if (query.get("drive") === "1") void drive().then((seen) => setResult(JSON.stringify(seen)), (reason: unknown) => setResult(JSON.stringify({ error: String(reason) })));
+  }, []);
   return (
-    <figure className="flex w-[720px] flex-col gap-2" data-scene={caption}>
-      <figcaption className="flex flex-col gap-0.5">
-        <span className="text-foreground text-sm font-medium">{caption}</span>
-        {note && <span className="text-foreground/60 text-xs">{note}</span>}
-      </figcaption>
-      <div ref={ref} className="flex flex-col">
-        <ComposerRail>{children}</ComposerRail>
-        <ComposerCard>
-          <p className="text-foreground/40 min-h-16 px-2 py-1 text-sm">Ask for follow-up changes</p>
-        </ComposerCard>
-      </div>
-    </figure>
+    <TooltipProvider>
+      <AgentsPanelContext.Provider value={{ panel: undefined, setPanel: (panel) => { panelOpened = panel; } }}>
+      <main className="bg-background flex w-fit flex-col gap-8 p-8">
+        {shown.map((id) => <Stage key={id} id={id} />)}
+        <pre id="composer-rails-result" className="hidden">{result}</pre>
+      </main>
+      </AgentsPanelContext.Provider>
+    </TooltipProvider>
   );
-};
+}
 
-/** Variant A: three strips, each its own rail item. */
-const Stacked: FC<{ workers?: string; subagents?: MockLine[]; checks?: MockLine[]; open?: "subagents" | "checks" | "all" }> = ({ workers, subagents, checks, open }) => (
-  <>
-    {workers && <RealWorkers conversationId={workers} />}
-    {subagents && (
-      <ComposerRailItem label="Subagents">
-        <MockStrip kind="subagents" lines={subagents} defaultOpen={open === "subagents" || open === "all"} />
-      </ComposerRailItem>
-    )}
-    {checks && (
-      <ComposerRailItem label="Checks">
-        <MockStrip kind="checks" lines={checks} defaultOpen={open === "checks" || open === "all"} />
-      </ComposerRailItem>
-    )}
-  </>
-);
-
-const Board: FC<{ title: string; intro: string; children: ReactNode }> = ({ title, intro, children }) => (
-  <main className="bg-background flex w-fit flex-col gap-8 p-8">
-    <header className="flex w-[720px] flex-col gap-1">
-      <h1 className="text-foreground text-base font-semibold">{title}</h1>
-      <p className="text-foreground/60 text-sm">{intro}</p>
-    </header>
-    {children}
-  </main>
-);
-
-/** Variants B and C: one strip, in one rail item. */
-const Split: FC<ComponentProps<typeof MockSplitStrip>> = (props) => (
-  <ComposerRailItem label="Live work"><MockSplitStrip {...props} /></ComposerRailItem>
-);
-const Grouped: FC<ComponentProps<typeof MockGroupedStrip>> = (props) => (
-  <ComposerRailItem label="Live work"><MockGroupedStrip {...props} /></ComposerRailItem>
-);
-
-const BOARDS: Record<string, () => ReactNode> = {
-  1: () => (
-    <Board title="A · Three strips, stacked · closed" intro="Each kind has its own strip, the Workers strip's look line for line: its icon, what it is about in words, a chevron to open it, and Stop all while something runs. A strip shows only while it has something.">
-      <Scene caption="Workers alone (as today)"><Stacked workers={SHORT} /></Scene>
-      <Scene caption="Subagents alone" note="The session's own helpers. Finished ones stay until the session's turn ends."><Stacked subagents={SUBAGENTS_FAILED} /></Scene>
-      <Scene caption="Checks alone" note="The session's own tests, builds and checks. A wait is not a row: the line says what the session waits on."><Stacked checks={CHECKS} /></Scene>
-      <Scene caption="All three"><Stacked workers={SHORT} subagents={SUBAGENTS} checks={CHECKS} /></Scene>
-    </Board>
-  ),
-  2: () => (
-    <Board title="A · Three strips, stacked · open" intro="A click on a strip's line opens its rows; each opens on its own. A row opens what it is (a subagent's transcript, a command's output); its stop sign stops only it. Hover a check for its command.">
-      <Scene caption="Checks open" note="Core tests carries 'Session waits on this': the wait is part of the thing it waits on. A pause with nothing to wait on is one row with the time left."><Stacked workers={SHORT} subagents={SUBAGENTS} checks={CHECKS_ALL} open="checks" /></Scene>
-      <Scene caption="Subagents open"><Stacked workers={SHORT} subagents={SUBAGENTS_FAILED} checks={CHECKS} open="subagents" /></Scene>
-      <Scene caption="All three open" openWorkers><Stacked workers={SHORT} subagents={SUBAGENTS} checks={CHECKS} open="all" /></Scene>
-    </Board>
-  ),
-  3: () => (
-    <Board title="A · Three strips, stacked · long names" intro="Only the words truncate; the state, the wait mark, the time and Stop keep their room.">
-      <Scene caption="All three, closed"><Stacked workers={LONG} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} /></Scene>
-      <Scene caption="All three, open" openWorkers><Stacked workers={LONG} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} open="all" /></Scene>
-    </Board>
-  ),
-  4: () => (
-    <Board title="B · One strip, three parts" intro="One line for everything, a part for each kind that has something. A part opens its own rows below, one at a time; Stop all at the line's end stops the open part's.">
-      <Scene caption="Checks alone"><Split checks={CHECKS} /></Scene>
-      <Scene caption="All three, closed"><Split workers={SHORT_WORKERS} subagents={SUBAGENTS} checks={CHECKS} /></Scene>
-      <Scene caption="Workers open"><Split workers={SHORT_WORKERS} subagents={SUBAGENTS} checks={CHECKS} defaultOpen="workers" /></Scene>
-      <Scene caption="Subagents open"><Split workers={SHORT_WORKERS} subagents={SUBAGENTS_FAILED} checks={CHECKS} defaultOpen="subagents" /></Scene>
-      <Scene caption="Checks open"><Split workers={SHORT_WORKERS} subagents={SUBAGENTS} checks={CHECKS_ALL} defaultOpen="checks" /></Scene>
-    </Board>
-  ),
-  5: () => (
-    <Board title="B · One strip, three parts · long names" intro="The parts share one line, so each says less: a count, or what the session waits on.">
-      <Scene caption="All three, closed"><Split workers={LONG_WORKERS} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} /></Scene>
-      <Scene caption="Checks open"><Split workers={LONG_WORKERS} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} defaultOpen="checks" /></Scene>
-    </Board>
-  ),
-  6: () => (
-    <Board title="C · One strip, one grouped list" intro="One line names all three; open, one list under three headings, each heading with its own Stop all.">
-      <Scene caption="Checks alone, closed"><Grouped checks={CHECKS} /></Scene>
-      <Scene caption="All three, closed"><Grouped workers={SHORT_WORKERS} subagents={SUBAGENTS} checks={CHECKS} /></Scene>
-      <Scene caption="All three, open"><Grouped workers={SHORT_WORKERS} subagents={SUBAGENTS_FAILED} checks={CHECKS_ALL} defaultOpen /></Scene>
-    </Board>
-  ),
-  7: () => (
-    <Board title="C · One strip, one grouped list · long names" intro="Everything opens at once, so a long list scrolls inside the strip.">
-      <Scene caption="All three, closed"><Grouped workers={LONG_WORKERS} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} /></Scene>
-      <Scene caption="All three, open"><Grouped workers={LONG_WORKERS} subagents={SUBAGENTS_LONG} checks={CHECKS_LONG} defaultOpen /></Scene>
-    </Board>
-  ),
-};
-
-const board = new URLSearchParams(location.search).get("board") ?? "1";
-createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <AgentsPanelContext.Provider value={{ panel: undefined, setPanel: () => {} }}>
-      {(BOARDS[board] ?? BOARDS[1]!)()}
-    </AgentsPanelContext.Provider>
-  </TooltipProvider>,
-);
+createRoot(document.getElementById("root")!).render(<Fixture />);
