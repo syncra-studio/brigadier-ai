@@ -5,7 +5,7 @@
   "required": ["part", "text"],
   "additionalProperties": false,
   "properties": {
-    "part": {"enum": ["overview", "brief", "decisions", "open", "ledger", "checkpoint", "transcript", "skills", "mcps", "project", "routing"]},
+    "part": {"enum": ["overview", "brief", "waiting", "decisions", "open", "ledger", "checkpoint", "transcript", "skills", "mcps", "project", "routing"]},
     "text": {"type": "string", "description": "What it prints without --json."},
     "parts": {
       "type": "array",
