@@ -35,8 +35,12 @@ const besideStatus = "group-has-data-[slot=status-word]/row:mask-none group-has-
 const hideOnRowHover =
   "group-hover/row:invisible group-focus-within/row:invisible group-has-data-[state=open]/row:invisible";
 
+/** Project session titles reclaim the state word's space when the actions replace it. */
+const removeOnRowHover =
+  "group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden";
+
 /** A row's state word and mark, with its reason on hover; otherwise its unread dot. */
-export function RowStatus({ conversationId }: { conversationId: string }) {
+export function RowStatus({ conversationId, reclaimSpace = false }: { conversationId: string; reclaimSpace?: boolean }) {
   const seen = useLastOpened((s) => s.at[conversationId]);
   const finishedAtMs = useActivity((s) => s.byConversation[conversationId]?.turnEndedAtMs);
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
@@ -45,7 +49,7 @@ export function RowStatus({ conversationId }: { conversationId: string }) {
   }, [conversationId, open, finishedAtMs]);
   const isUnread = unread(finishedAtMs, seen, open);
   const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
-  return <SessionStatusLabel conversationId={conversationId} className={hideOnRowHover}
+  return <SessionStatusLabel conversationId={conversationId} className={reclaimSpace ? removeOnRowHover : hideOnRowHover}
     rowIndicator={mark} />;
 }
 
@@ -68,6 +72,7 @@ export const ConversationRow = memo(function ConversationRow({
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
+  const projectSession = nested && conversation.kind === "session";
   const noun = conversation.kind === "chat" ? "chat" : "session";
   const togglePin = () =>
     void setPinned(conversation.id, !pinned).catch((error: unknown) =>
@@ -105,6 +110,7 @@ export const ConversationRow = memo(function ConversationRow({
               "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
               roomForActions,
               nested && "ps-8",
+              projectSession && !picked && "group-hover/row:bg-foreground/8",
             )}
             onClick={(event) => {
               if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
@@ -116,7 +122,7 @@ export const ConversationRow = memo(function ConversationRow({
             <span data-slot="row-title" className={cn("mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap", besideStatus)}>
               {title}
             </span>
-            <RowStatus conversationId={conversation.id} />
+            <RowStatus conversationId={conversation.id} reclaimSpace={projectSession} />
           </NavRow>
         </ContextMenuTrigger>
         {targets.length > 1 ? (
