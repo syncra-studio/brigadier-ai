@@ -76,6 +76,29 @@ What Brigadier changed and added:
 | `cu-testkit` | Test helpers |
 | `upstream/crates/*` | The vendored driver (see `upstream/UPSTREAM.md`) |
 
+## Platforms
+
+macOS is the reference: the helper app bundle, its own Accessibility and
+Screen Recording grants, and Brigadier's setup window. On Windows and Linux
+the helper is one more sidecar, `brigadier-cu`, beside brigadierd; Brigadier
+runs it from `<data dir>/computer/bin/`, and it asks for no permissions.
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Driver | `platform-macos` (AX) | `platform-windows` (UI Automation) | `platform-linux` (AT-SPI, X11/XWayland) |
+| Daemon transport | Unix socket in the home | named pipe for the home, same-user SID only (`transport.rs`) | Unix socket in the home |
+| Daemon start | LaunchServices (`open -g`) | detached process | detached process (own group) |
+| Permissions | two grants and a capture check | none | none; what the session allows is reported (`cu-layer/src/platform.rs`) |
+| Apps named by | bundle id | executable name | executable name |
+
+What Windows and Linux can't do in the background is said plainly in the
+tool's answer: apps running as administrator and Store (UWP) apps on Windows
+(the driver's uiAccess worker, `cua-driver-uia`, is vendored but not built or
+shipped), and input in a pure Wayland session without XWayland on Linux (the
+driver's experimental Wayland backend stays off). `cu-testkit`, and so
+`brigadier-cu`'s own tests, run on macOS only; CI runs clippy for both
+crates and `cu-layer`'s tests on Windows and Linux.
+
 ## Build and check
 
 ```bash
@@ -88,4 +111,7 @@ target/release/brigadier-cu list-tools
 ```
 
 The desktop build (`pnpm stage-sidecar` in `apps/desktop`) builds the release
-binary, assembles the bundle from `scripts/BrigadierCuBundle`, and signs it.
+binary, assembles the bundle from `scripts/BrigadierCuBundle`, and signs it; on
+Windows and Linux it stages the binary as the `brigadier-cu` sidecar. Linux
+builds need `pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev
+libwayland-dev libxkbcommon-dev`.
