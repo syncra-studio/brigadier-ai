@@ -194,6 +194,10 @@ const CARRIED: &str = ".brigadier-carried.json";
 /// the merge runs under that lock and goes in only if the file is still what it was read from,
 /// so no write of theirs is lost.
 pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
+    carry_servers_with_settle(main, home, || std::thread::sleep(SETTLE))
+}
+
+fn carry_servers_with_settle(main: &Path, home: &Path, mut settle: impl FnMut()) -> io::Result<()> {
     let main = read_json(main)?.unwrap_or_default();
     let config_path = home.join(".claude.json");
     let carried_path = home.join(CARRIED);
@@ -208,17 +212,22 @@ pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
         if wrote.is_empty() {
             break;
         }
-        std::thread::sleep(SETTLE);
+        settle();
         let config = read_json(&config_path)?.unwrap_or_default();
-        if wrote
+        if !wrote
             .iter()
-            .all(|(at, value)| config.pointer(at) == Some(value))
+            .any(|edit| edit.current(&config) == edit.before)
         {
             break;
         }
         carry_once(&config_path, |mut config| {
-            for (at, value) in &wrote {
-                put(&mut config, at, value.clone());
+            let observed = serde_json::Value::Object(config.clone());
+            for edit in &wrote {
+                // A value different from both snapshots is the user's edit. Entries this
+                // carry never changed aren't in wrote at all, including user removals.
+                if edit.current(&observed) == edit.before {
+                    edit.restore(&mut config);
+                }
             }
             (config, serde_json::Map::new())
         })?;
@@ -232,11 +241,106 @@ pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
 /// How long after a carry its values are checked again.
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// The carried values a carry changed (JSON pointer and value), and what is carried now.
-type Carried = (
-    Vec<(String, serde_json::Value)>,
-    serde_json::Map<String, serde_json::Value>,
-);
+/// Each server/flag this carry changed, and the main values carried now.
+type Carried = (Vec<CarryEdit>, serde_json::Map<String, serde_json::Value>);
+
+struct CarryEdit {
+    at: String,
+    /// A flag is membership of one name, never a replacement of the whole array.
+    flag: Option<String>,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+}
+
+impl CarryEdit {
+    fn current(&self, config: &serde_json::Value) -> Option<serde_json::Value> {
+        match &self.flag {
+            None => config.pointer(&self.at).cloned(),
+            Some(name) => Some(serde_json::Value::Bool(
+                config
+                    .pointer(&self.at)
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|flags| flags.iter().any(|flag| flag.as_str() == Some(name))),
+            )),
+        }
+    }
+
+    fn restore(&self, config: &mut serde_json::Map<String, serde_json::Value>) {
+        let value = match &self.flag {
+            None => self.after.clone(),
+            Some(name) => {
+                let mut flags = serde_json::Value::Object(config.clone())
+                    .pointer(&self.at)
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                flags.retain(|flag| flag.as_str() != Some(name));
+                if self.after == Some(serde_json::Value::Bool(true)) {
+                    flags.push(name.clone().into());
+                }
+                Some(serde_json::Value::Array(flags))
+            }
+        };
+        put(config, &self.at, value);
+    }
+}
+
+/// Record only actual per-name changes, including removals. Retrying a captured container
+/// would overwrite unrelated edits made during settle or between the check and the lock.
+fn carry_edits(before: &serde_json::Value, after: &serde_json::Value) -> Vec<CarryEdit> {
+    use serde_json::Value;
+    let paths = carried_values(before)
+        .into_iter()
+        .chain(carried_values(after))
+        .map(|(path, _)| path)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut edits = Vec::new();
+    for at in paths {
+        let flag = at.ends_with("/disabledMcpServers");
+        let names = |config: &Value| -> Vec<String> {
+            if flag {
+                config
+                    .pointer(&at)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                config
+                    .pointer(&at)
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            }
+        };
+        let names = names(before)
+            .into_iter()
+            .chain(names(after))
+            .collect::<std::collections::BTreeSet<_>>();
+        for name in names {
+            let mut edit = CarryEdit {
+                at: if flag {
+                    at.clone()
+                } else {
+                    format!("{at}/{}", name.replace('~', "~0").replace('/', "~1"))
+                },
+                flag: flag.then_some(name),
+                before: None,
+                after: None,
+            };
+            edit.before = edit.current(before);
+            edit.after = edit.current(after);
+            if edit.before != edit.after {
+                edits.push(edit);
+            }
+        }
+    }
+    edits
+}
 
 /// Runs `merge` on the account's config file at `path` and writes the result, under Claude
 /// Code's lock and only if the file is still what was read (else merges again from what it
@@ -261,10 +365,7 @@ fn carry_once(
         };
         let (config, now) = merge(config);
         let after = serde_json::Value::Object(config);
-        let wrote = carried_values(&after)
-            .into_iter()
-            .filter(|(at, now)| value.pointer(at) != Some(now))
-            .collect();
+        let wrote = carry_edits(&value, &after);
         result = Some((wrote, now));
         if after == value {
             Ok(None)
@@ -305,7 +406,7 @@ fn carried_values(config: &serde_json::Value) -> Vec<(String, serde_json::Value)
 fn put(
     config: &mut serde_json::Map<String, serde_json::Value>,
     at: &str,
-    value: serde_json::Value,
+    value: Option<serde_json::Value>,
 ) {
     let keys: Vec<String> = at
         .split('/')
@@ -328,7 +429,14 @@ fn put(
         };
         holder = next;
     }
-    holder.insert(last.clone(), value);
+    match value {
+        Some(value) => {
+            holder.insert(last.clone(), value);
+        }
+        None => {
+            holder.remove(last);
+        }
+    }
 }
 
 /// The JSON in `path`; `None` when it isn't there.
@@ -892,6 +1000,116 @@ mod tests {
             std::fs::metadata(&config).unwrap().modified().unwrap(),
             before
         );
+    }
+
+    #[test]
+    fn an_account_server_added_during_carry_settle_is_preserved() {
+        use serde_json::{Value, json};
+        let root = scratch("carry-settle-add");
+        let main_dir = root.join("main");
+        let main = main_dir.join(".claude.json");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        std::fs::write(
+            &main,
+            json!({"mcpServers":{"carried":{"command":"main"}}}).to_string(),
+        )
+        .unwrap();
+        let home = root.join("account");
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        let config = home.join(".claude.json");
+        carry_servers_with_settle(&main, &home, || {
+            let mut value: Value =
+                serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+            value["mcpServers"]["mine"] = json!({"command":"user-added"});
+            std::fs::write(&config, value.to_string()).unwrap();
+        })
+        .unwrap();
+        let got: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(got["mcpServers"]["mine"], json!({"command":"user-added"}));
+        assert_eq!(got["mcpServers"]["carried"], json!({"command":"main"}));
+    }
+
+    #[test]
+    fn carry_settle_recovers_only_its_deltas_and_preserves_user_edits_and_flags() {
+        use serde_json::{Value, json};
+        let root = scratch("carry-settle-edits");
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        let main = main_dir.join(".claude.json");
+        let home = root.join("account");
+        let before_servers = json!({
+            "keep_change":{"command":"k"}, "keep_delete":{"command":"d"},
+            "updated":{"command":"u0"}, "recover":{"command":"r0"},
+            "removed_main":{"command":"gone"}
+        });
+        let before = json!({"mcpServers": before_servers, "projects": {
+            "/work/a~b": {"mcpServers":before_servers, "disabledMcpServers":["kept_off","removed_from_main"]}
+        }});
+        std::fs::write(&main, before.to_string()).unwrap();
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        carry_servers(&main, &home).unwrap();
+        let after_servers = json!({
+            "keep_change":{"command":"k"}, "keep_delete":{"command":"d"},
+            "updated":{"command":"u1"}, "recover":{"command":"r1"}, "added":{"command":"new"}
+        });
+        std::fs::write(&main, json!({"mcpServers":after_servers, "projects": {
+            "/work/a~b": {"mcpServers":after_servers, "disabledMcpServers":["kept_off","added_from_main"]}
+        }}).to_string()).unwrap();
+        let config = home.join(".claude.json");
+        let mut first = true;
+        carry_servers_with_settle(&main, &home, || {
+            if !first {
+                return;
+            }
+            first = false;
+            let mut value: Value =
+                serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+            for at in ["/mcpServers", "/projects/~1work~1a~0b/mcpServers"] {
+                let servers = value.pointer_mut(at).unwrap().as_object_mut().unwrap();
+                servers.insert("mine".into(), json!({"command":"user-added"}));
+                servers.insert(
+                    "keep_change".into(),
+                    json!({"command":"user-changed-unchanged-entry"}),
+                );
+                servers.remove("keep_delete");
+                servers.insert(
+                    "updated".into(),
+                    json!({"command":"user-changed-carried-entry"}),
+                );
+                // A stale CLI write lost these carry changes. Recover them individually.
+                servers.insert("recover".into(), json!({"command":"r0"}));
+                servers.insert("removed_main".into(), json!({"command":"gone"}));
+                servers.remove("added");
+            }
+            value["projects"]["/work/a~b"]["disabledMcpServers"] =
+                json!(["mine_off", "removed_from_main"]);
+            value["login"] = json!("user-login-edit");
+            std::fs::write(&config, value.to_string()).unwrap();
+        })
+        .unwrap();
+        let got: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        for at in ["/mcpServers", "/projects/~1work~1a~0b/mcpServers"] {
+            let servers = got.pointer(at).unwrap();
+            assert_eq!(servers["mine"]["command"], "user-added");
+            assert_eq!(
+                servers["keep_change"]["command"],
+                "user-changed-unchanged-entry"
+            );
+            assert!(servers.get("keep_delete").is_none());
+            assert_eq!(servers["updated"]["command"], "user-changed-carried-entry");
+            assert_eq!(servers["recover"]["command"], "r1");
+            assert!(servers.get("removed_main").is_none());
+            assert_eq!(servers["added"]["command"], "new");
+        }
+        assert_eq!(
+            got["projects"]["/work/a~b"]["disabledMcpServers"],
+            json!(["mine_off", "added_from_main"])
+        );
+        assert_eq!(got["login"], "user-login-edit");
+        carry_servers(&main, &home).unwrap();
+        let repeated: Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(repeated, got);
     }
 
     #[test]
