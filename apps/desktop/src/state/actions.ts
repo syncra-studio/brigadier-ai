@@ -41,7 +41,7 @@ import { providerForSetting } from "@/state/providerDestination";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
-import { realActivity, onRealActivity } from "@/state/activity";
+import { onRealActivity, realActivity, workHolds } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
@@ -657,8 +657,12 @@ export async function send(
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const target = useApp.getState().conversations[conversationId];
   const session = target?.kind === "session";
-  // A session's message waits in the queue while its CLI's turn is open.
-  const working = session && board !== null && (!!realActivity(conversationId)?.turnOpen || starting);
+  // A session's message waits in the queue while its CLI's turn is open; a session's or a
+  // Chat's (not a side chat's) while its work still holds with no turn running (its workers,
+  // its CLI's background commands).
+  const activity = realActivity(conversationId);
+  const brigade = session || (target?.kind === "chat" && !target.sideOf);
+  const working = board !== null && ((session && (!!activity?.turnOpen || starting)) || (brigade && workHolds(activity)));
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.
@@ -984,6 +988,16 @@ export async function startSessionFrom(source: Conversation, outgoing: Outgoing)
   return conversation;
 }
 
+/**
+ * "Start as session" on the thread's offer `offerId`: the daemon starts its task as a new
+ * background session of `conversationId`'s project, on its own worktree; the user stays here.
+ */
+export async function startOfferedSession(conversationId: string, offerId: string): Promise<Conversation> {
+  const { conversation } = await request({ method: "startOfferedSession", conversationId, offerId });
+  storeConversation(conversation);
+  return conversation;
+}
+
 export async function steerQueued(conversationId: string, itemId: string): Promise<void> {
   await request({ method: "steerQueued", conversationId, itemId });
 }
@@ -1093,8 +1107,8 @@ export async function stopPreview(conversationId: string, previewId: string | nu
 
 /** Stops one of the thread's CLI's background tasks, as the CLI's own Stop does. */
 /** Stops a background task of the session's CLI, or of its worker `workerId`'s. */
-export async function stopBackgroundTask(conversationId: string, taskId: string, workerId?: string): Promise<void> {
-  await request({ method: "stopBackgroundTask", conversationId, taskId, ...(workerId !== undefined && { workerId }) });
+export async function stopBackgroundTask(conversationId: string, taskId: string, workerId?: string, startedAtMs?: number): Promise<void> {
+  await request({ method: "stopBackgroundTask", conversationId, taskId, ...(workerId !== undefined && { workerId }), ...(startedAtMs !== undefined && { startedAtMs }) });
 }
 
 export async function pausePreview(conversationId: string, previewId: string): Promise<void> {
@@ -1201,22 +1215,17 @@ export async function dontResume(conversationId: string): Promise<void> {
 }
 
 /**
- * Stop all: stops every running or waiting worker of the conversation; the ids stopped. They
- * show stopped at once.
+ * The Workers strip's Stop all: stops every running or waiting worker of the conversation; the
+ * ids stopped. They show stopped at once. The CLI's own background agents are the Subagents
+ * strip's, with a Stop all of its own: they go on.
  */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
   const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
-  // The CLI's own background agents stop with them; one that won't is no failure of the rest.
-  const native = useCliThread.getState().views[conversationId]?.background?.filter((task) => task.kind === "agent" && task.status === "running") ?? [];
-  const [stopped] = await Promise.all([
-    showStopped(
-      { conversationId, turn: false, tasks: ids },
-      async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
-      (taskIds) => taskIds,
-    ),
-    Promise.allSettled(native.map((task) => stopBackgroundTask(conversationId, task.id))),
-  ]);
-  return stopped;
+  return showStopped(
+    { conversationId, turn: false, tasks: ids },
+    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
+    (taskIds) => taskIds,
+  );
 }
 
 /** The user's notes on a mockup, with the marked screenshots, to the mockup's worker. */

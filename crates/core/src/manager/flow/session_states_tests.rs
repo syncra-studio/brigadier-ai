@@ -114,6 +114,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = flow.repo.parent().unwrap().to_path_buf();
     scratch.set(root.clone()).unwrap();
     let origin = root.join("origin.git");
@@ -182,6 +183,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         .await;
     assert_eq!(seen(&board), Some(PullRequestState::Closed));
     flow.restart().await;
+    let _reopened_app = flow.manager.app.subscribe();
     assert_eq!(
         seen(&flow.board().await),
         Some(PullRequestState::Closed),
@@ -475,6 +477,7 @@ fn pr_list(state: &str, head: &str, merge_commit: Option<&str>) -> String {
         "url": "https://github.com/o/n/pull/7",
         "state": state,
         "isDraft": false,
+        "createdAt": jiff::Timestamp::now().to_string(),
         "baseRefName": "main",
         "headRefOid": head,
         "mergeCommit": merge_commit.map(|oid| serde_json::json!({ "oid": oid })),
@@ -652,5 +655,98 @@ async fn an_unchanged_turns_end_is_in_live_news_and_the_reconnect_snapshot() {
         Some(at),
         "the timestamp comes from its turn record"
     );
+    flow.stop().await;
+}
+
+/// A background command of a worker's own, as the worker's CLI says it.
+fn worker_job(
+    status: brigadier_providers::BackgroundTaskStatus,
+) -> brigadier_providers::ProviderEvent {
+    brigadier_providers::ProviderEvent::BackgroundTask {
+        task: brigadier_providers::BackgroundTask {
+            id: "bg1".into(),
+            item_id: None,
+            kind: brigadier_providers::BackgroundTaskKind::Shell,
+            label: "Run full core tests".into(),
+            status,
+            started_at_ms: 1,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+        },
+    }
+}
+
+/// A worker whose turn ended while background commands of its own still run (its tests, and a
+/// wait on them) still works: its row, the session's activity (its row reads Working, not Done)
+/// and the session's held work say so until they end.
+#[tokio::test]
+async fn a_worker_whose_own_background_commands_still_run_still_works() {
+    use brigadier_providers::BackgroundTaskStatus;
+
+    let finish = Arc::new(tokio::sync::Notify::new());
+    let gate = finish.clone();
+    let flow = Flow::start(
+        "states-worker-background",
+        Options::default(),
+        script(move |turn| {
+            let gate = gate.clone();
+            async move {
+                if turn.worker().is_some() {
+                    turn.emit(worker_job(BackgroundTaskStatus::Running)).await;
+                    let later = turn.clone();
+                    tokio::spawn(async move {
+                        gate.notified().await;
+                        later
+                            .emit(worker_job(BackgroundTaskStatus::Completed))
+                            .await;
+                    });
+                    return Reply::text("The tests run in the background.");
+                }
+                if turn.input.contains("Start a worker.") {
+                    turn.start_worker("Plugin page bugs", "Fix them.").await;
+                }
+                Reply::text("A worker is on it.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a worker.").await;
+    flow.idle().await;
+    flow.until("the worker's turn to end", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    let working = || async {
+        flow.manager
+            .activity()
+            .await
+            .iter()
+            .any(|entry| entry.conversation_id == flow.conversation && entry.workers_working)
+    };
+    super::eventually_async("the activity to see its worker at work", working).await;
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, false)
+        .await
+        .unwrap();
+    assert!(rows[0].working, "its row reads at work: {:?}", rows[0]);
+    assert!(rows[0].last_end.is_some(), "its turn did end");
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "it holds the session's work"
+    );
+
+    finish.notify_one();
+    super::eventually_async("its background commands to end", || async {
+        !working().await
+    })
+    .await;
+    assert!(!flow.manager.work_holds(&conv).await);
     flow.stop().await;
 }

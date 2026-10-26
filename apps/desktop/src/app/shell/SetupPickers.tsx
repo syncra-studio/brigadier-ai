@@ -3,7 +3,6 @@ import { type FC, useId, useRef, useState } from "react";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
-import { WaitingPill } from "@/app/shell/WaitingPill";
 import {
   ModelSelector,
   type ModelGroup,
@@ -350,7 +349,6 @@ export function ConversationModelPicker({
           {refusals.words(action.error)}
         </span>
       )}
-      {conversation.quotaWait && <WaitingPill wait={conversation.quotaWait} />}
       <ModelSelector
         groups={shown}
         value={current}
@@ -366,7 +364,13 @@ export function ConversationModelPicker({
           // A model whose efforts the rules cap starts at the highest they allow.
           const choice = refusals.allowed(picked);
           if (setup?.type === "session" && choice.provider !== current.provider) {
-            action.run(() => continueOn(conversation.id, choice.provider, choice));
+            action.run(async () => {
+              const when = await continueOn(conversation.id, choice.provider, choice);
+              if (when === "afterTurn") {
+                const provider = shown.find((group) => group.provider === choice.provider)?.label ?? choice.provider;
+                toast(`Will continue on ${provider} after the current turn`, { tone: "neutral" });
+              }
+            });
             return;
           }
           action.run(() =>

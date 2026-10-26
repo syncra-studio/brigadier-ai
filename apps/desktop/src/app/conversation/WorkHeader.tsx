@@ -1,5 +1,6 @@
 import type { FC } from "react";
 
+import { useBlockError } from "@/app/conversation/BlockError";
 import { isLive, turnTime, waitsOnCard } from "@/app/conversation/blocks";
 import { headerLabel, useTicking } from "@/app/conversation/requestTime";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
@@ -38,10 +39,11 @@ export const WorkHeader: FC<{
   // Waiting on its own question card, the turn still reads as working.
   const onCard = !answering && waitsOnCard(meta);
   const state = answering ? "done" : onCard ? "working" : meta.state;
-  const interrupted = useAuiState((s) => {
+  const failed = useAuiState((s) => {
     const status = s.message.status;
-    return status?.type === "incomplete" && status.reason === "error" && interruptedByQuit(String(status.error ?? ""));
+    return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;
   });
+  const interrupted = interruptedByQuit(useBlockError(meta, failed)?.error);
   const label = headerLabel(state, elapsed, quota, interrupted, workers, commands);
   const text = (
     <span

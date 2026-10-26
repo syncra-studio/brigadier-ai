@@ -387,13 +387,43 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
         requests: Vec::new(),
         limit: None,
         context_window: None,
+        joins: false,
     }
 }
 
-/// The sidebar and worker row agree on whether this worker has work under way.
+/// The sidebar and worker row agree on whether this worker has work under way: its CLI's turn
+/// is open, or its turn ended while background commands of its own still run (a test run and
+/// a wait on it), whose end it takes up again.
 fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
-    cli.is_some_and(|cli| cli.open)
-        && !task.state.is_final()
+    cli.is_some_and(|cli| {
+        cli.open
+            || cli.background.iter().any(|job| {
+                job.status == brigadier_providers::BackgroundTaskStatus::Running
+                    && job.kind != brigadier_providers::BackgroundTaskKind::Agent
+                    && !cli
+                        .commands
+                        .iter()
+                        .find(|(id, _)| job.item_id.as_ref() == Some(id))
+                        .map(|(_, command)| command.as_str())
+                        .or_else(|| {
+                            (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                                .then_some(job.label.as_str())
+                        })
+                        .is_some_and(|command| {
+                            (matches!(
+                                job.kind,
+                                brigadier_providers::BackgroundTaskKind::Shell
+                                    | brigadier_providers::BackgroundTaskKind::Terminal
+                            ) && thread_view::persistent_app(command))
+                                || (brigadier_providers::policy::runs_only_brigadier(command)
+                                    && (brigadier_providers::policy::runs_brigadier(
+                                        command, "preview",
+                                    ) || brigadier_providers::policy::runs_brigadier(
+                                        command, "wait",
+                                    )))
+                        })
+            })
+    }) && !task.state.is_final()
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
 }
 
@@ -769,7 +799,7 @@ impl SessionManager {
                         .as_deref()
                         .and_then(|branch| {
                             let tip = repo.branch_tip(branch).ok()??;
-                            let into = repo.branch_tip(&parent).ok()??;
+                            let (into, _) = repo.newer_tip(&parent).ok()?;
                             let ahead = repo.count_commits(&into, &tip).unwrap_or(0);
                             let moved = start.as_deref().is_none_or(|start| start != tip.0);
                             let merged = moved && repo.ancestor(&tip, &into).unwrap_or(false);

@@ -53,6 +53,16 @@ test("the context card's Workers row names each worker at work by its row, with 
     assert.match(few, /1 done · 1 stopped/);
     assert.doesNotMatch(few, /Settings fixes|rm -rf/);
 
+    // Its turn over but its own background commands still running (its tests, a wait on them):
+    // still at work, not done.
+    const background = text([
+      row("t6", "Plugin page bugs", { working: true, lastEnd: "done", lastEventAtMs: NOW }),
+      row("t4", "Settings fixes", { working: false, lastEnd: "done", merged: true, ahead: 1 }),
+    ]);
+    assert.match(background, /Plugin page bugs working/);
+    assert.match(background, /1 done/);
+    assert.doesNotMatch(background, /2 done/);
+
     // More than a few: the one row of avatars with the count.
     const many = text(["t1", "t2", "t3", "t4"].map((id) => row(id, `Worker ${id}`)));
     assert.match(many, /4 working/);

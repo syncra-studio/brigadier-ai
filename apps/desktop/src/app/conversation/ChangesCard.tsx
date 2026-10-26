@@ -12,7 +12,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { ArrowRotateCcw, Branch, ChevronDown, ChevronUp, PullRequestMerged } from "@/components/icons";
 import { Button, RoundBadge } from "@/components/controls";
 import { Counts, RowText, SettingsCard } from "@/components/shared";
-import type { FileReview, TurnRevert } from "@/ipc/generated";
+import type { FileReview, MergedTurnChanges, TurnRevert } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
@@ -23,6 +23,36 @@ import { toast } from "@/state/toasts";
 import { useKeptState } from "@/components/conversation";
 
 const FIRST_FILES = 3;
+const FIRST_MERGES = 3;
+const mergeKey = (group: MergedTurnChanges) => `${group.mergeCommit}:${group.tip}`;
+
+/** Merge attribution stays compact until its files are requested. */
+const MergedChanges: FC<{ group: MergedTurnChanges; conversationId: string; busy: boolean }> = ({ group, conversationId, busy }) => {
+  const key = `merge:${mergeKey(group)}`;
+  const [open, setOpen] = useKeptState(`${key}:open`, false);
+  const [all, setAll] = useKeptState(`${key}:files`, false);
+  const workers = useBoard((s) => s.board?.tasks);
+  const matches = Object.values(workers ?? {}).filter((task) => task.workspace?.branch === group.branch);
+  const worker = matches.length === 1 ? matches[0] : undefined;
+  const sha = group.branch === group.tip && /^[a-f0-9]{40,64}$/i.test(group.branch);
+  const label = worker?.title ?? (sha ? `Merged changes · ${group.branch.slice(0, 8)}` : group.branch);
+  const files = group.stat.files;
+  const more = files.length - FIRST_FILES;
+
+  return <div data-slot="turn-merged-branch" data-worker={worker?.id} data-merge={mergeKey(group)} className="ps-13">
+    <button type="button" data-slot="turn-merged-fold" aria-expanded={open} onClick={() => setOpen(!open)} className="border-divider hover:text-foreground flex w-full items-center gap-2 border-t py-3 text-start text-label">
+      <span data-slot="turn-merged-title" title={group.branch} className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="text-muted-foreground shrink-0 text-xs">{files.length} {files.length === 1 ? "file" : "files"}</span>
+      <Counts insertions={group.stat.insertions} deletions={group.stat.deletions} />
+      {open ? <ChevronUp aria-hidden className="size-3.75 shrink-0" /> : <ChevronDown aria-hidden className="size-3.75 shrink-0" />}
+    </button>
+    <FoldBody open={open}>
+      <ul>{(all ? files : files.slice(0, FIRST_FILES)).map((file) => <ChangesFileRow key={file.path} file={file} review={undefined} busy={busy} onOpen={() => openReviewTab(conversationId, { type: "commit", commit: group.mergeCommit, path: file.path, staged: false })} onAct={() => {}} />)}
+        {more > 0 && <li className="border-divider border-t pt-2.5 pb-3"><Button variant="link-blue" size="inline" data-slot="turn-merged-more-files" aria-expanded={all} className="text-label" onClick={() => setAll(!all)}>{all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}{all ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}</Button></li>}
+      </ul>
+    </FoldBody>
+  </div>;
+};
 
 /** Only a retained git diff can make a turn's Changes card appear. */
 export function useTurnChanged(requestIds: readonly string[]): boolean {
@@ -39,13 +69,13 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const records = useBoard(useShallow((s) => requestIds.map((id) => s.board?.requests[id] ?? null)));
   const snapshots = records.filter((record) => record?.changes?.settled);
   const diff = mergeStats(snapshots.flatMap((record) => record?.changes ? [record.changes.stat] : []));
-  const groups = snapshots.flatMap((record) => record?.changes?.merged ?? []);
-  const workers = useBoard((s) => s.board?.tasks);
+  const groups = [...new Map(snapshots.flatMap((record) => record?.changes?.merged ?? []).map((group) => [mergeKey(group), group])).values()];
   const reverted = snapshots.length > 0 && snapshots.every((record) => record?.undo?.reverted);
   const review: Record<string, FileReview> = Object.assign({}, ...snapshots.map((record) => record?.review ?? {}));
   const working = useBoard((s) => s.board?.run === "running" || s.board?.run === "starting");
   const [busy, setBusy] = useState(false);
   const [all, setAll] = useKeptState("files", false);
+  const [allMerges, setAllMerges] = useKeptState("merges", false);
   const [preview, setPreview] = useState<{ requestId: string; revert: TurnRevert } | null>(null);
   const [fold, setFold] = useKeptState<{ reverted: boolean; open: boolean } | null>("fold", null);
   const open = fold?.reverted === reverted ? fold.open : !reverted;
@@ -122,13 +152,8 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           {shown.map((file) => <ChangesFileRow key={file.path} file={file} review={review[file.path]} busy={busy} onOpen={() => openDiff(file.path)} onAct={(what) => each(what, [file.path])} />)}
           {more > 0 && <li className="border-divider border-t pt-2.5 pb-3"><Button variant="link-blue" size="inline" data-slot="turn-diff-more" className="text-label" onClick={() => setAll(!all)}>{all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}{all ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}</Button></li>}
         </ul>}
-        {groups.map((group) => {
-          const worker = Object.values(workers ?? {}).find((task) => task.workspace?.branch === group.branch);
-          return <div key={`${group.branch}:${group.tip}`} data-slot="turn-merged-branch" data-worker={worker?.id} className="ps-13">
-            <div className="border-divider flex items-center gap-2 border-t py-3 text-label"><span className="min-w-0 flex-1 truncate">{worker?.title ?? group.branch}</span><Counts insertions={group.stat.insertions} deletions={group.stat.deletions} /></div>
-            <ul>{group.stat.files.map((file) => <ChangesFileRow key={file.path} file={file} review={undefined} busy={busy} onOpen={() => openReviewTab(conversationId, { type: "commit", commit: group.mergeCommit, path: file.path, staged: false })} onAct={() => {}} />)}</ul>
-          </div>;
-        })}
+        {(allMerges ? groups : groups.slice(0, FIRST_MERGES)).map((group) => <MergedChanges key={mergeKey(group)} group={group} conversationId={conversationId} busy={busy} />)}
+        {groups.length > FIRST_MERGES && <div className="ps-13"><div className="border-divider border-t pt-2.5 pb-3"><Button variant="link-blue" size="inline" data-slot="turn-merged-more" aria-expanded={allMerges} className="text-label" onClick={() => setAllMerges(!allMerges)}>{allMerges ? "Show fewer merges" : `Show ${groups.length - FIRST_MERGES} more ${groups.length - FIRST_MERGES === 1 ? "merge" : "merges"}`}{allMerges ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}</Button></div></div>}
         {preview && <RevertConfirmRow fileCount={files.length} changedAfter={preview.revert.changedAfter} reverting={busy} onCancel={() => setPreview(null)} onRevert={revert} />}
       </FoldBody>
     </SettingsCard>

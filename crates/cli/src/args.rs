@@ -580,6 +580,54 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
         }
     };
     let tool = match command.name {
+        "pr" => {
+            if action != "watch" && args.flag("account").is_some() {
+                return Err(error("--account is only valid for pr watch"));
+            }
+            match action.as_str() {
+                "watch" | "forget" => {
+                    put("value", one("PR URL or canonical key", true)?);
+                    put("account", flag("account"));
+                }
+                "list" if words.is_empty() => {}
+                _ => return Err(error("pr list takes no arguments")),
+            }
+            Tool::Pr
+        }
+        "waiting" => {
+            if action != "add"
+                && ["by", "timezone", "then", "link"]
+                    .iter()
+                    .any(|name| args.flag(name).is_some())
+            {
+                return Err(error("wait options are only valid for waiting add"));
+            }
+            match action.as_str() {
+                "add" => {
+                    if text.trim().is_empty() {
+                        return Err(error("missing wait text"));
+                    }
+                    put("text", Some(json!(text)));
+                    put("by", flag("by"));
+                    put("timezone", flag("timezone"));
+                    put("then", flag("then"));
+                    put("link", flag("link"));
+                }
+                "done" => {
+                    let Some(id) = words.first() else {
+                        return Err(error("missing <wait ID>"));
+                    };
+                    put("id", Some(json!(id)));
+                    if words.len() > 1 {
+                        put("note", Some(json!(words[1..].join(" "))));
+                    }
+                }
+                "list" if words.is_empty() => {}
+                _ => return Err(error("waiting list takes no arguments")),
+            }
+            Tool::Waiting
+        }
+
         "preview" => {
             match action.as_str() {
                 "start" => {
@@ -914,6 +962,15 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             put("body", Some(json!(args.text("body"))));
             put("asked", Some(json!(args.switch("asked"))));
             Tool::Feedback
+        }
+        "session" => {
+            let task = args.text("task");
+            if task.trim().is_empty() {
+                return Err(error("missing <task>: what the new session is to do"));
+            }
+            put("task", Some(json!(task)));
+            put("title", flag("title"));
+            Tool::Session
         }
         _ => {
             let Some(what) = args.flag("action") else {
@@ -1532,6 +1589,27 @@ mod tests {
         );
         assert_eq!(
             tool(&[
+                "session",
+                "propose",
+                "--title",
+                "CI and nightly",
+                "Fix",
+                "CI",
+                "on",
+                "main."
+            ]),
+            (
+                Tool::Session,
+                "propose".into(),
+                json!({"task": "Fix CI on main.", "title": "CI and nightly"})
+            )
+        );
+        assert_eq!(
+            tool(&["session", "propose", "Fix", "CI."]),
+            (Tool::Session, "propose".into(), json!({"task": "Fix CI."}))
+        );
+        assert_eq!(
+            tool(&[
                 "approval",
                 "request",
                 "--action",
@@ -1561,6 +1639,8 @@ mod tests {
         assert!(fails(&["report", "save", "text"]).contains("--title"));
         assert!(fails(&["feedback", "offer", "--title", "T", "b"]).contains("--kind"));
         assert!(fails(&["feedback", "offer", "--kind", "rant", "b"]).contains("one of: bug"));
+        assert!(fails(&["session", "propose", "--title", "T"]).contains("missing <task>"));
+        assert!(fails(&["session", "start", "x"]).contains("not one of"));
         assert!(fails(&["approval", "request", "why"]).contains("--action"));
         assert!(fails(&["approval", "request", "--action", "Pay"]).contains("missing <details>"));
     }
@@ -1622,6 +1702,48 @@ mod tests {
         let help = crate::commands::command_help(crate::commands::find("brain").unwrap());
         for flag in ["--item", "--role", "--tool", "--offset", "--limit"] {
             assert!(help.contains(flag), "{help}");
+        }
+    }
+    #[test]
+    fn tracking_commands_validate_actions_and_scope_options() {
+        for words in [
+            vec!["pr", "watch"],
+            vec!["pr", "list", "unexpected"],
+            vec!["pr", "forget", "key", "--account", "alice"],
+            vec!["waiting", "add"],
+            vec!["waiting", "done", "w-1", "--by", "2026-10-28"],
+            vec!["waiting", "list", "extra"],
+        ] {
+            let invocation = parse(words).unwrap();
+            let Invocation::Run { command, args, .. } = invocation else {
+                panic!("run expected")
+            };
+            assert!(request(command, &args).is_err());
+        }
+        for words in [
+            vec![
+                "pr",
+                "watch",
+                "https://github.com/o/r/pull/1",
+                "--account",
+                "alice",
+            ],
+            vec![
+                "waiting",
+                "add",
+                "Michael checks",
+                "--by",
+                "2026-10-28",
+                "--timezone",
+                "Europe/Chisinau",
+            ],
+            vec!["waiting", "done", "w-1"],
+            vec!["context", "waiting"],
+        ] {
+            let Invocation::Run { command, args, .. } = parse(words).unwrap() else {
+                panic!("run expected")
+            };
+            assert!(request(command, &args).unwrap().is_some());
         }
     }
 }

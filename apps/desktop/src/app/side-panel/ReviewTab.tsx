@@ -24,7 +24,7 @@ import {
   Text,
 } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { request } from "@/ipc/client";
+import { request, RequestError } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { type DiffLine, fileSides, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
 import { type DiffSource, DiffView } from "@/app/side-panel/diffView";
@@ -33,7 +33,7 @@ import { ReviewContext } from "@/app/side-panel/reviewContext";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
-import { CHAT_TAB, type ReviewTarget, reviewScope, selectTab } from "@/state/sessionTabs";
+import { CHAT_TAB, closeTab, REVIEW_TAB, type ReviewTarget, reviewScope, selectTab, sessionTabs } from "@/state/sessionTabs";
 
 /**
  * A session's Review tab, opened from the Source panel: a group's diffs ("Open Changes"), each
@@ -71,6 +71,8 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number)
     view: string | null;
     review: ReviewDiff | null;
     error: string | null;
+    /** What it compares is gone: a worker closed, or its worktree removed. */
+    gone?: boolean;
   }>({ key: null, view: null, review: null, error: null });
   useEffect(() => {
     let live = true;
@@ -92,6 +94,7 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number)
             view,
             review: null,
             error: error instanceof Error ? error.message : String(error),
+            gone: error instanceof RequestError && error.code === "notFound",
           });
         }
       });
@@ -103,6 +106,7 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number)
   return {
     review: same ? state.review : null,
     error: same ? state.error : null,
+    gone: same && state.gone === true,
     loading: state.key !== key,
   };
 }
@@ -118,7 +122,7 @@ export function ReviewTab({
   active?: boolean;
 }) {
   // One file's diff: the file's own, or its part of a commit's or a turn's (a Changes card's row).
-  const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" ? (target.path ?? null) : null;
+  const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" || target.type === "worker" ? (target.path ?? null) : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;
   // The diff is read again only when what it compares changes (it goes by the scope's text).
@@ -130,7 +134,14 @@ export function ReviewTab({
     setWasActive(active);
     if (active) setTick(tick + 1);
   }
-  const { review: fullReview, error, loading } = useReviewDiff(conversationId, scope, tick);
+  const { review: fullReview, error, gone, loading } = useReviewDiff(conversationId, scope, tick);
+  // A worker's diff whose worker is gone closes quietly, as a deleted session's view goes Home.
+  const workerGone = gone && target.type === "worker" ? target.taskId : null;
+  useEffect(() => {
+    if (!workerGone) return;
+    const tab = sessionTabs(conversationId).tabs.find((entry) => entry.id === REVIEW_TAB);
+    if (tab?.kind === "review" && tab.target.type === "worker" && tab.target.taskId === workerGone) closeTab(conversationId, REVIEW_TAB);
+  }, [conversationId, workerGone]);
   // One file's diff: only its part of the scope's.
   const review = useMemo(
     () =>
@@ -170,7 +181,7 @@ export function ReviewTab({
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground px-1.5 text-sm">
-          {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
+          {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "worker" ? "Worker changes" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
         </span>
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} />
@@ -209,7 +220,7 @@ export function ReviewTab({
       <div className="flex min-h-0 flex-1">
         <ReviewContext.Provider value={conversationId}>
           <div data-slot="review-diffs" className="min-w-0 flex-1 overflow-auto">
-            {error ? (
+            {error && !workerGone ? (
               <p className="text-destructive p-4 text-sm">{error}</p>
             ) : review && review.files.length === 0 ? (
               <p className="text-muted-foreground p-4 text-sm">

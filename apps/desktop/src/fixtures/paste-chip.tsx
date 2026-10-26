@@ -39,6 +39,8 @@ const paste: AttachmentRef = { id: "paste-1", name: "Pasted text.md", mime: "tex
 const DRAFT = "[Image #1] see [Pasted text #1]";
 const QUEUED = "queued [Pasted text #1]";
 const EARLIER = "earlier [Image #1] [Pasted text #1]";
+/** As the rich composer once sent a chip in a code mark (the user's own message, 2026-10). */
+const IN_CODE = "Also Eric messaged me this `[Pasted text #1] `";
 
 const conversation = {
   id, kind: "chat", projectId: null, title: "Paste chip", pinnedAtMs: null, createdAtMs: start,
@@ -46,9 +48,13 @@ const conversation = {
   setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" },
 } as unknown as Conversation;
 const messages: Message[] = [
-  { id: "u1", conversationId: id, seq: 1, role: "user", text: EARLIER, blob: null, createdAtMs: start,
-    attachments: [image, paste], mentions: [], model: null, requestId: "r1", parentId: null },
-  { id: "a1", conversationId: id, seq: 2, role: "assistant", text: "Done.", blob: null, createdAtMs: start + 30_000,
+  { id: "u0", conversationId: id, seq: 1, role: "user", text: IN_CODE, blob: null, createdAtMs: start - 60_000,
+    attachments: [paste], mentions: [], model: null, requestId: "r0", parentId: null },
+  { id: "a0", conversationId: id, seq: 2, role: "assistant", text: "Seen.", blob: null, createdAtMs: start - 30_000,
+    attachments: [], mentions: [], model: null, requestId: "r0", parentId: "u0" },
+  { id: "u1", conversationId: id, seq: 3, role: "user", text: EARLIER, blob: null, createdAtMs: start,
+    attachments: [image, paste], mentions: [], model: null, requestId: "r1", parentId: "a0" },
+  { id: "a1", conversationId: id, seq: 4, role: "assistant", text: "Done.", blob: null, createdAtMs: start + 30_000,
     attachments: [], mentions: [], model: null, requestId: "r1", parentId: "u1" },
 ];
 const request = {
@@ -175,7 +181,7 @@ const shown = () => document.querySelector("[data-slot=pasted-text-editor] [cont
 /** The thread's scrolling view, and how many rows it holds. */
 const thread = () => document.querySelector<HTMLElement>("[data-slot=aui_thread-viewport]");
 /** The pasted text's chip in the earlier message, the first one the thread holds, while it is mounted. */
-const bubble = () => document.querySelector<HTMLElement>('[data-thread-row="u1"] [data-slot=inline-paste]') ?? undefined;
+const bubble = (row = "u1") => document.querySelector<HTMLElement>(`[data-thread-row="${row}"] [data-slot=inline-paste]`) ?? undefined;
 
 /** The thread's newest message mounted. */
 const newestRow = () => [...document.querySelectorAll<HTMLElement>("[data-slot=aui_message-group] > [data-thread-row]")].at(-1)?.dataset["threadRow"] ?? null;
@@ -267,6 +273,13 @@ async function drive() {
     const againSend = await send();
     seen.copiedAgain = { text: againSend.text, kinds: kinds(againSend.attachments), content: content(againSend.attachments[0]) };
 
+    // Backticks typed around a pasted chip never put the chip in a code mark: it is sent as a chip.
+    await type("e `");
+    pasteData({ "text/plain": long });
+    await until("the chip between backticks", () => pasteChip() !== null);
+    await type("`");
+    seen.ticked = (await send()).text;
+
     // Text too long to go whole says so on its chip.
     await type("big ");
     pasteData({ "text/plain": "y".repeat(210_000) });
@@ -336,6 +349,23 @@ async function drive() {
       done: [...document.querySelectorAll("button")].some((button) => button.textContent === "Done"),
       text: shown()!.querySelector("li:last-child")?.textContent,
       handles: document.querySelectorAll("[data-slot=pasted-text-editor] [data-slot=page-drag-handle]").length,
+    };
+
+    // A message whose chip went in a code mark shows the chip too, and it opens the same way.
+    await fixtureClick(pane()!.querySelector<HTMLElement>("button[aria-label='Close Pasted text #1']")!);
+    await until("the pane closed", () => pane() === null);
+    mountInThread(document.querySelector("[data-slot=aui_thread-viewport]"), "jump", "u0");
+    await until("the chip in the code-marked message", () => bubble("u0") !== undefined, 10_000, () => document.querySelector('[data-thread-row="u0"]')?.outerHTML ?? "no u0 row");
+    jumpInThread(bubble("u0")!);
+    bubble("u0")!.scrollIntoView({ block: "center" });
+    const inCode = bubble("u0")!.querySelector("button")!;
+    await still(inCode);
+    await fixtureClick(inCode);
+    await until("its read-only editor", () => shown()?.querySelector("h1")?.textContent === "Notes", 10_000, () => pane()?.outerHTML ?? "no pane");
+    seen.inCode = {
+      pane: pane()?.getAttribute("aria-label"),
+      code: document.querySelector('[data-thread-row="u0"] code') !== null,
+      text: document.querySelector('[data-thread-row="u0"] .aui-user-message-content')?.textContent,
     };
   } catch (error) {
     seen.error = String(error);

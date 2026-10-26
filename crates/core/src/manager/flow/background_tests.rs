@@ -372,7 +372,14 @@ async fn a_codex_terminal_ends_once(end: TerminalEnd) {
         }
     };
     assert_eq!(told.len(), 1, "{end:?}: {told:#?}");
-    assert!(told[0].starts_with(expected), "{end:?}: {told:#?}");
+    let (provenance, payload) = told[0].split_once('\n').expect("registered input prefix");
+    let nonce = provenance
+        .strip_prefix("[Brigadier internal input ")
+        .and_then(|prefix| prefix.strip_suffix(']'))
+        .expect("typed internal input provenance");
+    assert!(uuid::Uuid::parse_str(nonce).is_ok(), "{provenance}");
+    assert_eq!(payload.trim_end(), expected, "{end:?}: {told:#?}");
+    assert_eq!(payload.matches("finished after your turn").count(), 1);
     let answers = answers_with_requests(&flow).await;
     assert!(
         answers.contains(&("It printed xyz.".into(), Some(root))),
@@ -926,4 +933,295 @@ async fn dismiss_takes_an_ended_previews_row_off() {
     let view = flow.core.conversation_view(id(), 50).await.unwrap();
     assert!(view.background_cleared.is_empty());
     flow.stop().await;
+}
+
+/// An app keeps its native CLI/process owner and history while its useful work settles.
+/// In the late cases the first job list/terminal arrives before a proven app command.
+async fn persistent_app_lifetime(provider: brigadier_providers::ProviderKind, late: bool) {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+        ProviderKind,
+    };
+    let release = Arc::new(tokio::sync::Notify::new());
+    let metadata = release.clone();
+    let feed = Arc::new(Mutex::new(None));
+    let producer = feed.clone();
+    let flow = Flow::start(
+        &format!("persistent-app-{provider:?}-{late}"),
+        Options {
+            thread: provider,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let metadata = metadata.clone();
+            let producer = producer.clone();
+            async move {
+                turn.emit(ProviderEvent::Message {
+                    item_id: format!("app-user-{}", turn.earlier),
+                    role: brigadier_providers::Role::User,
+                    text: turn.input.clone(),
+                })
+                .await;
+                if !turn.input.contains("Start the persistent app") {
+                    return Reply::text("A separate follow-up answer.");
+                }
+                let events = turn.events.clone();
+                *producer.lock().unwrap() = Some(events.clone());
+                let command = |words: &str| ProviderEvent::Command {
+                    item_id: "app-call".into(),
+                    command: words.into(),
+                    cwd: Some(turn.cwd.display().to_string()),
+                    status: if provider == ProviderKind::Claude {
+                        ItemStatus::Completed
+                    } else {
+                        ItemStatus::InProgress
+                    },
+                    exit_code: None,
+                    output: None,
+                    duration_ms: None,
+                    kept: None,
+                };
+                let task = |known| ProviderEvent::BackgroundTask {
+                    task: BackgroundTask {
+                        id: "native-app".into(),
+                        item_id: Some("app-call".into()),
+                        kind: if provider == ProviderKind::Claude {
+                            BackgroundTaskKind::Shell
+                        } else {
+                            BackgroundTaskKind::Terminal
+                        },
+                        label: if provider == ProviderKind::Claude {
+                            "Show the website"
+                        } else if known {
+                            "pnpm dev"
+                        } else {
+                            "node pending.js"
+                        }
+                        .into(),
+                        status: BackgroundTaskStatus::Running,
+                        started_at_ms: 123,
+                        ended_at_ms: None,
+                        output_file: None,
+                        summary: None,
+                        last_line: None,
+                    },
+                };
+                if provider == ProviderKind::Codex || !late {
+                    events
+                        .send(command(if late { "node pending.js" } else { "pnpm dev" }))
+                        .await
+                        .unwrap();
+                }
+                events.send(task(!late)).await.unwrap();
+                if provider == ProviderKind::Claude {
+                    events
+                        .send(ProviderEvent::BackgroundJobs {
+                            running: vec!["native-app".into()],
+                        })
+                        .await
+                        .unwrap();
+                }
+                if late {
+                    let full = command("pnpm dev");
+                    let known = task(true);
+                    tokio::spawn(async move {
+                        metadata.notified().await;
+                        events.send(full).await.unwrap();
+                        events.send(known).await.unwrap();
+                    });
+                }
+                Reply::text("The app is available in Background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start the persistent app.").await;
+    rested(&flow).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    if late {
+        assert!(
+            flow.manager.work_holds(&conv).await,
+            "unknown command evidence conservatively holds work"
+        );
+        assert!(
+            flow.board()
+                .await
+                .requests
+                .values()
+                .any(|r| r.state == RequestState::Working)
+        );
+        release.notify_one();
+    }
+    let board = flow.settled().await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|r| r.state == RequestState::Done)
+    );
+    assert!(
+        !flow.manager.work_holds(&conv).await,
+        "a persistent app cannot hold the lead workblock"
+    );
+    assert!(
+        conv.has_cli_jobs().await,
+        "native process/Stop ownership is retained"
+    );
+    assert!(
+        conv.live_cli().await.is_some(),
+        "classification must not retire or close its CLI"
+    );
+    let activity = flow
+        .manager
+        .activity()
+        .await
+        .into_iter()
+        .find(|a| a.conversation_id == flow.conversation);
+    assert!(
+        activity.is_none_or(|a| !a.commands_working && !a.turn_open),
+        "settled sidebar activity is absent or no longer Working"
+    );
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert!(
+        view.background
+            .iter()
+            .any(|t| t.id == "native-app" && t.status == BackgroundTaskStatus::Running)
+    );
+    let history = flow
+        .manager
+        .background_history(&flow.conversation, None, 50)
+        .await
+        .unwrap();
+    assert!(
+        history
+            .records
+            .iter()
+            .any(|r| r.task_id == "native-app" && r.status == "running")
+    );
+    flow.say("Follow-up while the app stays up.").await;
+    let board = flow.settled().await;
+    assert_eq!(board.requests.len(), 2);
+    assert!(
+        board.requests.values().all(|r| r.steered_into.is_none()),
+        "app-only background work cannot absorb a new user's request"
+    );
+    assert!(
+        !flow
+            .manager
+            .thread_view(&flow.conversation)
+            .unwrap()
+            .turns
+            .last()
+            .unwrap()
+            .joins
+    );
+    let events = feed.lock().unwrap().clone().unwrap();
+    events
+        .send(ProviderEvent::Command {
+            item_id: "app-call".into(),
+            command: "pnpm dev".into(),
+            cwd: None,
+            status: ItemStatus::Completed,
+            exit_code: Some(0),
+            output: Some("app ended".into()),
+            duration_ms: None,
+            kept: None,
+        })
+        .await
+        .unwrap();
+    events
+        .send(ProviderEvent::BackgroundTask {
+            task: BackgroundTask {
+                id: "native-app".into(),
+                item_id: Some("app-call".into()),
+                kind: if provider == ProviderKind::Claude {
+                    BackgroundTaskKind::Shell
+                } else {
+                    BackgroundTaskKind::Terminal
+                },
+                label: "pnpm dev".into(),
+                status: BackgroundTaskStatus::Completed,
+                started_at_ms: 123,
+                ended_at_ms: Some(crate::now_ms()),
+                output_file: None,
+                summary: None,
+                last_line: None,
+            },
+        })
+        .await
+        .unwrap();
+    if provider == ProviderKind::Claude {
+        events
+            .send(ProviderEvent::BackgroundJobs {
+                running: Vec::new(),
+            })
+            .await
+            .unwrap();
+    }
+    super::eventually_async(
+        "the native app to end without owing a work turn",
+        || async {
+            !conv.has_cli_jobs().await
+                && !flow
+                    .manager
+                    .thread_view(&flow.conversation)
+                    .unwrap()
+                    .jobs
+                    .waking
+        },
+    )
+    .await;
+    flow.idle().await;
+    assert!(!flow.manager.work_holds(&conv).await);
+    assert_eq!(
+        flow.board().await.requests.len(),
+        2,
+        "app completion cannot reopen or fabricate a user's request"
+    );
+    let history = flow
+        .manager
+        .background_history(&flow.conversation, None, 50)
+        .await
+        .unwrap();
+    assert!(
+        history
+            .records
+            .iter()
+            .any(|r| r.task_id == "native-app" && r.status == "completed")
+    );
+    if provider == ProviderKind::Claude {
+        events
+            .send(ProviderEvent::BackgroundJobs {
+                running: vec!["native-app".into()],
+            })
+            .await
+            .unwrap();
+        super::eventually_async(
+            "a reused native id without new app evidence to hold conservatively",
+            || async { flow.manager.work_holds(&conv).await },
+        )
+        .await;
+        assert!(
+            flow.manager.work_holds(&conv).await,
+            "an ended app's cached command cannot classify a reused unknown invocation"
+        );
+    }
+    flow.manager.shutdown().await;
+}
+
+#[tokio::test]
+async fn persistent_app_claude_does_not_hold_work_or_sidebar() {
+    persistent_app_lifetime(brigadier_providers::ProviderKind::Claude, false).await;
+}
+#[tokio::test]
+async fn persistent_app_codex_does_not_hold_work_or_sidebar() {
+    persistent_app_lifetime(brigadier_providers::ProviderKind::Codex, false).await;
+}
+#[tokio::test]
+async fn persistent_app_late_claude_metadata_releases_only_proven_app_work() {
+    persistent_app_lifetime(brigadier_providers::ProviderKind::Claude, true).await;
+}
+#[tokio::test]
+async fn persistent_app_late_codex_metadata_releases_only_proven_app_work() {
+    persistent_app_lifetime(brigadier_providers::ProviderKind::Codex, true).await;
 }

@@ -181,6 +181,10 @@ pub struct Attempt {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaWait {
+    /// The scheduler's promise, rather than an inference from the provider's reset time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recovery: Option<QuotaRecovery>,
     /// What it waits for ("Claude's 5-hour window resets at 21:10").
     pub reason: String,
     /// The earliest reset that could let it continue, when known.
@@ -232,6 +236,29 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub landed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaRecovery {
+    pub mode: QuotaRecoveryMode,
+    pub next_check_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum QuotaRecoveryMode {
+    AutomaticAt,
+    AutomaticProbe,
+    ManualOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderTransitionCause {
+    AutomaticFallback,
+    ManualSwitch,
+    QuotaReset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -992,10 +1019,22 @@ pub struct Task {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerQuotaPolicy {
+    pub work: Option<String>,
+    pub pin: Pin,
+    pub avoid_providers: Vec<ProviderKind>,
+}
+
 /// How a `brigadier start` worker runs ([`Task::plain`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlainWorker {
+    /// The start's routing restrictions, retained for quota recovery. Missing on legacy
+    /// workers: those retain their provider rather than guessing their original intent.
+    #[serde(default)]
+    pub quota_policy: Option<WorkerQuotaPolicy>,
     /// Its CLI's permission mode: its session's unless `--permission` said (Q8).
     pub permission: crate::model::PermissionLevel,
     /// It works in its session's checkout (`--local`; a Chat's worker: `repo`'s), not a
@@ -1884,8 +1923,8 @@ pub enum OrchestratorStepKind {
         #[ts(as = "Option<Vec<crate::feedback::FeedbackSent>>", optional)]
         results: Vec<crate::feedback::FeedbackSent>,
     },
-    /// Work outside the request the thread offered as a session of its own
-    /// (`offer_session`): a card with one "Start as session" button. Open until a
+    /// Work the thread offered to run as a session of its own (`brigadier session propose`,
+    /// `offer_session` before it): a card with one "Start as session" button. Open until a
     /// `SessionOfferTaken` with its `id`.
     SessionOffered {
         id: String,
@@ -1961,6 +2000,19 @@ pub enum OrchestratorStepKind {
     /// The usage limit a turn waited for reset and the turn went on (#128): a divider across
     /// the thread where its work went on, "Claude usage limit reset · 9:39 PM".
     QuotaResumed { provider: ProviderKind },
+    /// A recovery or explicit selection confirmed by the destination CLI starting a turn.
+    ProviderTransition {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task_id: Option<TaskId>,
+        id: String,
+        cause: ProviderTransitionCause,
+        from: ModelChoice,
+        to: ModelChoice,
+        account: crate::accounts::AccountRef,
+        account_label: String,
+        started_at_ms: i64,
+    },
     /// A moment of the conversation that is no work of its own (#506): a usage limit, a move
     /// to another model, provider or account, the chosen model back. The thread says it across
     /// the column as a divider where it happened.
@@ -2694,6 +2746,9 @@ pub enum ReviewScope {
     },
     /// The session's branch since it left its base.
     Branch,
+    /// A worker's branch since it left the branch it merges into, committed and not, as its
+    /// worktree stands.
+    Worker { task_id: TaskId },
 }
 
 /// How a file changed, for the Review tab's badge.
@@ -2749,6 +2804,20 @@ pub struct ReviewDiff {
     /// The branch compared ("Branch") and the one it left.
     pub branch: Option<String>,
     pub base: Option<String>,
+}
+
+/// A worker's changes as the Source panel lists them: its branch since it left the branch it
+/// merges into, committed and not (its +N −N), each file with its counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerSource {
+    /// Its own branch; none while its worktree has none checked out.
+    pub branch: Option<String>,
+    /// The branch it merges into.
+    pub base: String,
+    pub files: Vec<ReviewFile>,
+    pub insertions: u32,
+    pub deletions: u32,
 }
 
 /// A file of a session's checkout, as the Files tab shows it.

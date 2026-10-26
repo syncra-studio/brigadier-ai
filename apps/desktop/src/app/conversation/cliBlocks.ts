@@ -1,10 +1,12 @@
 import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import {
   type Block,
+  type BlockCompaction,
   type BoardDigest,
   type BlockState,
   blockShows,
   boardItems,
+  isLive,
   isUpdate,
   type ThreadNode,
   type ThreadTree,
@@ -564,6 +566,21 @@ function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly Th
   if (endedAtMs !== null) block.thinking = block.thinking.map((segment) => (segment.complete ? segment : { ...segment, complete: true }));
 }
 
+/** How far apart the board's and the thread's word of one compaction may be. */
+const SAME_COMPACTION_MS = 2000;
+
+/** Whether the thread's compaction `held` is the board's `compaction`: it began or ended within it. */
+function sameCompaction(held: BlockCompaction, compaction: BlockCompaction): boolean {
+  const within = (atMs: number) => atMs >= compaction.startedAtMs - SAME_COMPACTION_MS && atMs <= (compaction.endedAtMs ?? Number.POSITIVE_INFINITY) + SAME_COMPACTION_MS;
+  return within(held.startedAtMs) || within(held.endedAtMs ?? held.startedAtMs);
+}
+
+/** Whether anything of the block's own came after `position`. */
+function itemsAfter(block: Block, position: number): boolean {
+  const lists: readonly (readonly { position: number }[])[] = [block.texts, block.orchestratorSteps, block.rows, block.cards, block.steers, block.taskNotices, block.thinking];
+  return lists.some((items) => items.some((item) => item.position > position));
+}
+
 /**
  * Brigadier's own items in the turns: each in the turn that carried its request (or, a request
  * no turn names, the turn it came in), after the CLI's items from before it.
@@ -598,7 +615,8 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
         block.orchestratorSteps.push({ ...item.step, position });
         break;
       case "compaction":
-        block.compactions.push({ ...item.compaction, position });
+        // A Chat's compaction its CLI said in the thread too is that one divider, not a second.
+        if (!blocks.some((each) => each.compactions.some((held) => sameCompaction(held, item.compaction)))) block.compactions.push({ ...item.compaction, position });
         break;
       case "card":
         block.cards.push({ ...item.card, position });
@@ -628,6 +646,17 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // that started them, as one more turn of it.
   const joined = new Map<Block, ThreadTurn[]>();
   const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
+  // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
+  const join = (each: Block, position: number, atMs: number | undefined) => {
+    const last = turnOf.get(each);
+    joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
+    turnOf.set(each, view.turns[turn]);
+    for (const request of view.turns[turn]?.requests ?? []) if (!each.requestIds.includes(request)) each.requestIds.push(request);
+    if (atMs !== undefined) times.at(-1)?.push([position, atMs]);
+  };
+  // A turn the user's message started while the block before still held (its workers or its
+  // CLI's background commands still ran) goes on in that block, as the daemon says.
+  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && !!view.turns[turn]?.joins;
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
@@ -729,19 +758,21 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           (woke && carries.some((request) => before.requestIds.includes(request))) ||
           // Brigadier's `/compact` that Claude told a background command's end in: one more turn
           // of the block before, as Codex's word of its command's end is (D44, D52).
-          (compacting && noticed.has(turn)));
+          (compacting && noticed.has(turn)) ||
+          // A queued message still in the rail that woke the session to judge it while the
+          // block before held: that block's, no bubble until it joins.
+          goesOn(before));
       if (joins && block) {
-        const last = turnOf.get(block);
-        joined.set(block, [...(joined.get(block) ?? []), ...(last ? [last] : [])]);
-        turnOf.set(block, view.turns[turn]);
-        for (const request of view.turns[turn]?.requests ?? []) if (!block.requestIds.includes(request)) block.requestIds.push(request);
-        if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
+        join(block, position, entry.atMs);
       } else if (startsTurn(entry)) {
         if (block) close(block);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[turn]?.requests ?? []);
         blocks.push(block);
         turnOf.set(block, view.turns[turn]);
         times.push([[position, entry.atMs ?? 0]]);
+        // Brigadier's compaction is done under the hood: its turn is no block (no header, no
+        // time, nothing cut off); its divider goes after the block before.
+        if (compacting) internal.add(block);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, id: `${asked.itemId}:${nth}`, text, ...(joins && { inWork: true }) }));
@@ -749,10 +780,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      if (block) close(block);
       const requests = view.turns[turn]?.requests ?? [];
       const atMs = entry.atMs ?? 0;
-      block = emptyBlock(event.itemId, atMs, requests);
       // A turn of a request an earlier turn carried (a background command's end, told after its
       // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message
       // the CLI began a turn with is its own request, which the turn names only once it joined:
@@ -765,6 +794,15 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           ? first
           : event.itemId;
       const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
+      // Sent while the block before still held: its bubble goes in that block, where it came,
+      // and the turn's work goes on there.
+      if (goesOn(block)) {
+        join(block, position, entry.atMs);
+        block.steers.push({ ...said, position });
+        return;
+      }
+      if (block) close(block);
+      block = emptyBlock(event.itemId, atMs, requests);
       block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
       blocks.push(block);
       turnOf.set(block, view.turns[turn]);
@@ -832,18 +870,24 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         if (waitEnded(event.text, view) || agentRowSays(event.text, current)) return;
         current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
+      // A compaction is one divider: the stream's word that it runs (no file keeps it) is the
+      // divider its end then takes over, in place. Said again with nothing between (the file's
+      // word and the stream's while the turn is open), it is the same one.
+      case "compactionStarted":
       case "compactionEnded": {
-        const atMs = entry.atMs ?? current.startedAtMs;
-        current.compactions.push({
-          id: `compaction:${position}`,
-          inTurn: true,
-          automatic: event.automatic,
-          state: event.error === null ? "done" : "failed",
-          error: event.error,
-          position,
-          startedAtMs: atMs,
-          endedAtMs: atMs,
-        });
+        const target = internal.has(current) ? blocks.findLast((each) => !internal.has(each)) : current;
+        if (!target) return;
+        const atMs = entry.atMs ?? target.startedAtMs;
+        const last = target.compactions.at(-1);
+        const again = !!last && !itemsAfter(target, last.position);
+        if (event.type === "compactionStarted") {
+          if (again) return;
+          target.compactions.push({ id: `compaction:${position}`, inTurn: true, automatic: event.automatic, state: "running", error: null, position, startedAtMs: atMs, endedAtMs: null });
+          return;
+        }
+        const state = event.error === null ? "done" : "failed";
+        if (again && last.state === "running") Object.assign(last, { state, error: event.error, endedAtMs: atMs });
+        else if (!again) target.compactions.push({ id: `compaction:${position}`, inTurn: true, automatic: event.automatic, state, error: event.error, position, startedAtMs: atMs, endedAtMs: atMs });
         return;
       }
       default: {
@@ -854,6 +898,14 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     }
   });
   if (block) close(block);
+  // A compaction its turn ended with (Brigadier's at a turn's end, or the CLI's after its last
+  // reply) is between that turn and the next: after the block, not in its work.
+  for (const each of blocks) {
+    if (internal.has(each)) continue;
+    for (const compaction of each.compactions) {
+      if (compaction.inTurn && !itemsAfter(each, compaction.position) && (!isLive(each.state) || !compaction.automatic)) compaction.inTurn = false;
+    }
+  }
   if (board) {
     place(blocks, times, board);
     dropShownCalls(blocks, board);

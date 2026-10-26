@@ -128,15 +128,14 @@ test("Stop all shows the workers stopped at once; one the daemon didn't stop sho
 
 const agent = (taskId: string) => ({ id: taskId, kind: "agent", status: "running", label: taskId, itemId: null, startedAtMs: 1, endedAtMs: null });
 
-test("Stop all stops the CLI's own agents too; one that won't stop is no failure of the rest", async () => {
+test("the Workers strip's Stop all stops only Brigadier's workers: the CLI's own agents are the Subagents strip's, and go on", async () => {
   useCliThread.setState({ views: { [id]: { entries: [], turns: [], background: [agent("a1"), agent("a2")] } } } as never);
-  const done = stopWorkers(id).catch((error: unknown) => error);
+  const done = stopWorkers(id);
   await flushed();
-  assert.deepEqual(sent.toSorted(), ["stopBackgroundTask", "stopBackgroundTask", "stopWorkers"]);
-  await answer("stopBackgroundTask", true);
-  await answer("stopBackgroundTask");
+  assert.deepEqual(sent, ["stopWorkers"]);
   await answer("stopWorkers");
   assert.deepEqual(await done, ["w1"]);
+  assert.deepEqual(sent, ["stopWorkers"], "no agent was stopped");
   useCliThread.setState({ views: {} });
 });
 

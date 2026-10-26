@@ -1,5 +1,6 @@
 import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
+import { transitionSteps } from "@/app/conversation/providerTransitions";
 import type {
   AttachmentRef,
   Compaction,
@@ -126,9 +127,9 @@ export type BlockOrchestratorStep = {
 };
 
 /**
- * A Chat's model compacting its context ("Compacting context" → "Context compacted"): in the
- * turn it happened in (`inTurn`, the model compacted on its own), or after the block it
- * followed (the user asked for it between turns).
+ * A model compacting its context ("Refreshing context" → "Context refreshed"), one divider in the
+ * thread: in the turn it happened in (`inTurn`, the model compacted on its own), where it cuts
+ * the work, or after the block it followed (asked for between turns: the user's, or Brigadier's).
  */
 export type BlockCompaction = {
   id: string;
@@ -297,6 +298,18 @@ export function workedMs(spans: readonly WorkSpan[], now: number): number {
 }
 
 /**
+ * How long the spans took on the clock, from the first one's start to the last one's end, the
+ * waits between them counted (an open span runs until `now`): a block's turns and the waits for
+ * its workers between them are one piece of work.
+ */
+export function wallMs(spans: readonly WorkSpan[], now: number): number {
+  if (spans.length === 0) return 0;
+  const from = Math.min(...spans.map((span) => span.fromMs));
+  const to = Math.max(...spans.map((span) => Math.max(span.fromMs, span.toMs ?? now)));
+  return Math.max(0, to - from);
+}
+
+/**
  * When the spans last stopped working, or `null` when none has. A span still open belongs to a
  * follow-up that waits for quota, not to the wait for the user.
  */
@@ -312,9 +325,10 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
 
 /**
  * The time a turn shows: while it works, waits for quota or for the answer to its question
- * card, how long it worked so far; while it waits for the user otherwise, how long it has
- * waited; once over, how long it worked, its waits for the user left out ([`waitedTime`]
- * gives its card waits).
+ * card, how long it has worked so far; while it waits for the user otherwise, how long it has
+ * waited; once over, how long it worked. Worked time is on the clock, from its first turn's
+ * start to its last one's end (or to where its final answer started), the waits for its
+ * workers between its turns counted.
  */
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; cardWait: boolean; endedAtMs: number | null },
@@ -327,12 +341,12 @@ export function turnTime(
     const spans = meta.worked
       .filter((span) => span.fromMs < answerAtMs)
       .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
-    return workedMs(spans, until(now));
+    return wallMs(spans, until(now));
   }
   if (meta.state === "waiting" && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
-  return workedMs(meta.worked, now);
+  return wallMs(meta.worked, now);
 }
 
 /** Whether a task is over: its worker is gone and it will not run again. */
@@ -350,8 +364,6 @@ const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["created
 const OLD_RECORDS: ReadonlySet<OrchestratorStepKind["type"]> = new Set([
   "fullAccessSuggested",
   "settingSuggested",
-  "sessionOffered",
-  "sessionOfferTaken",
   "ciWatch",
 ]);
 
@@ -428,18 +440,17 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       row: { type: "task", taskId: step.taskId, kind: step.kind, position: step.position },
       atMs: step.atMs });
   }
-  for (const step of board.orchestratorSteps) {
+  for (const step of transitionSteps(board.orchestratorSteps)) {
     // The CLI's calls are in its file.
     if (step.kind.type === "tool") continue;
-    // The user's answer to a feedback offer shows on the offer itself.
-    if (step.kind.type === "feedbackAnswered") continue;
+    // The user's answer to a feedback or session offer shows on the offer itself.
+    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
     // Old records of what Brigadier no longer does: not shown. A suggestion of Full access (from
-    // when it had a sandbox of its own), a suggested setting, an offer to start a session and its
-    // answer, a CI watch.
+    // when it had a sandbox of its own), a suggested setting, a CI watch.
     if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
     items.push({
       kind: "orchestrator",
       position: step.position,
@@ -588,7 +599,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...(source.nudges ?? []).map((position) => ({ kind: "nudge" as const, position })),
     ...(source.taskNotices ?? []).map((notice) => ({ kind: "taskNotice" as const, ...notice })),
     // A proof shows with the merge message, under the answer, not in the work.
-    ...source.orchestratorSteps.filter((step) => step.kind.type !== "proof").map((step) => ({
+    ...transitionSteps(source.orchestratorSteps).filter((step) => step.kind.type !== "proof").map((step) => ({
       kind: "orchestrator" as const,
       steps: [step],
       position: step.position,
@@ -647,7 +658,7 @@ function gaps(entries: SequenceEntry[], texts: SequenceSource["texts"]): Sequenc
   for (const entry of entries) {
     const { from, to } = entryTimes(entry, texts);
     // Where a usage limit reset, its own divider says when the work went on, not a time line (#128).
-    if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "quotaResumed")) {
+    if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "quotaResumed" || step.kind.type === "providerTransition")) {
       if (from !== undefined) reached = Math.max(reached ?? from, from);
       out.push(entry);
       continue;
@@ -764,13 +775,13 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards and feedback offers that stay in view (decisions, failures, what
+ * and the cards, feedback and session offers that stay in view (decisions, failures, what
  * needs the user), and the dividers of its limits and switches (#506).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

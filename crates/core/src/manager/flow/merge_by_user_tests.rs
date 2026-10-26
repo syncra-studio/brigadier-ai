@@ -248,9 +248,9 @@ async fn a_local_checkout_sessions_diff_is_its_uncommitted_work() {
 
 /// #233: the local `main` fell behind GitHub's, and the session merged GitHub's `main` in. Its
 /// size is what it changed since that merge base, its own notes only, not every file
-/// GitHub's `main` gained.
+/// GitHub's `main` gained. If local `main` then diverges, its fork and commit counts win.
 #[tokio::test]
-async fn the_session_diff_counts_from_the_upstream_it_merged() {
+async fn the_session_diff_uses_a_containing_upstream_but_keeps_a_diverged_local_base() {
     let (flow, _log) = session("merge-diff-upstream").await;
     flow.say("Add notes.").await;
     flow.settled().await;
@@ -293,6 +293,61 @@ async fn the_session_diff_counts_from_the_upstream_it_merged() {
         .expect("a worktree session");
     let files: Vec<&str> = stat.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(files, ["NOTES.md"], "{stat:?}");
+    let review = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            crate::work::ReviewScope::Branch,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((review.insertions, review.deletions), (1, 0));
+    assert_eq!(review.files.len(), 1);
+    assert_eq!(review.files[0].path, "NOTES.md");
+
+    // Once local main diverges, its commits take precedence over the upstream.
+    std::fs::write(flow.repo.join("local.txt"), "local work\n").unwrap();
+    git(&flow.repo, &["add", "local.txt"]);
+    git(&flow.repo, &["commit", "-q", "-m", "Local work"]);
+    std::fs::write(flow.repo.join("local.txt"), "local work\nmore local work\n").unwrap();
+    git(&flow.repo, &["add", "local.txt"]);
+    git(&flow.repo, &["commit", "-q", "-m", "More local work"]);
+    // The session has not merged local main's new commits.
+    let (stat, commits) = flow
+        .manager
+        .session_diff_stat(&flow.conversation)
+        .await
+        .unwrap()
+        .expect("a worktree session");
+    assert_eq!((stat.insertions, stat.deletions, commits), (4, 0, 3));
+    assert_eq!(
+        stat.files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["NOTES.md", "base-1.txt", "base-2.txt", "base-3.txt"]
+    );
+    let review = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            crate::work::ReviewScope::Branch,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((review.insertions, review.deletions), (4, 0));
+    assert_eq!(
+        review
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["NOTES.md", "base-1.txt", "base-2.txt", "base-3.txt"]
+    );
     flow.stop().await;
 }
 

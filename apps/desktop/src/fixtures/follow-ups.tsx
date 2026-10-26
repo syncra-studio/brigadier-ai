@@ -5,12 +5,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 
 import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome, SentToWorker } from "@/ipc/generated";
 import { send } from "@/state/actions";
-import { applyActivityNews } from "@/state/activity";
+import { applyActivityNews, useActivity } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
 
 const id = "flow-session";
 const text = "Follow-up awaiting admission";
+const whileHeld = "Also make it fast";
+const chatWhileHeld = "And note the edge cases";
 const item: QueuedMessage = { id: "follow-up", text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null };
 const message: Message = { id: "admitted", conversationId: id, seq: 4, role: "user", text, attachments: [], mentions: [], createdAtMs: Date.now() + 100, blob: null, model: null, requestId: "admitted", parentId: null };
 let respond: (outcome: SendOutcome) => void;
@@ -24,8 +26,13 @@ mockIPC((command, payload) => {
 });
 useApp.setState({ threads: { [id]: emptyThread }, pending: [], summaryShown: { [id]: false } });
 useBoard.setState({ board: emptyBoard(id) });
-// The session rests: its CLI's turn is over.
+// The session rests: its CLI's turn is over, and none of its workers works (one that does
+// would hold its work, and a message would wait in the rail).
 applyActivityNews({ conversationId: id, entries: [], ended: "done" });
+useActivity.setState((state) => {
+  const activity = state.byConversation[id];
+  return activity ? { byConversation: { ...state.byConversation, [id]: { ...activity, tasks: {}, workersWorking: false, commandsWorking: false } } } : state;
+});
 
 let seq = 0;
 function apply(events: EventEnvelope["event"][]) {
@@ -88,9 +95,41 @@ async function drive() {
   apply([queued([], [{ id: item.id, text, worker: "task-2", workerNumber: 2, workerTitle: "Docs", sentAtMs: Date.now() }])]);
   await pause();
   const sentToWorker = { ...railState(), ...view() };
+  apply([queued([])]);
+  await pause();
+  // Its CLI's turn is over but one of its workers still works: its work holds, and a message
+  // waits in the rail at once, Deciding, never a bubble of a turn of its own.
+  useActivity.setState((state) => {
+    const activity = state.byConversation[id];
+    return activity ? { byConversation: { ...state.byConversation, [id]: { ...activity, tasks: { "task-2": "running" } } } } : state;
+  });
+  const holding = send({ text: whileHeld, attachments: [], mentions: [] });
+  await pause();
+  const rows = [...document.querySelectorAll('[data-slot="message-queue-item"]')].filter((node) => node.textContent?.includes(whileHeld));
+  const whileWorkersWork = {
+    rail: rows.length,
+    chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(whileHeld)).length,
+    deciding: rows[0]?.getAttribute("data-deciding") === "true",
+  };
+  respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld, deciding: true } });
+  await holding;
+  apply([queued([])]);
+  await pause();
+  // A Chat is a brigade too: one whose worker still works holds its work the same way.
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, kind: "chat", sideOf: null } } }));
+  const chatHolding = send({ text: chatWhileHeld, attachments: [], mentions: [] });
+  await pause();
+  const chatRows = [...document.querySelectorAll('[data-slot="message-queue-item"]')].filter((node) => node.textContent?.includes(chatWhileHeld));
+  const chatWhileWorkersWork = {
+    rail: chatRows.length,
+    chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(chatWhileHeld)).length,
+    deciding: chatRows[0]?.getAttribute("data-deciding") === "true",
+  };
+  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld, deciding: true } });
+  await chatHolding;
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork });
   document.body.append(result);
 }
 void drive();

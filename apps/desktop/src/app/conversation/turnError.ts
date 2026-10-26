@@ -1,4 +1,4 @@
-import type { Notice, ThreadTurn } from "@/ipc/generated";
+import type { Notice, ThreadTurn, UserRequest } from "@/ipc/generated";
 
 /**
  * A failed turn in plain words. The thread says what happened in one calm line; the error's own
@@ -12,7 +12,7 @@ const RATE = /rate.?limit|too many requests|\b429\b/i;
 const CONTEXT = /context (window|length)|prompt is too long|too long for the (model|context)|maximum context|context_length_exceeded|out of context/i;
 const AUTH = /not (logged|signed) in|log ?in again|sign ?in again|unauthori[sz]ed|\b401\b|invalid (api|x-api) key|authentication_error|oauth token (has )?expired/i;
 const OVERLOADED = /overloaded|\b529\b/i;
-const LIMIT = /usage limit|hit your limit|limit (was )?reached|limit exceeded|quota|out of (usage|credits)/i;
+const LIMIT = /usage limit|hit your (?:(?:session|weekly) )?limit|limit (was )?reached|limit exceeded|quota|out of (usage|credits)/i;
 const NETWORK = /network|connection|disconnected|\beconn\w*|enetunreach|enotfound|etimedout|eai_again|timed? ?out|timeout|fetch failed|socket hang up|getaddrinfo|offline/i;
 const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service unavailable|invalid_request|authentication_error/i;
 
@@ -25,6 +25,29 @@ const INTERRUPTED_BEFORE_START = "Brigadier quit before this started.";
 export function interruptedByQuit(raw: string | null | undefined): boolean {
   const text = raw?.trim();
   return text === INTERRUPTED || text === INTERRUPTED_BEFORE_START;
+}
+
+/** The daemon's words when a turn's CLI went away and Brigadier didn't quit (`ENDED_UNEXPECTEDLY`). */
+const CLI_ENDED = "The CLI session ended unexpectedly.";
+
+type RequestRecord = Pick<UserRequest, "id" | "state">;
+
+/**
+ * An interrupted turn read by its requests as the daemon has them: the thread says a turn its
+ * CLI never ended was cut by a quit, which only its requests can tell. `error`: the words its
+ * block says, a request's own when it failed for another reason (or the CLI's end, when none
+ * failed: a turn of Brigadier's own); `resumable`: Continue picks it up, as the daemon's
+ * resume does only for the newest request, stopped or cut by a quit.
+ */
+export function cutOff(error: string, own: readonly RequestRecord[], latest: RequestRecord | null): { error: string; resumable: boolean } {
+  if (!interruptedByQuit(error)) return { error, resumable: false };
+  const quit = (request: RequestRecord) => request.state.type === "failed" && interruptedByQuit(request.state.error);
+  const resumable = !!latest && own.some((request) => request.id === latest.id) && (latest.state.type === "stopped" || quit(latest));
+  const cut = own.findLast(quit);
+  if (cut?.state.type === "failed") return { error: cut.state.error, resumable };
+  if (resumable) return { error, resumable };
+  const failed = own.findLast((request) => request.state.type === "failed");
+  return { error: failed?.state.type === "failed" ? failed.state.error : CLI_ENDED, resumable: false };
 }
 
 /** `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error. */

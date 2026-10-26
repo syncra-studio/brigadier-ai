@@ -487,6 +487,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     match name {
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
+        "offer_session" => ToolCall::Orchestrator(O::OfferSession(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),
@@ -606,12 +607,15 @@ pub(crate) struct FakeBehavior {
     pub signed_out: Mutex<Vec<ProviderKind>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
+    /// Title-routing tests offer both small families, including an operate-only Haiku.
+    pub title_models: bool,
     /// An extra account's CLI also lists a model of its own (`<account>-model`), so a list
     /// tells whose it is.
     pub account_models: bool,
     /// The next this many model lists fail, whichever CLI reads them.
     pub models_failing: Mutex<u32>,
     pub refuse_steers: bool,
+    pub refuse_sends: Mutex<Vec<ProviderKind>>,
     /// A message steered into a turn that its script never read is taken in once the script
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
     /// Off, it is dropped.
@@ -634,6 +638,8 @@ pub(crate) struct FakeBehavior {
     /// The next turn's send signals the first once the CLI took its input, and waits for the
     /// second before its turn starts.
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next CLI close signals the first and waits for the second before it exits.
+    pub hold_close: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next login check of an extra account signals the first and waits for the second.
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
@@ -716,7 +722,17 @@ struct FakeCli {
 impl FakeCli {
     fn models(&self) -> Vec<ModelInfo> {
         let ids: &[(&str, &str)] = match self.kind {
+            ProviderKind::Claude if self.behavior.title_models => &[
+                ("claude-opus-5-5", "Opus 5.5"),
+                ("claude-haiku-5-5", "Haiku 5.5"),
+                ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+            ],
             ProviderKind::Claude => &[("claude-opus-5-5", "Opus 5.5")],
+            ProviderKind::Codex if self.behavior.title_models => &[
+                ("gpt-6-astra", "GPT-6-Astra"),
+                ("gpt-6-luna", "GPT-6-Luna"),
+                ("gpt-5.6-luna", "GPT-5.6-Luna"),
+            ],
             ProviderKind::Codex if self.behavior.light_model => {
                 &[("gpt-6-astra", "GPT-6-Astra"), ("gpt-6-luna", "GPT-6-Luna")]
             }
@@ -1178,6 +1194,17 @@ impl ProviderSession for FakeSession {
 
     fn send(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         Box::pin(async move {
+            if self
+                .behavior
+                .refuse_sends
+                .lock()
+                .unwrap()
+                .contains(&self.kind)
+            {
+                return Err(brigadier_providers::Error::Invalid(
+                    "turn send refused".into(),
+                ));
+            }
             let Some(tx) = self.sender() else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
             };
@@ -1537,6 +1564,11 @@ impl ProviderSession for FakeSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            let held = self.behavior.hold_close.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             // Its running turn ends with it, as a real CLI's does with its process: a script
             // waiting for its stop sees it.
             if *self.running.lock().unwrap() {
@@ -2526,6 +2558,8 @@ mod tests;
 mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
+mod internal_envelope_tests;
+#[cfg(unix)]
 mod project_sessions_tests;
 #[cfg(unix)]
 mod session_dir_tests;
@@ -2550,6 +2584,8 @@ mod user_setup_tests;
 mod warm_session_tests;
 #[cfg(unix)]
 mod worker_events_tests;
+#[cfg(unix)]
+mod worker_quota_tests;
 #[cfg(unix)]
 mod worker_seam_tests;
 #[cfg(unix)]

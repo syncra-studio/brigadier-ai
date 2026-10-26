@@ -36,7 +36,8 @@ function placeKey(selection: Selection): string | null {
 
 /**
  * Notes that `selection` is about to show. A push onto the place already showing (the same
- * page or conversation again) updates that entry instead.
+ * page or conversation again) updates that entry instead; a push onto a place further back
+ * drops the entries after it.
  */
 export function recordPlace(selection: Selection, mode: HistoryMode): void {
   if (mode === "none" || selection.type === "none") return;
@@ -54,7 +55,12 @@ export function recordPlace(selection: Selection, mode: HistoryMode): void {
     useHistory.setState({ entries: next, index });
     return;
   }
-  const next = [...entries.slice(0, index + 1), selection].slice(-MAX_ENTRIES);
+  // A place already behind the current one is returned to, not stacked again: Back then
+  // unwinds the way the place was first reached instead of replaying every detour.
+  const key = placeKey(selection);
+  const earlier = entries.slice(0, index).findIndex((entry) => placeKey(entry) === key);
+  const kept = earlier === -1 ? entries.slice(0, index + 1) : entries.slice(0, earlier);
+  const next = [...kept, selection].slice(-MAX_ENTRIES);
   useHistory.setState({ entries: next, index: next.length - 1 });
 }
 

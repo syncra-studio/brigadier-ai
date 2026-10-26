@@ -176,6 +176,10 @@ impl SessionManager {
                 continue;
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
+                if task.quota_wait.is_some() && conversation.lifecycle == Lifecycle::Active {
+                    self.arm_worker_quota_retry(&task).await;
+                    continue;
+                }
                 // Its hand-off a restart came in goes on from its record (D14), whether its
                 // session heard its last turn end (a count's note turn) or not (a cut-off's).
                 if task.plain.is_some()
@@ -897,7 +901,9 @@ impl SessionManager {
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
             // Messages waiting for quota never go.
-            self.drop_waiting(&conv).await;
+            if let Err(err) = self.drop_waiting(&conv).await {
+                tracing::error!(conversation = %id, error = %err, "could not cancel quota recovery while closing");
+            }
             conv.close_cli().await;
         }
         // The workers' CLI sessions end side by side; then their worktrees go, one cleanup's
@@ -1486,6 +1492,8 @@ impl SessionManager {
             streams::legacy_orchestrator(&id),
             streams::inbox(&id),
             streams::draft(&id.to_string()),
+            format!("tracked-work:{id}"),
+            format!("pr-discovery:{id}"),
         ];
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
         self.forget_brain_conversation(&id, conversation.project_id.clone())

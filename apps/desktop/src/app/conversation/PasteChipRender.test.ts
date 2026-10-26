@@ -25,7 +25,11 @@ for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in t
   // A copied chip comes back with its text: numbered on in the same composer, as itself in one without it.
   assert.deepEqual(seen.copied, { text: "c [Pasted text #1] c [Pasted text #2]", kinds: [markdown, { ...markdown, inline: 2 }], same: true });
   assert.deepEqual(seen.copiedAgain, { text: "again c [Pasted text #1]", kinds: [markdown], content: "## Title\n\n- a\n- b" });
+  // The rich field sends them escaped, so the chip is no code span; the plain field keeps them as typed.
+  if (mode === "rich") assert.equal(seen.ticked, "e \\`[Pasted text #1] \\`");
   assert.equal(seen.big, "Pasted text #1· Start and end are sent");
   assert.deepEqual(seen.opened, { pane: "Pasted text #1", dialog: false });
   assert.deepEqual(seen.bubble, { pane: "Pasted text #1", dialog: false, done: false, text: "a", handles: 0 });
+  // A chip sent in a code mark (as in the user's screenshot, its text a `Pasted text.md`) is a chip that opens.
+  assert.deepEqual(seen.inCode, { pane: "Pasted text #1", code: false, text: "Also Eric messaged me this Pasted text #1" });
 });

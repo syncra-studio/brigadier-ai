@@ -93,14 +93,14 @@ test("a missing or unreadable Claude command keeps the task, without using its l
   }
 });
 
-test("task rows say how a task ended for about 5 min, then drop it, and leave the task history intact (D21)", () => {
+test("task rows show only running work, and leave all source history intact", () => {
   const tasks = [
     task("shell", "Tests"),
     ...(["completed", "failed", "stopped"] as const).map((status) => task("shell", "Build", { id: status, status, endedAtMs: 20 })),
   ];
   const before = structuredClone(tasks);
   assert.deepEqual(taskRows(tasks, [], 30).map((row) => [row.id, row.state]),
-    [["task:t", "running"], ["task:completed", "finished"], ["task:failed", "failed"], ["task:stopped", "stopped"]]);
+    [["task:t", "running"]]);
   assert.deepEqual(taskRows(tasks, [], 20 + 5 * 60_000).map((row) => [row.id, row.state]), [["task:t", "running"]]);
   assert.deepEqual(tasks, before);
 });
@@ -121,6 +121,6 @@ test("a worker's background commands are rows under its name, by the session's r
     { task: task("shell", "Old build", { id: "done", status: "completed", endedAtMs: 20, summary: 'Background command "pnpm build" completed (exit code 0)' }), command: "pnpm build" },
     { task: task("shell", "Wait", { id: "wait", status: "completed", endedAtMs: 20 }), command: "brigadier wait w3" },
   ])], () => "Rail fix", 30);
-  assert.deepEqual(recent.map((row) => [row.id, row.state]), [["task:w1:done", "finished"]]);
+  assert.deepEqual(recent, []);
   assert.deepEqual(workerTaskRows([{ id: "w2" } as WorkerRow], () => null, 0), []);
 });

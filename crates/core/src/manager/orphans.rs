@@ -421,6 +421,8 @@ impl SessionManager {
             streams::legacy_orchestrator(id),
             streams::inbox(id),
             streams::draft(&id.to_string()),
+            format!("tracked-work:{id}"),
+            format!("pr-discovery:{id}"),
         ];
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
         self.forget_brain_conversation(id, project.clone()).await;
@@ -658,4 +660,83 @@ fn worktree_repos(folder: &Path) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+#[cfg(test)]
+mod pr_stream_tests {
+    use super::super::flow::{Flow, Options, Reply};
+    use std::sync::Arc;
+    #[tokio::test]
+    async fn delete_and_orphan_cleanup_purge_owned_pr_payloads_only() {
+        for orphan in [false, true] {
+            let flow = Flow::start(
+                "pr-stream-delete",
+                Options::default(),
+                Arc::new(|_| Box::pin(async { Reply::text("Done") })),
+            )
+            .await;
+            let doomed = flow.conversation.clone();
+            let other = flow
+                .manager
+                .create_conversation(
+                    crate::ConversationKind::Chat,
+                    None,
+                    Some("Keep".into()),
+                    None,
+                )
+                .await
+                .unwrap()
+                .id;
+            for id in [&doomed, &other] {
+                flow.manager
+                    .watch_pull_request(
+                        id,
+                        "https://github.com/org/repo/pull/7",
+                        Some("org-user".into()),
+                        "session",
+                    )
+                    .await
+                    .unwrap();
+                let event = brigadier_store::NewEvent::new(
+                    format!("pr-discovery:{id}"),
+                    "pr.discovery",
+                    crate::now_ms(),
+                    &serde_json::json!({"source":"lookup-marker","identity":null,"retry_at":null}),
+                )
+                .unwrap();
+                flow.core.store().append(vec![event]).await.unwrap();
+            }
+            if orphan {
+                let project = flow.core.conversation(&doomed).unwrap().project_id;
+                flow.core.forget_conversation(doomed.clone()).await.unwrap();
+                flow.manager.forget_deleted(&doomed, project).await.unwrap();
+            } else {
+                flow.manager.delete(doomed.clone()).await.unwrap();
+                flow.manager.cleanup_finished(&doomed).await;
+            }
+            for prefix in ["tracked-work", "pr-discovery"] {
+                let gone = flow
+                    .core
+                    .store()
+                    .read_stream(format!("{prefix}:{doomed}"), Default::default())
+                    .await
+                    .unwrap();
+                assert!(
+                    gone.is_empty(),
+                    "orphan={orphan}: {prefix} payload survived"
+                );
+                let kept = flow
+                    .core
+                    .store()
+                    .read_stream(format!("{prefix}:{other}"), Default::default())
+                    .await
+                    .unwrap();
+                assert!(
+                    !kept.is_empty(),
+                    "another owner's {prefix} payload was removed"
+                );
+            }
+            flow.stop().await;
+        }
+    }
 }

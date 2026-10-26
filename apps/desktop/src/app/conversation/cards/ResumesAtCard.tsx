@@ -1,14 +1,47 @@
 import type { ReactNode } from "react";
 
-import { resumesAt } from "@/app/conversation/cards/resumesAt";
+import { quotaRecoveryWords, resumesAt } from "@/app/conversation/cards/resumesAt";
 import { useAction } from "@/app/conversation/useAction";
 import { ScheduleCard } from "@/components/conversation";
 import { Button } from "@/components/controls";
+import { Clock } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { cn } from "@/lib/utils";
 import { continueWaiting, dontResume } from "@/state/actions";
 import { useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
+
+/** The conversation's one recovery notice, hosted above the composer rather than in the summary. */
+export function QuotaWaitStrip({ conversationId }: { conversationId: string }) {
+  const wait = useApp((s) => s.conversations[conversationId]?.quotaWait ?? null);
+  const go = useAction();
+  const stay = useAction();
+  if (!wait) return null;
+  const words = quotaRecoveryWords(wait);
+  return (
+    <section data-slot="quota-wait-strip" role="status" aria-label="Usage limit" title={wait.reason}
+      className="bg-rail/70 border-foreground/10 rounded-rail flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2 text-sm">
+      <div className="flex min-w-0 flex-1 items-start gap-2">
+        <Clock aria-hidden className="text-muted-foreground size-icon-sm mt-0.5 shrink-0" />
+        <div className="min-w-0 wrap-break-word">
+          <p>{words.title}</p>
+          <p className="text-muted-foreground text-xs">{words.detail ?? wait.reason}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-0.5">
+        <Button size="xs" variant="ghost" className="text-muted-foreground font-normal" data-slot="continue-now"
+          disabled={go.busy || stay.busy} onClick={() => go.run(() => continueWaiting(conversationId))}>
+          Continue now
+        </Button>
+        {words.cancelLabel && <Button size="xs" variant="ghost" className="text-muted-foreground font-normal" data-slot="dont-resume"
+          disabled={go.busy || stay.busy} onClick={() => stay.run(() => dontResume(conversationId))}>
+          {words.cancelLabel}
+        </Button>}
+      </div>
+      {(go.error ?? stay.error) && <p role="alert" className="text-destructive basis-full text-xs">{go.error ?? stay.error}</p>}
+    </section>
+  );
+}
 
 /**
  * A card of the summary's column beside the context card (Q88): the same surface, its own card.

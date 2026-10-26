@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, appTaskRows, workerAppTaskRows } from "@/app/conversation/backgroundRows";
 import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { rowName } from "@/app/conversation/activity/workerState";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
-import { Terminal } from "@/components/icons";
+import { Clock, Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
+import { useBackgroundHistoryCount } from "@/state/backgroundHistory";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
@@ -37,23 +38,11 @@ const label = (activity: Activity) =>
 
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
-/** No thread entries. */
 const NO_ENTRIES: readonly FileEntry[] = [];
 /** No previews. */
 const NO_PREVIEWS: readonly Preview[] = [];
 
-/**
- * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews (`brigadier preview`) and its CLI's and its workers' CLIs' running
- * background tasks, except `brigadier wait` (the workers have their own card), a worker's named
- * by it, each with its state in a word and an icon
- * (a worker's copy of an app or a browser at it is a state of the app's row), how long it has gone,
- * and Stop on hover. A click on a web preview that is up opens its page in the browser
- * (Brigadier's, by Settings › Browser),
- * with what it prints one button away; any other preview opens what it prints in a tab. A
- * preview's row leaves when it ends; a CLI task's that ended stays a while saying how
- * ("finished · exit 0"), as the CLI's own list does (D21).
- */
+/** Previews and proven live native apps, with their own output/Stop and durable History. */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
@@ -67,21 +56,27 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  // A task that ended keeps its row a while, read against the card's clock.
-  const workerTasks = workerTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now);
-  const activities = [...rows, ...taskRows(cliTasks.filter((task) => task.kind !== "agent"), entries, clock.now), ...workerTasks].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  // Ended app tasks leave immediately; the native records remain in History.
+  const activities = [...rows, ...appTaskRows(cliTasks, entries, clock.now), ...workerAppTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
+    .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs]), cliTasks.map((task) => [task.id, task.startedAtMs]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs])])]);
+  const historyCount = useBackgroundHistoryCount(conversationId, changed);
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
     const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
     return () => clearInterval(timer);
   }, [ticking]);
-  if (activities.length === 0) return null;
+  if (activities.length === 0 && historyCount === 0) return null;
   return (
     <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length}>
       {activities.map((activity) => (
-        <BackgroundRow key={activity.id} conversationId={conversationId} activity={activity} now={clock.now} />
+        <BackgroundRow key={`${activity.id}:${activity.startedAtMs}`} conversationId={conversationId} activity={activity} now={clock.now} />
       ))}
+      <SummaryRowButton data-slot="background-history-link" icon={<Clock />} meta={historyCount === null ? undefined : String(historyCount)}
+        onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
+        History
+      </SummaryRowButton>
     </SummarySection>
   );
 }
@@ -108,14 +103,14 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
   const name = label(activity);
   // A task that ended shows how long it ran.
   const meta = elapsedWords((activity.type === "task" ? (activity.task.endedAtMs ?? now) : now) - activity.startedAtMs);
-  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} worker={activity.worker} name={name} meta={meta} state={activity.state} />;
+  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} worker={activity.worker} command={activity.command} name={name} meta={meta} state={activity.state} />;
   const tip = [
     `${previewWord(activity.preview)}: ${activity.preview.command}`,
     activity.worker && `From ${activity.worker}`,
     ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
   ].filter(Boolean).join("\n");
   const stop = () => stopPreview(conversationId, activity.id);
-  const output = () => openPanelTab(conversationId, { type: "output", source: "preview", id: activity.id }, name);
+  const output = () => openPanelTab(conversationId, { type: "output", source: "preview", id: activity.id, startedAtMs: activity.startedAtMs }, name);
   const url = activity.preview.kind === "web" && activity.preview.state.type === "running" ? activity.preview.url : undefined;
   return (
     <SummaryRowButton
@@ -144,30 +139,30 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
 
 /**
  * A row for one of the CLI's background tasks, or a worker's CLI's: its last line on hover, Stop
- * while it runs, and a command's output in a tab on a click. A subagent or a Codex terminal has no
- * output to open.
+ * while it runs, and a command's output in a tab on a click. Native shell/terminal output opens when its output file is available.
  */
-function TaskRow({ conversationId, task, worker, name, meta, state }: {
+function TaskRow({ conversationId, task, worker, command, name, meta, state }: {
   conversationId: string;
   task: BackgroundTask;
   worker: { id: string; name: string | null } | null;
+  command?: string | null | undefined;
   name: string;
   meta: string;
   state: BackgroundState;
 }) {
-  const said = task.lastLine ?? task.summary ?? task.label;
+  const said = [command, task.lastLine ?? task.summary].filter(Boolean).join("\n") || task.label;
   const parts = {
     "data-activity": worker ? `task:${worker.id}:${task.id}` : `task:${task.id}`,
     title: worker?.name ? `${said}\nFrom ${worker.name}` : said,
     icon: <StateIcon state={state} />,
     meta,
-    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id)} /> : undefined,
+    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id, task.startedAtMs)} /> : undefined,
   };
   const end = taskEnd(task);
   const words = <ActivityLabel name={name} state={state} worker={worker?.name} {...(end && { word: endWords(end) })} />;
-  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
+  if ((task.kind !== "shell" && task.kind !== "terminal") || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
   return (
-    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, ...(worker && { worker: worker.id }) }, name)}>
+    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, startedAtMs: task.startedAtMs, ...(worker && { worker: worker.id }) }, name)}>
       {words}
     </SummaryRowButton>
   );

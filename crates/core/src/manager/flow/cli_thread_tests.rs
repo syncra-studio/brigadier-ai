@@ -490,3 +490,109 @@ async fn a_sessions_background_command_holds_its_turn_until_the_turn_its_end_sta
     );
     flow.stop().await;
 }
+
+/// Brigadier's `/compact` after a turn: Claude says the compaction, then `/compact` as the
+/// user's message. That message starts a turn of its own, noted under its own id, so the
+/// thread read back after the turn (the file holds `/compact` as a turn) never reads it as cut
+/// off, and the turn before keeps its end.
+#[tokio::test]
+async fn brigadiers_compact_is_a_turn_of_its_own_never_one_more_of_the_turn_before() {
+    use brigadier_providers::{ProviderEvent, Role, TurnStatus};
+
+    let flow = Flow::start(
+        "cli-thread-compact",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Look around.").await;
+    eventually("the first turn ends", || {
+        let view = flow.manager.thread_view(&id).unwrap();
+        view.turns.len() == 1 && view.turns[0].end.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let first = flow.manager.thread_view(&id).unwrap().turns[0].clone();
+
+    let conv = flow.manager.conv(&id).unwrap();
+    let follow = |event: ProviderEvent| {
+        let (manager, conv) = (flow.manager.clone(), conv.clone());
+        async move { manager.follow_cli_thread(&conv, Some(&event)).await }
+    };
+    follow(ProviderEvent::TurnStarted { turn_id: None }).await;
+    follow(ProviderEvent::CompactionStarted { automatic: false }).await;
+    // While it runs the live thread says so, the turn before still over: the app's "Refreshing
+    // context" divider, which its end takes over.
+    let running = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(running.turns.len(), 1, "{running:#?}");
+    assert_eq!(running.turns[0].end, Some(TurnEnd::Done));
+    assert!(
+        running.entries.last().is_some_and(|entry| matches!(
+            entry.event,
+            ProviderEvent::CompactionStarted { automatic: false }
+        )),
+        "{running:#?}"
+    );
+    follow(ProviderEvent::CompactionEnded {
+        automatic: false,
+        tokens_before: Some(900_000),
+        tokens_after: Some(40_000),
+        error: None,
+        native_id: None,
+    })
+    .await;
+    let compact = "549fa9d0-9a52-4c1d-ae9a-2bdac6bb2e53";
+    follow(ProviderEvent::Message {
+        item_id: compact.into(),
+        role: Role::User,
+        text: "/compact Besides your usual summary, keep these exactly".into(),
+    })
+    .await;
+    follow(ProviderEvent::TurnCompleted {
+        turn_id: None,
+        status: TurnStatus::Completed,
+        duration_ms: None,
+        usage: None,
+    })
+    .await;
+
+    let view = flow.manager.thread_view(&id).unwrap();
+    let ends: Vec<_> = view
+        .turns
+        .iter()
+        .map(|turn| (turn.user_message.as_str(), turn.end))
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            (first.user_message.as_str(), Some(TurnEnd::Done)),
+            (compact, Some(TurnEnd::Done))
+        ],
+        "{view:#?}"
+    );
+    assert_eq!(view.turns[0].ended_at_ms, first.ended_at_ms);
+    // Over, the thread is its file's: no word of it running is left.
+    assert!(
+        !view
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.event, ProviderEvent::CompactionStarted { .. })),
+        "{view:#?}"
+    );
+    let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
+    assert!(
+        records
+            .iter()
+            .any(|record| record.user_message.as_deref() == Some(compact)
+                && record.end == Some(TurnEnd::Done)),
+        "{records:#?}"
+    );
+    flow.stop().await;
+}

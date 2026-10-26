@@ -1,4 +1,4 @@
-import { useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
+import { type OpenPastedText, PastedTextOpenerContext, useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import {
   type ReactNode,
   useContext,
@@ -16,6 +16,7 @@ import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
 import { PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
+import { activePullRequests, activeWaits, completeWait, useTrackedWork, waitingDue } from "@/app/conversation/trackedWork";
 import type { PullRequestStatus } from "@/app/conversation/usePullRequest";
 import { SourceRow } from "@/app/conversation/SourceRow";
 import { hostOf, linksIn, openLink } from "@/app/conversation/summaryLinks";
@@ -31,7 +32,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
 } from "@/components/icons";
-import { openPanelTab } from "@/state/sessionTabs";
+import { openPanelTab, openPastedTab } from "@/state/sessionTabs";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
@@ -39,12 +40,14 @@ import { TooltipIconButton } from "@/components/controls";
 import { Popover, PopoverTrigger } from "@/components/overlays";
 import { openLink as openWebLink } from "@/state/links";
 import type {
+  AttachmentRef,
   Conversation,
   DiffStat,
   FileEntry,
   McpServerState,
   PullRequest,
   PullRequestState,
+  TrackedWork,
   WorkerRow,
   WorkerWait,
 } from "@/ipc/generated";
@@ -134,7 +137,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
     const pages = pagesSeen === "" ? [] : pagesSeen.split("\n");
     const used = serversUsed === "" ? [] : serversUsed.split("\n");
     return [
-      ...files.map((file): UsedSource => ({ key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name })),
+      ...files.map((file) => fileSource(conversationId, file)),
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
         const state = statusOf(servers, name);
@@ -142,7 +145,31 @@ export function useUsedSources(conversationId: string): UsedSource[] {
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
-  }, [messages, pagesSeen, serversUsed, servers]);
+  }, [conversationId, messages, pagesSeen, serversUsed, servers]);
+}
+
+/** How a Chat's attachment row opens it: a pasted text over the thread, as its chip or card does; another file not at all. */
+export function pastedOpener(open: OpenPastedText | null, file: AttachmentRef): (() => void) | undefined {
+  return open && file.pasted ? () => open(file.inline ?? null, file) : undefined;
+}
+
+/** A Chat's "Attachments": the files attached to the user's messages; a pasted text opens over the thread. */
+export function ChatAttachments({ attachments }: { attachments: readonly AttachmentRef[] }) {
+  const openPasted = useContext(PastedTextOpenerContext);
+  return <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
+    {attachments.map((attachment) => {
+      const open = pastedOpener(openPasted, attachment);
+      return open
+        ? <SummaryRowButton key={attachment.id} onClick={open}>{attachment.name}</SummaryRowButton>
+        : <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>;
+    })}
+  </SummarySection>;
+}
+
+/** A file attached to the user's messages, as Sources lists it: a pasted text opens in its tab, as its chip or card does. */
+export function fileSource(conversationId: string, file: AttachmentRef): UsedSource {
+  const open = file.pasted ? () => void openPastedTab(conversationId, file.inline ?? null, file) : undefined;
+  return { key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name, ...(open ? { open } : {}) };
 }
 
 /** Sources shown before "View all". */
@@ -291,9 +318,50 @@ const PULL_REQUEST_ICONS: Record<PullRequestState, ReactNode> = {
   closed: <PullRequestClosed />,
 };
 
+/** Watched PRs and named waits use the same compact rows as the rest of the card. */
+function TrackedWorkSummary({ sessionId, fallback, authRequired }: { sessionId: string; fallback: PullRequest | null; authRequired?: boolean | undefined }) {
+  const { work, error } = useTrackedWork(sessionId);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(timer); }, []);
+  return <TrackedWorkSections sessionId={sessionId} work={work} error={error} now={now} fallback={fallback} authRequired={authRequired} />;
+}
+
+export function TrackedWorkSections({ sessionId, work, error, now = 0, fallback, authRequired }: { sessionId: string; work: TrackedWork; error: string | null; now?: number; fallback: PullRequest | null; authRequired?: boolean | undefined }) {
+  const prs = activePullRequests(work);
+  const waits = activeWaits(work);
+  const [completing, setCompleting] = useState<string | null>(null);
+  const branch = fallback && fallback.state !== "merged" && fallback.state !== "closed" && !work.pullRequests.some((pr) => pr.identity.number === fallback.number && `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`.toLowerCase() === fallback.url.toLowerCase()) ? fallback : null;
+  return <>
+    {(prs.length > 0 || branch || authRequired || work.prHistory.length > 0 || error) && <SummarySection foldKey="pull-requests" title="Pull requests" count={prs.length + (branch ? 1 : 0)}>
+      {branch && <PullRequestRow pullRequest={branch} />}
+      {prs.map((pr) => {
+        const state = pr.pullRequest?.state ?? "open";
+        const look = pr.complete && pr.pullRequest ? pullRequestLook(pr.pullRequest) : null;
+        const tone = look ? PULL_REQUEST_TONES[look.tone] : "text-muted-foreground";
+        const url = `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`;
+        return <SummaryRowButton key={url} data-slot="tracked-pr-row" title={`${pr.pullRequest?.title ?? url}\n${pr.actor} · ${pr.action}\n${pr.account ? `Account: ${pr.account}` : "Account needed"}`} icon={<span className={cn("flex", tone)}>{PULL_REQUEST_ICONS[state]}</span>} meta={<span className={cn("max-w-48 truncate", tone)}>{pr.status}</span>} onClick={() => openLink(url)}>{pr.identity.repo} #{pr.identity.number}</SummaryRowButton>;
+      })}
+      {authRequired && prs.length === 0 && <SummaryRow data-slot="pull-request-auth" muted icon={<PullRequestOpen />}>gh auth login for PR status</SummaryRow>}
+      {error && <SummaryRow muted>Pull request status unavailable</SummaryRow>}
+      {work.prHistory.length > 0 && <SummaryRowButton muted icon={<PullRequestClosed />} onClick={() => openPanelTab(sessionId, { type: "pr-history" }, "Pull request history")}>View history</SummaryRowButton>}
+    </SummarySection>}
+    {waits.length > 0 && <SummarySection foldKey="waiting-on" title="Waiting on" count={waits.length}>
+      {waits.map((wait) => <div key={wait.id} className="flex min-w-0 items-center">
+        {wait.link ? <SummaryRowButton className="min-w-0 flex-1" title={`${wait.then ?? wait.text}\n${wait.timezone}`} icon={<HandRaised />} meta={<span className={wait.dueAtMs !== null && wait.dueAtMs <= now ? "text-destructive" : undefined}>{waitingDue(wait, now)}</span>} onClick={() => openLink(wait.link!)}>{wait.text}</SummaryRowButton> : <SummaryRow className="min-w-0 flex-1" title={`${wait.then ?? wait.text}\n${wait.timezone}`} icon={<HandRaised />} meta={<span className={wait.dueAtMs !== null && wait.dueAtMs <= now ? "text-destructive" : undefined}>{waitingDue(wait, now)}</span>}>{wait.text}</SummaryRow>}
+        <button className="text-muted-foreground hover:text-foreground focus-visible:text-foreground mr-3 shrink-0 px-1 py-1 text-xs disabled:opacity-50" disabled={completing === wait.id} aria-label={`Mark done: ${wait.text}`} onClick={() => {
+          setCompleting(wait.id);
+          void completeWait(sessionId, wait.id).catch((cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" })).finally(() => setCompleting(null));
+        }}>Done</button>
+      </div>)}
+    </SummarySection>}
+  </>;
+}
+
 /** The pull request row: `#N`, its state in a word and a colour (failed checks red); a click opens it. */
 function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
-  const look = pullRequestLook(pullRequest);
+  const observed = pullRequestLook(pullRequest);
+  // Initial branch discovery has not fetched the complete canonical review/check pages.
+  const look = observed.word === "Ready" ? { word: "Checking status", tone: "quiet" as const } : observed;
   const tone = PULL_REQUEST_TONES[look.tone];
   return (
     <SummaryRowButton
@@ -386,9 +454,7 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
       {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
       <WorkersSummary conversationId={conversation.id} />
       <Sources conversationId={conversation.id} />
-      {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
-        {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}
-      </SummarySection>}
+      {attachments.length > 0 && <ChatAttachments attachments={attachments} />}
       {context && <SummarySection foldKey="usage" title="Context usage">
         <SummaryRow>{context.usedTokens.toLocaleString()} tokens used</SummaryRow>
       </SummarySection>}
@@ -434,14 +500,11 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={setup.environment.branch} diff={diff} />
-            {authRequired ? (
-              <SummaryRow data-slot="pull-request-auth" muted icon={<PullRequestOpen />}>
-                gh auth login for PR status
-              </SummaryRow>
-            ) : pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
           <WorkersSummary conversationId={conversation.id} />
+          <TrackedWorkSummary sessionId={conversation.id} fallback={pullRequest} authRequired={authRequired} />
           <ActivitiesSummary conversationId={conversation.id} />
           <SessionSources conversationId={conversation.id} />
         </div>

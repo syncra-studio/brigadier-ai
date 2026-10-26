@@ -9,14 +9,15 @@
 //! | `tmp/` | its CLI's `TMPDIR` | removes | removes |
 //! | `dev/` | its previews' scratch and the thread's own files | removes | removes |
 //! | `logs/` | its previews' logs | removes | removes |
-//! | `workers/` | each worker's `<n>-<task8>/{work,tmp}`, and `home`, where Claude workers start | removes | removes |
+//! | `workers/` | each worker's `<n>-<task8>/{record,work,tmp}`, what else it wrote there, and `home`, where Claude workers start | keeps each worker's `record/` and what else it wrote; removes its `tmp/`, and its `work/` once merged | removes |
 //!
 //! A part is recorded in the cleanup ledger under the owner that removes it (the session's
 //! worktree under `session:`, `tmp/` under `thread-temp:`, …); the folder itself and `record/`
 //! only under [`folder_owner`], which only Delete disposes of. A Local checkout session works
 //! in the user's own checkout, never in `work/`. Tab chats keep their folder in the data
 //! directory. Sessions made before these folders were archived at the upgrade
-//! (`upgrade.rs`), never converted.
+//! (`upgrade.rs`), never converted. A page the user saved lives in the data directory's
+//! `pages/`, outside the folder, and stays after Delete.
 
 use std::path::{Path, PathBuf};
 

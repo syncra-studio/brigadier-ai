@@ -26,6 +26,7 @@ fn list(root: &Path, state: &str, head: &str, auto: bool, merge_commit: Option<&
             "url": "https://github.com/o/n/pull/7",
             "state": state,
             "isDraft": false,
+            "createdAt": jiff::Timestamp::now().to_string(),
             "headRefOid": head,
             "baseRefName": "main",
             "mergeCommit": merge_commit.map(|oid| json!({ "oid": oid })),
@@ -118,6 +119,7 @@ async fn a_pull_request_watch_survives_until_the_request_is_recorded_ready() {
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = with_origin(&flow);
     scratch.set(root.clone()).unwrap();
     flow.say("Ship the notes.").await;
@@ -172,6 +174,7 @@ async fn queued_then_merged(name: &str, auto: bool) {
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = with_origin(&flow);
     scratch.set(root.clone()).unwrap();
 
@@ -185,7 +188,13 @@ async fn queued_then_merged(name: &str, auto: bool) {
     let head = git(&workspace, &["rev-parse", "HEAD"]);
     let branch = git(&workspace, &["branch", "--show-current"]);
     let squash = squash_merge(&root.join("origin.git"), &root, &branch);
+    // No general PR polling while the window is closed. Reopening must still settle
+    // our queued branch merge even though no named review account was assigned.
+    drop(_app);
     list(&root, "MERGED", &head, false, Some(&squash));
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert!(merges(&flow.board().await).is_empty());
+    let _reopened_app = flow.manager.app.subscribe();
 
     let board = flow
         .until("the merge recorded", |board| !merges(board).is_empty())
@@ -246,6 +255,7 @@ async fn a_queued_pull_request_merging_while_a_command_runs_is_recorded_after_it
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = with_origin(&flow);
     scratch.set(root.clone()).unwrap();
 
@@ -323,6 +333,7 @@ async fn queued_across_a_restart(name: &str, merged_while_off: bool) {
         }),
     )
     .await;
+    let _app = flow.manager.app.subscribe();
     let root = with_origin(&flow);
     scratch.set(root.clone()).unwrap();
 
@@ -351,6 +362,7 @@ async fn queued_across_a_restart(name: &str, merged_while_off: bool) {
         merge()
     });
     flow.restart().await;
+    let _reopened_app = flow.manager.app.subscribe();
     *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&root.join("gh")));
     tokio::time::sleep(Duration::from_millis(300)).await;
     let squash = squash.unwrap_or_else(merge);

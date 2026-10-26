@@ -1143,3 +1143,251 @@ async fn a_message_going_to_a_starting_worker_is_left_to_that_hand_off() {
     assert!(board.queue.items.is_empty(), "{:?}", board.queue);
     judging.flow.stop().await;
 }
+
+/// A message sent while only the session's workers work (its turn over, the block waiting for
+/// a worker) goes to the rail Deciding too, and wakes the session at once to judge it, on a turn
+/// that goes on with that work: the thread draws it in the same block. Once the work is over,
+/// what the user sends starts a turn of its own again.
+#[tokio::test]
+async fn a_message_sent_while_only_its_workers_work_wakes_the_session_to_judge_it() {
+    let answers = Answers::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let script: Script = {
+        let (answers, release) = (answers.clone(), release.clone());
+        Arc::new(move |turn| {
+            let (answers, release) = (answers.clone(), release.clone());
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    answers
+                        .lock()
+                        .unwrap()
+                        .insert("worker running".into(), json!(true));
+                    release.notified().await;
+                    return Reply::text("Fixed.");
+                }
+                {
+                    let mut answers = answers.lock().unwrap();
+                    let inputs = answers.entry("inputs".into()).or_insert_with(|| json!([]));
+                    inputs.as_array_mut().unwrap().push(json!(turn.input));
+                }
+                if turn.input.contains("Fix it with a worker.") {
+                    turn.start_worker("Fix", "Fix the bug.").await;
+                    super::eventually("the worker to run", || {
+                        answers.lock().unwrap().contains_key("worker running")
+                    })
+                    .await;
+                    return Reply::text("A worker is on it.");
+                }
+                if let Some(at) = turn.input.find("[queued message ") {
+                    let id = shown_in(&turn.input[at..]);
+                    let request = CliRequest::Queue {
+                        id,
+                        judgment: Judgment::Join,
+                    };
+                    let judged = brigadier(&turn, request).await;
+                    answers.lock().unwrap().insert("judged".into(), judged);
+                    return Reply::text("That goes with the fix.");
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start(
+        "queue-held-by-workers",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    flow.say("Fix it with a worker.").await;
+    // Its turn ends while its worker still works.
+    flow.settled().await;
+    super::eventually_async("the thread's turn to end", || conv.idle()).await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its worker holds the work"
+    );
+
+    flow.say(ASKED).await;
+    let board = flow
+        .until("the message to wait, Deciding", |board| {
+            board
+                .queue
+                .items
+                .first()
+                .is_some_and(|item| item.text == ASKED && item.deciding && item.delivered)
+        })
+        .await;
+    let item = board.queue.items[0].clone();
+    super::eventually("the session to judge it", || {
+        answers.lock().unwrap().contains_key("judged")
+    })
+    .await;
+    let judged = answers.lock().unwrap()["judged"].clone();
+    assert_eq!(judged["state"], "joined", "{judged:#}");
+    flow.until("it to join", |board| joined(board, &item)).await;
+    let inputs: Vec<String> = answers.lock().unwrap()["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|input| input.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(inputs.len(), 2, "{inputs:#?}");
+    assert!(
+        inputs[1].contains(&format!("[queued message {}", shown(&item)))
+            && inputs[1].contains(ASKED),
+        "it woke the session under its frame: {inputs:#?}"
+    );
+
+    // The worker ends; the work is over.
+    release.notify_one();
+    super::eventually_async("the work to be over", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
+    flow.idle().await;
+    flow.say("Thanks, that's all.").await;
+    flow.idle().await;
+    assert!(
+        flow.board().await.queue.items.is_empty(),
+        "nothing held it: it went straight in"
+    );
+
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    let joining = view
+        .turns
+        .iter()
+        .find(|turn| turn.requests.contains(&item.id))
+        .expect("the turn it joined");
+    assert!(
+        joining.joins,
+        "the woken turn goes on with the work: {view:#?}"
+    );
+    assert!(!view.turns[0].joins, "{view:#?}");
+    assert!(
+        !view.turns.last().unwrap().joins,
+        "a message after the work ended starts its own block: {view:#?}"
+    );
+    flow.stop().await;
+}
+
+/// A Chat is a brigade too: a message sent while only its workers work goes to its rail
+/// Deciding and wakes it at once to judge it, on a turn that goes on with that work. Once the
+/// work is over, what the user sends starts a turn of its own again.
+#[tokio::test]
+async fn a_chat_whose_workers_work_judges_a_message_too() {
+    let answers = Answers::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let script: Script = {
+        let (answers, release) = (answers.clone(), release.clone());
+        Arc::new(move |turn| {
+            let (answers, release) = (answers.clone(), release.clone());
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    answers
+                        .lock()
+                        .unwrap()
+                        .insert("worker running".into(), json!(true));
+                    release.notified().await;
+                    return Reply::text("Written.");
+                }
+                if turn.input.contains("Write the notes with a worker.") {
+                    brigadier(&turn, CliRequest::Start(Box::new(start("Write notes.")))).await;
+                    super::eventually("the worker to run", || {
+                        answers.lock().unwrap().contains_key("worker running")
+                    })
+                    .await;
+                    return Reply::text("A worker is on it.");
+                }
+                if let Some(at) = turn.input.find("[queued message ") {
+                    let id = shown_in(&turn.input[at..]);
+                    let request = CliRequest::Queue {
+                        id,
+                        judgment: Judgment::Join,
+                    };
+                    let judged = brigadier(&turn, request).await;
+                    answers.lock().unwrap().insert("judged".into(), judged);
+                    return Reply::text("That goes with the notes.");
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start(
+        "queue-chat-held-by-workers",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let chat = super::chat_thread_tests::new_chat(&flow).await;
+    let conv = flow.manager.conv(&chat).unwrap();
+    flow.say_to(&chat, "Write the notes with a worker.").await;
+    flow.settled_in(&chat).await;
+    super::eventually_async("the Chat's turn to end", || conv.idle()).await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its worker holds the Chat's work"
+    );
+
+    flow.say_to(&chat, ASKED).await;
+    let board = flow
+        .until_in(&chat, "the message to wait, Deciding", |board| {
+            board
+                .queue
+                .items
+                .first()
+                .is_some_and(|item| item.text == ASKED && item.deciding && item.delivered)
+        })
+        .await;
+    let item = board.queue.items[0].clone();
+    super::eventually("the Chat to judge it", || {
+        answers.lock().unwrap().contains_key("judged")
+    })
+    .await;
+    let judged = answers.lock().unwrap()["judged"].clone();
+    assert_eq!(judged["state"], "joined", "{judged:#}");
+    flow.until_in(&chat, "it to join", |board| joined(board, &item))
+        .await;
+
+    release.notify_one();
+    super::eventually_async("the work to be over", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
+    flow.idle_in(&chat).await;
+    flow.say_to(&chat, "Thanks, that's all.").await;
+    flow.idle_in(&chat).await;
+    assert!(
+        flow.board_of(&chat).await.queue.items.is_empty(),
+        "nothing held it: it went straight in"
+    );
+
+    let view = flow.manager.thread_view(&chat).unwrap();
+    let joining = view
+        .turns
+        .iter()
+        .find(|turn| turn.requests.contains(&item.id))
+        .expect("the turn it joined");
+    assert!(
+        joining.joins,
+        "the woken turn goes on with the work: {view:#?}"
+    );
+    assert!(!view.turns[0].joins, "{view:#?}");
+    assert!(
+        !view.turns.last().unwrap().joins,
+        "a message after the work ended starts its own block: {view:#?}"
+    );
+    flow.stop().await;
+}

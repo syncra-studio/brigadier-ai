@@ -381,6 +381,8 @@ const BrowserTab = lazy(() => import("../side-panel/BrowserTab").then((module) =
 const SideChatTab = lazy(() => import("../side-panel/SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("../side-panel/MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("../side-panel/MockupTab").then((module) => ({ default: module.MockupView })));
+const HistoryTab = lazy(() => import("../side-panel/HistoryTab").then((module) => ({ default: module.HistoryTab })));
+const PullRequestHistory = lazy(() => import("../conversation/PullRequestHistory").then((module) => ({ default: module.PullRequestHistory })));
 const SourcesTab = lazy(() => import("../side-panel/SourcesTab").then((module) => ({ default: module.SourcesTab })));
 const PastedTextView = lazy(() => import("@/components/conversation/elements/pasted-text").then((module) => ({ default: module.PastedTextView })));
 const ConflictTab = lazy(() => import("../side-panel/ConflictTab").then((module) => ({ default: module.ConflictTab })));
@@ -437,6 +439,8 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "pasted" ? <PastedTextView n={tab.n} paste={tab.paste} />
                 : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} />
+                  : tab.view.type === "backgroundHistory" ? <HistoryTab conversationId={conversationId} />
+                  : tab.view.type === "pr-history" ? <PullRequestHistory sessionId={conversationId} />
                   : <SourcesTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (

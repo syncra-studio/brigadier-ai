@@ -59,7 +59,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.manualOpenFocus, "Context");
   assert.equal(seen.manualEscapeFocus, "Context");
   assert.equal(seen.previewSection, true);
-  assert.equal(seen.previewCleared, true, "the pill disappears when previews are cleared");
+  assert.equal(seen.previewCleared, true, "the preview row disappears when previews are cleared (history may remain)");
   assert.equal(seen.previewReturned, true, "the context pill returns when previews arrive");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);

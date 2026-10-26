@@ -26,4 +26,9 @@ requests: Array<string>,
 /**
  * The usage, spend or credits limit that ended it, as its CLI said.
  */
-limit?: LimitHit, };
+limit?: LimitHit, 
+/**
+ * It started with a message the user sent while the work before it still held (its
+ * workers or its background commands still ran): it goes on with that work, in its block.
+ */
+joins?: boolean, };

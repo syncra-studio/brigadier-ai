@@ -1,5 +1,8 @@
+import { create } from "zustand";
+
 import { request } from "@/ipc/client";
 import type { CommitOutcome, SourceChange, SourceState } from "@/ipc/generated";
+import { openWorkspacePane } from "@/state/workspacePane";
 import type { WorkspaceTarget } from "@/state/workspaceCache";
 
 /** Whose changes the panel shows: a session's checkout, or the project folder of one not started. */
@@ -67,3 +70,23 @@ export type CommitHow = "commit" | "amend" | "push" | "sync";
 
 /** What a branch pick is for. */
 export type Picking = "merge" | "checkout" | "rebase" | "from" | "delete";
+
+/**
+ * Whose changes each session's Source shows, by session: a worker's (its task id), read only,
+ * or without one the session's own checkout. Kept while the app runs.
+ */
+export const useSourceScopes = create<Record<string, string>>(() => ({}));
+
+/** Shows the session's own checkout in its Source (`taskId` null), or a worker's changes. */
+export function setSourceScope(conversationId: string, taskId: string | null): void {
+  useSourceScopes.setState((scopes) => {
+    const { [conversationId]: _shown, ...rest } = scopes;
+    return taskId ? { ...rest, [conversationId]: taskId } : rest;
+  }, true);
+}
+
+/** Opens the right sidebar's Source on a worker's changes: its +N −N, clicked. */
+export function showWorkerSource(conversationId: string, taskId: string): void {
+  setSourceScope(conversationId, taskId);
+  openWorkspacePane(conversationId, "source");
+}

@@ -141,8 +141,17 @@ mod tests {
         // 0.09 KB (harness D7, D28); the session's own subagents and quick checks, naked workers
         // and the review flow, 0.61 KB after tightening (harness D3, D8, D13, D22; proposed); the
         // question tool winning over another skill's text format, and a round too big for one
-        // call on one card, 0.28 KB (harness D36).
-        assert!(SKILL.len() <= 10_840, "{} bytes", SKILL.len());
+        // call on one card, 0.28 KB (harness D36); workers' disposable output in their $TMPDIR,
+        // results inline instead of links, and new sessions proposed on a card, 0.48 KB (the
+        // 10-26 artifact rule; proposed).
+        assert!(SKILL.len() <= 11_320, "{} bytes", SKILL.len());
+        for line in [
+            "Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.",
+            "with the results themselves, research findings too; never a record or skill file link, and a report, plan or page only when the user asks for that document or to save it",
+            "`brigadier session propose --title \"2-4 words\" \"<self-contained brief>\"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise.",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));

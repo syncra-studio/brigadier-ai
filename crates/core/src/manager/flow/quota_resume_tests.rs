@@ -272,10 +272,9 @@ async fn the_limited_turn_carries_on_at_the_reset() {
     flow.stop().await;
 }
 
-/// MA5: a thread goes on by itself after at most four resets in a row; the fifth limit waits
-/// for Continue now, and says so.
+/// L43: repeated usage failures retain automatic recovery, rather than quietly requiring a click.
 #[tokio::test]
-async fn a_fifth_limit_in_a_row_waits_for_continue_now() {
+async fn a_fifth_limit_keeps_automatic_recovery() {
     let (flow, turns, _) = limited_flow_n(
         "quota-five-limits",
         brigadier_providers::LimitKind::UsageWindow,
@@ -293,47 +292,16 @@ async fn a_fifth_limit_in_a_row_waits_for_continue_now() {
         })
         .await;
     }
-    let reset = waiting_reset(&flow);
-    flow.until("the fifth limit to reset", |_| {
-        crate::now_ms() > reset + 200
-    })
-    .await;
-    flow.manager.retry_waiting_conversations().await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    assert_eq!(turns.load(Ordering::SeqCst), 5, "it waits for Continue now");
     let wait = flow
         .core
         .conversation(&flow.conversation)
         .unwrap()
         .quota_wait
         .unwrap();
-    assert_eq!(wait.tries, 4);
-    let said = flow
-        .board()
-        .await
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Moment { text } => Some(text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        said.iter()
-            .any(|text| text.ends_with("goes when you choose Continue now.")),
-        "{said:#?}"
-    );
-    flow.manager
-        .continue_waiting(&flow.conversation)
-        .await
-        .unwrap();
-    flow.until("the request done", |board| {
-        board
-            .requests
-            .values()
-            .any(|request| request.state == RequestState::Done)
-    })
-    .await;
+    let recovery = wait.recovery.unwrap();
+    assert_ne!(recovery.mode, crate::work::QuotaRecoveryMode::ManualOnly);
+    assert!(recovery.next_check_at_ms.unwrap() > crate::now_ms());
+    resume(&flow).await;
     assert_eq!(turns.load(Ordering::SeqCst), 6);
     flow.stop().await;
 }
@@ -528,9 +496,11 @@ fn resumed(board: &Board) -> Vec<(Option<String>, ProviderKind)> {
         .orchestrator_steps
         .iter()
         .filter_map(|step| match step.kind {
-            OrchestratorStepKind::QuotaResumed { provider } => {
-                Some((step.request_id.clone(), provider))
-            }
+            OrchestratorStepKind::ProviderTransition {
+                cause: crate::work::ProviderTransitionCause::QuotaReset,
+                ref to,
+                ..
+            } => Some((step.request_id.clone(), to.provider)),
             _ => None,
         })
         .collect()
@@ -544,4 +514,154 @@ fn waiting_reset(flow: &Flow) -> i64 {
         .and_then(|conversation| conversation.quota_wait)
         .and_then(|wait| wait.resets_at_ms)
         .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn an_unknown_usage_reset_is_a_durable_automatic_probe() {
+    let (mut flow, turns, _) = limited_flow_n(
+        "quota-unknown-probe",
+        brigadier_providers::LimitKind::UsageWindow,
+        None,
+        usize::MAX,
+    )
+    .await;
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    let recovery = wait.recovery.as_ref().unwrap();
+    assert_eq!(
+        recovery.mode,
+        crate::work::QuotaRecoveryMode::AutomaticProbe
+    );
+    assert!(recovery.next_check_at_ms.unwrap() > crate::now_ms());
+    flow.crash().await;
+    flow.until("restored quota wait", |_| {
+        flow.core
+            .conversation(&flow.conversation)
+            .is_ok_and(|conversation| conversation.quota_wait.is_some())
+    })
+    .await;
+    let restored = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    assert_eq!(restored.request, wait.request);
+    assert_eq!(restored.messages, wait.messages);
+    assert!(restored.recovery.unwrap().next_check_at_ms.unwrap() > crate::now_ms());
+    let before_stop = turns.load(Ordering::SeqCst);
+    flow.manager.dont_resume(&flow.conversation).await.unwrap();
+    flow.manager.retry_waiting_conversations().await;
+    assert_eq!(turns.load(Ordering::SeqCst), before_stop);
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_manual_account_selection_wakes_pending_work_without_a_message() {
+    let (flow, turns) = waiting_flow("quota-manual-account").await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-free")], true)
+        .await;
+    let mut setup = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .setup
+        .unwrap();
+    let from = setup.choice().clone();
+    match &mut setup {
+        Setup::Session { orchestrator, .. } => orchestrator.account = Some("acct-free".into()),
+        Setup::Chat { model, .. } => model.account = Some("acct-free".into()),
+    }
+    let to = setup.choice().clone();
+    // The shared updateSetup hook calls this helper after committing the setup.
+    flow.core
+        .set_setup(flow.conversation.clone(), setup)
+        .await
+        .unwrap();
+    flow.manager
+        .model_selected(&flow.conversation, from, to)
+        .await
+        .unwrap();
+    flow.until("manual selection accepted", |board| board.orchestrator_steps.iter().any(|step| matches!(&step.kind,
+        OrchestratorStepKind::ProviderTransition { cause: crate::work::ProviderTransitionCause::ManualSwitch, account, .. }
+        if account.account.as_deref() == Some("acct-free")))).await;
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_failed_recovery_send_has_no_completed_transition() {
+    let (flow, turns) = waiting_flow("quota-refused-send").await;
+    flow.behavior
+        .refuse_sends
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.clear();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    flow.until("refused recovery failed", |board| {
+        board.run == crate::work::RunState::Failed
+    })
+    .await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    assert!(
+        flow.board()
+            .await
+            .orchestrator_steps
+            .iter()
+            .all(|step| !matches!(step.kind, OrchestratorStepKind::ProviderTransition { .. }))
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_durable_cancellation_marker_blocks_a_stale_wait_after_restart() {
+    let (mut flow, turns) = waiting_flow("quota-cancelled-wait-replay").await;
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    flow.manager.dont_resume(&flow.conversation).await.unwrap();
+    // Simulate an old persisted wait surviving its database clear: its independent
+    // cancellation marker still wins at recovery.
+    flow.core
+        .set_conversation_wait(&flow.conversation, Some(wait))
+        .await
+        .unwrap();
+    flow.crash().await;
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.manager.retry_waiting_conversations().await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    flow.stop().await;
 }

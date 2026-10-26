@@ -70,6 +70,17 @@ export function signInsOf(servers: readonly McpServerState[]): string[] {
     .map((server) => server.name);
 }
 
+/**
+ * Its work still holds while no turn of its CLI runs: one of its workers still works, or a
+ * background command of its CLI still runs or owes the turn its end starts. A message sent then
+ * waits Deciding and goes on with that work, as the daemon's `work_holds` reads it.
+ */
+export function workHolds(activity: Activity | undefined): boolean {
+  if (!activity) return false;
+  return !!activity.workersWorking || !!activity.commandsWorking
+    || Object.values(activity.tasks).some((state) => WORKING.has(state) || state === "takenOver");
+}
+
 /** Its CLI works: its turn is open, or Brigadier hands it a message. */
 const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
 

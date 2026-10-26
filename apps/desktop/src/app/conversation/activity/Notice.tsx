@@ -5,9 +5,11 @@ import { MachineRow } from "@/app/conversation/activity/MachineRow";
 import { MergedRow } from "@/app/conversation/activity/MergedRow";
 import { Moment } from "@/app/conversation/activity/Moment";
 import { QuotaResumed } from "@/app/conversation/activity/QuotaResumed";
+import { ProviderTransitionDivider } from "@/app/conversation/activity/ProviderTransition";
 import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
+import { SessionOffer } from "@/app/conversation/SessionOffer";
 
 /**
  * The thread's notices among its work (THREAD-UX-PLAN.md §3.1): a judgement call the lead made,
@@ -22,10 +24,12 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   const { kind } = step;
   if (kind.type === "machine") return <MachineRow kind={kind} />;
   if (kind.type === "quotaResumed") return <QuotaResumed provider={kind.provider} atMs={step.atMs} />;
+  if (kind.type === "providerTransition") return <ProviderTransitionDivider transition={kind} />;
   if (kind.type === "moment") return <Moment text={kind.text} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
+  if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;
   if (kind.type === "merged") return <MergedRow kind={kind} />;
   return null;
 };

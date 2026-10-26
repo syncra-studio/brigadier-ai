@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
-import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity } from "@/state/activity";
+import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
@@ -110,7 +110,8 @@ test("the reconnect snapshot restores live worker activity without a thread view
   assert.equal(tabState(row("snapshot"), false, false, true), "working");
   assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, false, true), { state: "needsYou", reason: "question" });
   assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, false, true), { state: "needsYou", reason: "approval" });
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "needsYou", reason: "sign-in" });
+  // A sign-in doesn't hold the turn: while it works, it reads Working.
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "working", reason: null });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
 });
 
@@ -148,4 +149,14 @@ test("a session stays Working while its CLI's background commands hold its turn,
   const snapshot = fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], commandsWorking: true });
   assert.equal(rowActivity(snapshot).running, true);
   assert.equal(rowActivity({ ...snapshot, commandsWorking: false }).running, false);
+});
+
+test("a session's work holds with no turn running while one of its workers or its CLI's background commands still work", () => {
+  const idle = fromSnapshot({ conversationId: "h1", run: "idle", tasks: [], approvals: [], questions: [], signIns: [] } as never);
+  assert.equal(workHolds(idle), false);
+  assert.equal(workHolds(undefined), false);
+  assert.equal(workHolds({ ...idle, tasks: { t1: "running" } }), true);
+  assert.equal(workHolds({ ...idle, tasks: { t1: "reported" } }), false, "a worker that reported holds nothing");
+  assert.equal(workHolds({ ...idle, workersWorking: true }), true);
+  assert.equal(workHolds({ ...idle, commandsWorking: true }), true);
 });

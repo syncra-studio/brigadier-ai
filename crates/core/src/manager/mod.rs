@@ -17,6 +17,7 @@ mod accounts;
 mod add_project;
 mod app_call;
 mod app_state;
+mod background_history;
 mod brains;
 mod branch_names;
 mod branches;
@@ -40,6 +41,7 @@ mod models;
 mod open_in_app;
 mod orphans;
 mod terminal_run;
+mod titles;
 pub use computer_host::ComputerNews;
 mod computer_use;
 mod conversation;
@@ -72,6 +74,7 @@ mod page_tools;
 mod past_projects;
 mod plain_workers;
 pub mod plugins;
+mod pr_tracking;
 mod preview;
 mod preview_ready;
 mod project_removal;
@@ -102,6 +105,7 @@ mod thread_items;
 mod thread_metrics;
 mod tool_output;
 mod tools;
+mod tracked_work;
 mod trust;
 mod turn_changes;
 mod uninstall;
@@ -109,11 +113,13 @@ pub(super) mod upgrade;
 mod usage;
 mod usage_view;
 mod user_rebase;
+mod waiting;
 pub mod warm;
 mod watchdog;
 mod work_facts;
 mod worker_events;
 mod worker_rows;
+mod worker_source;
 mod workers;
 pub mod workspace;
 
@@ -136,6 +142,9 @@ use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
 use crate::work::{DiffStat, TaskId, WorkerDiff};
 use crate::{Core, Error, Result};
 
+pub use background_history::{
+    BackgroundHistoryOutput, BackgroundHistoryPage, BackgroundHistoryRecord,
+};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
@@ -222,6 +231,8 @@ pub struct SessionManager {
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,
+    tracked_writes: tokio::sync::Mutex<()>,
+    pr_poll: pr_tracking::Poller,
     /// Send feedback's GitHub sign-in at work, if any.
     feedback_sign_in: Mutex<Option<feedback::GhSignIn>>,
     /// A stand-in `gh` for tests.
@@ -410,6 +421,8 @@ impl SessionManager {
             stoppables: setup_script::Stoppables::default(),
             previews: preview::Previews::default(),
             pr_looked_up: Mutex::default(),
+            tracked_writes: tokio::sync::Mutex::new(()),
+            pr_poll: Default::default(),
             #[cfg(test)]
             gh_override: Mutex::default(),
             #[cfg(test)]
@@ -448,6 +461,7 @@ impl SessionManager {
             activity: Arc::default(),
         });
         manager.install_worktree_remover();
+        manager.install_titles();
         // Each step's future is polled from the heap: made in this frame, they took half a
         // MiB of an unoptimized build's stack at once.
         // Cleanups a quit cut off finish before anything of those conversations resumes.
@@ -458,6 +472,7 @@ impl SessionManager {
         // Sessions open at the strip-down's first start are archived, not carried over.
         crate::heap(|| manager.archive_open_at_upgrade()).await;
         crate::heap(|| manager.recover()).await;
+        manager.start_tracked_polling();
         crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
         manager.start_computer_watchdog();
@@ -616,27 +631,18 @@ impl SessionManager {
             }
             _ => return Ok(None),
         };
-        let base_name = base.clone();
         blocking(move || {
             let repo = git.open(Path::new(&repo)).map_err(git_error)?;
-            let (Some(base), Some(tip)) = (
+            let (Some(_), Some(tip)) = (
                 repo.branch_tip(&base).map_err(git_error)?,
                 repo.branch_tip(&branch).map_err(git_error)?,
             ) else {
                 return Ok(None);
             };
-            let mut fork = repo.merge_base(&base, &tip).map_err(git_error)?;
-            let mut from = base;
-            // The branch merged in the base's upstream, newer than the local base (#233): what
-            // it changed is counted from there, not from where it first left the base.
-            if let Some(upstream) = repo.upstream_tip(&base_name).map_err(git_error)?
-                && let Ok(newer) = repo.merge_base(&upstream, &tip)
-                && newer != fork
-                && repo.ancestor(&fork, &newer).map_err(git_error)?
-            {
-                fork = newer;
-                from = upstream;
-            }
+            // A stale local base uses its containing upstream as last fetched (#233).
+            // Local commits take precedence when the base and upstream diverge.
+            let (from, _) = repo.newer_tip(&base).map_err(git_error)?;
+            let fork = repo.merge_base(&from, &tip).map_err(git_error)?;
             // Its worktree as it stands, while it has the branch checked out; else the branch.
             let to = path
                 .and_then(|path| git.open(Path::new(&path)).ok())
@@ -926,7 +932,12 @@ impl SessionManager {
             }
             return self.core.set_setup(id, setup).await;
         }
+        let before = current.as_ref().map(|setup| setup.choice().clone());
+        let selected = setup.choice().clone();
         let conversation = self.core.set_setup(id.clone(), setup).await?;
+        if let Some(before) = before.filter(|before| before != &selected) {
+            self.model_selected(&id, before, selected).await?;
+        }
         // Raised to Full access mid-turn: what its thread waits on goes now.
         self.allow_waiting_at_full(&id).await;
         Ok(conversation)

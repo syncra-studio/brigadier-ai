@@ -60,6 +60,20 @@ async fn notices(flow: &Flow) -> Vec<String> {
         .collect()
 }
 
+async fn switched_accounts(flow: &Flow) -> Vec<String> {
+    flow.board()
+        .await
+        .orchestrator_steps
+        .into_iter()
+        .filter_map(|step| match step.kind {
+            crate::work::OrchestratorStepKind::ProviderTransition { account_label, .. } => {
+                Some(account_label)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// What the thread says across its column (#506): limits and switches are no notices.
 async fn moments(flow: &Flow) -> Vec<String> {
     flow.events()
@@ -126,11 +140,7 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
     assert_eq!(*done.lock().unwrap(), 1, "the work is done once");
     // The chat now runs on that account, and says so.
     assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-b"));
-    let moments = moments(&flow).await;
-    assert_eq!(
-        moments,
-        ["Claude Code hit its usage limit on this computer's login; continuing on Account acct-b."],
-    );
+    assert_eq!(switched_accounts(&flow).await, ["Account acct-b"]);
     // Only that divider: the CLI's own limit message is not shown, nor any notice of it.
     let notices = notices(&flow).await;
     assert!(notices.is_empty(), "{notices:#?}");
@@ -165,12 +175,40 @@ async fn a_switch_notice_masks_an_account_named_by_its_email() {
     flow.manager.runtime.sync_accounts().await;
     flow.say("Do the thing.").await;
     flow.settled().await;
-    let moments = moments(&flow).await;
+    let moments = switched_accounts(&flow).await;
     assert!(
-        moments.iter().any(|text| text
-            == "Claude Code hit its usage limit on this computer's login; continuing on wor•••••@•••••.io."),
+        moments.iter().any(|text| text == "wor•••••@•••••.io"),
         "{moments:#?}"
     );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_switch_notice_names_the_own_login_by_the_name_it_was_given() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-switch-own-name",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.accounts[0].name = "Work #2".into();
+    settings.own_account_names = vec![crate::model::OwnAccountName {
+        provider: ProviderKind::Claude,
+        name: "Work".into(),
+    }];
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    flow.say("Do the thing.").await;
+    flow.settled().await;
+    let moments = switched_accounts(&flow).await;
+    assert!(moments.iter().any(|text| text == "Work #2"), "{moments:#?}");
     flow.stop().await;
 }
 
@@ -225,10 +263,9 @@ async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
         ]
     );
     assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-c"));
-    let moments = moments(&flow).await;
+    let moments = switched_accounts(&flow).await;
     assert!(
-        moments.iter().any(|text| text
-            == "Claude Code hit its usage limit on Account acct-b; continuing on Account acct-c."),
+        moments.iter().any(|text| text == "Account acct-c"),
         "{moments:#?}"
     );
     assert!(
@@ -2010,10 +2047,7 @@ async fn the_account_nearest_its_limit_works_first_and_both_out_waits() {
             .count(),
         1
     );
-    assert_eq!(
-        moments(&flow).await,
-        ["Claude Code hit its usage limit on Account acct-b; continuing on this computer's login."]
-    );
+    assert_eq!(switched_accounts(&flow).await, ["this computer's login"]);
 
     // Both out: the persisted wait and the CLI's limit supply the Resumes at card.
     assert!(!flow.core.settings().switch_providers);
@@ -2175,6 +2209,28 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
     assert!(codex.input.contains("Do the thing."), "{}", codex.input);
     // The session runs on Codex now, and its seam says why.
     assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    let transitions: Vec<_> = flow
+        .board()
+        .await
+        .orchestrator_steps
+        .into_iter()
+        .filter(|step| {
+            matches!(
+                step.kind,
+                crate::work::OrchestratorStepKind::ProviderTransition { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        transitions.len(),
+        2,
+        "one account switch and one provider switch"
+    );
+    assert!(
+        matches!(&transitions[1].kind, crate::work::OrchestratorStepKind::ProviderTransition {
+        cause: crate::work::ProviderTransitionCause::AutomaticFallback, to, account, account_label, ..
+    } if to.provider == ProviderKind::Codex && account.provider == ProviderKind::Codex && !account_label.is_empty())
+    );
     let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
     assert!(matches!(file.phase, Phase::Live), "{:?}", file.phase);
     assert_eq!(file.seams.len(), 1);

@@ -16,9 +16,10 @@ test("session states use only activity, in the requested precedence order", () =
   assert.equal(tabState({ ...quiet, running: true }, false, true, complete), "working");
   assert.equal(tabState(quiet, true, true, complete), "working");
   assert.equal(tabState({ ...quiet, awaiting: "failed", running: true }, true, true, complete), "failed");
-  for (const awaiting of ["approval", "input", "signIn"] as const) {
+  for (const awaiting of ["approval", "input"] as const) {
     assert.equal(tabState({ ...quiet, awaiting, running: true }, true, true, complete), "needsYou");
   }
+  assert.equal(tabState({ ...quiet, awaiting: "signIn" }, false, false, complete), "needsYou");
   assert.deepEqual(TAB_STATES, ["needsYou", "failed", "working", "stopped", "done"]);
   assert.deepEqual(Object.values(SESSION_STATUS_WORDS), ["Needs you", "Failed", "Working", "Stopped", "Done"]);
   assert.deepEqual(TAB_STATE_WORDS.done, { one: "Done", many: "done" });
@@ -89,7 +90,7 @@ test("a project's open session is a task of its own; a chat, a side chat, an arc
 
 
 test("Needs you keeps a blue dot, failures a red mark, Working a spinner, and Done only an unread dot", () => {
-  for (const awaiting of ["approval", "input", "signIn"] as const) for (const running of [false, true]) for (const unread of [false, true]) {
+  for (const awaiting of ["approval", "input", "signIn"] as const) for (const running of awaiting === "signIn" ? [false] : [false, true]) for (const unread of [false, true]) {
     assert.deepEqual(sidebarIndicators({ ...quiet, awaiting, running }, true, unread, false, true), { working: false, error: false, unread: true });
   }
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed", running: true }, true, true), { working: false, error: true, unread: false });
@@ -98,4 +99,21 @@ test("Needs you keeps a blue dot, failures a red mark, Working a spinner, and Do
   assert.deepEqual(sidebarIndicators(quiet, false, true, false, true), { working: false, error: false, unread: true });
   assert.deepEqual(sidebarIndicators(quiet, false, false, false, true), { working: false, error: false, unread: false });
   assert.deepEqual(sidebarIndicators(quiet, false, true), { working: false, error: false, unread: false });
+});
+
+test("a session the user is looking at, or working again past a sign-in, doesn't show Needs you", () => {
+  // The screenshot's session: an MCP server still wants a sign-in, and the user's reply set it working.
+  const signedOff = { ...quiet, awaiting: "signIn", running: true, workers: 1 } as const;
+  assert.equal(tabState(signedOff, false), "working");
+  assert.deepEqual(sessionStatus(signedOff, null), { state: "working", reason: null });
+  assert.deepEqual(sidebarIndicators(signedOff, false, false), { working: true, error: false, unread: false });
+  // In front of the user, no waiting card marks its own row or tab; the next state shows instead.
+  for (const awaiting of ["approval", "input", "signIn"] as const) {
+    assert.equal(tabState({ ...quiet, awaiting, running: true }, false, false, false, true), "working");
+    assert.equal(tabState({ ...quiet, awaiting }, false, false, true, true), "done");
+    assert.deepEqual(sessionStatus({ ...quiet, awaiting }, null, false, false, true), null);
+    assert.deepEqual(sidebarIndicators({ ...quiet, awaiting }, false, false, false, true, true), { working: false, error: false, unread: false });
+  }
+  // Elsewhere, a question still needs the user.
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "input", running: true }, false, false), { working: false, error: false, unread: true });
 });

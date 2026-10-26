@@ -364,11 +364,22 @@ impl Runtime {
         self.signed_in(&self.monitor.lead(provider))
     }
 
-    /// How the app names `account` to the user (in notices): the user's own login is "this
-    /// computer's login"; an extra account its name, else its email, an email masked either way.
+    /// How the app names `account` to the user (in notices): the user's own login its name,
+    /// else its already-known email, else "this computer's login"; an extra account its
+    /// name, else its email, an email masked
+    /// either way.
     pub fn account_label(&self, account: &AccountRef) -> String {
         let Some(id) = &account.account else {
-            return "this computer's login".into();
+            let settings = self.core.settings();
+            let name = settings.own_account_name(account.provider).trim();
+            if !name.is_empty() {
+                return mask_email(name);
+            }
+            let email = self
+                .overview(account.provider)
+                .and_then(|overview| overview.status)
+                .and_then(|status| status.email);
+            return own_login_label(email.as_deref());
         };
         let (name, status) = match self.accounts().get(id) {
             Some(live) => (live.entry.name.clone(), live.status.clone()),
@@ -768,5 +779,32 @@ pub fn sign_in_args(kind: ProviderKind) -> &'static [&'static str] {
     match kind {
         ProviderKind::Claude => &["auth", "login"],
         ProviderKind::Codex => &["login"],
+    }
+}
+
+// Use only the provider identity already observed by the runtime. No credential/profile read.
+fn own_login_label(email: Option<&str>) -> String {
+    match email.map(str::trim).filter(|email| !email.is_empty()) {
+        Some(email) => mask_email(email),
+        None => "this computer's login".into(),
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::own_login_label;
+
+    #[test]
+    fn an_unnamed_own_login_uses_the_known_masked_identity() {
+        assert_eq!(
+            own_login_label(Some("work.person@corp.example.io")),
+            "wor•••••@•••••.io"
+        );
+    }
+
+    #[test]
+    fn an_unknown_own_identity_stays_generic() {
+        assert_eq!(own_login_label(None), "this computer's login");
+        assert_eq!(own_login_label(Some("  ")), "this computer's login");
     }
 }

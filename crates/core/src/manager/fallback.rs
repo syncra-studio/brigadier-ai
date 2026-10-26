@@ -1,7 +1,6 @@
-//! What a CLI's error means for its work, and the waits for quota. A worker's usage limit
-//! pauses it and its session hears it (`brigadier wait`); Brigadier moves no work to another
-//! model (G18). Conversations waiting for a model look again whenever a provider's state is
-//! recorded.
+//! What a CLI's error means for its work, and durable quota recovery. Sessions and workers
+//! try eligible accounts/providers under their routing restrictions; otherwise they wait.
+//! Provider observations and reset timers recheck those waits without a new user message.
 
 use std::time::Duration;
 
@@ -85,6 +84,37 @@ impl SessionManager {
     /// or a provider's state changed (a login, a fresh usage read).
     pub async fn retry_waiting_work(&self) {
         self.retry_waiting_conversations().await;
+        self.retry_waiting_workers().await;
+    }
+}
+
+/// Persist the scheduler's promise. Repeated failures back off instead of silently
+/// abandoning a subscription window's automatic recovery.
+pub(super) fn recovery(
+    reset: Option<i64>,
+    kind: Option<LimitKind>,
+    tries: u32,
+) -> crate::work::QuotaRecovery {
+    use crate::work::{QuotaRecovery, QuotaRecoveryMode as Mode};
+    if kind.is_some_and(|kind| kind != LimitKind::UsageWindow) {
+        return QuotaRecovery {
+            mode: Mode::ManualOnly,
+            next_check_at_ms: None,
+        };
+    }
+    let future = reset.filter(|at| *at > now_ms());
+    let delay = if future.is_none() && tries >= 4 {
+        WAIT_RETRY
+    } else {
+        retry_delay(future)
+    };
+    QuotaRecovery {
+        mode: if future.is_some() {
+            Mode::AutomaticAt
+        } else {
+            Mode::AutomaticProbe
+        },
+        next_check_at_ms: Some(now_ms() + delay.as_millis() as i64),
     }
 }
 

@@ -67,3 +67,20 @@ test("a turn held by its workers says it waits for them", () => {
   assert.equal(headerLabel("done", 65_000, false, false, 2), "Waiting for 2 workers · 1m 5s");
   assert.equal(headerLabel("done", 65_000), "Worked for 1m 5s");
 });
+
+test("a block its later turns joined holds for the workers each of them started; only a turn of a block after it bounds it", () => {
+  const joinedTurns = [{ startedAtMs: 1000 }, { startedAtMs: 3000 }, { startedAtMs: 5000 }, { startedAtMs: 9000 }];
+  const workers = [worker("w1", 1500), worker("w2", 3500), worker("w3", 9500)];
+  // The turns at 3000 and 5000 joined the block of the turn at 1000: its workers are w1 and w2.
+  assert.equal(workingWorkers(workers, joinedTurns, [1000, 3000, 5000]), 2);
+  // Unjoined, the turn at 3000 would bound it to w1.
+  assert.equal(workingWorkers(workers, joinedTurns, [1000]), 1);
+});
+
+test("a worker whose turn ended while background commands of its own still run holds its block until they end", () => {
+  // Its row reads at work (the engine counts its running background commands): the block, its
+  // later turn joined, still waits for it.
+  assert.equal(workingWorkers([worker("w1", 1500, { lastEnd: "done", working: true })], turns, [1000, 5000]), 1);
+  // They ended: it is done.
+  assert.equal(workingWorkers([worker("w1", 1500, { lastEnd: "done", working: false })], turns, [1000, 5000]), 0);
+});

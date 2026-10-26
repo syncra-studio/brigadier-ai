@@ -43,6 +43,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     tools: Record<string, { json: string | null; text: string | null; empty: string | null; error: boolean; argumentsShown: boolean; raw: string | null }>;
     toolRaw: string | null;
     compaction: (string | null)[];
+    compactionRules: number[];
     sentImages: [string | null, string | null, boolean][];
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
@@ -108,8 +109,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.equal(seen["diff-empty"].empty, "No changes");
   // A sent image read shows; one that can't be read says "Failed"; one on its way pulses.
   assert.deepEqual(seen.sentImages, [[null, null, true], ["failed", "Failed", false], ["loading", null, false]]);
-  // A compaction says it compacts; after 10 s, that it can take a few minutes.
-  assert.deepEqual(seen.compaction, ["Compacting context", "Compacting context · This can take a few minutes"]);
+  // A compaction is one divider: it says it refreshes the context; after 10 s, that it can take a few minutes.
+  assert.deepEqual(seen.compaction, ["Refreshing context", "Refreshing context · This can take a few minutes"]);
+  assert.deepEqual(seen.compactionRules, [2, 2]);
   // A tool's result: structured data as a JSON code block, text as it is, nothing said so, a
   // failure in the error callout; its arguments only in the raw view.
   const { tools } = seen;

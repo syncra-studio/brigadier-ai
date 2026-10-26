@@ -1,6 +1,6 @@
 //! The tools a session keeps, behind `brigadier` (STRIP-DOWN-PLAN S13, S16c): `preview`,
 //! `browser`, `app`, `page`, `ask`, and what the thread, Chats and side chats had as MCP tools
-//! (`brain`, `transcript`, `code`, `report`, `feedback`, `approval`). Each runs as the
+//! (`brain`, `transcript`, `code`, `report`, `feedback`, `session`, `approval`). Each runs as the
 //! session's own call of the tool it was, with the grant it called with, so what a session or
 //! worker may do is what it could do before.
 //! `brigadier ask` waits for the user's answer on its card, and the answer goes back to it
@@ -151,6 +151,7 @@ fn tool_call(
         (Tool::Report, "save") if chat => ToolCall::Chat(ChatCall::SaveReport(args(given)?)),
         (Tool::Report, "save") => ToolCall::Orchestrator(O::SaveReport(args(given)?)),
         (Tool::Feedback, "offer") => ToolCall::Orchestrator(O::OfferFeedback(args(given)?)),
+        (Tool::Session, "propose") => ToolCall::Orchestrator(O::OfferSession(args(given)?)),
         (Tool::Approval, "request") => ToolCall::Orchestrator(O::RequestApproval(args(given)?)),
         (_, other) => return Err(usage(format!("no action {other:?}"))),
     })
@@ -195,6 +196,9 @@ impl SessionManager {
         given: Value,
     ) -> CliReply {
         let role = self.grants.resolve(&caller.grant);
+        if matches!(tool, Tool::Pr | Tool::Waiting) {
+            return self.cli_tracked_work(caller, tool, action, given).await;
+        }
         if tool == Tool::Ledger {
             return match self.cli_ledger(caller, action, given).await {
                 Ok((text, check)) => CliReply::ok(&LedgerOutput {

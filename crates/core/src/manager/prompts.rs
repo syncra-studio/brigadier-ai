@@ -42,8 +42,10 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
 /// Haiku session with the user's grilling skill put 0 of 6 rounds on the card with one clause
 /// on it, 17 of 19 with this line and its close variants). A worker goes without them:
 /// `brigadier start` refuses a worker's own workers, it has no brigade skill, it never asks the
-/// user (G19.Q6), and it keeps full reports (run2-D27).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.";
+/// user (G19.Q6), and it keeps full reports (run2-D27). Its replies carry results, not links to
+/// the session's own files, and it offers feedback and proposes new sessions on cards (the
+/// 10-26 artifact rule).
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler. Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.\nUser annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click. In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -97,12 +99,13 @@ macro_rules! research_breakdown {
     };
 }
 
-/// Where a research answer's full findings go, saved with `$save` (Q79).
+/// Where a research answer's full findings go when the user asks for them, saved with `$save`
+/// (Q79; only on request since the 10-26 artifact rule).
 macro_rules! research_report {
     ($save:literal) => {
         concat!(
             "
-- Findings longer than that (many options compared, prices, a full write-up) go in a report: save it with ",
+- When the user asks for a full write-up or to keep the findings, they go in a report: save it with ",
             $save,
             " and link it in one line ([Full report](brigadier-page:…)). Never paste the report into the chat."
         )
@@ -414,14 +417,17 @@ mod tests {
     /// text format (harness D36) took 375 more, a line of its own: shorter or folded into the
     /// line above, it lost to the skill on 3 of 5 Haiku rounds: 2,500 (proposed). The lines a
     /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
+    /// Disposable output in $TMPDIR, results inline instead of links to the session's files, and
+    /// the feedback and new-session cards took 800 more and a line: 3,300 (the 10-26 artifact
+    /// rule; proposed).
     #[test]
-    fn the_standing_instructions_stay_under_2500_bytes_and_sixteen_lines() {
+    fn the_standing_instructions_stay_under_3300_bytes_and_seventeen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 2_500,
+            STANDING_INSTRUCTIONS.len() < 3_300,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
-        assert!(STANDING_INSTRUCTIONS.lines().count() < 16);
+        assert!(STANDING_INSTRUCTIONS.lines().count() < 17);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
             "$BRIGADIER_SESSION_DIR",
@@ -432,8 +438,25 @@ mod tests {
             // D13: everything about the job is pulled, never put in.
             "skills, MCP servers, project and routing are in `brigadier context`.",
             "Run it when you start and after any compaction.",
+            // Disposable output goes in the session's $TMPDIR, never its record, which is for
+            // resuming; a file the user asks for goes where they say.
+            "its record/ keeps only what a resume needs",
+            "Your scratch, research notes, check logs and evidence screenshots go in $TMPDIR, never the repo or record/; a file the user asks for goes where they say.",
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
+        }
+        // The user reads results, never the session's record or skill files: research findings
+        // too stay inline, and a report, plan or page is only for a user who asks for that
+        // document or to save it. Feedback is offered once on a card that sends nothing until
+        // the user clicks, with --asked only when they asked to report; in a project session (a
+        // Chat can't), separate work is proposed as a session by a call, never promised in text
+        // or sent to another session.
+        for words in [
+            "Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.",
+            "User annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click.",
+            "In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.",
+        ] {
+            assert!(WORKERS_LINE.contains(words), "{words}");
         }
         // A session or Chat asks with its CLI's own question tool (harness D7), never as text,
         // whatever format a skill shows; a round too big for one call goes whole on one

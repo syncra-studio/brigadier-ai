@@ -272,6 +272,12 @@ do it"). A message the user sends while the session's turn runs (queueing on, th
     dismiss-only; attachments go as their paths);
   - `new-session`: it waits with "Open as a new session" and "Run here", and is never sent until the user picks.
   - Re-judging a message still queued is allowed (proposed). A worker can't judge; it has no queue.
+- **Held work (user, 2026-10-26: "Judge it right away").** The session's turn is over but its work still holds
+  (a worker of its works, its own background commands counted, or a background command of its CLI runs): a
+  message waits Deciding all the same, and wakes the session at once on a turn of its own under the same frame.
+  That turn, and any turn a message starts while the work holds, joins the block before it (`ThreadTurn::joins`):
+  one block, "Waiting for a worker" until the last ends, "Worked for" on the clock from its first message to its
+  answer. A message after everything ended opens a new block.
 - **Unjudged (the earlier default, run2-D40).** After 20 s it joins the working answer; still unjudged when its
   turn completes, it joins that turn; after a stop, a failure, a limit or a daemon restart it waits for its own
   turn. A late judgment hears it already joined.

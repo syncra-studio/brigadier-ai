@@ -22,7 +22,6 @@ import { ChatActions, RenameDialog } from "@/app/shell/ChatActions";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
-import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
 import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { useSidePanel } from "@/app/side-panel/SidePanel";
@@ -527,8 +526,7 @@ const SessionTop = memo(function SessionTop({ conversation, kind, onRename }: { 
 
 const SessionSummary = memo(function SessionSummary({ conversation }: { conversation: Conversation | null }) {
   return (
-    <PinnedSummary conversation={conversation}
-      cards={conversation?.kind === "session" ? <SessionCards conversationId={conversation.id} /> : null} />
+    <PinnedSummary conversation={conversation} />
   );
 });
 
@@ -1047,7 +1045,7 @@ export function ConversationView({
   const tabbed = standalone && (conversation?.kind === "session" || openTabs.length > 0);
   // A pasted text a chip opened in a Chat or a draft, which have no tabs: over the thread (#427).
   const place = conversationId ?? "draft";
-  const [pastedOver, setPastedOver] = useState<{ place: string; n: number; paste: AttachmentRef | null } | null>(null);
+  const [pastedOver, setPastedOver] = useState<{ place: string; n: number | null; paste: AttachmentRef | null } | null>(null);
   const pasted = !tabbed && pastedOver?.place === place ? pastedOver : null;
   const openPasted = useCallback<OpenPastedText>(
     (n, paste) => {
@@ -1222,14 +1220,6 @@ export const Welcome: FC = () => {
     </div>
   );
 };
-
-/**
- * The cards under a session's context card, and in its place while it is hidden: its "Resumes
- * at" card (MA5).
- */
-function SessionCards({ conversationId }: { conversationId: string }) {
-  return <ResumesAtCard conversationId={conversationId} />;
-}
 
 const THREAD_COMPONENTS: ThreadComponents = {
   AssistantMessage: RequestBlock,

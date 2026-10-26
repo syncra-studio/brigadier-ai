@@ -4,8 +4,9 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use brigadier_git::{ChangeKind, Oid};
+use brigadier_git::{ChangeKind, Oid, Repo};
 
+use super::worker_source::worker_range;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{ReviewCommit, ReviewDiff, ReviewFile, ReviewFileStatus, ReviewScope};
@@ -30,25 +31,31 @@ impl SessionManager {
         whole_files: bool,
         ignore_whitespace: bool,
     ) -> Result<ReviewDiff> {
-        let conversation = self.core.conversation(id)?;
-        let archived = conversation.lifecycle == crate::model::Lifecycle::Archived;
-        let Some(Setup::Session {
-            repo, environment, ..
-        }) = conversation.setup
-        else {
-            return Err(Error::Invalid(
-                "only a session has changes to review".into(),
-            ));
-        };
-        let (checkout, branch, base) = match environment {
-            Environment::LocalCheckout { branch } => (repo, branch, None),
-            Environment::NewWorktree {
-                base, branch, path, ..
-            } => (
-                if archived { repo } else { path.unwrap_or(repo) },
-                branch,
-                Some(base),
-            ),
+        // A worker's changes are read in its own worktree, against the branch it merges into.
+        let (checkout, branch, base) = if let ReviewScope::Worker { task_id } = &scope {
+            let worker = self.worker_checkout(id, task_id).await?;
+            (worker.path, worker.branch, Some(worker.base))
+        } else {
+            let conversation = self.core.conversation(id)?;
+            let archived = conversation.lifecycle == crate::model::Lifecycle::Archived;
+            let Some(Setup::Session {
+                repo, environment, ..
+            }) = conversation.setup
+            else {
+                return Err(Error::Invalid(
+                    "only a session has changes to review".into(),
+                ));
+            };
+            match environment {
+                Environment::LocalCheckout { branch } => (repo, Some(branch), None),
+                Environment::NewWorktree {
+                    base, branch, path, ..
+                } => (
+                    if archived { repo } else { path.unwrap_or(repo) },
+                    Some(branch),
+                    Some(base),
+                ),
+            }
         };
         let session = id.0.clone();
         let mut snapshot_turn = None;
@@ -117,9 +124,15 @@ impl SessionManager {
                     Some((parent, commit))
                 }
                 ReviewScope::Branch => {
-                    let tip = repo.branch_tip(&branch).map_err(git_error)?;
+                    let tip = match &branch {
+                        Some(branch) => repo.branch_tip(branch).map_err(git_error)?,
+                        None => None,
+                    };
                     let left = match &base {
-                        Some(base) => repo.branch_tip(base).map_err(git_error)?,
+                        Some(base) => match repo.branch_tip(base).map_err(git_error)? {
+                            Some(_) => Some(repo.newer_tip(base).map_err(git_error)?.0),
+                            None => None,
+                        },
                         None => None,
                     };
                     match (left, tip) {
@@ -128,6 +141,12 @@ impl SessionManager {
                         }
                         _ => None,
                     }
+                }
+                ReviewScope::Worker { .. } => {
+                    let (from, to, files) =
+                        worker_range(&repo, base.as_deref().unwrap_or_default())?;
+                    untracked.extend(files);
+                    Some((from, to))
                 }
             };
             let commits = match repo.resolve("HEAD") {
@@ -151,44 +170,14 @@ impl SessionManager {
                 patch: String::new(),
                 full_files: whole_files,
                 commits,
-                branch: Some(branch),
+                branch,
                 base,
             };
             let Some((from, to)) = range else {
                 return Ok(review);
             };
-            let stat = repo.diff_stat(&from, &to).map_err(git_error)?;
-            let stats: HashMap<&str, _> = stat
-                .files
-                .iter()
-                .map(|file| (file.path.as_str(), file))
-                .collect();
-            review.files = repo
-                .changes(&from, &to, &untracked)
-                .map_err(git_error)?
-                .into_iter()
-                .map(|change| {
-                    let counts = stats.get(change.path.as_str());
-                    let (status, from) = match change.kind {
-                        _ if change.untracked => (ReviewFileStatus::Untracked, None),
-                        ChangeKind::Added => (ReviewFileStatus::Added, None),
-                        ChangeKind::Modified => (ReviewFileStatus::Modified, None),
-                        ChangeKind::Deleted => (ReviewFileStatus::Deleted, None),
-                        ChangeKind::Renamed { from } => (ReviewFileStatus::Renamed, Some(from)),
-                        ChangeKind::TypeChanged => (ReviewFileStatus::TypeChanged, None),
-                    };
-                    ReviewFile {
-                        insertions: counts.map_or(0, |file| file.insertions),
-                        deletions: counts.map_or(0, |file| file.deletions),
-                        binary: counts.is_some_and(|file| file.binary),
-                        path: change.path,
-                        from,
-                        status,
-                    }
-                })
-                .collect();
-            review.insertions = stat.insertions;
-            review.deletions = stat.deletions;
+            (review.files, review.insertions, review.deletions) =
+                review_files(&repo, &from, &to, &untracked)?;
             let context = if whole_files { WHOLE_FILES } else { CONTEXT };
             review.patch = repo
                 .review_patch(&from, &to, context, ignore_whitespace)
@@ -231,4 +220,45 @@ impl SessionManager {
         })
         .await
     }
+}
+
+/// The files changed from `from` to `to`, each with its counts (those in `untracked` marked
+/// so), and the counts of all of them.
+pub(super) fn review_files(
+    repo: &Repo,
+    from: &Oid,
+    to: &Oid,
+    untracked: &BTreeSet<String>,
+) -> Result<(Vec<ReviewFile>, u32, u32)> {
+    let stat = repo.diff_stat(from, to).map_err(git_error)?;
+    let stats: HashMap<&str, _> = stat
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    let files = repo
+        .changes(from, to, untracked)
+        .map_err(git_error)?
+        .into_iter()
+        .map(|change| {
+            let counts = stats.get(change.path.as_str());
+            let (status, from) = match change.kind {
+                _ if change.untracked => (ReviewFileStatus::Untracked, None),
+                ChangeKind::Added => (ReviewFileStatus::Added, None),
+                ChangeKind::Modified => (ReviewFileStatus::Modified, None),
+                ChangeKind::Deleted => (ReviewFileStatus::Deleted, None),
+                ChangeKind::Renamed { from } => (ReviewFileStatus::Renamed, Some(from)),
+                ChangeKind::TypeChanged => (ReviewFileStatus::TypeChanged, None),
+            };
+            ReviewFile {
+                insertions: counts.map_or(0, |file| file.insertions),
+                deletions: counts.map_or(0, |file| file.deletions),
+                binary: counts.is_some_and(|file| file.binary),
+                path: change.path,
+                from,
+                status,
+            }
+        })
+        .collect();
+    Ok((files, stat.insertions, stat.deletions))
 }

@@ -88,6 +88,7 @@ pub(crate) struct WorkerSession {
     pub grant: String,
 }
 
+mod quota;
 mod seam;
 
 #[derive(Default)]
@@ -111,6 +112,10 @@ struct TaskLiveState {
     seam: Option<seam::SeamLive>,
     /// What its session sent while it hands off: its successor's first input carries it.
     seam_held: Vec<String>,
+    quota_timer: u64,
+    quota_cancelled: bool,
+    quota_send_accepted: bool,
+    quota_turn_started: bool,
 }
 
 /// A task's live worker.
@@ -122,6 +127,7 @@ pub(crate) struct TaskLive {
     pub(crate) settle: tokio::sync::Mutex<()>,
     /// Held while the worker's CLI starts again, so two messages never start two CLIs.
     pub(crate) reroute: tokio::sync::Mutex<()>,
+    quota_transition: tokio::sync::Mutex<()>,
 }
 
 impl TaskLive {
@@ -132,6 +138,7 @@ impl TaskLive {
             state: tokio::sync::Mutex::new(TaskLiveState::default()),
             settle: tokio::sync::Mutex::new(()),
             reroute: tokio::sync::Mutex::new(()),
+            quota_transition: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -425,16 +432,9 @@ impl SessionManager {
             explanation: None,
         };
         let number = self.core.next_task_number(conversation_id).await?;
-        let names = self
-            .core
-            .board(conversation_id)
-            .await?
-            .tasks
-            .values()
-            .map(|task| task.title.clone())
-            .collect::<Vec<_>>();
         let kind = TaskKind::Implement;
-        let title = job_name(&title, kind, None, &names);
+        // Explicit titles are complete names; provisional unnamed titles are already short.
+        let title = title.trim().to_owned();
         let task = Task {
             id: TaskId::generate(),
             conversation_id: conversation_id.clone(),
@@ -903,6 +903,8 @@ impl SessionManager {
             state.busy = true;
             state.stopping = false;
             state.cutoff = None;
+            state.quota_send_accepted = false;
+            state.quota_turn_started = false;
         }
         #[cfg(debug_assertions)]
         self.arm_env_fault(&task.id, provider).await;
@@ -922,7 +924,7 @@ impl SessionManager {
             t.blocked_reason = None;
         })
         .await?;
-        if stopped {
+        if stopped || live.state.lock().await.quota_cancelled {
             live.close_cli().await;
             self.grants.revoke(&cli.grants);
             return Err(stopped_as_it_started(task));
@@ -939,6 +941,8 @@ impl SessionManager {
             .send(first)
             .await
             .map_err(|err| Error::Provider(err.to_string()))?;
+        live.state.lock().await.quota_send_accepted = true;
+        self.confirm_worker_quota_transition(live, &cli).await;
         Ok(())
     }
 
@@ -1596,6 +1600,8 @@ impl SessionManager {
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
+                live.state.lock().await.quota_turn_started = true;
+                self.confirm_worker_quota_transition(live, cli).await;
                 live.state.lock().await.last_message = None;
             }
             ProviderEvent::SessionStarted {
@@ -1659,6 +1665,9 @@ impl SessionManager {
                 // A usage limit (or a logout, an outage): its session hears it when the turn
                 // ends.
                 fallback::ErrorVerdict::HandOff(end) => {
+                    if let AttemptEnd::Limit { limit } = &end {
+                        self.runtime.note_limit(&cli.account, limit.clone()).await;
+                    }
                     live.set_cutoff(end).await;
                     None
                 }
@@ -1904,6 +1913,9 @@ impl SessionManager {
         task: &Task,
         text: String,
     ) -> Result<()> {
+        let live = self.task_live(task);
+        let _settled = live.settle.lock().await;
+        self.cancel_worker_quota(&live, task).await?;
         // Something new from its session: a later cut-off may go on by itself again (D9 a).
         if task.plain.as_ref().is_some_and(|plain| plain.auto_resumed) {
             self.update_task(conversation_id, &task.id, |t| {
@@ -1913,6 +1925,7 @@ impl SessionManager {
             })
             .await?;
         }
+        live.state.lock().await.quota_cancelled = false;
         self.send_worker_text(conversation_id, task, text).await
     }
 
@@ -1988,6 +2001,11 @@ impl SessionManager {
     async fn stop_if(&self, task_id: TaskId, eligible: fn(TaskState) -> bool) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
+        if let Some(live) = &live {
+            let mut state = live.state.lock().await;
+            state.quota_cancelled = true;
+            state.quota_timer += 1;
+        }
         let settled = match &live {
             Some(live) => Some(live.settle.lock().await),
             None => None,
@@ -1995,6 +2013,9 @@ impl SessionManager {
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         if !eligible(task.state) {
             return Ok(false);
+        }
+        if let Some(live) = &live {
+            self.cancel_worker_quota(live, &task).await?;
         }
         // Until it is recorded stopped, a landing that fails as its worktree goes hands
         // nothing back to the orchestrator.
@@ -2197,6 +2218,14 @@ impl SessionManager {
         let live = self
             .existing_task_live(&task_id)
             .ok_or_else(|| Error::Invalid("the worker has ended".into()))?;
+        {
+            let mut state = live.state.lock().await;
+            state.quota_cancelled = true;
+            state.quota_timer += 1;
+        }
+        let _settled = live.settle.lock().await;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        self.cancel_worker_quota(&live, &task).await?;
         let cli = live.state.lock().await.cli.clone();
         if let Some(cli) = cli {
             cli.session
@@ -2694,6 +2723,7 @@ async fn latest_session_start(store: &brigadier_store::Store, id: &TaskId) -> Op
 }
 
 /// Names remain short and unique even for automatically created reviewers and old callers.
+#[cfg(test)]
 fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String]) -> String {
     let contains_id = title
         .split_whitespace()

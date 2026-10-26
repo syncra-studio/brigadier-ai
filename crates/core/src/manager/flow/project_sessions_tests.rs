@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{ConversationId, ConversationKind, Environment, Setup};
+use crate::work::OrchestratorStepKind;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -575,5 +576,291 @@ async fn a_fork_in_the_same_folder_respects_the_checkout_guard() {
             ..
         })
     ));
+    flow.stop().await;
+}
+
+/// The latest request of the flow's thread.
+async fn latest_request(flow: &Flow) -> String {
+    flow.board()
+        .await
+        .latest_request()
+        .expect("a request")
+        .id
+        .clone()
+}
+
+/// Records a session offer in the flow's thread as the thread recorded one (an old record's
+/// too: the event is the same), at `at_ms`.
+async fn record_offer(flow: &Flow, request: Option<String>, id: &str, task: &str, at_ms: i64) {
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::OrchestratorStepped {
+                step: crate::work::OrchestratorStep {
+                    request_id: request,
+                    kind: OrchestratorStepKind::SessionOffered {
+                        id: id.into(),
+                        title: task.trim_end_matches('.').into(),
+                        task: task.into(),
+                    },
+                    at_ms,
+                    position: 0,
+                },
+            }],
+        )
+        .await
+        .unwrap();
+}
+
+/// How many times the offer `id` was taken in the flow's thread.
+async fn taken(flow: &Flow, id: &str) -> usize {
+    flow.board()
+        .await
+        .orchestrator_steps
+        .iter()
+        .filter(|step| matches!(&step.kind, OrchestratorStepKind::SessionOfferTaken { id: taken, .. } if taken == id))
+        .count()
+}
+
+/// Start as session (Q73): the thread offers work to run apart as a card
+/// (`brigadier session propose`), the same task once a request; nothing starts by itself. The
+/// user's click starts it as a session of its own, on its own worktree, with the task as its
+/// first message, and the offer is spent.
+#[tokio::test]
+async fn an_offered_session_starts_only_on_the_users_click() {
+    let inner = writing(None);
+    let thread = script(move |turn| {
+        let inner = inner.clone();
+        async move {
+            if !turn.is_orchestrator() || !turn.input.contains("Fix the header.") {
+                return inner(turn).await;
+            }
+            let offered = turn
+                .call(
+                    "offer_session",
+                    serde_json::json!({ "task": "Write delta.", "title": "Write delta" }),
+                )
+                .await;
+            assert!(!offered.is_error, "{}", offered.text);
+            assert!(
+                offered.text.contains("Don't start it yourself"),
+                "{}",
+                offered.text
+            );
+            let again = turn
+                .call(
+                    "offer_session",
+                    serde_json::json!({ "task": "Write delta." }),
+                )
+                .await;
+            assert!(
+                again.is_error && again.text.contains("already offered"),
+                "{}",
+                again.text
+            );
+            let empty = turn
+                .call("offer_session", serde_json::json!({ "task": "  " }))
+                .await;
+            assert!(empty.is_error, "{}", empty.text);
+            Reply::text("The header is fixed.")
+        }
+    });
+    let flow = Flow::start("sessions-offer", Options::default(), thread).await;
+    let before = flow.core.catalog().conversations.len();
+    flow.say("Fix the header.").await;
+    let board = flow.settled().await;
+    let offers: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::SessionOffered { id, title, task } => {
+                Some((id.clone(), title.clone(), task.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let [(offer, title, task)] = offers.try_into().expect("one offer");
+    assert_eq!(
+        (title.as_str(), task.as_str()),
+        ("Write delta", "Write delta.")
+    );
+    assert_eq!(
+        flow.core.catalog().conversations.len(),
+        before,
+        "nothing starts by itself"
+    );
+
+    let (session, _) = flow
+        .manager
+        .start_offered_session(&flow.conversation, &offer)
+        .await
+        .unwrap();
+    assert_eq!(
+        session.title, "Write delta",
+        "its task is its first message"
+    );
+    assert_eq!(
+        session.project_id,
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .project_id
+    );
+    flow.settled_in(&session.id).await;
+    let (Some(path), _, _) = worktree(&flow, &session.id) else {
+        panic!("the session's worktree");
+    };
+    assert!(path.join("delta.txt").exists());
+    assert_ne!(Some(path), worktree(&flow, &flow.conversation).0);
+    let board = flow.board().await;
+    assert!(board.orchestrator_steps.iter().any(|step| matches!(
+        &step.kind,
+        OrchestratorStepKind::SessionOfferTaken { id, session: started } if *id == offer && *started == session.id
+    )));
+    assert!(
+        flow.manager
+            .start_offered_session(&flow.conversation, &offer)
+            .await
+            .is_err(),
+        "once only"
+    );
+    flow.stop().await;
+}
+
+/// Two clicks of Start as session at once, on an offer an older version recorded: one session
+/// starts, the offer is taken once, and the other click is refused.
+#[tokio::test]
+async fn two_clicks_on_an_old_records_offer_start_one_session() {
+    let flow = Flow::start("sessions-offer-clicks", Options::default(), writing(None)).await;
+    flow.say("Note it.").await;
+    flow.settled().await;
+    let request = latest_request(&flow).await;
+    record_offer(
+        &flow,
+        Some(request),
+        "old",
+        "Write epsilon.",
+        crate::now_ms(),
+    )
+    .await;
+    let before = flow.core.catalog().conversations.len();
+    let (first, second) = tokio::join!(
+        flow.manager
+            .start_offered_session(&flow.conversation, "old"),
+        flow.manager
+            .start_offered_session(&flow.conversation, "old"),
+    );
+    let started: Vec<_> = [first, second].into_iter().filter_map(Result::ok).collect();
+    let [(session, _)] = started.try_into().expect("one click starts it");
+    assert_eq!(flow.core.catalog().conversations.len(), before + 1);
+    assert_eq!(taken(&flow, "old").await, 1);
+    flow.settled_in(&session.id).await;
+    flow.stop().await;
+}
+
+/// Start as session starts nothing from an offer out of view (from a request's earlier attempt,
+/// or a message the user edited away), an unknown offer, or a session archived; workers and
+/// Chats have no `offer_session`, and a Chat opens no session.
+#[tokio::test]
+async fn an_offer_out_of_view_or_from_an_archived_session_starts_nothing() {
+    use crate::tools::{OfferSession, OrchestratorCall, Role, ToolCall, ToolHost};
+    let flow = Flow::start("sessions-offer-refused", Options::default(), writing(None)).await;
+    flow.say("Note it.").await;
+    flow.settled().await;
+    let request = latest_request(&flow).await;
+    record_offer(&flow, Some(request.clone()), "earlier", "Write zeta.", 0).await;
+    record_offer(
+        &flow,
+        Some("edited-away".into()),
+        "edited",
+        "Write eta.",
+        crate::now_ms(),
+    )
+    .await;
+    record_offer(
+        &flow,
+        Some(request),
+        "current",
+        "Write theta.",
+        crate::now_ms(),
+    )
+    .await;
+    let before = flow.core.catalog().conversations.len();
+    for offer in ["earlier", "edited"] {
+        let err = flow
+            .manager
+            .start_offered_session(&flow.conversation, offer)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("earlier answer"), "{offer}: {err}");
+    }
+    assert!(matches!(
+        flow.manager
+            .start_offered_session(&flow.conversation, "unknown")
+            .await,
+        Err(crate::Error::NotFound(_))
+    ));
+    assert_eq!(flow.core.catalog().conversations.len(), before);
+
+    let offer = |task: &str| OfferSession {
+        task: task.into(),
+        title: None,
+    };
+    for role in [
+        Role::Worker {
+            conversation_id: flow.conversation.clone(),
+            task_id: crate::work::TaskId("t-offer".into()),
+        },
+        Role::Chat {
+            conversation_id: flow.conversation.clone(),
+        },
+    ] {
+        let grant = flow.manager.grants.issue("test:offer", role);
+        let reply = ToolHost::call(
+            &*flow.manager,
+            &grant,
+            ToolCall::Orchestrator(OrchestratorCall::OfferSession(offer("Write iota."))),
+        )
+        .await;
+        assert!(
+            reply.is_error && reply.text.contains("not available"),
+            "{}",
+            reply.text
+        );
+    }
+    let chat = flow
+        .manager
+        .create_conversation(ConversationKind::Chat, None, None, None)
+        .await
+        .unwrap();
+    assert!(
+        flow.manager
+            .offer_session(&chat.id, offer("Write iota."))
+            .await
+            .is_err()
+    );
+
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    assert!(
+        flow.manager
+            .offer_session(&flow.conversation, offer("Write kappa."))
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .start_offered_session(&flow.conversation, "current")
+            .await
+            .is_err()
+    );
+    assert_eq!(taken(&flow, "current").await, 0);
+    assert_eq!(
+        flow.core.catalog().conversations.len(),
+        before + 1,
+        "only the Chat"
+    );
     flow.stop().await;
 }

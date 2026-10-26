@@ -7,6 +7,7 @@
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
 use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, NodeFilter};
+use brigadier_core::manager::{BackgroundHistoryOutput, BackgroundHistoryPage};
 use brigadier_core::pages::{Page, PageContent, PageError, PageSummary, PageWriteOutcome};
 use brigadier_core::storage::{
     BranchChoice, CleanProgress, CleanReport, FreeUpProjectsReport, ProjectRemoval,
@@ -14,20 +15,20 @@ use brigadier_core::storage::{
     UnlandedBranch,
 };
 use brigadier_core::{
-    AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile, ConnectView,
-    ContinueWhen, ConventionsExport, Conversation, ConversationActivity, ConversationId,
-    ConversationKind, ConversationStatus, ConversationView, DiffStat, FeedbackFiled,
-    FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport, ForkPlace,
-    GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches, MessagePage,
-    MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst, Project,
-    ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating,
-    RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    AccountEntry, AccountsView, AddWaitingOn, AppAnswer, AppCall, AttachmentRef, BrainOverview,
+    CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
+    ConflictFile, ConnectView, ContinueWhen, ConventionsExport, Conversation, ConversationActivity,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
+    FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
+    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches,
+    MessagePage, MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst,
+    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
+    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
-    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
-    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
+    TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn,
+    WorkerDiff, WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -443,6 +444,12 @@ pub enum Request {
     GetWorkerDiffs {
         conversation_id: ConversationId,
     },
+    /// The files a worker of the conversation changed, as its +N −N counts them: the Source
+    /// panel's worker scope. It only reads.
+    GetWorkerSource {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
     /// Creates a session (with a project) or a chat (without). The setup comes from the
     /// composer; sessions need one to run, and their project remembers it.
     CreateConversation {
@@ -460,6 +467,12 @@ pub enum Request {
         text: String,
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
+    },
+    /// "Start as session" on the thread's offer (`brigadier session propose`): its task starts
+    /// as a new session of the project in the background, as ⌘⏎ starts one; once only.
+    StartOfferedSession {
+        conversation_id: ConversationId,
+        offer_id: String,
     },
     /// "Fork chat from here": a new conversation with the thread up to the answer
     /// `message_id`; a session's fork works from the commit current then, in `place`.
@@ -689,6 +702,10 @@ pub enum Request {
         #[ts(optional)]
         worker_id: Option<TaskId>,
         task_id: String,
+        // Invocation shown by the caller; reject an id reused by a later task.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        started_at_ms: Option<i64>,
     },
     /// What a background command of the thread's CLI, or of its worker `worker_id`'s CLI,
     /// printed so far: the end of its output file, up to 256 KiB.
@@ -698,6 +715,9 @@ pub enum Request {
         #[ts(optional)]
         worker_id: Option<TaskId>,
         task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        started_at_ms: Option<i64>,
     },
     /// The thread as its CLI keeps it (S9, S10): its CLI session files' items, the live
     /// stream's after them, and its turns. `threadNews` frames extend it.
@@ -752,6 +772,38 @@ pub enum Request {
     /// A session checkout's branch, changes and remote, for its Git actions.
     GetGitState {
         conversation_id: ConversationId,
+    },
+    GetBackgroundHistory {
+        conversation_id: ConversationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        before: Option<String>,
+        #[serde(default = "background_history_limit")]
+        limit: u32,
+    },
+    ReadBackgroundHistoryOutput {
+        conversation_id: ConversationId,
+        record_id: String,
+    },
+    GetTrackedWork {
+        conversation_id: ConversationId,
+    },
+    WatchPullRequest {
+        conversation_id: ConversationId,
+        url: String,
+        account: Option<String>,
+    },
+    ForgetPullRequest {
+        conversation_id: ConversationId,
+        key: String,
+    },
+    AddWaitingOn {
+        conversation_id: ConversationId,
+        wait: AddWaitingOn,
+    },
+    CompleteWaitingOn {
+        conversation_id: ConversationId,
+        id: String,
     },
     /// The GitHub pull request of a session checkout's branch, looked up with `gh` (read only).
     GetPullRequest {
@@ -1578,10 +1630,17 @@ pub enum Response {
     GetWorkerDiffs {
         diffs: Vec<WorkerDiff>,
     },
+    GetWorkerSource {
+        source: WorkerSource,
+    },
     CreateConversation {
         conversation: Box<Conversation>,
     },
     StartSession {
+        conversation: Box<Conversation>,
+        outcome: SendOutcome,
+    },
+    StartOfferedSession {
         conversation: Box<Conversation>,
         outcome: SendOutcome,
     },
@@ -1698,6 +1757,25 @@ pub enum Response {
     },
     GetGitState {
         state: GitState,
+    },
+    GetBackgroundHistory {
+        history: BackgroundHistoryPage,
+    },
+    ReadBackgroundHistoryOutput {
+        output: BackgroundHistoryOutput,
+    },
+    GetTrackedWork {
+        work: TrackedWork,
+    },
+    WatchPullRequest {
+        pull_request: TrackedPullRequest,
+    },
+    ForgetPullRequest,
+    AddWaitingOn {
+        wait: WaitingOn,
+    },
+    CompleteWaitingOn {
+        wait: WaitingOn,
     },
     GetPullRequest {
         pull_request: Option<PullRequest>,
@@ -2601,4 +2679,8 @@ mod plugin_import_tests {
             serde_json::json!({"method":"importPlugin", "job":"plugin-job-test"})
         );
     }
+}
+
+fn background_history_limit() -> u32 {
+    50
 }

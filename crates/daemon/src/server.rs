@@ -1246,8 +1246,8 @@ fn lifecycle_outcomes(
         .collect()
 }
 
-/// A new session started on a message, the notice of a message sent on to another session, and
-/// "Run here" on one offered as a new session (in its own boxed future: the dispatch stays
+/// A new session started on a message or on the thread's offer, the notice of a message sent on
+/// to another session, and "Run here" on one offered as a new session (in its own boxed future: the dispatch stays
 /// under its size).
 async fn open_session(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
     Ok(match request {
@@ -1268,6 +1268,18 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 )
                 .await?;
             Response::StartSession {
+                conversation: Box::new(conversation),
+                outcome: send_outcome(outcome),
+            }
+        }
+        Request::StartOfferedSession {
+            conversation_id,
+            offer_id,
+        } => {
+            let (conversation, outcome) = sessions
+                .start_offered_session(&conversation_id, &offer_id)
+                .await?;
+            Response::StartOfferedSession {
                 conversation: Box::new(conversation),
                 outcome: send_outcome(outcome),
             }
@@ -1356,6 +1368,7 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetProjectSourceState { .. }
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
+            | Request::GetWorkerSource { .. }
             | Request::PrepareTurnRevert { .. }
             | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
@@ -1409,6 +1422,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             ),
         },
         request @ (Request::StartSession { .. }
+        | Request::StartOfferedSession { .. }
         | Request::GetSettledTabs
         | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {
@@ -1808,6 +1822,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
             diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
         },
+        Request::GetWorkerSource {
+            conversation_id,
+            task_id,
+        } => Response::GetWorkerSource {
+            source: heap(|| sessions.worker_source(&conversation_id, &task_id)).await?,
+        },
         Request::SteerQueued {
             conversation_id,
             item_id,
@@ -1951,9 +1971,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             worker_id,
             task_id,
+            started_at_ms,
         } => {
             sessions
-                .stop_background_task(&conversation_id, worker_id.as_ref(), task_id)
+                .stop_background_task(&conversation_id, worker_id.as_ref(), task_id, started_at_ms)
                 .await?;
             Response::StopBackgroundTask
         }
@@ -1961,11 +1982,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             worker_id,
             task_id,
+            started_at_ms,
         } => Response::ReadBackgroundTaskOutput {
             output: sessions.background_task_output(
                 &conversation_id,
                 worker_id.as_ref(),
                 &task_id,
+                started_at_ms,
             )?,
         },
         Request::ThreadView { conversation_id } => Response::ThreadView {
@@ -2021,6 +2044,52 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,
+        },
+        Request::GetBackgroundHistory {
+            conversation_id,
+            before,
+            limit,
+        } => Response::GetBackgroundHistory {
+            history: heap(|| sessions.background_history(&conversation_id, before, limit)).await?,
+        },
+        Request::ReadBackgroundHistoryOutput {
+            conversation_id,
+            record_id,
+        } => Response::ReadBackgroundHistoryOutput {
+            output: heap(|| sessions.background_history_output(&conversation_id, &record_id))
+                .await?,
+        },
+        Request::GetTrackedWork { conversation_id } => Response::GetTrackedWork {
+            work: heap(|| sessions.tracked_work_status(&conversation_id)).await?,
+        },
+        Request::WatchPullRequest {
+            conversation_id,
+            url,
+            account,
+        } => Response::WatchPullRequest {
+            pull_request: heap(|| {
+                sessions.watch_pull_request(&conversation_id, &url, account, "you")
+            })
+            .await?,
+        },
+        Request::ForgetPullRequest {
+            conversation_id,
+            key,
+        } => {
+            heap(|| sessions.forget_pull_request(&conversation_id, &key)).await?;
+            Response::ForgetPullRequest
+        }
+        Request::AddWaitingOn {
+            conversation_id,
+            wait,
+        } => Response::AddWaitingOn {
+            wait: heap(|| sessions.add_waiting_on(&conversation_id, "you", wait)).await?,
+        },
+        Request::CompleteWaitingOn {
+            conversation_id,
+            id,
+        } => Response::CompleteWaitingOn {
+            wait: heap(|| sessions.complete_waiting_on(&conversation_id, &id)).await?,
         },
         Request::GetPullRequest { conversation_id } => {
             let status = heap(|| sessions.pull_request(&conversation_id)).await?;
@@ -2948,6 +3017,10 @@ mod tests {
             Request::GetSessionDiff { id: id() },
             Request::GetWorkerDiffs {
                 conversation_id: id(),
+            },
+            Request::GetWorkerSource {
+                conversation_id: id(),
+                task_id: brigadier_core::TaskId("t1".into()),
             },
             Request::GetPendingChanges {
                 conversation_id: id(),

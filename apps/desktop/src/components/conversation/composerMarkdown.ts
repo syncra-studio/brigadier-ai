@@ -27,7 +27,16 @@ import {
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { $dfs } from "@lexical/utils";
-import { $createTextNode, $isLineBreakNode, $isTextNode, type Klass, type LexicalNode, type TextNode } from "lexical";
+import {
+  $createTextNode,
+  $isElementNode,
+  $isLineBreakNode,
+  $isTextNode,
+  type ElementNode,
+  type Klass,
+  type LexicalNode,
+  type TextNode,
+} from "lexical";
 
 import { DIVIDER } from "@/components/views/page-editor/pageMarkdown";
 
@@ -90,10 +99,13 @@ const KEPT_BACK = new Map(Object.entries(KEPT).map(([char, held]) => [held, char
  * formatting when read back left to be escaped (with a link's `(` and a line's block marker).
  * So `snake_case` and `2 * 3` go as typed, and `**x**` typed as text as `\*\*x\*\*`.
  */
-export function escapeText(text: string, startsBlock: boolean): string {
+export function escapeText(text: string, startsBlock: boolean, line: string = text): string {
   let escaped = text.replace(/\\(?=[!-/:-@[-`{-~])/g, "\\\\");
-  // The markers that would format it are left for Lexical to escape; the others are kept.
-  const escape = new Set(INLINE_MARKERS.flatMap(([marker, char]) => (marker.test(escaped) ? [char] : [])));
+  // The markers that would format it are left for Lexical to escape; the others are kept. A
+  // backtick pairs with one anywhere on its line (`line`), across a chip: `` a `[Pasted text #1] ` ``.
+  const escape = new Set(
+    INLINE_MARKERS.flatMap(([marker, char]) => (marker.test(char === "`" ? line : escaped) ? [char] : [])),
+  );
   escaped = escaped.replace(LINK_TEXT, "\\(");
   let lead = "";
   if (startsBlock && BLOCK_START.test(escaped)) {
@@ -133,6 +145,34 @@ export const CARET = "\uf8ff";
 /** Where the caret is while the Markdown is measured: a text node and an offset in it. */
 let caretAt: { key: string; offset: number } | null = null;
 
+/** Each block's text while the Markdown is exported, by its key (see `$lineOf`). */
+const lines = new Map<string, string>();
+
+/** `parent`'s text in Markdown: its chips as their text, inline code as a pair of backticks. */
+function inlineText(parent: ElementNode): string {
+  return parent.getChildren().map((child: LexicalNode) => {
+    if ($isTextNode(child)) return child.hasFormat("code") ? "``" : child.getTextContent();
+    if ($isLineBreakNode(child)) return "\n";
+    if ($isElementNode(child)) return child.isInline() ? inlineText(child) : "";
+    return child.getTextContent();
+  }).join("");
+}
+
+/**
+ * The text of `node`'s block as its backticks read in Markdown: its chips as their text and its
+ * inline code as a pair of backticks (a nested block's text aside).
+ */
+function $lineOf(node: TextNode): string {
+  let block: ElementNode | null = node.getParent();
+  while (block?.isInline()) block = block.getParent();
+  if (!block) return node.getTextContent();
+  const known = lines.get(block.getKey());
+  if (known !== undefined) return known;
+  const line = inlineText(block);
+  lines.set(block.getKey(), line);
+  return line;
+}
+
 /** Plain text exports escaped, so what was typed as text never comes back as formatting. */
 const LITERAL_TEXT: TextMatchTransformer = {
   dependencies: [],
@@ -140,7 +180,7 @@ const LITERAL_TEXT: TextMatchTransformer = {
     if (!$isTextNode(node) || $inCode(node)) return null;
     let text = node.getTextContent();
     if (caretAt?.key === node.getKey()) text = text.slice(0, caretAt.offset) + CARET + text.slice(caretAt.offset);
-    return exportFormat(node, escapeText(text, $startsBlock(node)));
+    return exportFormat(node, escapeText(text, $startsBlock(node), $lineOf(node)));
   },
   importRegExp: /(?!)/,
   regExp: /(?!)/,
@@ -248,5 +288,6 @@ export function $exportComposer(caret: { key: string; offset: number } | null = 
     );
   } finally {
     caretAt = null;
+    lines.clear();
   }
 }

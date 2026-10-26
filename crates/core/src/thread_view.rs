@@ -81,6 +81,14 @@ impl CliJobs {
 }
 
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
+/// Only a native id previously bound to registered typed input can hide a user-shaped event.
+pub(crate) fn daemon_context(
+    event: &ProviderEvent,
+    known: &std::collections::HashSet<String>,
+) -> bool {
+    matches!(event, ProviderEvent::Message { role: Role::User, item_id, .. } if known.contains(item_id))
+}
+
 pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue this work.";
 /// How a successor's hand-off begins (`[Brigadier hand-off <n> · <session>]`) and ends; the
 /// first message of the successor follows it.
@@ -240,6 +248,11 @@ pub struct ThreadTurn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<LimitHit>,
+    /// It started with a message the user sent while the work before it still held (its
+    /// workers or its background commands still ran): it goes on with that work, in its block.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub joins: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -273,6 +286,9 @@ pub(crate) struct TurnRecord {
     /// never records it (#540).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub joins: bool,
 }
 
 /// What the live stream added for a conversation, sent as it comes.
@@ -329,6 +345,10 @@ pub struct CliTurn {
     pub turn_ended_at_ms: Option<i64>,
 }
 
+#[path = "persistent_apps.rs"]
+mod persistent_apps;
+pub(crate) use persistent_apps::persistent_app;
+
 /// A conversation's live turn: the stream's items since it began.
 #[derive(Debug, Default)]
 pub(crate) struct LiveTurn {
@@ -347,6 +367,8 @@ pub(crate) struct LiveTurn {
     pub limit: Option<LimitHit>,
     /// Brigadier's requests it carries.
     pub requests: Vec<String>,
+    /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
+    pub joins: bool,
     /// The CLI's background tasks: they outlast the turn that started them, so a turn that
     /// opens keeps them.
     pub background: Vec<BackgroundTask>,
@@ -417,14 +439,32 @@ impl LiveTurn {
 
     /// The command background task `task` runs, when its CLI said it.
     fn command_of<'a>(&'a self, task: &'a BackgroundTask) -> Option<&'a str> {
-        if task.kind == BackgroundTaskKind::Terminal {
-            return Some(&task.label);
-        }
-        let item = task.item_id.as_deref()?;
-        self.commands
+        task.item_id
+            .as_deref()
+            .and_then(|item| {
+                self.commands
+                    .iter()
+                    .find(|(id, _)| id == item)
+                    .map(|(_, command)| command.as_str())
+            })
+            .or_else(|| (task.kind == BackgroundTaskKind::Terminal).then_some(task.label.as_str()))
+    }
+
+    pub(crate) fn persistent_task(&self, task: &BackgroundTask) -> bool {
+        matches!(
+            task.kind,
+            BackgroundTaskKind::Shell | BackgroundTaskKind::Terminal
+        ) && self.command_of(task).is_some_and(persistent_app)
+    }
+
+    pub(crate) fn persistent_tasks(&self) -> std::collections::HashSet<String> {
+        self.background
             .iter()
-            .find(|(id, _)| id == item)
-            .map(|(_, command)| command.as_str())
+            .filter(|task| {
+                task.status == BackgroundTaskStatus::Running && self.persistent_task(task)
+            })
+            .map(|task| task.id.clone())
+            .collect()
     }
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
@@ -435,9 +475,11 @@ impl LiveTurn {
             .filter(|task| {
                 task.status == BackgroundTaskStatus::Running
                     && task.kind != BackgroundTaskKind::Agent
+                    && !self.persistent_task(task)
                     && !self.command_of(task).is_some_and(|command| {
-                        policy::runs_brigadier(command, "wait")
-                            || policy::runs_brigadier(command, "preview")
+                        policy::runs_only_brigadier(command)
+                            && (policy::runs_brigadier(command, "wait")
+                                || policy::runs_brigadier(command, "preview"))
                     })
             })
             .map(|task| task.id.clone())
@@ -553,6 +595,7 @@ pub(crate) fn view(
             turn.limit.clone_from(&live.limit);
         }
         add_requests(&mut turn.requests, &live.requests);
+        turn.joins |= live.joins;
     }
     ThreadView {
         entries,
@@ -609,19 +652,26 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         .collect();
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
-    let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>)> = HashMap::new();
+    let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>, bool)> = HashMap::new();
+    // Each turn's ends, oldest first: a turn the stream said went on (a background job's end,
+    // or a compaction the daemon took for one) ends more than once.
+    let mut ends: HashMap<&str, Vec<&TurnRecord>> = HashMap::new();
     for record in records {
         let Some(id) = record.user_message.as_deref() else {
             continue;
         };
-        let (requests, end) = recorded.entry(id).or_default();
+        let (requests, end, joins) = recorded.entry(id).or_default();
         add_requests(requests, &record.requests);
+        *joins |= record.joins;
         if record.end.is_some() {
             *end = Some(record);
+            ends.entry(id).or_default().push(record);
         }
     }
     let count = starts.len();
-    starts
+    // The end the turn before was recorded with, as the daemon followed it.
+    let mut before: Option<&TurnRecord> = None;
+    let mut turns: Vec<(ThreadTurn, bool)> = starts
         .iter()
         .enumerate()
         .map(|(n, &start)| {
@@ -637,6 +687,7 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 error: None,
                 requests: Vec::new(),
                 limit: None,
+                joins: false,
             };
             let marker = inside.iter().find_map(|entry| match &entry.event {
                 ProviderEvent::TurnCompleted { status, .. } if entry.parent.is_none() => {
@@ -659,9 +710,23 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 _ => None,
             });
             let noted = recorded.remove(id.as_str());
-            let cut = noted.as_ref().is_some_and(|(_, end)| end.is_none());
-            let (requests, record) = noted.unwrap_or_default();
+            // A turn no record names that began before the turn before it ended ran inside that
+            // one, as the stream said it: Claude writes Brigadier's `/compact` after the
+            // compaction, which the stream said in the turn before. It ended as that one did.
+            let within = before.filter(|record| {
+                noted.is_none()
+                    && record
+                        .ended_at_ms
+                        .zip(turn.started_at_ms)
+                        .is_some_and(|(ended, started)| started <= ended)
+            });
+            let cut = noted.as_ref().is_some_and(|(_, end, _)| end.is_none());
+            let (requests, record, joins) = noted.unwrap_or_default();
+            if within.is_none() {
+                before = record;
+            }
             turn.requests = requests;
+            turn.joins = joins;
             turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
             if let Some(record) = record {
                 turn.end = record.end;
@@ -669,6 +734,10 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 turn.ended_at_ms = record.ended_at_ms;
             } else if last && running {
                 turn.ended_at_ms = None;
+            } else if let Some(record) = within {
+                turn.end = record.end;
+                turn.error = error;
+                turn.ended_at_ms = record.ended_at_ms;
             } else if cut {
                 turn.end = Some(TurnEnd::Interrupted);
                 turn.error = error;
@@ -684,9 +753,34 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             } else {
                 turn.end = Some(TurnEnd::Done);
             }
-            turn
+            (turn, within.is_some())
         })
-        .collect()
+        .collect();
+    // The turn before one that ran inside it ended where it ended before that one began, not
+    // with it: Brigadier's `/compact` after an answer adds nothing to the answer's time.
+    for n in 1..turns.len() {
+        if !turns[n].1 || turns[n - 1].1 {
+            continue;
+        }
+        let started = turns[n].0.started_at_ms;
+        let previous = &mut turns[n - 1].0;
+        let own = ends.get(previous.user_message.as_str()).and_then(|ends| {
+            ends.iter().rev().find(|record| {
+                record
+                    .ended_at_ms
+                    .zip(started)
+                    .is_some_and(|(ended, started)| ended <= started)
+            })
+        });
+        if let Some(record) = own {
+            previous.end = record.end;
+            previous.ended_at_ms = record.ended_at_ms;
+            if record.error.is_some() {
+                previous.error.clone_from(&record.error);
+            }
+        }
+    }
+    turns.into_iter().map(|(turn, _)| turn).collect()
 }
 
 /// The limit an error of the CLI says it hit: a usage window, a spend control or credits.
@@ -775,6 +869,43 @@ mod tests {
             images: Vec::new(),
             phase: None,
         }
+    }
+
+    #[test]
+    fn daemon_provenance_requires_known_native_id_and_respects_authored_markers() {
+        let entry = message("native", Role::User);
+        assert!(!daemon_context(&entry.event, &Default::default()));
+        assert!(daemon_context(
+            &entry.event,
+            &std::collections::HashSet::from(["native".into()])
+        ));
+    }
+
+    #[test]
+    fn reconstructed_projection_keeps_assistant_followup_without_an_internal_workblock() {
+        let raw = [
+            message("real-user", Role::User),
+            message("answer-before", Role::Assistant),
+            message("daemon-input", Role::User),
+            message("answer-after", Role::Assistant),
+        ];
+        let known = std::collections::HashSet::from(["daemon-input".to_owned()]);
+        let projected: Vec<_> = raw
+            .iter()
+            .filter(|entry| !daemon_context(&entry.event, &known))
+            .cloned()
+            .collect();
+        let reconstructed = view(vec![Arc::new(projected)], None, &[]);
+        assert_eq!(reconstructed.turns.len(), 1);
+        assert_eq!(
+            ids(&reconstructed),
+            ["real-user", "answer-before", "answer-after"]
+        );
+        assert_eq!(raw.len(), 4, "native diagnostics/history remain untouched");
+        assert!(!daemon_context(
+            &message("authored-identical", Role::User).event,
+            &known
+        ));
     }
 
     /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
@@ -879,6 +1010,7 @@ mod tests {
             requests: Vec::new(),
             limit: None,
             context_window: None,
+            joins: false,
         };
         let live = LiveTurn {
             entries: vec![notice.clone(), message("a2", Role::Assistant)],
@@ -912,5 +1044,54 @@ mod tests {
             &[ended(10)],
         );
         assert_eq!(next.turns[0].end, Some(TurnEnd::Done));
+    }
+
+    /// Brigadier's `/compact` after a turn: the stream said the compaction in that turn, so its
+    /// record names that turn alone; Claude's file then holds the `/compact` as a turn of its
+    /// own. It ended with that turn, and never reads as cut off. A turn begun after that one's
+    /// end that nothing recorded still does.
+    #[test]
+    fn a_turn_the_records_never_named_inside_the_turn_before_ends_as_that_one_did() {
+        let at = |at: i64, entry: FileEntry| FileEntry {
+            at_ms: Some(at),
+            ..entry
+        };
+        let ended = |at: i64| TurnRecord {
+            user_message: Some("u1".into()),
+            end: Some(TurnEnd::Done),
+            error: None,
+            ended_at_ms: Some(at),
+            requests: vec!["r1".into()],
+            limit: None,
+            context_window: None,
+            joins: false,
+        };
+        let compaction = entry(ProviderEvent::CompactionEnded {
+            automatic: false,
+            tokens_before: Some(200),
+            tokens_after: Some(20),
+            error: None,
+            native_id: None,
+        });
+        let file = vec![
+            at(1, message("u1", Role::User)),
+            at(2, message("a1", Role::Assistant)),
+            at(9, compaction),
+            at(3, message("/compact", Role::User)),
+        ];
+        let records = [ended(2), ended(10)];
+        let view = view(vec![Arc::new(file.clone())], None, &records);
+        assert_eq!(view.turns.len(), 2);
+        // The turn before ended where it did, before the `/compact` began: not with it.
+        assert_eq!(view.turns[0].end, Some(TurnEnd::Done));
+        assert_eq!(view.turns[0].ended_at_ms, Some(2));
+        assert_eq!(view.turns[1].end, Some(TurnEnd::Done));
+        assert_eq!(view.turns[1].error, None);
+        assert_eq!(view.turns[1].ended_at_ms, Some(10));
+        assert!(view.turns[1].requests.is_empty());
+        let mut later = file;
+        later.push(at(20, message("u3", Role::User)));
+        let cut = super::view(vec![Arc::new(later)], None, &records);
+        assert_eq!(cut.turns[2].end, Some(TurnEnd::Interrupted));
     }
 }

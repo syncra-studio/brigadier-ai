@@ -89,6 +89,24 @@ test("new navigation after Back drops Forward while revisiting the same place ad
   assert.deepEqual(shown(), { type: "settings", page: "voice" });
 });
 
+test("returning to an earlier place by a link drops the detour, so Back unwinds the way it was reached", () => {
+  const plugins: Selection = { type: "settings", page: "plugins" };
+  const pluginA: Selection = { type: "settings", page: "plugins", detail: { plugin: "server:a" } };
+  const pluginB: Selection = { type: "settings", page: "plugins", detail: { plugin: "server:b" } };
+  openSettings("general");
+  openSettings("plugins");
+  select(pluginA);
+  openSettings("plugins");
+  select(pluginB);
+  assert.deepEqual(places(), [home, { type: "settings", page: "general" }, plugins, pluginB]);
+  stepHistory(-1);
+  assert.deepEqual(shown(), plugins);
+  stepHistory(-1);
+  assert.deepEqual(shown(), { type: "settings", page: "general" });
+  stepHistory(-1);
+  assert.deepEqual(shown(), home);
+});
+
 test("Browser nested pages and plugin details are restored as app destinations", () => {
   openSettings("browser");
   for (const view of ["history", "downloads", "sites"] as const) {
@@ -169,8 +187,9 @@ test("provider reveals keep the current provider, or resolve the model or first 
   assert.deepEqual(shown(), claude);
   openSettings("providers", "GPT fixture");
   assert.deepEqual(shown(), codex);
+  // Codex was reached before Claude, so Back skips the detour through Claude.
   stepHistory(-1);
-  assert.deepEqual(shown(), claude);
+  assert.deepEqual(shown(), providers);
 });
 
 test("close and toggle still leave all of Settings for its entry destination", () => {
@@ -181,6 +200,10 @@ test("close and toggle still leave all of Settings for its entry destination", (
   openSettings("git");
   closeSettings();
   assert.deepEqual(shown(), { type: "draft", kind: "session", projectId: "p" });
+  // Back from where Settings was entered unwinds past it, not into it again.
+  assert.deepEqual(places(), [home, { type: "draft", kind: "session", projectId: "p" }]);
+  openSettings("providers");
+  openSettings("git");
   stepHistory(-1);
   toggleSettings();
   assert.deepEqual(shown(), { type: "draft", kind: "session", projectId: "p" });

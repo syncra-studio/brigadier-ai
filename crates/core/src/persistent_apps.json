@@ -1,0 +1,26 @@
+{
+  "unsafeAssignments": ["PATH", "NODE_OPTIONS", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "ENV", "BASH_ENV"],
+  "shells": ["sh", "bash", "zsh"],
+  "rules": [
+    {
+      "programs": ["pnpm"], "prefixes": [["dev"], ["run", "dev"]], "separator": true,
+      "options": {"--host":"optional", "--hostname":"word", "--port":"port", "-p":"port", "--strictPort":"flag", "--open":"optional"}
+    },
+    {
+      "programs": ["vite"], "prefixes": [[], ["dev"], ["serve"], ["preview"]],
+      "options": {"--host":"optional", "--port":"port", "--strictPort":"flag", "--open":"optional", "--base":"word", "--config":"word", "--mode":"word", "--clearScreen":"word", "--logLevel":"word"}
+    },
+    {
+      "programs": ["next"], "prefixes": [["dev"]],
+      "options": {"--hostname":"word", "-H":"word", "--port":"port", "-p":"port", "--turbo":"flag", "--turbopack":"flag", "--webpack":"flag"}
+    },
+    {
+      "programs": ["python", "python3"], "prefixes": [["-m", "http.server"]], "positional": "port",
+      "options": {"--bind":"word", "-b":"word", "--directory":"word", "-d":"word", "--protocol":"word", "-p":"word", "--cgi":"flag"}
+    },
+    {
+      "programs": ["chrome", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "Google Chrome", "Chromium", "chrome-headless-shell", "headless_shell"], "prefixes": [[]], "positional": "url", "browser": true,
+      "options": {"--headless":"headless", "--remote-debugging-port":"port", "--user-data-dir":"word", "--no-sandbox":"flag", "--disable-gpu":"flag", "--no-first-run":"flag", "--no-default-browser-check":"flag", "--hide-scrollbars":"flag", "--disable-dev-shm-usage":"flag", "--window-size":"dimensions", "--remote-allow-origins":"word"}
+    }
+  ]
+}

@@ -1,0 +1,370 @@
+[
+  {
+    "command": "pnpm dev",
+    "app": true
+  },
+  {
+    "command": "pnpm run dev",
+    "app": true
+  },
+  {
+    "command": "pnpm dev -- --host 127.0.0.1 --port=5173",
+    "app": true
+  },
+  {
+    "command": "PORT=5173 NODE_ENV='development' pnpm dev",
+    "app": true
+  },
+  {
+    "command": "NOTE=\"dev app\" pnpm dev",
+    "app": true
+  },
+  {
+    "command": "cd '/work/web app' && PORT=3000 pnpm dev",
+    "app": true
+  },
+  {
+    "command": "cd -- ./web && cd ../app && vite --host",
+    "app": true
+  },
+  {
+    "command": "vite",
+    "app": true
+  },
+  {
+    "command": "vite dev",
+    "app": true
+  },
+  {
+    "command": "vite serve --host 0.0.0.0 --strictPort",
+    "app": true
+  },
+  {
+    "command": "vite preview --port 4173",
+    "app": true
+  },
+  {
+    "command": "/usr/local/bin/vite --config \"vite app.config.ts\"",
+    "app": true
+  },
+  {
+    "command": "next dev",
+    "app": true
+  },
+  {
+    "command": "next dev -p 3000 -H localhost --turbopack",
+    "app": true
+  },
+  {
+    "command": "python -m http.server",
+    "app": true
+  },
+  {
+    "command": "python3 -m http.server 8123 --bind 127.0.0.1 --directory \"/work/static site\"",
+    "app": true
+  },
+  {
+    "command": "python3 -m http.server 0",
+    "app": true
+  },
+  {
+    "command": "google-chrome --remote-debugging-port=9334",
+    "app": true
+  },
+  {
+    "command": "chromium --headless=new --remote-debugging-port=0 --no-sandbox about:blank",
+    "app": true
+  },
+  {
+    "command": "\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --user-data-dir=\"/tmp/browser profile\" --disable-gpu",
+    "app": true
+  },
+  {
+    "command": "chrome --headless --window-size=1280,834 https://localhost:5173/",
+    "app": true
+  },
+  {
+    "command": "chromium --remote-debugging-port 9222",
+    "app": true
+  },
+  {
+    "command": "/bin/zsh -lc 'cd /work && PORT=5173 pnpm dev'",
+    "app": true
+  },
+  {
+    "command": "bash -c \"vite --host\"",
+    "app": true
+  },
+  {
+    "command": "cd 'a&&b' && vite",
+    "app": true
+  },
+  {
+    "command": "pnpm dev --open \"/page with spaces\"",
+    "app": true
+  },
+  {
+    "command": "pnpm test",
+    "app": false
+  },
+  {
+    "command": "pnpm build",
+    "app": false
+  },
+  {
+    "command": "pnpm tauri:dev",
+    "app": false
+  },
+  {
+    "command": "pnpm dev:test",
+    "app": false
+  },
+  {
+    "command": "pnpm run developer",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --help",
+    "app": false
+  },
+  {
+    "command": "pnpm dev -- --help",
+    "app": false
+  },
+  {
+    "command": "pnpm --filter site dev",
+    "app": false
+  },
+  {
+    "command": "vite build",
+    "app": false
+  },
+  {
+    "command": "vite --version",
+    "app": false
+  },
+  {
+    "command": "vite build --watch",
+    "app": false
+  },
+  {
+    "command": "vite test",
+    "app": false
+  },
+  {
+    "command": "next build",
+    "app": false
+  },
+  {
+    "command": "next start",
+    "app": false
+  },
+  {
+    "command": "next dev --help",
+    "app": false
+  },
+  {
+    "command": "python -m http.server --help",
+    "app": false
+  },
+  {
+    "command": "python3 -m http.server_test",
+    "app": false
+  },
+  {
+    "command": "python3 -c \"http.server\"",
+    "app": false
+  },
+  {
+    "command": "python server.py",
+    "app": false
+  },
+  {
+    "command": "chromium --version",
+    "app": false
+  },
+  {
+    "command": "chromium https://localhost:5173",
+    "app": false
+  },
+  {
+    "command": "chromium --headless --dump-dom https://example.com",
+    "app": false
+  },
+  {
+    "command": "chrome --headless --screenshot=/tmp/page.png",
+    "app": false
+  },
+  {
+    "command": "chrome --headless --print-to-pdf",
+    "app": false
+  },
+  {
+    "command": "echo \"pnpm dev\"",
+    "app": false
+  },
+  {
+    "command": "printf \"%s\" \"vite\"",
+    "app": false
+  },
+  {
+    "command": "pnpm dev && pnpm test",
+    "app": false
+  },
+  {
+    "command": "pnpm dev; echo done",
+    "app": false
+  },
+  {
+    "command": "pnpm dev || pnpm test",
+    "app": false
+  },
+  {
+    "command": "pnpm dev | tee /tmp/dev.log",
+    "app": false
+  },
+  {
+    "command": "pnpm dev &",
+    "app": false
+  },
+  {
+    "command": "pnpm dev > /tmp/dev.log",
+    "app": false
+  },
+  {
+    "command": "pnpm dev # tests",
+    "app": false
+  },
+  {
+    "command": "pnpm dev\npnpm test",
+    "app": false
+  },
+  {
+    "command": "cd /work; pnpm dev",
+    "app": false
+  },
+  {
+    "command": "cd \"$DIR\" && pnpm dev",
+    "app": false
+  },
+  {
+    "command": "cd /work && echo done && pnpm dev",
+    "app": false
+  },
+  {
+    "command": "PORT=$(cat /tmp/port) pnpm dev",
+    "app": false
+  },
+  {
+    "command": "\"$SERVER\" dev",
+    "app": false
+  },
+  {
+    "command": "bash -lc 'pnpm dev; pnpm test'",
+    "app": false
+  },
+  {
+    "command": "node scripts/dev.js",
+    "app": false
+  },
+  {
+    "command": "npx vite",
+    "app": false
+  },
+  {
+    "command": "./vite",
+    "app": false
+  },
+  {
+    "command": "env PORT=3000 pnpm dev",
+    "app": false
+  },
+  {
+    "command": "PATH=/tmp/fake pnpm dev",
+    "app": false
+  },
+  {
+    "command": "NODE_OPTIONS=\"--require test.js\" pnpm dev",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --port 70000",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --port -1",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --port",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --unknown",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --host --help",
+    "app": false
+  },
+  {
+    "command": "chrome --remote-debugging-port=bad",
+    "app": false
+  },
+  {
+    "command": "chrome --headless=unknown",
+    "app": false
+  },
+  {
+    "command": "chromium --headless --window-size=1,2,3",
+    "app": false
+  },
+  {
+    "command": "pnpm dev \"--port 3000\"",
+    "app": false
+  },
+  {
+    "command": "pnpm dev --host '$(touch x)' && pnpm test",
+    "app": false
+  },
+  {
+    "command": "'pnpm dev'",
+    "app": false
+  },
+  {
+    "command": "pnpm \"dev && test\"",
+    "app": false
+  },
+  {
+    "command": "cd - && vite",
+    "app": false
+  },
+  {
+    "command": "cd && vite",
+    "app": false
+  },
+  {
+    "command": "vite --config \"$CONFIG\"",
+    "app": false
+  },
+  {
+    "command": "vite --host *",
+    "app": false
+  },
+  {
+    "command": "pnpm dev \"unterminated",
+    "app": false
+  },
+  {
+    "command": "'PORT=3000' pnpm dev",
+    "app": false
+  },
+  {
+    "command": "\"PORT=3000\" pnpm dev",
+    "app": false
+  },
+  {
+    "command": "PORT='3000' pnpm dev",
+    "app": true
+  }
+]

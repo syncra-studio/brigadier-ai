@@ -129,24 +129,28 @@ async fn the_thread_out_of_credits_goes_on_in_its_session_on_another_account() {
     assert_eq!(seen.len(), 2, "{seen:#?}");
     assert_eq!(seen[1].0.as_deref(), Some("acct-b"));
     assert_eq!(seen[1].1, seen[0].1, "the same session");
-    let moments: Vec<String> = flow
+    let transitions: Vec<_> = flow
         .events()
         .await
         .into_iter()
         .filter_map(|event| match event {
             DomainEvent::OrchestratorStepped { step } => match step.kind {
-                crate::work::OrchestratorStepKind::Moment { text } => Some(text),
+                crate::work::OrchestratorStepKind::ProviderTransition {
+                    cause,
+                    account,
+                    task_id: None,
+                    ..
+                } => Some((cause, account)),
                 _ => None,
             },
             _ => None,
         })
         .collect();
     assert!(
-        moments
-            .iter()
-            .any(|text| text.contains("ran out of credits")
-                && text.contains("continuing on Account acct-b")),
-        "{moments:#?}"
+        transitions.iter().any(|(cause, account)| *cause
+            == crate::work::ProviderTransitionCause::AutomaticFallback
+            && account.account.as_deref() == Some("acct-b")),
+        "{transitions:#?}"
     );
     flow.stop().await;
 }

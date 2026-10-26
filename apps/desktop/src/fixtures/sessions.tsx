@@ -13,8 +13,10 @@ import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
 import { SessionTabBar } from "@/app/shell/SessionTabBar";
+import { NavRow } from "@/components/controls/nav-row";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
+import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
@@ -68,6 +70,7 @@ if (params.has("unread")) for (const conversation of conversations) conversation
 if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1));
 if (params.has("doneRead")) conversations.push(session("done-read", "A finished turn", -4));
 if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran", -3, { finishedAtMs: 500 }));
+if (params.has("pinned")) conversations.find((each) => each.id === "w1-b")!.pinnedAtMs = 1;
 useLastOpened.setState({ at: Object.fromEntries(conversations.map((each) => [each.id, params.has("unread") ? 0 : 100])) });
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
 useApp.setState({
@@ -193,6 +196,67 @@ const cut = (title: string) => {
 
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
+const tooltipText = () => {
+  const content = document.querySelector('[data-slot="tooltip-content"]:not([data-state="closed"])');
+  return content?.querySelector('[role="tooltip"]')?.textContent ?? content?.textContent;
+};
+
+/** Measure the real pointer's hover on the row and each of its sibling action buttons. */
+async function hoverRow() {
+  const title = "In this session we'll fix the sidebar session row hover and truncation";
+  useApp.setState((state) => ({ conversations: { ...state.conversations, "w1-b": { ...state.conversations["w1-b"]!, title } } }));
+  const findTitle = () => [...document.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].find((each) => each.textContent === title);
+  await until(() => findTitle() !== undefined);
+  const button = findTitle()!.closest("button")!;
+  const row = button.closest("li")!;
+  const text = button.querySelector<HTMLElement>('[data-slot="row-title"]')!;
+  const status = button.querySelector<HTMLElement>('[data-slot="row-status"]')!;
+  const pinWord = params.has("pinned") ? "Unpin" : "Pin";
+  const noun = params.has("chats") ? "chat" : "session";
+  const pin = row.querySelector<HTMLButtonElement>(`button[aria-label="${pinWord} ${title}"]`)!;
+  const archive = row.querySelector<HTMLButtonElement>(`button[aria-label="Archive ${title}"]`)!;
+  const background = () => getComputedStyle(button).backgroundColor;
+  const move = async (element: Element) => {
+    const rect = element.getBoundingClientRect();
+    await fixtureInput({ type: "pointer", x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+    await wait(150);
+  };
+  await fixtureInput({ type: "pointer", x: 1200, y: 900 });
+  const idle = {
+    background: background(), titleWidth: text.getBoundingClientRect().width,
+    statusVisible: getComputedStyle(status).display !== "none" && getComputedStyle(status).visibility !== "hidden",
+    rowHeight: button.getBoundingClientRect().height, fontSize: parseFloat(getComputedStyle(button).fontSize),
+    actionWidth: pin.getBoundingClientRect().width, iconWidth: pin.querySelector("svg")!.getBoundingClientRect().width,
+  };
+  const reference = document.getElementById("hover-reference")!;
+  await move(reference);
+  const navHoverBackground = getComputedStyle(reference).backgroundColor;
+  await move(text);
+  const hovered = {
+    background: background(),
+    titleRight: text.getBoundingClientRect().right,
+    titleWidth: text.getBoundingClientRect().width,
+    actionsLeft: pin.getBoundingClientRect().left,
+    statusVisible: getComputedStyle(status).display !== "none" && getComputedStyle(status).visibility !== "hidden",
+    statusDisplay: getComputedStyle(status).display,
+    overflowing: text.scrollWidth > text.clientWidth,
+  };
+  const actions = [];
+  for (const action of [pin, archive]) {
+    await move(action);
+    await until(() => tooltipText() === `${action === pin ? pinWord : "Archive"} ${noun}`);
+    actions.push({
+      background: background(),
+      underPointer: action.matches(":hover"),
+      tooltip: tooltipText(),
+      titleRight: text.getBoundingClientRect().right,
+    });
+  }
+  await fixtureInput({ type: "pointer", x: 1200, y: 900 });
+  await wait(150);
+  return { idle, hovered, actions, navHoverBackground, after: { background: background(), titleWidth: text.getBoundingClientRect().width } };
+}
+
 /** The toasts on screen, by their text. */
 const toastTexts = () => [...document.querySelectorAll<HTMLElement>("[data-slot=toast]")].map((each) => each.textContent?.trim());
 const close = () => document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Lone worker tab"]');
@@ -274,6 +338,10 @@ const doneReadRow = () => rows().find((row) => row.title === "A finished turn")!
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("hover")) {
+      void hoverRow().then((seen) => setResult(JSON.stringify(seen)));
+      return;
+    }
     if (params.has("doneRead")) {
       void (async () => {
         await until(() => doneReadRow()?.mark === "unread");
@@ -311,7 +379,7 @@ function Fixture() {
       void (async () => {
         await until(() => questionRow("question")?.status === "needsYou:Needs you");
         const before = [questionRow("question"), questionRow("question-approval")];
-        // Opening a session must not clear its waiting-question dot.
+        // Opening a session hides its waiting-question dot while it is in front of the user.
         useApp.setState({ selection: { type: "conversation", id: "question" } });
         await until(() => questionRow("question")?.active);
         const opened = questionRow("question");
@@ -336,7 +404,7 @@ function Fixture() {
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
-          const info = { beforeMark, error: !!error, plain: plainStatus(row),
+          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
             unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
@@ -349,9 +417,12 @@ function Fixture() {
           // The tab's marks are the sidebar row's own: its spinner or unread dot, its error glyph.
           const slot = tab.parentElement!;
           const mark = slot.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
-          states.push({ ...info, title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
-            state: row.dataset.status, words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: row.title,
-            rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+          // The open row's own state, read again: in front of the user it may have changed.
+          const open = [...document.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].find((title) => title.textContent === conversation.title)!.closest("button")!;
+          const openStatus = open.querySelector<HTMLElement>('[data-slot="row-status"]');
+          states.push({ ...info, title: conversation.title, openState: openStatus?.dataset.status ?? null,
+            words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: openStatus?.title ?? null,
+            rowMark: open.querySelector('[data-slot="status-spinner"]') ? "spinner" : open.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             mark: slot.querySelector('[data-slot="status-spinner"]') ? "spinner" : slot.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             dot: tab.querySelector('[data-slot="status-dot"]') !== null,
             tabError: tab.querySelector('[data-slot="status-error"]') !== null,
@@ -415,7 +486,10 @@ function Fixture() {
             <SidebarPanel strip={<AppStrip />}>
               <AppSidebar />
             </SidebarPanel>
-            <main className="bg-background flex-1">{(params.has("close") || params.has("manual") || params.has("states")) && <OpenBar />}</main>
+            <main className="bg-background flex-1">
+              {params.has("hover") && <NavRow id="hover-reference">Hover colour reference</NavRow>}
+              {(params.has("close") || params.has("manual") || params.has("states")) && <OpenBar />}
+            </main>
           </div>
         </SidebarProvider>
       </div>

@@ -33,7 +33,12 @@ export type ReviewTarget =
    */
   | { type: "lastTurn"; requestId: string | null; path?: string; staged: false }
   /** Everything not committed: staged, unstaged and new files together (Q90). */
-  | { type: "uncommitted"; staged: false };
+  | { type: "uncommitted"; staged: false }
+  /**
+   * A worker's branch since it left the session's, committed and not, in its own worktree: its
+   * +N −N. With `path`, only that file's part (a row of Source's worker scope).
+   */
+  | { type: "worker"; taskId: string; path?: string; staged: false };
 
 /** The changes `target` compares. */
 export function reviewScope(target: ReviewTarget): ReviewScope {
@@ -42,6 +47,7 @@ export function reviewScope(target: ReviewTarget): ReviewScope {
     case "branch": return { type: "branch" };
     case "lastTurn": return { type: "lastTurn", requestId: target.requestId };
     case "uncommitted": return { type: "uncommitted" };
+    case "worker": return { type: "worker", taskId: target.taskId };
     default: return { type: target.staged ? "staged" : "unstaged" };
   }
 }
@@ -137,14 +143,17 @@ export type ConflictView = "conflict" | "compare" | "merge";
 export type PanelView =
   /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
   | { type: "sources" }
+  | { type: "backgroundHistory" }
+  | { type: "pr-history" }
   /** What something in the context card's Background prints: a preview's log or a CLI's background command's output (`worker`: a worker's CLI's). */
-  | { type: "output"; source: "preview" | "task"; id: string; worker?: string };
+  | { type: "output"; source: "preview" | "task" | "history"; id: string; worker?: string; startedAtMs?: number };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 /**
  * Text pasted as a chip, `[Pasted text #n]`, read in a tab (#427): the composer's own, which
  * edits (`paste` null: found in the composer by its number), or a sent message's, read only.
+ * A sent "Pasted text" card has no number (`n` null).
  */
-export type PastedTabState = { kind: "pasted"; id: string; opener: string | null; n: number; paste: AttachmentRef | null };
+export type PastedTabState = { kind: "pasted"; id: string; opener: string | null; n: number | null; paste: AttachmentRef | null };
 
 /**
  * Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the
@@ -482,11 +491,12 @@ export function openPageTab(conversationId: string, pageId: string, title: strin
 }
 
 /**
- * Shows pasted text `n` in a tab: the composer's (`paste` null) or a sent message's. The tab
- * already showing it, else a new one after the tab in front. Returns the tab's ID.
+ * Shows pasted text `n` in a tab: the composer's (`paste` null) or a sent message's, `n` null
+ * for a sent "Pasted text" card. The tab already showing it, else a new one after the tab in
+ * front. Returns the tab's ID.
  */
-export function openPastedTab(conversationId: string, n: number, paste: AttachmentRef | null): string {
-  const id = paste ? `pasted:${paste.id}:${n}` : `pasted:composer:${n}`;
+export function openPastedTab(conversationId: string, n: number | null, paste: AttachmentRef | null): string {
+  const id = paste ? (n === null ? `pasted:${paste.id}` : `pasted:${paste.id}:${n}`) : `pasted:composer:${n}`;
   update(conversationId, (current) => {
     if (current.tabs.some((tab) => tab.id === id)) return { ...current, active: id };
     const tab: PastedTabState = { kind: "pasted", id, opener: current.active, n, paste };
@@ -635,7 +645,7 @@ export function closeMockupTab(conversationId: string, moment: string): void {
 
 /** Shows `view` in its own tab: the tab already showing it, else a new one after the tab in front. */
 export function openPanelTab(conversationId: string, view: PanelView, title: string): string {
-  const id = view.type === "output" ? `panel:output:${view.source}:${view.worker ? `${view.worker}:` : ""}${view.id}` : `panel:${view.type}`;
+  const id = view.type === "output" ? `panel:output:${view.source}:${view.worker ? `${view.worker}:` : ""}${view.id}${view.startedAtMs === undefined ? "" : `:${view.startedAtMs}`}` : `panel:${view.type}`;
   update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
     ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "panel" ? { ...tab, title } : tab) }
     : { tabs: insertAfterActive(current, { kind: "panel", id, opener: current.active, view, title }), active: id });
@@ -780,7 +790,7 @@ export function selectTabNumber(conversationId: string, number: number): void {
   if (id) selectTab(conversationId, id);
 }
 
-const REVIEW_TARGETS = new Set<string>(["changes", "file", "commit", "branch", "lastTurn", "uncommitted"] satisfies ReviewTarget["type"][]);
+const REVIEW_TARGETS = new Set<string>(["changes", "file", "commit", "branch", "lastTurn", "uncommitted", "worker"] satisfies ReviewTarget["type"][]);
 
 /** Turns an old document's file name into a page title. */
 export function draftTitle(name: string): string {
