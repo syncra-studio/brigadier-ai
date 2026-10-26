@@ -307,3 +307,79 @@ impl SessionManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod durable_wake_tests {
+    use super::super::flow::{Flow, Options, Reply};
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    #[tokio::test]
+    async fn overdue_wake_survives_stop_and_restart_and_is_taken_once() {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let observed = wakes.clone();
+        let mut flow = Flow::start(
+            "waiting-wake-durable",
+            Options::default(),
+            Arc::new(move |turn| {
+                let observed = observed.clone();
+                Box::pin(async move {
+                    if turn.input.contains("Waiting on is overdue:") {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Reply::text("Done")
+                })
+            }),
+        )
+        .await;
+        flow.say("Remember the external check").await;
+        flow.idle().await;
+        let id = flow.conversation.clone();
+        let wait = flow
+            .manager
+            .add_waiting_on(
+                &id,
+                "session",
+                AddWaitingOn {
+                    text: "External check".into(),
+                    by: Some("2000-01-01".into()),
+                    timezone: Some("UTC".into()),
+                    then: None,
+                    link: None,
+                },
+            )
+            .await
+            .unwrap();
+        flow.core.set_queue_paused(&id, true).await.unwrap();
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        flow.restart().await;
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
+        flow.core.set_queue_paused(&id, false).await.unwrap();
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        flow.idle().await;
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        assert_eq!(
+            flow.manager
+                .tracked_work(&id)
+                .await
+                .unwrap()
+                .waiting_on
+                .iter()
+                .find(|w| w.id == wait.id)
+                .unwrap()
+                .wake_delivered_at_ms
+                .is_some(),
+            true
+        );
+        flow.restart().await;
+        flow.manager.deliver_waiting_wakes(&id).await.unwrap();
+        flow.idle().await;
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        flow.stop().await;
+    }
+}

@@ -13,11 +13,12 @@ use std::time::Duration;
 #[derive(Default)]
 pub(super) struct Poller {
     state: Mutex<HashMap<String, PollSlot>>,
+    round: tokio::sync::Mutex<()>,
 }
 #[derive(Default)]
 struct PollSlot {
     next: i64,
-    busy: bool,
+    failures: u32,
     cached: Option<TrackedPullRequest>,
 }
 struct Observation {
@@ -222,171 +223,249 @@ impl SessionManager {
                         continue;
                     }
                     let _ = manager.discover_pull_requests(&conversation.id).await;
+                }
+                if let Some(conversation) = manager.core.catalog().conversations.first() {
                     let _ = manager.refresh_tracked_prs(&conversation.id).await;
                 }
             }
         });
     }
-    async fn refresh_tracked_prs(&self, id: &ConversationId) -> Result<()> {
+    async fn refresh_tracked_prs(&self, _id: &ConversationId) -> Result<()> {
         if !self.app.is_open() {
             return Ok(());
         }
+        let Ok(_round) = self.pr_poll.round.try_lock() else {
+            return Ok(());
+        };
         let Some(gh) = self.gh() else {
             return Ok(());
         };
-        for mut pr in self.tracked_work(id).await?.pull_requests {
-            if pr.forgotten
-                || pr.pull_request.as_ref().is_some_and(|p| {
-                    matches!(p.state, PullRequestState::Merged | PullRequestState::Closed)
-                })
+        let now = crate::now_ms();
+        // Gather every owner before issuing any requests: mounting another session cannot
+        // create another poller or a duplicate first-page request for a shared identity.
+        let mut targets: HashMap<String, (TrackedPullRequest, Vec<ConversationId>)> =
+            HashMap::new();
+        for conversation in self.core.catalog().conversations {
+            if conversation.lifecycle != crate::Lifecycle::Active || conversation.tab_chat.is_some()
             {
                 continue;
             }
-            let now = crate::now_ms();
-            let key = format!(
-                "{}:{}",
-                pr.identity.key(),
-                pr.account.as_deref().unwrap_or("unresolved")
-            );
-            let account_key = format!(
-                "account:{}:{}",
-                pr.identity.host,
-                pr.account.as_deref().unwrap_or("unresolved")
-            );
-            let cached = {
-                let mut state = self.pr_poll.state.lock().unwrap();
-                if state
-                    .get(&account_key)
-                    .is_some_and(|s| s.next > now || s.busy)
+            for pr in self.tracked_work(&conversation.id).await?.pull_requests {
+                if pr.forgotten
+                    || pr.pull_request.as_ref().is_some_and(|p| {
+                        matches!(p.state, PullRequestState::Merged | PullRequestState::Closed)
+                    })
                 {
                     continue;
                 }
-                let slot = state.entry(key.clone()).or_default();
-                if slot.busy {
-                    continue;
+                let key = poll_key(&pr);
+                let target = targets
+                    .entry(key)
+                    .or_insert_with(|| (pr.clone(), Vec::new()));
+                if pr.touched_at_ms > target.0.touched_at_ms {
+                    target.0 = pr;
                 }
-                if slot.next > now {
-                    slot.cached.clone()
-                } else {
-                    slot.busy = true;
-                    None
+                target.1.push(conversation.id.clone());
+            }
+        }
+        let mut groups: HashMap<
+            (String, String),
+            Vec<(String, TrackedPullRequest, Vec<ConversationId>)>,
+        > = HashMap::new();
+        for (key, (mut pr, owners)) in targets {
+            let cached = self
+                .pr_poll
+                .state
+                .lock()
+                .unwrap()
+                .get(&key)
+                .and_then(|slot| {
+                    let touched = slot
+                        .cached
+                        .as_ref()
+                        .is_some_and(|old| old.touched_at_ms < pr.touched_at_ms);
+                    (slot.next > now && !touched)
+                        .then(|| slot.cached.clone())
+                        .flatten()
+                });
+            if let Some(cached) = cached {
+                for owner in owners {
+                    self.apply_pr_observation(&owner, &cached, now).await?;
                 }
-            };
-            let result = if let Some(cached) = cached {
-                pr.pull_request = cached.pull_request;
-                pr.viewer = cached.viewer;
-                pr.status = cached.status;
-                pr.complete = cached.complete;
-                pr.observed_at_ms = cached.observed_at_ms;
-                None
-            } else {
-                // Ambient credentials carry no intended identity: ask for an explicit account.
-                let observed = if let Some(account) = &pr.account {
-                    if let Some(named) = gh.for_account(&pr.identity.host, account).await {
-                        observe(&named, &pr, now).await
-                    } else {
-                        Err(
-                            "Account unavailable; use gh auth login for the selected account"
-                                .into(),
-                        )
-                    }
-                } else {
-                    Err("Account needed: brigadier pr watch <url> --account <login>".into())
-                };
-                Some(observed)
-            };
-            let mut next = now
-                + if now - pr.touched_at_ms < 30 * 60 * 1000 {
-                    30_000
-                } else {
-                    120_000
-                };
-            if let Some(result) = result {
-                match result {
-                    Ok(seen) => {
-                        pr.pull_request = Some(seen.pr);
-                        pr.viewer = Some(seen.viewer);
-                        pr.status = seen.status;
-                        pr.complete = seen.complete;
-                        pr.observed_at_ms = Some(now);
-                        next = next.max(seen.next);
-                    }
-                    Err(reason) => {
-                        pr.status = reason;
-                        pr.complete = false;
-                        next = now + 120_000;
-                    }
-                }
-                let mut state = self.pr_poll.state.lock().unwrap();
-                state.insert(
+                continue;
+            }
+            let Some(account) = pr.account.clone() else {
+                pr.status = "Account needed: brigadier pr watch <url> --account <login>".into();
+                pr.complete = false;
+                self.pr_poll.state.lock().unwrap().insert(
                     key,
                     PollSlot {
-                        next,
-                        busy: false,
+                        next: now + 120_000,
+                        failures: 0,
                         cached: Some(pr.clone()),
                     },
                 );
-                // Shared primary/secondary backoff applies across this host/account.
-                if next > now + 120_000 {
-                    state.insert(
-                        account_key,
-                        PollSlot {
-                            next,
-                            busy: false,
-                            cached: None,
-                        },
-                    );
+                for owner in owners {
+                    self.apply_pr_observation(&owner, &pr, now).await?;
                 }
-            }
-            let _guard = self.tracked_writes.lock().await;
-            let current = self
-                .tracked_work(id)
-                .await?
-                .pull_requests
-                .into_iter()
-                .find(|p| p.identity == pr.identity);
-            let Some(current) = current else { continue };
-            if current.forgotten || current.account != pr.account {
+                continue;
+            };
+            groups
+                .entry((pr.identity.host.clone(), account))
+                .or_default()
+                .push((key, pr, owners));
+        }
+        for ((host, account), group) in groups {
+            let account_key = format!("account:{host}:{account}");
+            if self
+                .pr_poll
+                .state
+                .lock()
+                .unwrap()
+                .get(&account_key)
+                .is_some_and(|slot| slot.next > now)
+            {
                 continue;
             }
-            // Preserve touches that arrived while the network request was in flight.
-            pr.touched_at_ms = current.touched_at_ms;
-            pr.actor = current.actor.clone();
-            pr.action = current.action.clone();
-            if current != pr {
-                let event = (current.status != pr.status
-                    || current.pull_request.as_ref().map(|p| p.state)
-                        != pr.pull_request.as_ref().map(|p| p.state))
-                .then(|| PrHistoryEvent {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    at_ms: now,
-                    identity: pr.identity.clone(),
-                    actor: "GitHub".into(),
-                    action: "status changed".into(),
-                    detail: pr.status.clone(),
-                });
-                // Terminal display removal never bypasses own-branch merge bookkeeping.
-                if pr
-                    .pull_request
-                    .as_ref()
-                    .is_some_and(|p| p.state == PullRequestState::Merged)
-                    && self
-                        .core
-                        .board(id)
-                        .await?
-                        .pull_request
-                        .as_ref()
-                        .is_some_and(|p| p.url == pr.identity.url())
-                    && let Ok(conv) = self.conv(id)
-                {
-                    conv.pr_merge_due
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    self.kick(&conv);
+            if !self.app.is_open() {
+                break;
+            }
+            let named = gh.for_account(&host, &account).await;
+            // Bounded aliases keep the initial query modest; only a PR with more pages
+            // performs its own cursor requests. One viewer and rateLimit per batch.
+            for chunk in group.chunks(20) {
+                if !self.app.is_open() {
+                    break;
                 }
-                self.keep_tracked(id, &Change::Pr { pr, event }).await?;
+                let prs = chunk
+                    .iter()
+                    .map(|(_, pr, _)| pr.clone())
+                    .collect::<Vec<_>>();
+                let results = if let Some(named) = &named {
+                    observe_batch(named, &prs, now, || self.app.is_open()).await
+                } else {
+                    prs.iter()
+                        .map(|_| {
+                            Err(
+                                "Account unavailable; use gh auth login for the selected account"
+                                    .into(),
+                            )
+                        })
+                        .collect()
+                };
+                let mut account_next = now;
+                let mut failed = false;
+                for ((key, mut pr, owners), result) in chunk.iter().cloned().zip(results) {
+                    let mut next = now
+                        + if now - pr.touched_at_ms < 30 * 60 * 1000 {
+                            30_000
+                        } else {
+                            120_000
+                        };
+                    match result {
+                        Ok(seen) => {
+                            account_next = account_next.max(seen.next);
+                            failed |= seen.status.starts_with("GitHub unavailable");
+                            pr.pull_request = Some(seen.pr);
+                            pr.viewer = Some(seen.viewer);
+                            pr.status = seen.status;
+                            pr.complete = seen.complete;
+                            pr.observed_at_ms = Some(now);
+                            next = next.max(seen.next);
+                        }
+                        Err(reason) => {
+                            failed = true;
+                            pr.status = reason;
+                            pr.complete = false;
+                            next = now + 120_000;
+                        }
+                    }
+                    self.pr_poll.state.lock().unwrap().insert(
+                        key,
+                        PollSlot {
+                            next,
+                            failures: 0,
+                            cached: Some(pr.clone()),
+                        },
+                    );
+                    for owner in owners {
+                        self.apply_pr_observation(&owner, &pr, now).await?;
+                    }
+                }
+                {
+                    let mut state = self.pr_poll.state.lock().unwrap();
+                    let slot = state.entry(account_key.clone()).or_default();
+                    if failed {
+                        slot.failures = slot.failures.saturating_add(1);
+                        account_next = account_next
+                            .max(now + (120_000i64 << slot.failures.saturating_sub(1).min(5)));
+                    } else {
+                        slot.failures = 0;
+                    }
+                    slot.next = account_next;
+                }
+                if account_next > now {
+                    break;
+                }
             }
         }
         Ok(())
+    }
+    async fn apply_pr_observation(
+        &self,
+        id: &ConversationId,
+        observed: &TrackedPullRequest,
+        now: i64,
+    ) -> Result<()> {
+        let _guard = self.tracked_writes.lock().await;
+        let Some(current) = self
+            .tracked_work(id)
+            .await?
+            .pull_requests
+            .into_iter()
+            .find(|p| p.identity == observed.identity)
+        else {
+            return Ok(());
+        };
+        if current.forgotten || current.account != observed.account {
+            return Ok(());
+        }
+        let mut pr = observed.clone();
+        pr.touched_at_ms = current.touched_at_ms;
+        pr.actor = current.actor.clone();
+        pr.action = current.action.clone();
+        if current == pr {
+            return Ok(());
+        }
+        let event = (current.status != pr.status
+            || current.pull_request.as_ref().map(|p| p.state)
+                != pr.pull_request.as_ref().map(|p| p.state))
+        .then(|| PrHistoryEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            at_ms: now,
+            identity: pr.identity.clone(),
+            actor: "GitHub".into(),
+            action: "status changed".into(),
+            detail: pr.status.clone(),
+        });
+        if pr
+            .pull_request
+            .as_ref()
+            .is_some_and(|p| p.state == PullRequestState::Merged)
+            && self
+                .core
+                .board(id)
+                .await?
+                .pull_request
+                .as_ref()
+                .is_some_and(|p| p.url == pr.identity.url())
+            && let Ok(conv) = self.conv(id)
+        {
+            conv.pr_merge_due
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.kick(&conv);
+        }
+        self.keep_tracked(id, &Change::Pr { pr, event }).await
     }
 }
 
@@ -583,10 +662,26 @@ fn literal_words(command: &str) -> Option<Vec<String>> {
 }
 
 const QUERY: &str = r#"query($owner:String!,$repo:String!,$number:Int!,$checks:String,$threads:String,$reviews:String,$requests:String){viewer{login} rateLimit{cost limit remaining resetAt} repository(owner:$owner,name:$repo){pullRequest(number:$number){number title url state isDraft headRefOid baseRefName mergeCommit{oid} author{login} mergedBy{login} reviewDecision mergeable mergeStateStatus reviewRequests(first:100,after:$requests){totalCount pageInfo{hasNextPage endCursor} nodes{requestedReviewer{... on User{login} ... on Team{name}}}} latestOpinionatedReviews(first:100,after:$reviews){totalCount pageInfo{hasNextPage endCursor} nodes{state author{login}}} reviewThreads(first:100,after:$threads){totalCount pageInfo{hasNextPage endCursor} nodes{isResolved}} commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100,after:$checks){totalCount pageInfo{hasNextPage endCursor} nodes{... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}}}}"#;
+#[cfg(test)]
 async fn observe(
     gh: &super::gh::Gh,
     tracked: &TrackedPullRequest,
     now: i64,
+) -> std::result::Result<Observation, String> {
+    observe_pages(gh, tracked, now, None, || true).await
+}
+
+struct FirstPage {
+    value: Value,
+    headers: String,
+    success: bool,
+}
+async fn observe_pages(
+    gh: &super::gh::Gh,
+    tracked: &TrackedPullRequest,
+    now: i64,
+    mut first: Option<FirstPage>,
+    app_open: impl Fn() -> bool,
 ) -> std::result::Result<Observation, String> {
     let identity = &tracked.identity;
     let mut cursors = json!({"owner":identity.owner,"repo":identity.repo,"number":identity.number});
@@ -602,28 +697,38 @@ async fn observe(
     let mut head = None;
     // Hard bound protects secondary limits; incomplete results remain explicitly partial.
     for _ in 0..20 {
-        let body = json!({"query":QUERY,"variables":cursors}).to_string();
-        let output = gh
-            .output_with_input(
-                &[
-                    "api",
-                    "graphql",
-                    "--hostname",
-                    &identity.host,
-                    "--include",
-                    "--input",
-                    "-",
-                ],
-                &body,
+        if !app_open() {
+            return Err("App closed; status is stale".into());
+        }
+        let (value, headers, success) = if let Some(first) = first.take() {
+            (first.value, first.headers, first.success)
+        } else {
+            let body = json!({"query":QUERY,"variables":cursors}).to_string();
+            let output = gh
+                .output_with_input(
+                    &[
+                        "api",
+                        "graphql",
+                        "--hostname",
+                        &identity.host,
+                        "--include",
+                        "--input",
+                        "-",
+                    ],
+                    &body,
+                )
+                .await
+                .map_err(|_| "GitHub unavailable; status is stale".to_string())?;
+            let (headers, payload) = split_headers(&output.stdout);
+            (
+                serde_json::from_str::<Value>(payload).unwrap_or(Value::Null),
+                headers.to_owned(),
+                output.success(),
             )
-            .await
-            .map_err(|_| "GitHub unavailable; status is stale".to_string())?;
-        let (headers, payload) = split_headers(&output.stdout);
-        if let Some(delay) = retry_after(headers, now) {
+        };
+        if let Some(delay) = retry_after(&headers, now) {
             next = next.max(delay);
         }
-        let value: Value = serde_json::from_str(payload)
-            .map_err(|_| "GitHub unavailable; status is stale".to_string())?;
         if let Some(rate) = value.pointer("/data/rateLimit") {
             // Use actual returned cost, limit, remaining and reset, never a node estimate.
             let cost = rate["cost"].as_i64().unwrap_or(1);
@@ -637,7 +742,7 @@ async fn observe(
                 next = next.max(reset.as_millisecond());
             }
         }
-        if !output.success() || value.get("errors").is_some() {
+        if !success || value.is_null() || value.get("errors").is_some() {
             // The caller retains the previous observation. No raw stderr or API messages.
             return Ok(Observation {
                 pr: tracked
@@ -1034,6 +1139,35 @@ print('HTTP/2.0 200\r\n\r\n'+(root/('page-'+str(i)+'.json')).read_text())
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[tokio::test]
+    async fn two_prs_share_one_first_page_round_trip_and_keep_separate_states() {
+        let mut green = page(
+            vec![json!({"name":"CI","status":"COMPLETED","conclusion":"SUCCESS"})],
+            false,
+        );
+        green["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+            ["contexts"]["totalCount"] = json!(1);
+        let mut red = green["data"]["repository"].clone();
+        red["pullRequest"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+            [0]["conclusion"] = json!("ACTION_REQUIRED");
+        let batch = json!({"data":{"viewer":{"login":"alice"},"rateLimit":{"cost":9,"limit":5000,"remaining":4000,"resetAt":"2099-01-01T00:00:00Z"},"p0":green["data"]["repository"],"p1":red}});
+        let (dir, gh) = stub(vec![batch]);
+        let first = tracked();
+        let mut second = tracked();
+        second.identity.number = 8;
+        let result = observe_batch(&gh, &[first, second], 0, || true).await;
+        assert_eq!(result.len(), 2);
+        let a = result[0].as_ref().unwrap();
+        let b = result[1].as_ref().unwrap();
+        assert!(a.complete);
+        assert!(b.complete);
+        assert_eq!(a.status, "Ready to merge");
+        assert_eq!(b.status, "CI failing");
+        assert_eq!(a.pr.number, 7);
+        assert_eq!(b.pr.number, 8);
+        assert_eq!(std::fs::read_to_string(dir.join("count")).unwrap(), "1");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[tokio::test]
     async fn incomplete_connections_and_wrong_viewer_never_claim_ready() {
         let mut missing = page(vec![], false);
         missing["data"]["repository"]["pullRequest"]["reviewThreads"] = json!({"nodes":[]});
@@ -1054,18 +1188,318 @@ print('HTTP/2.0 200\r\n\r\n'+(root/('page-'+str(i)+'.json')).read_text())
 impl SessionManager {
     /// The own-branch lookup is canonical discovery. Keep its terminal transition even
     /// when it disappears from the summary; never revive a suppressed identity.
-    pub(super) async fn observe_own_branch_pr(&self,id:&ConversationId,found:&PullRequest)->Result<()> {
-        let Some(identity)=PrIdentity::parse(&found.url) else{return Ok(())};
-        let source=format!("branch:{}",identity.key());
-        self.touch_pr(id,identity.clone(),None,"session","branch pull request",Some(source),false).await?;
-        let _guard=self.tracked_writes.lock().await;
-        let Some(mut pr)=self.tracked_work(id).await?.pull_requests.into_iter().find(|p|p.identity==identity) else{return Ok(())};
-        if pr.forgotten {return Ok(());}
-        let terminal=matches!(found.state,PullRequestState::Merged|PullRequestState::Closed);
-        if pr.pull_request.is_some() && (!terminal || pr.pull_request.as_ref().is_some_and(|p|p.state==found.state)) {return Ok(());}
-        pr.pull_request=Some(found.clone());pr.complete=false;pr.observed_at_ms=Some(crate::now_ms());
-        pr.status=match found.state {PullRequestState::Merged=>"Merged",PullRequestState::Closed=>"Closed",_ if pr.account.is_none()=>"Account needed for review status",_=>"Checking status"}.into();
-        let event=PrHistoryEvent{id:uuid::Uuid::new_v4().to_string(),at_ms:crate::now_ms(),identity,actor:"GitHub".into(),action:"status changed".into(),detail:pr.status.clone()};
-        self.keep_tracked(id,&Change::Pr{pr,event:Some(event)}).await
+    pub(super) async fn observe_own_branch_pr(
+        &self,
+        id: &ConversationId,
+        found: &PullRequest,
+    ) -> Result<()> {
+        let Some(identity) = PrIdentity::parse(&found.url) else {
+            return Ok(());
+        };
+        let source = format!("branch:{}", identity.key());
+        self.touch_pr(
+            id,
+            identity.clone(),
+            None,
+            "session",
+            "branch pull request",
+            Some(source),
+            false,
+        )
+        .await?;
+        let _guard = self.tracked_writes.lock().await;
+        let Some(mut pr) = self
+            .tracked_work(id)
+            .await?
+            .pull_requests
+            .into_iter()
+            .find(|p| p.identity == identity)
+        else {
+            return Ok(());
+        };
+        if pr.forgotten {
+            return Ok(());
+        }
+        let terminal = matches!(
+            found.state,
+            PullRequestState::Merged | PullRequestState::Closed
+        );
+        if pr.pull_request.is_some()
+            && (!terminal
+                || pr
+                    .pull_request
+                    .as_ref()
+                    .is_some_and(|p| p.state == found.state))
+        {
+            return Ok(());
+        }
+        pr.pull_request = Some(found.clone());
+        pr.complete = false;
+        pr.observed_at_ms = Some(crate::now_ms());
+        pr.status = match found.state {
+            PullRequestState::Merged => "Merged",
+            PullRequestState::Closed => "Closed",
+            _ if pr.account.is_none() => "Account needed for review status",
+            _ => "Checking status",
+        }
+        .into();
+        let event = PrHistoryEvent {
+            id: uuid::Uuid::new_v4().to_string(),
+            at_ms: crate::now_ms(),
+            identity,
+            actor: "GitHub".into(),
+            action: "status changed".into(),
+            detail: pr.status.clone(),
+        };
+        self.keep_tracked(
+            id,
+            &Change::Pr {
+                pr,
+                event: Some(event),
+            },
+        )
+        .await
     }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::super::flow::{Flow, Options, Reply};
+    use super::super::session_dir::{LineageEntry, note_lineage_at};
+    use super::*;
+    use std::sync::Arc;
+    async fn generation(record: std::path::PathBuf, name: &str, command: &str, output: &str) {
+        std::fs::create_dir_all(&record).unwrap();
+        let path = record.join(format!("{name}.jsonl"));
+        let line = json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"reused-call-id","command":command,"status":"completed","exit_code":0,"cwd":"/tmp","aggregated_output":output}}});
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        note_lineage_at(
+            record,
+            LineageEntry {
+                provider: brigadier_providers::ProviderKind::Codex,
+                session_id: name.into(),
+                file: Some(path.display().to_string()),
+                started_at: 1,
+                forgotten: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn lead_and_worker_generations_replay_once_and_forget_stays_suppressed() {
+        let mut flow = Flow::start(
+            "pr-transcript-replay",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("Done") })),
+        )
+        .await;
+        let id = flow.conversation.clone();
+        let choice = flow
+            .core
+            .conversation(&id)
+            .unwrap()
+            .setup
+            .unwrap()
+            .choice()
+            .clone();
+        let plain = serde_json::from_value(json!({"permission":"full","local":true})).unwrap();
+        let task = flow
+            .manager
+            .create_plain_task(
+                &id,
+                "Worker".into(),
+                "Read only".into(),
+                choice,
+                plain,
+                None,
+            )
+            .await
+            .unwrap();
+        flow.until("worker finished", |board| {
+            board.tasks.get(&task.id).is_some_and(|t| {
+                !matches!(
+                    t.state,
+                    crate::TaskState::Queued
+                        | crate::TaskState::Starting
+                        | crate::TaskState::Running
+                )
+            })
+        })
+        .await;
+        let record = flow.manager.session_dir(&id).record();
+        generation(
+            record.clone(),
+            "lead-1",
+            "gh pr create --title Changes",
+            "https://github.com/org/main/pull/7",
+        )
+        .await;
+        generation(
+            record,
+            "lead-2",
+            "gh pr view https://github.com/org/read-only/pull/8",
+            "",
+        )
+        .await;
+        generation(
+            flow.manager.worker_record(&task),
+            "worker-1",
+            "GH_TOKEN=$(gh auth token --user org-user) gh pr review 9 -R org/other --approve",
+            "",
+        )
+        .await;
+        flow.manager.discover_pull_requests(&id).await.unwrap();
+        let first = flow.manager.tracked_work(&id).await.unwrap();
+        assert_eq!(first.pull_requests.len(), 2);
+        assert_eq!(first.pr_history.len(), 2);
+        let worker = first
+            .pull_requests
+            .iter()
+            .find(|p| p.identity.repo == "other")
+            .unwrap();
+        assert_eq!(worker.account.as_deref(), Some("org-user"));
+        assert_eq!(worker.actor, format!("worker {}", task.number));
+        flow.manager.discover_pull_requests(&id).await.unwrap();
+        assert_eq!(flow.manager.tracked_work(&id).await.unwrap(), first);
+        flow.manager
+            .forget_pull_request(&id, &worker.identity.key())
+            .await
+            .unwrap();
+        flow.restart().await;
+        flow.manager.discover_pull_requests(&id).await.unwrap();
+        let replay = flow.manager.tracked_work(&id).await.unwrap();
+        assert_eq!(replay.pull_requests.len(), 2);
+        assert!(
+            replay
+                .pull_requests
+                .iter()
+                .find(|p| p.identity.repo == "other")
+                .unwrap()
+                .forgotten
+        );
+        assert_eq!(replay.pr_history.len(), 3);
+        flow.stop().await;
+    }
+}
+
+fn poll_key(pr: &TrackedPullRequest) -> String {
+    format!(
+        "{}:{}",
+        pr.identity.key(),
+        pr.account.as_deref().unwrap_or("unresolved")
+    )
+}
+
+/// Initial pages share one account identity and one charged rateLimit result. Alias errors
+/// affect only their PR; global/auth/rate errors conservatively invalidate the whole batch.
+async fn observe_batch(
+    gh: &super::gh::Gh,
+    prs: &[TrackedPullRequest],
+    now: i64,
+    app_open: impl Fn() -> bool,
+) -> Vec<std::result::Result<Observation, String>> {
+    if prs.is_empty() {
+        return Vec::new();
+    }
+    let host = &prs[0].identity.host;
+    if prs.len() > 20
+        || prs
+            .iter()
+            .any(|pr| &pr.identity.host != host || pr.account != prs[0].account)
+    {
+        return prs
+            .iter()
+            .map(|_| Err("Invalid GitHub account batch".into()))
+            .collect();
+    }
+    if !app_open() {
+        return prs
+            .iter()
+            .map(|_| Err("App closed; status is stale".into()))
+            .collect();
+    }
+    let template = &QUERY[QUERY.find("repository(owner:").unwrap()..QUERY.len() - 1];
+    let mut query = String::from("query{viewer{login} rateLimit{cost limit remaining resetAt} ");
+    for (index, pr) in prs.iter().enumerate() {
+        let identity = &pr.identity;
+        let mut alias = template
+            .replace("$owner", &json!(identity.owner).to_string())
+            .replace("$repo", &json!(identity.repo).to_string())
+            .replace("$number", &identity.number.to_string());
+        for cursor in ["checks", "threads", "reviews", "requests"] {
+            alias = alias.replace(&format!(",after:${cursor}"), "");
+        }
+        query.push_str(&format!("p{index}:{alias} "));
+    }
+    query.push('}');
+    let body = json!({"query":query}).to_string();
+    let output = match gh
+        .output_with_input(
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                host,
+                "--include",
+                "--input",
+                "-",
+            ],
+            &body,
+        )
+        .await
+    {
+        Ok(output) => output,
+        Err(_) => {
+            return prs
+                .iter()
+                .map(|_| Err("GitHub unavailable; status is stale".into()))
+                .collect();
+        }
+    };
+    let (headers, payload) = split_headers(&output.stdout);
+    let value: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
+    let mut results = Vec::new();
+    for (index, pr) in prs.iter().enumerate() {
+        let alias = format!("p{index}");
+        let mut normalized = json!({"data":{"viewer":value.pointer("/data/viewer"),"rateLimit":value.pointer("/data/rateLimit"),"repository":value.get("data").and_then(|d|d.get(&alias))}});
+        let errors = value["errors"]
+            .as_array()
+            .map(|errors| {
+                errors
+                    .iter()
+                    .filter(
+                        |error| match error.pointer("/path/0").and_then(Value::as_str) {
+                            Some(path)
+                                if path.starts_with('p')
+                                    && path[1..].bytes().all(|b| b.is_ascii_digit()) =>
+                            {
+                                path == alias
+                            }
+                            _ => true,
+                        },
+                    )
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !errors.is_empty() {
+            normalized["errors"] = json!(errors);
+        }
+        results.push(
+            observe_pages(
+                gh,
+                pr,
+                now,
+                Some(FirstPage {
+                    value: normalized,
+                    headers: headers.into(),
+                    success: output.success() && !value.is_null(),
+                }),
+                &app_open,
+            )
+            .await,
+        );
+    }
+    results
 }

@@ -428,33 +428,10 @@ impl SessionManager {
                 };
                 continue;
             }
-            if !self.app.is_open() {
-                continue;
-            }
-            let Some(SessionPr { found, base, .. }) = self.session_pr(&conv.id).await else {
-                // `gh` failed this time, or the branch has no pull request (any more).
-                wait = later;
-                continue;
-            };
-            if found.base.as_deref() != Some(&base) {
-                return;
-            }
-            match found.pr.state {
-                PullRequestState::Merged => {
-                    conv.pr_merge_due
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    self.kick(conv);
-                    return;
-                }
-                PullRequestState::Open | PullRequestState::Draft => {
-                    wait = if start.elapsed() < PR_WATCH_SOON_FOR {
-                        soon
-                    } else {
-                        later
-                    };
-                }
-                PullRequestState::Closed => return,
-            }
+            // Unknown account provenance remains unresolved. Display observations come
+            // exclusively from the central named-account scheduler; a later explicit
+            // watch resolves it. Turn-boundary reconciliation below still records merges.
+            wait = later;
         }
     }
 }
