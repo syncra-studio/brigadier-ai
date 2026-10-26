@@ -77,6 +77,7 @@ import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
+import { forgetFusionSend } from "@/state/fusionSend";
 import { forgetHeldDirect } from "@/state/heldDirect";
 import { reopenable, rememberSelection, savedSelection } from "@/state/lastSelection";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
@@ -1532,7 +1533,10 @@ export async function deleteAll(ids: string[]): Promise<void> {
   }
   const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
   // Their unsent drafts go only once they are surely going.
-  for (const { id } of deleted) forgetDraft(id);
+  for (const { id } of deleted) {
+    forgetDraft(id);
+    forgetFusionSend(id);
+  }
   forgetHeldDirect(deleted.map((conversation) => conversation.id));
   forgetRightSidebarTabs(deleted.map((conversation) => conversation.id));
 }
@@ -1566,7 +1570,10 @@ export async function removeProject(
     .filter((conversation) => conversation.projectId === id)
     .map((conversation) => conversation.id);
   const { report } = await request({ method: "removeProject", id, deleteBranches, keepBrain });
-  for (const conversation of gone) forgetDraft(conversation);
+  for (const conversation of gone) {
+    forgetDraft(conversation);
+    forgetFusionSend(conversation);
+  }
   forgetHeldDirect(gone);
   forgetRightSidebarTabs(gone);
   const { selection } = useApp.getState();

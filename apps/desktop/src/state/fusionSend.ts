@@ -24,14 +24,39 @@ export function useFusionReady(): boolean {
   return useApp((s) => fusionReady(s.providers.view?.providers ?? [], s.settings));
 }
 
-const armed = new Set<string>();
+const STORAGE_KEY = "brigadier.fusionSend";
+
+function readArmed(): Set<string> {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    return new Set(Array.isArray(stored) ? stored.filter((scope): scope is string => typeof scope === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const armed = readArmed();
 const listeners = new Set<() => void>();
+
+function changed(): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...armed]));
+  } catch {
+    // As with drafts, unavailable or full storage leaves the current window working.
+  }
+  for (const listener of listeners) listener();
+}
 
 export function armFusionSend(scope: string, on: boolean): void {
   if (armed.has(scope) === on) return;
   if (on) armed.add(scope);
   else armed.delete(scope);
-  for (const listener of listeners) listener();
+  changed();
+}
+
+/** A deleted Chat no longer keeps its toggle. */
+export function forgetFusionSend(scope: string): void {
+  armFusionSend(scope, false);
 }
 
 /** Fusion stays on for this Chat until its toggle is turned off. */
@@ -43,7 +68,7 @@ export function isFusionArmed(scope: string): boolean {
 export function moveFusionSend(from: string, to: string): void {
   if (from === to || !armed.delete(from)) return;
   armed.add(to);
-  for (const listener of listeners) listener();
+  changed();
 }
 
 export function useFusionArmed(scope: string): boolean {
