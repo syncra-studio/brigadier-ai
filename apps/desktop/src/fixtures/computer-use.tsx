@@ -27,7 +27,7 @@ const status = (
   accessibility: PermissionState = "unknown",
   screenRecording: PermissionState = "unknown",
   current = false,
-): ComputerUseStatus => ({ available: true, accessibility, screenRecording, current, setup, sessions: [] });
+): ComputerUseStatus => ({ available: true, platform: "macos", accessibility, screenRecording, current, setup, sessions: [], notes: [] });
 
 const calls: string[] = [];
 // The first check's answer, held until the fixture has seen the page while it runs.
@@ -136,7 +136,28 @@ function Fixture() {
       },
       ...show("off", status({ state: "off" }, "granted", "notGranted", false)),
       () => {
-        seen.calls = calls;
+        seen.calls = [...calls];
+      },
+      // Linux: nothing to grant; the page says what the desktop session allows.
+      () => {
+        useApp.setState((state) => ({
+          info: { ...state.info, platform: "linux" } as typeof state.info,
+          settings: { ...state.settings, computerUse: true },
+        }));
+        onComputerUse({
+          ...status({ state: "ready" }, "granted", "granted", true),
+          platform: "linux",
+          notes: ["Wayland session: apps running under XWayland work in the background."],
+        });
+      },
+      () => {
+        seen.linux = {
+          sections: all("main section h2").map(text),
+          rows: all('[data-slot="settings-row"]').map((element) => element.dataset.setting),
+          notes: text(document.querySelector('[data-slot="desktop-notes"]')),
+          setup: text(document.querySelector('[data-slot="setup-line"]')),
+          setupButtons: buttons(row("Setup")),
+        };
         setResult(JSON.stringify(seen));
       },
     ];
