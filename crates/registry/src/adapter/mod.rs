@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::item::{ServerSpec, TransportSpec};
 use crate::{Agent, Catalog, Roots, Source};
 
-pub use apply::{Applied, ApplyError, CLI_TIMEOUT, apply, output_within, wait_within};
+pub use apply::{Applied, ApplyError, CLI_TIMEOUT, apply, check_steps, output_within, wait_within};
 pub use claude::Claude;
 pub use codex::Codex;
 

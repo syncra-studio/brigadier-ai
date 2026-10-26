@@ -165,7 +165,8 @@ fn each_cli_signs_in_on_its_own_list_and_prints_the_page() {
         "Checking MCP server health…\r\n\r\n\
          plugin:oauth:oauth-probe: http://127.0.0.1:53127/mcp (HTTP) - \u{1b}[33m! Needs authentication\u{1b}[39m\n\
          user-one: /usr/bin/python3 /tmp/server.py - \u{1b}[32m✔ Connected\u{1b}[39m\n\
-         broken: /usr/bin/false  - \u{1b}[31m✘ Failed to connect — CONNECTION_CLOSED: Connection closed\u{1b}[39m\n",
+         broken: /usr/bin/false  - \u{1b}[31m✘ Failed to connect — CONNECTION_CLOSED: Connection closed\u{1b}[39m\n\
+         railway: /bin/cat railway - ⊘ Disabled for this project (re-enable via /mcp)\n",
     );
     assert_eq!(
         listed,

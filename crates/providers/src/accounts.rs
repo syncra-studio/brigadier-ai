@@ -182,41 +182,212 @@ const CARRIED: &str = ".brigadier-carried.json";
 
 /// Copies the user's MCP servers from the main config file `main` (read only) into the
 /// account's own `.claude.json` in `home`, leaving its login and everything else its own.
-/// Run before each session, so a server the user adds is there at the next start.
+/// Run before each session, so a server the user adds is there at the next start. The servers
+/// each project switches off (`disabledMcpServers`, what `/mcp` and Brigadier's per-project
+/// switches write) come with them.
 ///
 /// A three-way merge on what was copied last time: a server the account changed or added
 /// itself (a `claude mcp add` in one of its sessions) stays, one the main file added,
-/// changed or removed follows it there.
+/// changed or removed follows it there; likewise each off flag.
+///
+/// The account's sessions write the file too, some under Claude Code's lock and some without:
+/// the merge runs under that lock and goes in only if the file is still what it was read from,
+/// so no write of theirs is lost.
 pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
-    use serde_json::{Map, Value};
-    let read = |path: &Path| -> io::Result<Option<Value>> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text)
-                .map(Some)
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err)),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        }
-    };
-    let main = read(main)?.unwrap_or_default();
+    let main = read_json(main)?.unwrap_or_default();
     let config_path = home.join(".claude.json");
-    let Some(Value::Object(mut config)) = read(&config_path)? else {
-        // Not made yet, or not an object: the CLI's to sort out.
+    let carried_path = home.join(CARRIED);
+    let last = read_json(&carried_path).ok().flatten().unwrap_or_default();
+    let Some((wrote, now)) = carry_once(&config_path, |config| carried(&main, &last, config))?
+    else {
         return Ok(());
     };
-    let carried_path = home.join(CARRIED);
-    let last = read(&carried_path).ok().flatten().unwrap_or_default();
+    // A session that read the file just before the rename may write its older copy over it:
+    // a moment later, whatever it took back is put back (only after a change, which is rare).
+    for _ in 0..2 {
+        if wrote.is_empty() {
+            break;
+        }
+        std::thread::sleep(SETTLE);
+        let config = read_json(&config_path)?.unwrap_or_default();
+        if wrote
+            .iter()
+            .all(|(at, value)| config.pointer(at) == Some(value))
+        {
+            break;
+        }
+        carry_once(&config_path, |mut config| {
+            for (at, value) in &wrote {
+                put(&mut config, at, value.clone());
+            }
+            (config, serde_json::Map::new())
+        })?;
+    }
+    if last != serde_json::Value::Object(now.clone()) {
+        write_private(&carried_path, &serde_json::Value::Object(now))?;
+    }
+    Ok(())
+}
 
-    let servers = |root: &Value, project: Option<&str>| -> Map<String, Value> {
-        let holder = match project {
-            Some(path) => root.get("projects").and_then(|all| all.get(path)),
-            None => Some(root),
+/// How long after a carry its values are checked again.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The carried values a carry changed (JSON pointer and value), and what is carried now.
+type Carried = (
+    Vec<(String, serde_json::Value)>,
+    serde_json::Map<String, serde_json::Value>,
+);
+
+/// Runs `merge` on the account's config file at `path` and writes the result, under Claude
+/// Code's lock and only if the file is still what was read (else merges again from what it
+/// is). `None` when there is no file to carry into.
+fn carry_once(
+    path: &Path,
+    merge: impl Fn(
+        serde_json::Map<String, serde_json::Value>,
+    ) -> (
+        serde_json::Map<String, serde_json::Value>,
+        serde_json::Map<String, serde_json::Value>,
+    ),
+) -> io::Result<Option<Carried>> {
+    let _lock = ConfigLock::take(path)?;
+    for _ in 0..RACES {
+        let before = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
         };
-        holder
-            .and_then(|holder| holder.get("mcpServers"))
-            .and_then(Value::as_object)
-            .cloned()
+        let value: serde_json::Value = serde_json::from_str(&before)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let serde_json::Value::Object(config) = value.clone() else {
+            // Not an object: the CLI's to sort out.
+            return Ok(None);
+        };
+        let (config, now) = merge(config);
+        let after = serde_json::Value::Object(config);
+        if after == value {
+            return Ok(Some((Vec::new(), now)));
+        }
+        let wrote = carried_values(&after)
+            .into_iter()
+            .filter(|(at, now)| value.pointer(at) != Some(now))
+            .collect();
+        let temp = temp_beside(path);
+        write_new_private(&temp, &after)?;
+        if std::fs::read_to_string(path).ok().as_deref() != Some(before.as_str()) {
+            // A session wrote it meanwhile: merge again from what it wrote.
+            let _ = std::fs::remove_file(&temp);
+            continue;
+        }
+        std::fs::rename(&temp, path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+        })?;
+        return Ok(Some((wrote, now)));
+    }
+    Err(io::Error::other(
+        "Claude Code kept rewriting the account's settings; its servers come at the next start",
+    ))
+}
+
+/// The values carrying sets in `config`, by JSON pointer: the user's servers, and each
+/// project's servers and off flags.
+fn carried_values(config: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+    let escape = |key: &str| key.replace('~', "~0").replace('/', "~1");
+    let mut values = Vec::new();
+    if let Some(servers) = config.get("mcpServers") {
+        values.push(("/mcpServers".to_owned(), servers.clone()));
+    }
+    for (path, project) in config
+        .get("projects")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        for key in ["mcpServers", "disabledMcpServers"] {
+            if let Some(value) = project.get(key) {
+                values.push((format!("/projects/{}/{key}", escape(path)), value.clone()));
+            }
+        }
+    }
+    values
+}
+
+/// `config` with `value` at JSON pointer `at` (`/a/b/c`), making the objects on the way.
+fn put(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    at: &str,
+    value: serde_json::Value,
+) {
+    let keys: Vec<String> = at
+        .split('/')
+        .skip(1)
+        .map(|key| key.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    let Some((last, path)) = keys.split_last() else {
+        return;
+    };
+    let mut holder = config;
+    for key in path {
+        let next = holder
+            .entry(key.clone())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !next.is_object() {
+            *next = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let serde_json::Value::Object(next) = next else {
+            return;
+        };
+        holder = next;
+    }
+    holder.insert(last.clone(), value);
+}
+
+/// How often the account's file may change between the read and the rename before
+/// [`carry_servers`] gives up (each try takes milliseconds).
+const RACES: usize = 20;
+
+/// The JSON in `path`; `None` when it isn't there.
+fn read_json(path: &Path) -> io::Result<Option<serde_json::Value>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// The account's `config` with the main file's servers and off flags merged in against `last`
+/// (what was carried before), and what is carried now.
+fn carried(
+    main: &serde_json::Value,
+    last: &serde_json::Value,
+    mut config: serde_json::Map<String, serde_json::Value>,
+) -> (
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+) {
+    use serde_json::{Map, Value};
+    let entry = |root: &Value, project: Option<&str>| -> Option<Value> {
+        match project {
+            Some(path) => root.get("projects").and_then(|all| all.get(path)).cloned(),
+            None => Some(root.clone()),
+        }
+    };
+    let servers = |root: &Value, project: Option<&str>| -> Map<String, Value> {
+        entry(root, project)
+            .and_then(|holder| holder.get("mcpServers").cloned())
+            .and_then(|servers| servers.as_object().cloned())
             .unwrap_or_default()
+    };
+    let flags = |root: &Value, path: &str| -> Vec<String> {
+        entry(root, Some(path))
+            .and_then(|holder| holder.get("disabledMcpServers").cloned())
+            .and_then(|flags| flags.as_array().cloned())
+            .into_iter()
+            .flatten()
+            .filter_map(|flag| flag.as_str().map(str::to_owned))
+            .collect()
     };
     let merge =
         |mine: &mut Map<String, Value>, theirs: &Map<String, Value>, was: &Map<String, Value>| {
@@ -234,76 +405,159 @@ pub fn carry_servers(main: &Path, home: &Path) -> io::Result<()> {
         };
 
     let mut now = Map::new();
-    let main_user = servers(&main, None);
+    let main_user = servers(main, None);
     let mut user = servers(&Value::Object(config.clone()), None);
-    merge(&mut user, &main_user, &servers(&last, None));
+    merge(&mut user, &main_user, &servers(last, None));
     now.insert("mcpServers".into(), Value::Object(main_user));
 
     let mut projects: std::collections::BTreeSet<String> = Default::default();
-    for root in [&main, &last] {
+    for root in [main, last] {
         if let Some(all) = root.get("projects").and_then(Value::as_object) {
             projects.extend(all.keys().cloned());
         }
     }
     let mut carried_projects = Map::new();
     let mut project_servers = Vec::new();
+    let mut project_flags = Vec::new();
     for path in projects {
-        let theirs = servers(&main, Some(&path));
-        let was = servers(&last, Some(&path));
+        let theirs = servers(main, Some(&path));
+        let was = servers(last, Some(&path));
         let had = servers(&Value::Object(config.clone()), Some(&path));
         let mut mine = had.clone();
         merge(&mut mine, &theirs, &was);
+        // Off flags: one the main file gained since last time comes, one it lost goes; the
+        // account's own stay.
+        let their_flags = flags(main, &path);
+        let was_flags = flags(last, &path);
+        let had_flags = flags(&Value::Object(config.clone()), &path);
+        let mut my_flags = had_flags.clone();
+        for flag in their_flags.iter().filter(|flag| !was_flags.contains(flag)) {
+            if !my_flags.contains(flag) {
+                my_flags.push(flag.clone());
+            }
+        }
+        my_flags.retain(|flag| their_flags.contains(flag) || !was_flags.contains(flag));
+        let mut kept = Map::new();
         if !theirs.is_empty() {
-            carried_projects.insert(path.clone(), json_servers(theirs));
+            kept.insert("mcpServers".into(), Value::Object(theirs));
+        }
+        if !their_flags.is_empty() {
+            kept.insert(
+                "disabledMcpServers".into(),
+                Value::Array(their_flags.into_iter().map(Value::String).collect()),
+            );
+        }
+        if !kept.is_empty() {
+            carried_projects.insert(path.clone(), Value::Object(kept));
         }
         if mine != had {
-            project_servers.push((path, mine));
+            project_servers.push((path.clone(), mine));
+        }
+        if my_flags != had_flags {
+            project_flags.push((path, my_flags));
         }
     }
     now.insert("projects".into(), Value::Object(carried_projects));
 
-    let before = Value::Object(config.clone());
     config.insert("mcpServers".into(), Value::Object(user));
-    if !project_servers.is_empty() {
+    if !project_servers.is_empty() || !project_flags.is_empty() {
         let all = config
             .entry("projects")
             .or_insert_with(|| Value::Object(Map::new()));
         if let Value::Object(all) = all {
             for (path, mine) in project_servers {
-                let project = all.entry(path).or_insert_with(|| Value::Object(Map::new()));
-                if let Value::Object(project) = project {
+                if let Value::Object(project) =
+                    all.entry(path).or_insert_with(|| Value::Object(Map::new()))
+                {
                     project.insert("mcpServers".into(), Value::Object(mine));
+                }
+            }
+            for (path, flags) in project_flags {
+                if let Value::Object(project) =
+                    all.entry(path).or_insert_with(|| Value::Object(Map::new()))
+                {
+                    project.insert(
+                        "disabledMcpServers".into(),
+                        Value::Array(flags.into_iter().map(Value::String).collect()),
+                    );
                 }
             }
         }
     }
-    let config = Value::Object(config);
-    if config != before {
-        write_private(&config_path, &config)?;
-    }
-    if last != Value::Object(now.clone()) {
-        write_private(&carried_path, &Value::Object(now))?;
-    }
-    Ok(())
+    (config, now)
 }
 
-fn json_servers(servers: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({ "mcpServers": servers })
+/// Claude Code's lock on its config file `file`: the folder `<file>.lock`, as Claude Code's
+/// proper-lockfile makes it. Held for milliseconds.
+struct ConfigLock(PathBuf);
+
+impl ConfigLock {
+    /// After at most a few seconds' wait; a lock untouched for ten seconds was left behind.
+    fn take(file: &Path) -> io::Result<Self> {
+        let mut path = file.as_os_str().to_owned();
+        path.push(".lock");
+        let path = PathBuf::from(path);
+        let start = std::time::Instant::now();
+        loop {
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|meta| meta.modified())
+                        .is_ok_and(|at| {
+                            at.elapsed()
+                                .is_ok_and(|age| age > std::time::Duration::from_secs(10))
+                        });
+                    if stale {
+                        let _ = std::fs::remove_dir(&path);
+                        continue;
+                    }
+                    if start.elapsed() > std::time::Duration::from_secs(5) {
+                        return Err(io::Error::other(
+                            "Claude Code is busy with the account's settings",
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.0);
+    }
+}
+
+/// A fresh temporary file beside `path`.
+fn temp_beside(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()))
 }
 
 /// Writes `value` to `path` whole (a temporary file renamed over it), owner-only.
 fn write_private(path: &Path, value: &serde_json::Value) -> io::Result<()> {
-    let text = serde_json::to_string_pretty(value)? + "\n";
-    let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&temp, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let temp = temp_beside(path);
+    write_new_private(&temp, value)?;
     std::fs::rename(&temp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp);
     })
+}
+
+/// Writes `value` to the new file `temp`, owner-only and on disk.
+fn write_new_private(temp: &Path, value: &serde_json::Value) -> io::Result<()> {
+    use std::io::Write;
+    let text = serde_json::to_string_pretty(value)? + "\n";
+    let mut out = std::fs::File::create(temp)?;
+    out.write_all(text.as_bytes())?;
+    out.sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Deletes an account's home. Links are removed, never followed: what they point to in the
@@ -635,6 +889,146 @@ mod tests {
             std::fs::metadata(&config).unwrap().modified().unwrap(),
             before
         );
+    }
+
+    #[test]
+    fn an_account_gets_the_users_off_flags_and_keeps_its_own() {
+        use serde_json::{Value, json};
+        let root = scratch("carry-flags");
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        let main = main_dir.join(".claude.json");
+        let write = |path: &Path, value: Value| {
+            std::fs::write(path, serde_json::to_string(&value).unwrap()).unwrap()
+        };
+        let read = |path: &Path| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        write(
+            &main,
+            json!({
+                "projects": {
+                    "/work/a": { "disabledMcpServers": ["railway", "plugin:copy:railway"] },
+                    "/work/b": { "allowedTools": [] }
+                }
+            }),
+        );
+        let home = root.join("account");
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        let config = home.join(".claude.json");
+        carry_servers(&main, &home).unwrap();
+        let got = read(&config);
+        assert_eq!(
+            got["projects"]["/work/a"]["disabledMcpServers"],
+            json!(["railway", "plugin:copy:railway"])
+        );
+        // A project with nothing to carry gets no entry.
+        assert_eq!(got["projects"].get("/work/b"), None);
+
+        // The account switches one more off itself (`/mcp` in one of its sessions); the user
+        // switches railway back on and another off in their own file.
+        let mut own = read(&config);
+        own["projects"]["/work/a"]["disabledMcpServers"] =
+            json!(["railway", "plugin:copy:railway", "mine"]);
+        write(&config, own);
+        write(
+            &main,
+            json!({
+                "projects": {
+                    "/work/a": { "disabledMcpServers": ["plugin:copy:railway", "figma"] }
+                }
+            }),
+        );
+        carry_servers(&main, &home).unwrap();
+        assert_eq!(
+            read(&config)["projects"]["/work/a"]["disabledMcpServers"],
+            json!(["plugin:copy:railway", "mine", "figma"])
+        );
+        // Again: nothing to do, the file is left as it is.
+        let before = std::fs::metadata(&config).unwrap().modified().unwrap();
+        carry_servers(&main, &home).unwrap();
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().modified().unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn a_session_writing_the_accounts_file_meanwhile_loses_nothing() {
+        use serde_json::{Value, json};
+        let root = scratch("carry-race");
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        let main = main_dir.join(".claude.json");
+        let home = root.join("account");
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        let config = home.join(".claude.json");
+        let read = |path: &Path| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        // Like Claude Code's unlocked writes in the account's session: read, change, write.
+        let session = {
+            let config = config.clone();
+            std::thread::spawn(move || {
+                for n in 0..40 {
+                    let mut value: Value =
+                        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+                    value["numStartups"] = json!(n);
+                    let temp = config.with_extension("claude-tmp");
+                    std::fs::write(&temp, serde_json::to_string(&value).unwrap()).unwrap();
+                    std::fs::rename(&temp, &config).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            })
+        };
+        for n in 0..8 {
+            std::fs::write(
+                &main,
+                json!({ "mcpServers": { format!("s{n}"): { "command": "x" } } }).to_string(),
+            )
+            .unwrap();
+            carry_servers(&main, &home).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        session.join().unwrap();
+        carry_servers(&main, &home).unwrap();
+        let got = read(&config);
+        assert_eq!(got["numStartups"], json!(39));
+        assert_eq!(got["mcpServers"], json!({ "s7": { "command": "x" } }));
+    }
+
+    #[test]
+    fn carrying_waits_for_claude_codes_lock() {
+        use serde_json::json;
+        let root = scratch("carry-lock");
+        let main_dir = root.join("main");
+        std::fs::create_dir_all(&main_dir).unwrap();
+        let main = main_dir.join(".claude.json");
+        std::fs::write(
+            &main,
+            json!({ "mcpServers": { "docs": { "command": "d" } } }).to_string(),
+        )
+        .unwrap();
+        let home = root.join("account");
+        prepare_home(ProviderKind::Claude, &main_dir, &home).unwrap();
+        let lock = home.join(".claude.json.lock");
+        std::fs::create_dir(&lock).unwrap();
+        let release = {
+            let lock = lock.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                std::fs::remove_dir(&lock).unwrap();
+            })
+        };
+        let start = std::time::Instant::now();
+        carry_servers(&main, &home).unwrap();
+        assert!(start.elapsed() >= std::time::Duration::from_millis(250));
+        release.join().unwrap();
+        assert!(!lock.exists());
+        let got: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap())
+                .unwrap();
+        assert_eq!(got["mcpServers"]["docs"], json!({ "command": "d" }));
     }
 
     #[test]
