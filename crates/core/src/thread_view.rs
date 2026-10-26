@@ -621,6 +621,9 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
     let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>, bool)> = HashMap::new();
+    // Each turn's ends, oldest first: a turn the stream said went on (a background job's end,
+    // or a compaction the daemon took for one) ends more than once.
+    let mut ends: HashMap<&str, Vec<&TurnRecord>> = HashMap::new();
     for record in records {
         let Some(id) = record.user_message.as_deref() else {
             continue;
@@ -630,12 +633,13 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         *joins |= record.joins;
         if record.end.is_some() {
             *end = Some(record);
+            ends.entry(id).or_default().push(record);
         }
     }
     let count = starts.len();
     // The end the turn before was recorded with, as the daemon followed it.
     let mut before: Option<&TurnRecord> = None;
-    starts
+    let mut turns: Vec<(ThreadTurn, bool)> = starts
         .iter()
         .enumerate()
         .map(|(n, &start)| {
@@ -717,9 +721,34 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             } else {
                 turn.end = Some(TurnEnd::Done);
             }
-            turn
+            (turn, within.is_some())
         })
-        .collect()
+        .collect();
+    // The turn before one that ran inside it ended where it ended before that one began, not
+    // with it: Brigadier's `/compact` after an answer adds nothing to the answer's time.
+    for n in 1..turns.len() {
+        if !turns[n].1 || turns[n - 1].1 {
+            continue;
+        }
+        let started = turns[n].0.started_at_ms;
+        let previous = &mut turns[n - 1].0;
+        let own = ends.get(previous.user_message.as_str()).and_then(|ends| {
+            ends.iter().rev().find(|record| {
+                record
+                    .ended_at_ms
+                    .zip(started)
+                    .is_some_and(|(ended, started)| ended <= started)
+            })
+        });
+        if let Some(record) = own {
+            previous.end = record.end;
+            previous.ended_at_ms = record.ended_at_ms;
+            if record.error.is_some() {
+                previous.error.clone_from(&record.error);
+            }
+        }
+    }
+    turns.into_iter().map(|(turn, _)| turn).collect()
 }
 
 /// The limit an error of the CLI says it hit: a usage window, a spend control or credits.
@@ -984,6 +1013,9 @@ mod tests {
         let records = [ended(2), ended(10)];
         let view = view(vec![Arc::new(file.clone())], None, &records);
         assert_eq!(view.turns.len(), 2);
+        // The turn before ended where it did, before the `/compact` began: not with it.
+        assert_eq!(view.turns[0].end, Some(TurnEnd::Done));
+        assert_eq!(view.turns[0].ended_at_ms, Some(2));
         assert_eq!(view.turns[1].end, Some(TurnEnd::Done));
         assert_eq!(view.turns[1].error, None);
         assert_eq!(view.turns[1].ended_at_ms, Some(10));

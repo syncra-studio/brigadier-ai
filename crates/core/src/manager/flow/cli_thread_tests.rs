@@ -527,6 +527,19 @@ async fn brigadiers_compact_is_a_turn_of_its_own_never_one_more_of_the_turn_befo
         async move { manager.follow_cli_thread(&conv, Some(&event)).await }
     };
     follow(ProviderEvent::TurnStarted { turn_id: None }).await;
+    follow(ProviderEvent::CompactionStarted { automatic: false }).await;
+    // While it runs the live thread says so, the turn before still over: the app's "Refreshing
+    // context" divider, which its end takes over.
+    let running = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(running.turns.len(), 1, "{running:#?}");
+    assert_eq!(running.turns[0].end, Some(TurnEnd::Done));
+    assert!(
+        running.entries.last().is_some_and(|entry| matches!(
+            entry.event,
+            ProviderEvent::CompactionStarted { automatic: false }
+        )),
+        "{running:#?}"
+    );
     follow(ProviderEvent::CompactionEnded {
         automatic: false,
         tokens_before: Some(900_000),
@@ -565,6 +578,14 @@ async fn brigadiers_compact_is_a_turn_of_its_own_never_one_more_of_the_turn_befo
         "{view:#?}"
     );
     assert_eq!(view.turns[0].ended_at_ms, first.ended_at_ms);
+    // Over, the thread is its file's: no word of it running is left.
+    assert!(
+        !view
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.event, ProviderEvent::CompactionStarted { .. })),
+        "{view:#?}"
+    );
     let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
     assert!(
         records

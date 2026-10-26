@@ -15,9 +15,6 @@
               ]
             }
           ]
-        },
-        {
-          "between": "compaction"
         }
       ]
     },
@@ -76,9 +73,6 @@
               ]
             }
           ]
-        },
-        {
-          "between": "compaction"
         }
       ]
     },
