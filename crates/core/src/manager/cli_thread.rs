@@ -15,9 +15,61 @@ use crate::work::{ConversationActivity, TaskId};
 use crate::{Error, Result, now_ms};
 
 impl SessionManager {
+    /// The exact producer marker plus the absence of any authored marker message proves
+    /// provenance. Persist native ids so reconstruction never classifies text by prefix alone.
+    async fn note_daemon_context(
+        &self,
+        id: &ConversationId,
+        event: Option<&ProviderEvent>,
+    ) -> bool {
+        let Some(ProviderEvent::Message {
+            role: Role::User,
+            item_id,
+            text,
+            ..
+        }) = event
+        else {
+            return false;
+        };
+        let record = self.session_dir(id).record();
+        let mut known = daemon_context_ids(&record);
+        if !text.starts_with(thread_view::CUT_JOBS_MARK) {
+            return false;
+        }
+        let Ok(messages) = self.core.all_messages(id).await else {
+            return false;
+        };
+        if !thread_view::daemon_candidate(
+            text,
+            messages
+                .iter()
+                .filter(|message| message.role == crate::MessageRole::User)
+                .map(|message| message.text.as_str()),
+        ) {
+            return false;
+        }
+        let Some(native) = read_lineage(&record)
+            .last()
+            .map(|entry| entry.session_id.clone())
+        else {
+            return false;
+        };
+        let key = format!("{native}:{item_id}");
+        if known.contains(&key) {
+            return true;
+        }
+        known.insert(key);
+        let Ok(bytes) = serde_json::to_vec(&known) else {
+            return false;
+        };
+        super::session_dir::write_atomic(&record.join("daemon-context.json"), &bytes).is_ok()
+    }
+
     /// Follows the running turn of `conv`'s CLI through one of its events (`None`: the CLI's
     /// events ended): its items, and its end, written to `record/turns.jsonl`.
     pub(super) async fn follow_cli_thread(&self, conv: &ConvLive, event: Option<&ProviderEvent>) {
+        self.follow_background_history(&conv.id, None, event).await;
+        let daemon_context = self.note_daemon_context(&conv.id, event).await;
         let at = now_ms();
         // Brigadier's requests the turn carries, as the conversation knows them now, and whether
         // it joins the work before it: when the CLI says a user message (a turn's, or a steer's)
@@ -147,7 +199,7 @@ impl SessionManager {
                     item_id,
                     role: Role::User,
                     ..
-                }) => {
+                }) if !daemon_context => {
                     let steer = live.open && !live.awaiting_user;
                     if !live.open {
                         opened = true;
@@ -216,7 +268,9 @@ impl SessionManager {
                         window_tokens: *window_tokens,
                     });
                 }
-                Some(event) if shown_live(event) => news.push(entry(Some(event.clone()), at)),
+                Some(event) if shown_live(event) && !daemon_context => {
+                    news.push(entry(Some(event.clone()), at))
+                }
                 _ => {}
             }
             if !news.is_empty() {
@@ -461,14 +515,28 @@ impl SessionManager {
     pub fn thread_view(&self, id: &ConversationId) -> Result<ThreadView> {
         self.core.conversation(id)?;
         let record = self.session_dir(id).record();
+        let daemon_ids = daemon_context_ids(&record);
         let files = read_lineage(&record)
             .into_iter()
             .filter_map(|session| {
                 let file = session.file?;
-                Some(
-                    self.session_files
-                        .read(session.provider, std::path::Path::new(&file)),
-                )
+                let scoped_ids = daemon_ids
+                    .iter()
+                    .filter_map(|key| {
+                        key.strip_prefix(&format!("{}:", session.session_id))
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                let entries = self
+                    .session_files
+                    .read(session.provider, std::path::Path::new(&file));
+                Some(std::sync::Arc::new(
+                    entries
+                        .iter()
+                        .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
+                        .cloned()
+                        .collect(),
+                ))
             })
             .collect();
         let records = thread_view::read_turns(&record);
@@ -518,9 +586,11 @@ impl SessionManager {
         };
         let cli = cli.ok_or_else(|| Error::Invalid("its CLI isn't running".into()))?;
         cli.session
-            .stop_task(task)
+            .stop_task(task.clone())
             .await
-            .map_err(|err| Error::Provider(err.to_string()))
+            .map_err(|err| Error::Provider(err.to_string()))?;
+        self.note_history_stop(id, worker, &task);
+        Ok(())
     }
 
     /// What background command `task` of conversation `id`'s CLI, or of its worker `worker`'s,
@@ -533,9 +603,13 @@ impl SessionManager {
     ) -> Result<String> {
         use std::io::{Read, Seek, SeekFrom};
         let shell = |held: &BackgroundTask| {
-            (held.id == task && held.kind == BackgroundTaskKind::Shell)
-                .then(|| held.output_file.clone())
-                .flatten()
+            (held.id == task
+                && matches!(
+                    held.kind,
+                    BackgroundTaskKind::Shell | BackgroundTaskKind::Terminal
+                ))
+            .then(|| held.output_file.clone())
+            .flatten()
         };
         let file = match worker {
             None => self
@@ -564,6 +638,13 @@ impl SessionManager {
     pub fn subscribe_thread_news(&self) -> tokio::sync::broadcast::Receiver<ThreadNews> {
         self.thread_news.subscribe()
     }
+}
+
+fn daemon_context_ids(record: &std::path::Path) -> std::collections::HashSet<String> {
+    std::fs::read(record.join("daemon-context.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 /// How often a running background command's last output line is read again.
