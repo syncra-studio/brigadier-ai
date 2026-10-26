@@ -311,7 +311,7 @@ function Fixture() {
       void (async () => {
         await until(() => questionRow("question")?.status === "needsYou:Needs you");
         const before = [questionRow("question"), questionRow("question-approval")];
-        // Opening a session must not clear its waiting-question dot.
+        // Opening a session hides its waiting-question dot while it is in front of the user.
         useApp.setState({ selection: { type: "conversation", id: "question" } });
         await until(() => questionRow("question")?.active);
         const opened = questionRow("question");
@@ -336,7 +336,7 @@ function Fixture() {
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
-          const info = { beforeMark, error: !!error, plain: plainStatus(row),
+          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
             unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
@@ -349,9 +349,12 @@ function Fixture() {
           // The tab's marks are the sidebar row's own: its spinner or unread dot, its error glyph.
           const slot = tab.parentElement!;
           const mark = slot.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
-          states.push({ ...info, title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
-            state: row.dataset.status, words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: row.title,
-            rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+          // The open row's own state, read again: in front of the user it may have changed.
+          const open = [...document.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].find((title) => title.textContent === conversation.title)!.closest("button")!;
+          const openStatus = open.querySelector<HTMLElement>('[data-slot="row-status"]');
+          states.push({ ...info, title: conversation.title, openState: openStatus?.dataset.status ?? null,
+            words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: openStatus?.title ?? null,
+            rowMark: open.querySelector('[data-slot="status-spinner"]') ? "spinner" : open.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             mark: slot.querySelector('[data-slot="status-spinner"]') ? "spinner" : slot.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             dot: tab.querySelector('[data-slot="status-dot"]') !== null,
             tabError: tab.querySelector('[data-slot="status-error"]') !== null,

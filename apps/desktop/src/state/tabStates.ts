@@ -91,13 +91,22 @@ export const SESSION_STATUS_WORDS = Object.fromEntries(
 
 export type SessionStatus = { state: SessionState; reason: string | null };
 
-/** A waiting card wins over failures, live work, a stop and a recorded turn's end. */
-export function tabState(activity: RowActivity, quotaWait: boolean, stopped = false, turnEnded = false): SessionState | null {
-  if (activity.awaiting && activity.awaiting !== "failed") return "needsYou";
+/**
+ * A waiting card wins over failures, live work, a stop and a recorded turn's end; a sign-in only
+ * while nothing works, as the session goes on without it. Not for the session the user is looking
+ * at (`viewing`): its card is in front of them.
+ */
+export function tabState(activity: RowActivity, quotaWait: boolean, stopped = false, turnEnded = false, viewing = false): SessionState | null {
+  if (needsYou(activity, viewing)) return "needsYou";
   if (activity.awaiting === "failed") return "failed";
   if (activity.running || quotaWait) return "working";
   if (stopped) return "stopped";
   return turnEnded ? "done" : null;
+}
+
+function needsYou({ awaiting, running }: RowActivity, viewing: boolean): boolean {
+  if (viewing || !awaiting || awaiting === "failed") return false;
+  return awaiting !== "signIn" || !running;
 }
 
 /** The displayed state with the waiting card or quota reset named on hover. */
@@ -106,8 +115,9 @@ export function sessionStatus(
   quotaWait: { resetsAtMs: number | null } | null,
   stopped = false,
   turnEnded = false,
+  viewing = false,
 ): SessionStatus | null {
-  const state = tabState(activity, quotaWait !== null, stopped, turnEnded);
+  const state = tabState(activity, quotaWait !== null, stopped, turnEnded, viewing);
   if (!state) return null;
   let reason: string | null = null;
   if (state === "needsYou") {
@@ -119,9 +129,9 @@ export function sessionStatus(
   return { state, reason };
 }
 
-/** Needs you keeps its dot while open; Done uses the unread dot, failures their own red mark. */
-export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean, stopped = false, turnEnded = false) {
-  const state = tabState(activity, quotaWait, stopped, turnEnded);
+/** Needs you has its dot until it's looked at; Done uses the unread dot, failures their own red mark. */
+export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean, stopped = false, turnEnded = false, viewing = false) {
+  const state = tabState(activity, quotaWait, stopped, turnEnded, viewing);
   return { working: state === "working", error: state === "failed", unread: state === "needsYou" || (state === "done" && unread) };
 }
 
@@ -130,7 +140,13 @@ export function useSidebarIndicators(id: string, unread = false) {
   const quotaWait = useApp((s) => !!s.conversations[id]?.quotaWait);
   const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
   const turnEnded = useActivity((s) => s.byConversation[id]?.turnEndedAtMs !== undefined);
-  return sidebarIndicators(activity, quotaWait, unread, stopped, turnEnded);
+  const viewing = useViewing(id);
+  return sidebarIndicators(activity, quotaWait, unread, stopped, turnEnded, viewing);
+}
+
+/** Whether `id` is the conversation in front of the user. */
+function useViewing(id: string): boolean {
+  return useApp((s) => s.selection.type === "conversation" && s.selection.id === id);
 }
 
 export function useSessionStatus(id: string): SessionStatus | null {
@@ -141,7 +157,8 @@ export function useSessionStatus(id: string): SessionStatus | null {
   });
   const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
   const turnEnded = useActivity((s) => s.byConversation[id]?.turnEndedAtMs !== undefined);
-  return sessionStatus(activity, resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets }, stopped, turnEnded);
+  const viewing = useViewing(id);
+  return sessionStatus(activity, resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets }, stopped, turnEnded, viewing);
 }
 
 export function stillGoing(id: string): boolean {
