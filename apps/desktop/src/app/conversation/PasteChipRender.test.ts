@@ -28,4 +28,6 @@ for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in t
   assert.equal(seen.big, "Pasted text #1· Start and end are sent");
   assert.deepEqual(seen.opened, { pane: "Pasted text #1", dialog: false });
   assert.deepEqual(seen.bubble, { pane: "Pasted text #1", dialog: false, done: false, text: "a", handles: 0 });
+  // A chip sent in a code mark (as in the user's screenshot, its text a `Pasted text.md`) is a chip that opens.
+  assert.deepEqual(seen.inCode, { pane: "Pasted text #1", code: false, text: "Also Eric messaged me this Pasted text #1" });
 });

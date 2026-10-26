@@ -87,6 +87,8 @@ type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] 
 
 /** A worker's `@task-N`, a pasted image's `[Image #n]`, or a pasted text's `[Pasted text #n]`. */
 const USER_TOKEN = /(@task-\d+\b|\[Image #\d+\]|\[Pasted text #\d+\])/;
+/** Code that is a pasted image's or text's marker alone, spaces around it aside. */
+const INLINE_MARKER = /^\s*(?:\[Image #\d+\]|\[Pasted text #\d+\])\s*$/;
 
 /** One piece of the user's text: a line break, a mention or an image as a link, else text. */
 function userPieces(value: string): MdNode[] {
@@ -120,6 +122,8 @@ function splitUserText(node: MdNode): void {
   }
   node.children = merged.flatMap((child): MdNode[] => {
     if (child.type === "text") return userPieces(child.value ?? "");
+    // A chip the rich composer sent in a code mark (`` `[Pasted text #1] ` ``) is still its chip.
+    if (child.type === "inlineCode" && INLINE_MARKER.test(child.value ?? "")) return userPieces(child.value!.trim());
     if (child.type !== "link" && child.type !== "linkReference") splitUserText(child);
     return [child];
   });
