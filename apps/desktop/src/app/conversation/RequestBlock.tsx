@@ -161,7 +161,7 @@ export const RequestBlock: FC = () => {
   // Its model's turn runs now: what that turn offers waits for it to end, not for its workers.
   const turnRuns = useBoard((s) => {
     const board = s.board;
-    return !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
+    return !quotaWait && !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
   });
   // The workers its turn started that still work: over, it stays open and live until they finish
   // (its own wake-ups when they do are in the same turn), with no end cards yet; then it folds.
@@ -185,7 +185,7 @@ export const RequestBlock: FC = () => {
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
   // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
   // Until then a reply streams in place.
-  const answering = !finished && !held && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
+  const answering = !quotaWait && !finished && !held && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
   const done = finished || answering !== null;
   const answer = answering ?? answerIndex(meta.texts, finished);
   const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
@@ -211,9 +211,9 @@ export const RequestBlock: FC = () => {
     // A Chat's says it works over its steps, and with none until its reply streams, once something came.
     (live && (meta.session || meta.steers.length > 0 || activity.some((item) => item.type === "group" && item.items.some((each) => each.type === "step")) || (meta.texts.length === 0 && sequence.length > 0)));
   const streams = (index: number) => meta.texts[index]?.position === Number.POSITIVE_INFINITY;
-  const streaming = (entry: Entry) => !done && entry.kind === "text" && streams(entry.index);
+  const streaming = (entry: Entry) => !quotaWait && !done && entry.kind === "text" && streams(entry.index);
   const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
-  const liveThought = sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
+  const liveThought = quotaWait ? undefined : sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
   const status: ThreadStatusProps = {
     requestIds: meta.requestIds,
     state: isLive(meta.state) ? meta.state : "working",
@@ -250,7 +250,7 @@ export const RequestBlock: FC = () => {
             meta={meta}
             open={open}
             foldable={foldable}
-            quota={quotaWait !== null && meta.state === "working" && !workersActive}
+            quota={quotaWait !== null && isLive(meta.state)}
             answering={answering !== null}
             answerAtMs={answerAtMs}
             workers={holding}

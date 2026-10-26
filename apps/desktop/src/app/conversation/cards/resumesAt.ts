@@ -17,11 +17,12 @@ export type ResumesAt = {
  * resume, or none scheduled) and no such limit, nothing.
  */
 export function resumesAt(limit: LimitHit | null, wait: QuotaWait | null): ResumesAt | null {
-  const kind = wait?.limitKind ?? limit?.kind ?? null;
+  const kind = wait ? wait.limitKind ?? null : limit?.kind ?? null;
   if (kind === "credits" || kind === "spendControl") {
     return { title: kind === "credits" ? "Out of credits" : "Spend limit reached", reason: wait?.reason ?? null, atMs: null, resumes: false };
   }
   if (!wait) return null;
-  const atMs = wait.resetsAtMs ?? limit?.resetsAtMs ?? null;
+  // A current wait with no known reset must never inherit an older turn's reset.
+  const atMs = wait.resetsAtMs;
   return { title: atMs !== null ? `Resumes at ${formatTime(atMs)}` : "Resumes when the limit resets", reason: wait.reason, atMs, resumes: true };
 }
