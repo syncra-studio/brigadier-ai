@@ -81,6 +81,23 @@ impl CliJobs {
 }
 
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
+/// Exact daemon provenance marker; the raw native transcript remains untouched.
+pub(crate) const CUT_JOBS_MARK: &str = "[Brigadier background jobs stopped]";
+/// Marker alone is insufficient: caller must prove this native message was daemon-injected.
+pub(crate) fn daemon_candidate<'a>(
+    text: &str,
+    mut authored: impl Iterator<Item = &'a str>,
+) -> bool {
+    text.starts_with(CUT_JOBS_MARK) && !authored.any(|text| text.starts_with(CUT_JOBS_MARK))
+}
+
+pub(crate) fn daemon_context(
+    event: &ProviderEvent,
+    known: &std::collections::HashSet<String>,
+) -> bool {
+    matches!(event, ProviderEvent::Message { role: Role::User, item_id, .. } if known.contains(item_id))
+}
+
 pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue this work.";
 /// How a successor's hand-off begins (`[Brigadier hand-off <n> · <session>]`) and ends; the
 /// first message of the successor follows it.
@@ -446,8 +463,9 @@ impl LiveTurn {
                 task.status == BackgroundTaskStatus::Running
                     && task.kind != BackgroundTaskKind::Agent
                     && !self.command_of(task).is_some_and(|command| {
-                        policy::runs_brigadier(command, "wait")
-                            || policy::runs_brigadier(command, "preview")
+                        policy::runs_only_brigadier(command)
+                            && (policy::runs_brigadier(command, "wait")
+                                || policy::runs_brigadier(command, "preview"))
                     })
             })
             .map(|task| task.id.clone())
@@ -841,6 +859,23 @@ mod tests {
 
     /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
     #[cfg(unix)]
+    #[test]
+    fn daemon_provenance_requires_known_native_id_and_respects_authored_markers() {
+        let text = format!("{CUT_JOBS_MARK} a watcher ended");
+        assert!(daemon_candidate(&text, std::iter::empty()));
+        assert!(!daemon_candidate(&text, std::iter::once(text.as_str())));
+        assert!(!daemon_candidate(
+            &format!("Quoted {text}"),
+            std::iter::empty()
+        ));
+        let entry = message("native", Role::User);
+        assert!(!daemon_context(&entry.event, &Default::default()));
+        assert!(daemon_context(
+            &entry.event,
+            &std::collections::HashSet::from(["native".into()])
+        ));
+    }
+
     #[test]
     fn a_subagent_file_that_cannot_be_read_leaves_the_thread_whole() {
         let dir = std::env::temp_dir().join(format!("bg-thread-stamp-{}", std::process::id()));

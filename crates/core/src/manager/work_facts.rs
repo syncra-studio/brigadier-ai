@@ -622,6 +622,8 @@ impl SessionManager {
         cwd: Option<PathBuf>,
         event: &ProviderEvent,
     ) {
+        self.follow_background_history(conversation, Some(task), Some(event))
+            .await;
         if !concerns(event) {
             return;
         }

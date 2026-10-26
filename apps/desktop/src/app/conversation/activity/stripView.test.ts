@@ -57,17 +57,17 @@ test("the session's own subagents leave the Workers strip for the Subagents stri
   assert.deepEqual(subagentsStrip([worker, agent], NOW)?.rows, [agent.id]);
 });
 
-test("the Subagents strip keeps a finished subagent half a minute while another works, and hides a moment after the last ends", () => {
+test("finished subagents leave immediately while another works, and remain in their source records", () => {
   const working = native();
   const done = native({ working: false, lastEnd: "done", gone: true, lastEventAtMs: NOW - 20_000 });
   const failed = native({ working: false, lastEnd: "failed", gone: true, lastEventAtMs: NOW - 3_000 });
   const old = native({ working: false, lastEnd: "done", gone: true, lastEventAtMs: NOW - 40_000 });
   const view = subagentsStrip([working, done, failed, old], NOW);
-  assert.deepEqual(view?.rows, [working.id, done.id, failed.id]);
-  assert.equal(subagentWords(view!), "1 subagent working · 1 done · 1 failed");
+  assert.deepEqual(view?.rows, [working.id]);
+  assert.equal(subagentWords(view!), "1 subagent working");
   assert.deepEqual(view?.stops, ["bg"]);
   // Nothing at work: still there just after the last end, then gone.
-  assert.deepEqual(subagentsStrip([done, failed], NOW)?.rows, [done.id, failed.id]);
+  assert.equal(subagentsStrip([done, failed], NOW), null);
   assert.equal(subagentsStrip([done, old], NOW), null);
   assert.equal(subagentsStrip([], NOW), null);
 });

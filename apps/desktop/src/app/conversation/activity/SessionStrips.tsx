@@ -122,7 +122,7 @@ export const SubagentsStrip: FC<{ conversationId: string; view: SubagentsView }>
  * says what the session waits on first and counts the rest.
  */
 export const ChecksStrip: FC<{ conversationId: string; view: StripLines }> = ({ conversationId, view }) => {
-  const stops = view.lines.flatMap((line) => line.stops);
+  const stops = view.stops ?? view.lines.flatMap((line) => line.stops);
   return (
     <Strip
       slot="checks-strip"
@@ -184,7 +184,7 @@ const CheckRow = memo(function CheckRow({ conversationId, line }: { conversation
             data-slot="check-row"
             data-state={line.state}
             title={line.command ?? undefined}
-            onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: line.id }, line.name)}
+            onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: line.id, startedAtMs: line.startedAtMs }, line.name)}
             className={cn("hover:bg-foreground/5", row)}
           >
             {words}

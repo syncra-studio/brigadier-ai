@@ -185,14 +185,14 @@ async function drive() {
     checks: await read("checks"),
   };
   // A check's row opens what it printed, as the summary card's Background row does.
-  [...scene("checks").querySelectorAll<HTMLButtonElement>('[data-slot="checks-strip"] button[data-slot="check-row"]')].find((row) => row.textContent?.includes("Lint"))?.click();
+  [...scene("checks").querySelectorAll<HTMLButtonElement>('[data-slot="checks-strip"] button[data-slot="check-row"]')].find((row) => row.textContent?.includes("Build the desktop app"))?.click();
   await frame();
   seen.opened = sessionTabs("checks").active;
   // A subagent's row opens its transcript, as a worker's does.
   scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="workers-strip-row"]')?.click();
   await frame();
   seen.panel = panelOpened;
-  // The tests' Stop stops them and the wait folded into them.
+  // Per-row Stop owns the producer; its watcher is independent.
   scene("checks").querySelector<HTMLButtonElement>('[aria-label="Stop Run full core tests"]')?.click();
   scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip-stop-all"]')?.click();
   await frame();
