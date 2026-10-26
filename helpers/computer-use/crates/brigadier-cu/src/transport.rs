@@ -24,7 +24,7 @@ pub type Writer = Box<dyn AsyncWrite + Send + Unpin>;
 /// The named pipe that stands for the socket path `socket_path` on Windows:
 /// `\\.\pipe\brigadier-cu-<16 hex digits of its SHA-256>`. The path is
 /// compared case-insensitively, as Windows paths are.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(unix, allow(dead_code))]
 pub fn pipe_name(socket_path: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(socket_path.to_lowercase().as_bytes());
@@ -74,7 +74,9 @@ pub async fn connect(socket_path: &str) -> io::Result<(Reader, Writer)> {
     }
 }
 
-/// A blocking connection to the daemon, for one request at a time.
+/// A blocking connection to the daemon, for one request at a time. Unix
+/// callers use their socket directly; Windows's pipe goes through this.
+#[cfg_attr(unix, allow(dead_code))]
 pub struct Stream {
     #[cfg(unix)]
     inner: std::os::unix::net::UnixStream,
@@ -82,6 +84,7 @@ pub struct Stream {
     inner: std::fs::File,
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 impl Stream {
     /// Connect to the daemon for `socket_path`.
     pub fn connect(socket_path: &str) -> io::Result<Self> {
@@ -133,13 +136,6 @@ impl Stream {
             Ok(())
         }
     }
-
-    /// A second handle to the same connection.
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self {
-            inner: self.inner.try_clone()?,
-        })
-    }
 }
 
 impl io::Read for Stream {
@@ -160,6 +156,7 @@ impl io::Write for Stream {
 /// Send one request line on a fresh connection and read one answer line,
 /// giving up after `deadline`. `None` when nothing listens; `Some(Err)` when
 /// something accepted but didn't answer in time.
+#[cfg_attr(unix, allow(dead_code))]
 pub fn exchange_within(
     socket_path: &str,
     line: &str,
@@ -190,6 +187,7 @@ pub fn exchange_within(
 }
 
 /// Write `line` and read up to the first newline of the answer.
+#[cfg_attr(unix, allow(dead_code))]
 fn exchange(
     mut stream: Stream,
     line: &str,
@@ -227,12 +225,6 @@ fn exchange(
             Err(error) => return Err(error),
         }
     }
-}
-
-/// Whether a named pipe for `socket_path` exists right now (a daemon owns it).
-#[cfg(windows)]
-pub fn pipe_exists(socket_path: &str) -> bool {
-    std::path::Path::new(&pipe_name(socket_path)).exists()
 }
 
 #[cfg(windows)]

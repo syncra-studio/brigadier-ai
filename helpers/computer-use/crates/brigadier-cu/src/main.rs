@@ -23,10 +23,6 @@
 
 // A refusal is the driver's own `ToolResult`, returned as is to the agent.
 #![allow(clippy::result_large_err)]
-// On Windows and Linux the MCP shim serves in-process until its daemon proxy
-// is cross-platform; the proxy's helpers (journal, dispatch checks, setup
-// notes) have no caller there until then.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 // Moved whole from the old core; a few of its items have no caller here yet.
 #[allow(dead_code)]
@@ -60,16 +56,11 @@ mod process;
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod permissions;
-// The MCP shim's daemon proxy is macOS-only for now; on Windows and Linux
-// `mcp` serves in-process (see `run_in_process_mcp`).
-#[cfg(target_os = "macos")]
 mod proxy;
 mod responsibility;
 mod scope_args;
 mod serve;
 mod supervisor;
-// Used by the daemon on Windows; the clients switch to it with the proxy.
-#[cfg_attr(not(windows), allow(dead_code))]
 mod transport;
 
 use std::sync::Arc;
@@ -575,7 +566,16 @@ fn main() {
             socket,
             claude_code_compat,
         } => {
-            let _ = (no_daemon_relaunch, socket);
+            // Brigadier's agents go through the daemon, as on macOS; a helper
+            // run by hand serves in-process.
+            if cli::should_use_daemon_proxy(no_daemon_relaunch) {
+                if let Err(e) = cli::run_mcp_via_daemon_proxy(socket, claude_code_compat) {
+                    eprintln!("brigadier-cu: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            let _ = socket;
             run_in_process_mcp(claude_code_compat);
         }
     }

@@ -681,6 +681,17 @@ pub fn should_use_daemon_proxy(no_daemon_relaunch: bool) -> bool {
     true
 }
 
+/// Windows and Linux: Brigadier's agents (the helper is named by
+/// `BRIGADIER_CU_DAEMON_APP`) go through the daemon like macOS's, so every
+/// agent shares one daemon, its stop list and its activity. A helper run by
+/// hand, or with `--no-daemon-relaunch`, serves in-process.
+#[cfg(not(target_os = "macos"))]
+pub fn should_use_daemon_proxy(no_daemon_relaunch: bool) -> bool {
+    !no_daemon_relaunch
+        && !crate::bundle::is_env_truthy("BRIGADIER_CU_MCP_NO_RELAUNCH")
+        && std::env::var_os("BRIGADIER_CU_DAEMON_APP").is_some_and(|app| !app.is_empty())
+}
+
 /// Resolve the daemon endpoint for an MCP/serve invocation.
 pub fn daemon_socket_path(explicit_socket: Option<String>) -> String {
     explicit_socket.unwrap_or_else(crate::serve::default_socket_path)
@@ -804,7 +815,6 @@ pub fn launch_daemon(socket_path: &str, claude_code_compat: bool) -> anyhow::Res
 /// socket, allowing its macOS implementation to start or wait for the daemon
 /// lazily. Builds its own tokio runtime — same shape as the other `run_*`
 /// helpers in this file that own their event loop.
-#[cfg(target_os = "macos")]
 pub fn run_mcp_via_daemon_proxy(
     socket: Option<String>,
     claude_code_compat: bool,
@@ -1458,6 +1468,7 @@ fn discover_permission_daemons() -> anyhow::Result<Vec<PermissionDaemonState>> {
         .collect()
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn wait_for_permission_daemon(
     endpoint: &PermissionDaemonEndpoint,
     timeout: std::time::Duration,
@@ -1485,6 +1496,7 @@ fn permission_bool(state: &PermissionDaemonState, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn permission_instance(state: &PermissionDaemonState) -> Option<&str> {
     state
         .payload

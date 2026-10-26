@@ -1,5 +1,9 @@
 //! Stdio MCP proxy that forwards `tools/list` and `tools/call` through
-//! the running `brigadier-cu serve` daemon over its Unix socket.
+//! the running `brigadier-cu serve` daemon over its Unix socket (a named
+//! pipe on Windows, see `crate::transport`).
+//!
+//! Windows and Linux use the same lazy start, reaper and tool-list cache as
+//! macOS; only the permission wait is macOS's (they grant nothing).
 //!
 //! This is the runtime half of the TCC auto-relaunch path (issue #1525,
 //! mirror of Swift PR #1479). When `brigadier-cu mcp` is invoked from
@@ -27,7 +31,6 @@ use std::sync::Arc;
 
 use crate::mcp::initialize_result;
 use cua_driver_core::protocol::{Request, Response};
-#[cfg(target_os = "macos")]
 use cua_driver_core::protocol::{ToolCall, ToolResult};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, warn};
@@ -113,7 +116,6 @@ pub async fn run_proxy(
     // macOS tracks daemon/reaper ownership separately from the permission
     // onboarding milestone. A read-only permission probe may start the daemon
     // promptly without allowing a later driving action to skip the grant wait.
-    #[cfg(target_os = "macos")]
     let mut daemon_state = DaemonStartState::default();
 
     // macOS: build the tool list from the in-process registry — a pure,
@@ -124,13 +126,11 @@ pub async fn run_proxy(
     // Other platforms: there is no lazy `open -a` launch path, so the caller
     // guarantees a daemon is already up. Fetch the list from it and start the
     // reaper immediately (unchanged behaviour).
-    #[cfg(target_os = "macos")]
     let bootstrap_tools_list = {
         let registry = crate::one_shot_registry(claude_code_compat);
         Arc::new(proxy_tools_list(crate::mcp::agent_tools_list(&registry)))
     };
 
-    #[cfg(target_os = "macos")]
     let (daemon_lifecycle_tx, mut daemon_lifecycle_rx) =
         tokio::sync::mpsc::unbounded_channel::<DaemonLifecycleEvent>();
 
@@ -148,7 +148,6 @@ pub async fn run_proxy(
         // EOF event invalidates the generation/cache before the next request.
         // `next_line` is cancellation-safe, so selecting it against lifecycle
         // events cannot discard a partially received JSON-RPC line.
-        #[cfg(target_os = "macos")]
         let line = tokio::select! {
             biased;
             event = daemon_lifecycle_rx.recv() => {
@@ -197,7 +196,6 @@ pub async fn run_proxy(
                 // only after a tools/call passes permission-free protocol,
                 // roster, and schema admission. initialize/tools/list remain
                 // local so registering the server cannot trigger TCC prompts.
-                #[cfg(target_os = "macos")]
                 let platform_response = if req.method == "tools/call" {
                     let tools_list = daemon_state.tools_list_or(&bootstrap_tools_list);
                     match admit_bootstrap_tool_call(&req, tools_list) {
@@ -410,10 +408,9 @@ async fn run_control_connection(
         }
     };
 
-    #[cfg(unix)]
     {
         loop {
-            let connected = match run_unix_control_connection_once(
+            let connected = match run_control_connection_once(
                 &socket_path,
                 &session_id,
                 &line,
@@ -496,20 +493,17 @@ fn validate_control_ack(line: &str, expected_profile: DaemonProfile) -> anyhow::
     Ok(())
 }
 
-#[cfg(unix)]
-async fn run_unix_control_connection_once(
+async fn run_control_connection_once(
     socket_path: &str,
     session_id: &str,
     begin_line: &str,
     expected_profile: DaemonProfile,
     readiness: &tokio::sync::watch::Sender<ControlConnectionState>,
 ) -> Result<bool, String> {
-    use tokio::net::UnixStream;
-
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    let mut stream = loop {
-        match UnixStream::connect(socket_path).await {
-            Ok(stream) => break stream,
+    let (reader, mut writer) = loop {
+        match crate::transport::connect(socket_path).await {
+            Ok(halves) => break halves,
             Err(_) if std::time::Instant::now() < deadline => {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
@@ -522,15 +516,15 @@ async fn run_unix_control_connection_once(
             }
         }
     };
-    if let Err(error) = stream.write_all(begin_line.as_bytes()).await {
+    if let Err(error) = writer.write_all(begin_line.as_bytes()).await {
         debug!(
             session_id,
             "control connection: write session_begin failed: {error}"
         );
         return Ok(true);
     }
-    let _ = stream.flush().await;
-    let mut reader = BufReader::new(stream);
+    let _ = writer.flush().await;
+    let mut reader = BufReader::new(reader);
     let mut buffer = String::new();
     match tokio::time::timeout(
         std::time::Duration::from_secs(3),
@@ -732,7 +726,6 @@ async fn call_daemon_tool(
 /// connected, and the onboarding grant wait has completed. Keeping them
 /// separate ensures a prompt status call cannot accidentally waive onboarding
 /// for the next driving action.
-#[cfg(target_os = "macos")]
 #[derive(Debug, Default)]
 struct DaemonStartState {
     reaper_started: bool,
@@ -747,7 +740,6 @@ struct DaemonLifecycleEvent {
     generation: u64,
 }
 
-#[cfg(target_os = "macos")]
 impl DaemonStartState {
     fn needs_grant_wait(
         &self,
@@ -837,7 +829,6 @@ impl DaemonStartState {
 /// `{ "prompt": false }` probe or the explicit prompting form, instead of
 /// waiting up to 55 seconds for the condition it reports/requests. Every other
 /// tool call retains the onboarding wait, including all driving actions.
-#[cfg(target_os = "macos")]
 fn tool_call_requires_grant_wait(req: &Request) -> bool {
     req.tool_call()
         .map(|call| call.name != "check_permissions")
@@ -848,7 +839,6 @@ fn tool_call_requires_grant_wait(req: &Request) -> bool {
 /// identity, and the advertised input schema are checked before the helper is
 /// started or health-recovered. The supplied list is the bootstrap registry
 /// while dormant and the cached daemon-authored list after connection.
-#[cfg(target_os = "macos")]
 enum BootstrapToolCallAdmission {
     InvalidParams(String),
     Rejected(ToolResult),
@@ -858,7 +848,6 @@ enum BootstrapToolCallAdmission {
     },
 }
 
-#[cfg(target_os = "macos")]
 fn admit_bootstrap_tool_call(
     req: &Request,
     tools_list: &serde_json::Value,
@@ -920,7 +909,6 @@ fn admit_bootstrap_tool_call(
     }
 }
 
-#[cfg(target_os = "macos")]
 async fn ensure_daemon_started(
     socket_path: &str,
     state: &mut DaemonStartState,
@@ -982,7 +970,10 @@ async fn ensure_daemon_started(
     // host's explicit post-verification readiness milestone.
     let external_permission_flow =
         crate::bundle::is_env_truthy("BRIGADIER_CU_EXTERNAL_PERMISSION_FLOW");
-    if state.needs_grant_wait(wait_for_grants, external_permission_flow) {
+    // Windows and Linux grant nothing: no onboarding to wait for.
+    if cfg!(target_os = "macos")
+        && state.needs_grant_wait(wait_for_grants, external_permission_flow)
+    {
         wait_for_daemon_permission_readiness(socket_path, session_id, external_permission_flow)
             .await?;
         state.complete_grant_wait();
@@ -993,7 +984,6 @@ async fn ensure_daemon_started(
 /// Poll the daemon's private permission state until the complete authority is
 /// ready. The bounded deadline fails closed instead of dispatching protected
 /// work while onboarding is incomplete.
-#[cfg(target_os = "macos")]
 async fn wait_for_daemon_permission_readiness(
     socket_path: &str,
     session_id: &str,
@@ -1087,7 +1077,6 @@ fn unavailable_message(error: &anyhow::Error) -> String {
 
 /// Name exactly which precondition is missing so the agent (and the journal)
 /// can tell a missing TCC grant from a host that has not republished readiness.
-#[cfg(target_os = "macos")]
 fn permission_readiness_failure(
     last: Option<(bool, bool, Option<bool>)>,
     external_permission_flow: bool,
@@ -1124,7 +1113,6 @@ fn permission_readiness_failure(
     }
 }
 
-#[cfg(target_os = "macos")]
 fn daemon_permission_readiness(value: &serde_json::Value, external_permission_flow: bool) -> bool {
     extract_permission_readiness(value).is_some_and(
         |(accessibility, screen_recording, host_ready)| {
@@ -1137,7 +1125,6 @@ fn daemon_permission_readiness(value: &serde_json::Value, external_permission_fl
 
 /// Recursively locate the permission payload without depending on the daemon's
 /// result-envelope shape.
-#[cfg(target_os = "macos")]
 fn extract_permission_readiness(v: &serde_json::Value) -> Option<(bool, bool, Option<bool>)> {
     match v {
         serde_json::Value::Object(obj) => {
@@ -1214,7 +1201,6 @@ async fn handle_proxy_request(
     }
 }
 
-#[cfg(target_os = "macos")]
 fn response_from_tool_result(id: serde_json::Value, result: ToolResult) -> Response {
     match serde_json::to_value(result) {
         Ok(value) => Response::ok(id, value),

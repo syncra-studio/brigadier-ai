@@ -695,9 +695,12 @@ pub const SOCKET_HOST_AUTH_TOKEN_ENV: &str = "BRIGADIER_CU_SOCKET_HOST_AUTH_TOKE
 /// a separate host capability use this identity as a lifecycle owner instead:
 /// ordinary authenticated agents may outlive and reconnect across host
 /// generations, while the daemon still exits when its current owner exits.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_PID_ENV: &str = "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_START_SECONDS_ENV: &str =
     "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_SECONDS";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS_ENV: &str =
     "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS";
 
@@ -953,10 +956,12 @@ pub fn default_pid_file_path() -> String {
         .into_owned()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn is_managed_socket_path(path: &str) -> bool {
     path == default_socket_path()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn is_managed_pid_file_path(path: &str) -> bool {
     path == default_pid_file_path()
 }
@@ -1097,6 +1102,7 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn is_same_generation_as(self, other: Self) -> bool {
         self.process_id == other.process_id
             && self.start_seconds == other.start_seconds

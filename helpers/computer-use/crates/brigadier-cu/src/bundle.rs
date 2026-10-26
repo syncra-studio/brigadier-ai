@@ -96,6 +96,7 @@ pub fn is_executable_inside_brigadier_helper_app() -> bool {
         .is_some_and(is_executable_inside_brigadier_helper_app_path)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn is_executable_inside_brigadier_helper_app_path(path: &std::path::Path) -> bool {
     path.ends_with(std::path::Path::new(
         "Brigadier Computer Use.app/Contents/MacOS/brigadier-cu",
