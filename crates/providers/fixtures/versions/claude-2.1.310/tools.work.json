@@ -13,9 +13,6 @@
               "rows": [
                 "Ran sleep 2"
               ]
-            },
-            {
-              "item": "compaction"
             }
           ]
         }
@@ -74,9 +71,6 @@
               "rows": [
                 "Ran sleep 2"
               ]
-            },
-            {
-              "item": "compaction"
             }
           ]
         }

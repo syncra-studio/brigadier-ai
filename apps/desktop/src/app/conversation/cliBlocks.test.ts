@@ -174,6 +174,7 @@ test("a compaction in a turn shows in it, and images in the user's message are i
       entries: [
         user("u1", "Look at this", 1000, { images: [image] }),
         at({ type: "compactionEnded", automatic: true, tokensBefore: 100, tokensAfter: 10, error: null }, 1500),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Looked." }, 1800),
       ],
       turns: [turn("u1", 1000, 2000, "done")],
     },
@@ -184,7 +185,7 @@ test("a compaction in a turn shows in it, and images in the user's message are i
   assert.deepEqual(block?.user?.kind === "message" && block.user.message.attachments.map((ref) => [ref.name, ref.mime]), [["Image", "image/png"]]);
 });
 
-test("a long session's /compact is never a bubble: its turn shows the compaction's divider", () => {
+test("a long session's /compact is never a bubble nor a turn: its compaction is a divider after the block before", () => {
   const blocks = cliBlocks(
     {
       entries: [
@@ -200,16 +201,15 @@ test("a long session's /compact is never a bubble: its turn shows the compaction
     true,
   );
   assert.deepEqual(
-    blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.compactions.length]),
+    blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.compactions.map((each) => each.inTurn)]),
     [
-      ["u1", "message", [], 0],
-      ["u2", null, [], 1],
-      ["u3", "message", [], 0],
+      ["u1", "message", [], [false]],
+      ["u3", "message", [], []],
     ],
   );
 });
 
-test("a long session's checkpoint request is never a bubble either", () => {
+test("a long session's checkpoint request is never a bubble nor a turn either", () => {
   const blocks = cliBlocks(
     {
       entries: [
@@ -227,10 +227,70 @@ test("a long session's checkpoint request is never a bubble either", () => {
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges]),
     [
       ["u1", "message", []],
-      ["u2", null, []],
       ["u3", "message", []],
     ],
   );
+});
+
+const compactionStarted = (automatic: boolean, atMs: number) => at({ type: "compactionStarted", automatic }, atMs);
+const compactionEnded = (automatic: boolean, atMs: number, error: string | null = null) =>
+  at({ type: "compactionEnded", automatic, tokensBefore: 900, tokensAfter: 40, error }, atMs);
+
+test("Brigadier's /compact as the CLI writes it, the compaction before the /compact, is one divider after the answer, not its time, nor a block", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Is it rotated?", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Half done." }, 4000),
+        compactionEnded(false, 73_000),
+        user("c1", "/compact Besides your usual summary, keep these exactly", 5000),
+      ],
+      // A thread noted before the fix: the /compact turn, the last, read as cut off.
+      turns: [turn("u1", 1000, 5000, "done"), { ...turn("c1", 5000, 5000, "interrupted"), error: null }],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.state, block.endedAtMs, block.compactions.map((each) => [each.inTurn, each.state])]),
+    [["u1", "done", 5000, [[false, "done"]]]],
+  );
+});
+
+const tidying = (entries: ReturnType<typeof at>[], end: "done" | null) => ({ entries: [user("u1", "Tidy it", 1000), ...entries], turns: [turn("u1", 1000, 9000, end)] });
+const reply = (id: string, atMs: number) => at({ type: "message", itemId: id, role: "assistant", text: id }, atMs);
+
+test("a running compaction is the divider its end takes over, in place: one, never two", () => {
+  // Mid-turn, the CLI's own: in the work while it runs, the same divider once it ends.
+  const [running] = cliBlocks(tidying([reply("a1", 2000), compactionStarted(true, 3000)], null), "conv", undefined, true);
+  assert.deepEqual(running?.compactions.map((each) => [each.inTurn, each.state, each.position]), [[true, "running", 2]]);
+  const [ended] = cliBlocks(tidying([reply("a1", 2000), compactionStarted(true, 3000), compactionEnded(true, 8000), reply("a2", 8500)], null), "conv", undefined, true);
+  assert.deepEqual(ended?.compactions.map((each) => [each.inTurn, each.state, each.position, each.startedAtMs, each.endedAtMs]), [[true, "done", 2, 3000, 8000]]);
+  // Brigadier's at a turn's end: after the block while it runs, and after it once done; the
+  // file's word of the same end, read while the turn is open, is no second divider.
+  const [asked] = cliBlocks(tidying([reply("a1", 2000), compactionStarted(false, 9500)], "done"), "conv", undefined, true);
+  assert.deepEqual(asked?.compactions.map((each) => [each.inTurn, each.state]), [[false, "running"]]);
+  const [twice] = cliBlocks(tidying([reply("a1", 2000), compactionEnded(false, 9800), compactionStarted(false, 9500), compactionEnded(false, 9800)], "done"), "conv", undefined, true);
+  assert.deepEqual(twice?.compactions.map((each) => [each.inTurn, each.state]), [[false, "done"]]);
+  // A failed one says so.
+  const [failed] = cliBlocks(tidying([reply("a1", 2000), compactionEnded(false, 9800, "Not enough messages to compact.")], "done"), "conv", undefined, true);
+  assert.deepEqual(failed?.compactions.map((each) => [each.state, each.error]), [["failed", "Not enough messages to compact."]]);
+});
+
+test("a Chat's compaction the board and its CLI both say is one divider", () => {
+  const board = {
+    ...NO_BOARD,
+    compactions: {
+      k1: { id: "k1", requestId: null, after: null, automatic: false, state: { type: "done" }, tokensBefore: 900, tokensAfter: 40, startedAtMs: 3000, endedAtMs: 8000, position: 5 },
+    },
+  } as unknown as BoardDigest;
+  const [block] = cliBlocks(
+    { entries: [user("u1", "Grow", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Grown." }, 2000), compactionEnded(false, 7900)], turns: [turn("u1", 1000, 2500, "done")] },
+    "conv",
+    board,
+  );
+  assert.equal(block?.compactions.length, 1);
 });
 
 test("what the user sent shows as ever, /compact and Brigadier's marks too; so does a chat's /compact", () => {

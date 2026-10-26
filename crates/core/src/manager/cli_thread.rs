@@ -108,7 +108,8 @@ impl SessionManager {
                             ProviderEvent::Message {
                                 role: Role::User,
                                 ..
-                            } | ProviderEvent::CompactionEnded { .. }
+                            } | ProviderEvent::CompactionStarted { .. }
+                                | ProviderEvent::CompactionEnded { .. }
                         )
                 });
             if on_its_own {
@@ -684,7 +685,8 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
     }
 }
 
-/// What the live thread shows of the stream: its items and their deltas.
+/// What the live thread shows of the stream: its items and their deltas, and a compaction while
+/// it runs (no file keeps that: its end, which the file keeps, takes its place).
 fn shown_live(event: &ProviderEvent) -> bool {
     matches!(
         event,
@@ -697,6 +699,7 @@ fn shown_live(event: &ProviderEvent) -> bool {
             | ProviderEvent::CommandOutputDelta { .. }
             | ProviderEvent::FileChanges { .. }
             | ProviderEvent::Image { .. }
+            | ProviderEvent::CompactionStarted { .. }
             | ProviderEvent::CompactionEnded { .. }
             | ProviderEvent::TaskNotice { .. }
     )
