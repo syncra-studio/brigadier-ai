@@ -26,6 +26,7 @@ fn list(root: &Path, state: &str, head: &str, auto: bool, merge_commit: Option<&
             "url": "https://github.com/o/n/pull/7",
             "state": state,
             "isDraft": false,
+            "createdAt": jiff::Timestamp::now().to_string(),
             "headRefOid": head,
             "baseRefName": "main",
             "mergeCommit": merge_commit.map(|oid| json!({ "oid": oid })),

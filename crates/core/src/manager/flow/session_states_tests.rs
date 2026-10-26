@@ -475,6 +475,7 @@ fn pr_list(state: &str, head: &str, merge_commit: Option<&str>) -> String {
         "url": "https://github.com/o/n/pull/7",
         "state": state,
         "isDraft": false,
+        "createdAt": jiff::Timestamp::now().to_string(),
         "baseRefName": "main",
         "headRefOid": head,
         "mergeCommit": merge_commit.map(|oid| serde_json::json!({ "oid": oid })),

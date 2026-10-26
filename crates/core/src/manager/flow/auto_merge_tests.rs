@@ -129,6 +129,7 @@ async fn squash_merged(name: &str, single_branch: bool) {
                             "url": "https://github.com/o/n/pull/7",
                             "state": "MERGED",
                             "isDraft": false,
+                            "createdAt": jiff::Timestamp::now().to_string(),
                             "headRefOid": head,
                             "baseRefName": "main",
                             "mergeCommit": { "oid": squash },
@@ -353,6 +354,7 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
             "url": "https://github.com/o/n/pull/7",
             "state": "MERGED",
             "isDraft": false,
+            "createdAt": jiff::Timestamp::now().to_string(),
             "headRefOid": head,
             "baseRefName": "main",
             "mergeCommit": { "oid": squash },
@@ -424,6 +426,7 @@ async fn a_pull_request_into_another_branch_or_not_fetched_yet_is_not_recorded()
                         serde_json::json!([{
                             "number": 9, "title": "t", "url": "u", "state": "MERGED",
                             "isDraft": false, "headRefOid": head, "baseRefName": base,
+                            "createdAt": jiff::Timestamp::now().to_string(),
                             "mergeCommit": { "oid": merged },
                         }])
                         .to_string()

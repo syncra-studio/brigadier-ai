@@ -5,8 +5,165 @@
 use serde_json::json;
 
 use super::auto_merge_tests::{script, stub_gh};
-use super::{Flow, Options, Reply};
+use super::{Flow, Options, Reply, git};
+use crate::model::{
+    ConversationKind, EnvironmentRequest, ModelChoice, PermissionLevel, SetupRequest,
+};
 use crate::work::{PullRequestCi, PullRequestState};
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_local_checkout_does_not_show_a_shared_branchs_old_closed_pr() {
+    let mut flow = Flow::start(
+        "pr-card-old-local",
+        Options::default(),
+        script(|_| async { Reply::text("Done.") }),
+    )
+    .await;
+    git(&flow.repo, &["checkout", "-q", "-b", "staging"]);
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    flow.conversation = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: EnvironmentRequest::LocalCheckout {
+                    branch: "staging".into(),
+                    create_from: None,
+                },
+                permission: PermissionLevel::Full,
+                orchestrator: ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let gh = flow.repo.parent().unwrap().join("gh");
+    *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&gh));
+    std::fs::write(
+        gh.join("pr-list"),
+        json!([{
+            "number": 1480, "title": "Release 2026-06-01: Promote staging to production",
+            "url": "https://github.com/o/n/pull/1480", "state": "CLOSED",
+            "isDraft": false, "createdAt": "2026-06-01T12:00:00Z",
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let status = flow.manager.pull_request(&flow.conversation).await.unwrap();
+    assert!(status.pull_request.is_none());
+    assert!(!status.auth_required, "an old PR is not a lookup failure");
+    let calls = std::fs::read_to_string(gh.join("calls")).unwrap();
+    assert!(calls.contains("--head staging"), "{calls}");
+    assert!(calls.contains("createdAt"), "{calls}");
+    assert!(!calls.contains("auth status"), "{calls}");
+    flow.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_old_closed_or_merged_pr_is_cleared_without_settling_the_sessions_work() {
+    let flow = Flow::start(
+        "pr-card-old-merge",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                std::fs::write(turn.cwd.join("NOTES.md"), "notes\n").unwrap();
+                git(&turn.cwd, &["add", "NOTES.md"]);
+                git(&turn.cwd, &["commit", "-q", "-m", "Add notes"]);
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let root = flow.repo.parent().unwrap();
+    let origin = root.join("origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let checkout = std::path::PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    git(&checkout, &["push", "-q", "-u", "origin", "HEAD"]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    let base = git(&flow.repo, &["rev-parse", "main"]);
+    let gh = root.join("gh");
+    *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&gh));
+    let list = |state: &str| {
+        std::fs::write(
+            gh.join("pr-list"),
+            json!([{
+                "number": 1480, "title": "Old release", "url": "https://github.com/o/n/pull/1480",
+                "state": state, "isDraft": false, "createdAt": "2026-06-01T12:00:00Z",
+                "headRefOid": head, "baseRefName": "main", "mergeCommit": { "oid": head },
+            }])
+            .to_string(),
+        )
+        .unwrap();
+    };
+    list("OPEN");
+    let open = flow
+        .manager
+        .pull_request(&flow.conversation)
+        .await
+        .unwrap()
+        .pull_request;
+    assert_eq!(open.as_ref().unwrap().state, PullRequestState::Open);
+    for state in ["CLOSED", "MERGED"] {
+        // A previously recorded row must be cleared when the lookup excludes it.
+        flow.core
+            .record_pull_request(&flow.conversation, open.clone())
+            .await
+            .unwrap();
+        list(state);
+        flow.manager
+            .reconcile_pr_merge(&flow.conversation, None)
+            .await;
+        let board = flow.board().await;
+        assert!(board.pull_request.is_none(), "{state}");
+        assert!(
+            !board.unmerged_ready().is_empty(),
+            "the work remains ready: {state}"
+        );
+        assert!(
+            !board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. })),
+            "{state}"
+        );
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git(&flow.repo, &["rev-parse", "main"]), base);
+    }
+    let calls = std::fs::read_to_string(gh.join("calls")).unwrap();
+    assert!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("pr list "))
+            .all(|line| line.contains("createdAt")),
+        "{calls}"
+    );
+    flow.stop().await;
+}
 
 #[cfg(unix)]
 #[tokio::test]
@@ -30,6 +187,7 @@ async fn an_approved_pull_request_with_an_unresolved_thread_has_comments_to_addr
                 "url": "https://github.com/o/n/pull/7",
                 "state": state,
                 "isDraft": false,
+                "createdAt": jiff::Timestamp::now().to_string(),
                 "baseRefName": "main",
                 "mergeCommit": merge_commit.map(|oid| json!({ "oid": oid })),
                 "reviewDecision": "APPROVED",
@@ -116,6 +274,7 @@ async fn a_pr_card_poll_sees_approval_and_green_checks_without_a_push() {
             json!([{
                 "number": 7, "title": "Add notes", "url": "https://github.com/o/n/pull/7",
                 "state": "OPEN", "isDraft": false,
+                "createdAt": jiff::Timestamp::now().to_string(),
                 "reviewDecision": review, "mergeable": "MERGEABLE",
                 "statusCheckRollup": [{ "status": "COMPLETED", "conclusion": "SUCCESS" }],
             }])

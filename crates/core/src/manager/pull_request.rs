@@ -30,6 +30,7 @@ struct GhPullRequest {
     url: String,
     state: String,
     is_draft: bool,
+    created_at: String,
     #[serde(default)]
     head_ref_oid: Option<String>,
     #[serde(default)]
@@ -82,10 +83,12 @@ pub struct PullRequestStatus {
 }
 
 impl SessionManager {
-    /// The pull request of the session checkout's branch, newest first; none when there is
-    /// none, the branch isn't on GitHub, or `gh` is missing. A signed-out CLI has its own hint.
+    /// The newest pull request of the session checkout's branch, if open/draft or created
+    /// during the session; none when there is none, the branch isn't on GitHub, or `gh` is
+    /// missing. A signed-out CLI has its own hint.
     pub async fn pull_request(&self, id: &ConversationId) -> Result<PullRequestStatus> {
         let checkout = PathBuf::from(self.checkout_dir(id)?);
+        let session_started_at_ms = self.core.conversation(id)?.created_at_ms;
         let Some(gh) = self.gh() else {
             return Ok(PullRequestStatus {
                 pull_request: None,
@@ -106,7 +109,14 @@ impl SessionManager {
                 });
             };
             let mut auth_required = false;
-            let pull_request = match run_gh(&gh.program, &checkout, &branch, &gh.vars, true) {
+            let pull_request = match run_gh(
+                &gh.program,
+                &checkout,
+                &branch,
+                &gh.vars,
+                true,
+                session_started_at_ms,
+            ) {
                 Ok(found) => found.map(|found| {
                     let mut pr = found.pr;
                     if matches!(pr.state, PullRequestState::Open | PullRequestState::Draft) {
@@ -143,6 +153,7 @@ async fn lookup_pushed(
     checkout: PathBuf,
     name: String,
     gh: super::gh::Gh,
+    session_started_at_ms: i64,
 ) -> Option<std::result::Result<Option<FoundPr>, String>> {
     blocking(move || {
         let repo = git.open(&checkout).map_err(git_error)?;
@@ -156,7 +167,14 @@ async fn lookup_pushed(
         if !pushed {
             return Ok(None);
         }
-        Ok(Some(run_gh(&gh.program, &checkout, &name, &gh.vars, false)))
+        Ok(Some(run_gh(
+            &gh.program,
+            &checkout,
+            &name,
+            &gh.vars,
+            false,
+            session_started_at_ms,
+        )))
     })
     .await
     .ok()
@@ -290,7 +308,8 @@ const PR_WATCH_SOON_FOR: Duration = Duration::from_secs(30 * 60);
 
 impl SessionManager {
     /// The pull request of `id`'s session branch, when it has a worktree whose branch was
-    /// pushed and `gh` finds one. What `gh` answered is recorded for the session's row.
+    /// pushed and `gh` finds an open/draft PR or one created during the session. An excluded
+    /// old PR clears the session's recorded row, just as a branch without a PR does.
     async fn session_pr(&self, id: &ConversationId) -> Option<SessionPr> {
         let conversation = self.core.conversation(id).ok()?;
         let Some(crate::model::Setup::Session {
@@ -309,7 +328,7 @@ impl SessionManager {
         };
         let gh = self.gh()?;
         let (git, checkout, name) = (self.git.clone(), PathBuf::from(&worktree), branch.clone());
-        let found = lookup_pushed(git, checkout, name, gh).await;
+        let found = lookup_pushed(git, checkout, name, gh, conversation.created_at_ms).await;
         // What it was seen as, for its row ("PR open"): only when `gh` answered.
         if let Some(Ok(seen)) = &found
             && let Err(err) = self
@@ -537,16 +556,18 @@ impl SessionManager {
 }
 
 /// The branch's pull request; `card` adds what the pinned card's buttons need (checks, review
-/// decision, conflicts), which the merge watch has no use for.
+/// decision, conflicts), which the merge watch has no use for. Old closed or merged pull
+/// requests of a shared branch don't belong to this session.
 fn run_gh(
     gh: &Path,
     checkout: &Path,
     branch: &str,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
     card: bool,
+    session_started_at_ms: i64,
 ) -> std::result::Result<Option<FoundPr>, String> {
     let mut fields =
-        "number,title,url,state,isDraft,headRefOid,baseRefName,mergeCommit,autoMergeRequest"
+        "number,title,url,state,isDraft,createdAt,headRefOid,baseRefName,mergeCommit,autoMergeRequest"
             .to_owned();
     if card {
         fields.push_str(",statusCheckRollup,reviewDecision,mergeable");
@@ -560,12 +581,25 @@ fn run_gh(
         env,
     )?;
     let found: Vec<GhPullRequest> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    Ok(found.into_iter().next().map(found_pr))
+    Ok(found
+        .into_iter()
+        .next()
+        .and_then(|pr| found_pr(pr, session_started_at_ms)))
 }
 
-fn found_pr(pr: GhPullRequest) -> FoundPr {
+fn found_pr(pr: GhPullRequest, session_started_at_ms: i64) -> Option<FoundPr> {
+    // Drafts also have state OPEN. A closed/merged PR must have been created during this
+    // session; otherwise a long-lived branch's old release can appear as this session's work.
+    if pr.state != "OPEN"
+        && !pr
+            .created_at
+            .parse::<jiff::Timestamp>()
+            .is_ok_and(|at| at.as_millisecond() >= session_started_at_ms)
+    {
+        return None;
+    }
     let merge_commit = pr.merge_commit.map(|commit| commit.oid);
-    FoundPr {
+    Some(FoundPr {
         base: pr.base_ref_name.clone(),
         head: pr.head_ref_oid,
         merge_commit: merge_commit.clone(),
@@ -591,7 +625,7 @@ fn found_pr(pr: GhPullRequest) -> FoundPr {
             changes_requested: pr.review_decision.as_deref() == Some("CHANGES_REQUESTED"),
             unresolved: 0,
         },
-    }
+    })
 }
 
 /// All of a pull request's checks as one state: failing when any failed, else pending while
@@ -736,6 +770,65 @@ fn gh_output(
 mod tests {
     use super::*;
 
+    fn session_pr(state: &str, draft: bool, created_at: &str) -> Option<PullRequest> {
+        let pr = serde_json::from_value(serde_json::json!({
+            "number": 1480,
+            "title": "Promote staging to production",
+            "url": "https://github.com/o/n/pull/1480",
+            "state": state,
+            "isDraft": draft,
+            "createdAt": created_at,
+            "mergeCommit": { "oid": "f00dfeed" },
+        }))
+        .unwrap();
+        let started = "2026-10-26T10:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .as_millisecond();
+        found_pr(pr, started).map(|found| found.pr)
+    }
+
+    #[test]
+    fn an_old_closed_or_merged_branch_pr_is_not_the_sessions_pr() {
+        for state in ["CLOSED", "MERGED"] {
+            assert!(session_pr(state, false, "2026-06-01T12:00:00Z").is_none());
+        }
+    }
+
+    #[test]
+    fn an_open_or_draft_branch_pr_is_shown_even_if_older_than_the_session() {
+        for (draft, state) in [
+            (false, PullRequestState::Open),
+            (true, PullRequestState::Draft),
+        ] {
+            let pr = session_pr("OPEN", draft, "2026-06-01T12:00:00Z").unwrap();
+            assert_eq!(pr.state, state);
+            assert_eq!(pr.number, 1480);
+        }
+    }
+
+    #[test]
+    fn a_pr_created_during_the_session_still_shows_merged_or_closed() {
+        for (gh_state, state) in [
+            ("MERGED", PullRequestState::Merged),
+            ("CLOSED", PullRequestState::Closed),
+        ] {
+            for created in ["2026-10-26T10:00:00Z", "2026-10-26T10:00:01Z"] {
+                let pr = session_pr(gh_state, false, created).unwrap();
+                assert_eq!(pr.state, state);
+                assert_eq!(pr.merge_commit.as_deref(), Some("f00dfeed"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_pr_timestamp_is_compared_as_an_instant_and_must_be_valid_when_closed() {
+        assert!(session_pr("CLOSED", false, "2026-10-26T11:59:59+02:00").is_none());
+        assert!(session_pr("CLOSED", false, "2026-10-26T12:00:00+02:00").is_some());
+        assert!(session_pr("MERGED", false, "unknown").is_none());
+        assert!(session_pr("OPEN", false, "unknown").is_some());
+    }
+
     #[test]
     fn checks_read_as_failing_then_pending_then_passing() {
         let rollup = |json: &str| {
@@ -772,10 +865,10 @@ mod tests {
     #[test]
     fn an_approved_pull_request_with_conflicts_and_open_threads_reads_so() {
         let pr: GhPullRequest = serde_json::from_str(
-            r#"{"number":7,"title":"Add notes","url":"https://github.com/o/n/pull/7","state":"OPEN","isDraft":false,"baseRefName":"main","reviewDecision":"APPROVED","mergeable":"CONFLICTING","statusCheckRollup":[]}"#,
+            r#"{"number":7,"title":"Add notes","url":"https://github.com/o/n/pull/7","state":"OPEN","isDraft":false,"createdAt":"2026-06-01T12:00:00Z","baseRefName":"main","reviewDecision":"APPROVED","mergeable":"CONFLICTING","statusCheckRollup":[]}"#,
         )
         .unwrap();
-        let pr = found_pr(pr).pr;
+        let pr = found_pr(pr, 0).unwrap().pr;
         assert!(pr.conflicts);
         assert!(pr.approved);
         assert!(!pr.mergeable);
