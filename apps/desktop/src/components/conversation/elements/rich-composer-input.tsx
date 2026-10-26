@@ -180,14 +180,25 @@ function RichSyncPlugin({ formatter }: { formatter: Unstable_DirectiveFormatter 
     const apply = (text: string) => {
       last.current = text;
       const focused = editor.getRootElement()?.contains(document.activeElement) ?? false;
+      let shown: string | null = null;
       editor.update(
         () => {
           const { parse } = formatterRef.current;
-          $importComposer(text, parse, formatterRef.current);
+          if ($importComposer(text, parse, formatterRef.current)) shown = $exportComposer();
           $getRoot().selectEnd();
         },
         { tag: focused ? SYNC_TAG : [SYNC_TAG, SKIP_DOM_SELECTION_TAG] },
       );
+      // A pasted text or image read out of code (bare backticks round it, as the field once
+      // kept them): the text says what the field shows, so it is sent as a chip.
+      if (shown === null || shown === text) return;
+      last.current = shown;
+      fromField.current = true;
+      try {
+        aui.composer.setText(shown);
+      } finally {
+        fromField.current = false;
+      }
     };
     const initial = runtime.getState().text;
     if (initial !== last.current) apply(initial);

@@ -839,11 +839,12 @@ export function ConversationView({
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
       const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
-      // What wasn't sent goes back into the composer: a refusal never takes the typed message. A
-      // draft's goes to the conversation made for it, which shows by then.
+      // What wasn't sent goes back into the composer, its pasted texts and images too: a refusal
+      // never takes the typed message. A draft's goes to the conversation made for it, which
+      // shows by then.
       let target = conversationId;
       const keep = (cause: unknown) => {
-        putBack(target ?? NEW_CHAT_SCOPE, text);
+        putBack(target ?? NEW_CHAT_SCOPE, outgoing);
         fail(cause);
       };
       if (background && source && isTaskTab(source)) {
