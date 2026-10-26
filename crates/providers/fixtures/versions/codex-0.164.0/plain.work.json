@@ -13,11 +13,11 @@
               "rows": [
                 "Ran sleep 2"
               ]
-            },
-            {
-              "item": "compaction"
             }
           ]
+        },
+        {
+          "between": "compaction"
         }
       ]
     },
@@ -63,11 +63,11 @@
               "rows": [
                 "Ran sleep 2"
               ]
-            },
-            {
-              "item": "compaction"
             }
           ]
+        },
+        {
+          "between": "compaction"
         }
       ]
     },

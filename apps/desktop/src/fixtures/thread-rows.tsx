@@ -38,7 +38,7 @@ import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/side-panel/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
-import { CompactionRow } from "@/app/conversation/CompactionRow";
+import { CompactionDivider } from "@/app/conversation/CompactionRow";
 import { TurnBoundary, ImagePreview, MessageAttachments, MarkdownBlock, AttachmentReaderContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import type { AttachmentRef, Conversation, OrchestratorStep, Request } from "@/ipc/generated";
@@ -245,10 +245,10 @@ function Page() {
           </AttachmentReaderContext.Provider>
         </Case>
         <Case id="compaction-new">
-          <CompactionRow compaction={{ id: "c1", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now, endedAtMs: null }} />
+          <CompactionDivider compaction={{ id: "c1", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now, endedAtMs: null }} />
         </Case>
         <Case id="compaction-slow">
-          <CompactionRow compaction={{ id: "c2", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now - 11_000, endedAtMs: null }} />
+          <CompactionDivider compaction={{ id: "c2", inTurn: true, automatic: true, state: "running", error: null, position: 1, startedAtMs: now - 11_000, endedAtMs: null }} />
         </Case>
         <Case id="tool-json">
           <ToolResult name="lookup" status="completed" input={'{"id":7}'} output={'{"ok":true,"items":[1,2]}'} />
@@ -359,6 +359,8 @@ async function measure(): Promise<object> {
   const out: Record<string, unknown> = {};
   // A compaction: a new one's words alone (read first, well within its 10 s), a long one says it may take a while.
   out.compaction = [text(at("compaction-new")), text(at("compaction-slow"))];
+  // …as a divider: its words between two hairlines.
+  out.compactionRules = ["compaction-new", "compaction-slow"].map((id) => at(id).querySelectorAll("[data-slot=compaction] > [data-rule]").length);
   for (const id of ["shell-long", "shell-failed", "shell-cli-failed", "shell-running", "shell-clipped", "shell-command", "shell-note"]) out[id] = shell(id);
   one<HTMLElement>("[data-slot=shell-command]", at("shell-command"))?.click();
   await frame();

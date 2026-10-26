@@ -4,7 +4,7 @@ import { ImagesRow } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import { type BlockCard, isImageStep, type SequenceEntry as Entry } from "@/app/conversation/blocks";
-import { CompactionRow } from "@/app/conversation/CompactionRow";
+import { CompactionDivider } from "@/app/conversation/CompactionRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { ReplyText } from "@/app/conversation/ReplyText";
 import { TaskNoticeRow } from "@/app/conversation/SeamRows";
@@ -58,7 +58,7 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
       if (entry.steps.length > 0 && entry.steps.every(isImageStep)) return <ImagesRow steps={entry.steps} />;
       return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
     case "compaction":
-      return <CompactionRow compaction={entry.compaction} />;
+      return <CompactionDivider compaction={entry.compaction} />;
     case "nudge":
       return null;
     case "taskNotice":

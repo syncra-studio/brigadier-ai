@@ -1,16 +1,16 @@
 import { type FC, useEffect, useState } from "react";
 
 import type { BlockCompaction } from "@/app/conversation/blocks";
-import { ROW } from "@/components/conversation";
 import { TextShorterConcise } from "@/components/icons";
+import { LabeledDivider } from "@/components/shared";
 import { cn } from "@/lib/utils";
 
-function compactionLabel({ automatic, state }: BlockCompaction): string {
+function compactionLabel({ state }: BlockCompaction): string {
   switch (state) {
     case "running":
-      return "Compacting context";
+      return "Refreshing context";
     case "done":
-      return automatic ? "Context automatically compacted" : "Context compacted";
+      return "Context refreshed · everything important kept";
     case "failed":
       return "Couldn’t compact context";
   }
@@ -20,10 +20,11 @@ function compactionLabel({ automatic, state }: BlockCompaction): string {
 const SLOW_COMPACTION_MS = 10_000;
 
 /**
- * The compaction line: "Compacting context" shimmers while it runs (after 10 s, "· This can take
- * a few minutes"), then stays grey.
+ * A compaction, done under the hood: one divider across the thread where it happened, never a
+ * turn or a row of one. "Refreshing context" shimmers while it runs (after 10 s, "· This can
+ * take a few minutes"), then it says the context was refreshed.
  */
-export const CompactionRow: FC<{ compaction: BlockCompaction }> = ({ compaction }) => {
+export const CompactionDivider: FC<{ compaction: BlockCompaction }> = ({ compaction }) => {
   const running = compaction.state === "running";
   const [slow, setSlow] = useState(() => running && Date.now() - compaction.startedAtMs >= SLOW_COMPACTION_MS);
   useEffect(() => {
@@ -32,13 +33,13 @@ export const CompactionRow: FC<{ compaction: BlockCompaction }> = ({ compaction 
     return () => window.clearTimeout(timer);
   }, [running, slow, compaction.startedAtMs]);
   return (
-    <div data-slot="compaction" data-state={compaction.state} className={ROW}>
-      <TextShorterConcise aria-hidden className="size-4 shrink-0" />
-      <span className={cn("min-w-0 truncate", running && "shimmer")}>
+    <LabeledDivider data-slot="compaction" data-state={compaction.state} role="status">
+      <TextShorterConcise aria-hidden className="size-icon-sm shrink-0" />
+      <span className={cn("min-w-0 text-center", running && "shimmer")}>
         {compactionLabel(compaction)}
         {running && slow && " · This can take a few minutes"}
         {compaction.error && ` · ${compaction.error}`}
       </span>
-    </div>
+    </LabeledDivider>
   );
 };

@@ -126,9 +126,9 @@ export type BlockOrchestratorStep = {
 };
 
 /**
- * A Chat's model compacting its context ("Compacting context" → "Context compacted"): in the
- * turn it happened in (`inTurn`, the model compacted on its own), or after the block it
- * followed (the user asked for it between turns).
+ * A model compacting its context ("Refreshing context" → "Context refreshed"), one divider in the
+ * thread: in the turn it happened in (`inTurn`, the model compacted on its own), where it cuts
+ * the work, or after the block it followed (asked for between turns: the user's, or Brigadier's).
  */
 export type BlockCompaction = {
   id: string;
