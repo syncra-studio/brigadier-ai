@@ -68,7 +68,8 @@ fn the_status_sums_the_agents_up() {
 
 /// Stand-in CLIs on a throwaway folder: each lists `srv` (Claude's as a plugin's) as needing a
 /// sign-in until its login is done, and its login prints a page and waits until the "browser"
-/// visits it. Claude's refuses to run without a terminal, as the real one does.
+/// visits it. Claude's refuses to run without a terminal, as the real one does. Each list
+/// leaves a line in `lists`, and takes `$SLOW_LIST` seconds when set.
 #[cfg(unix)]
 mod fake {
     use super::*;
@@ -88,7 +89,9 @@ mod fake {
     const CLAUDE: &str = r#"#!/bin/sh
 case "$1 $2" in
 "mcp list")
+  echo claude >> "$STATE/lists"
   if [ -f "$STATE/claude-in" ]; then s="✔ Connected"; else s="! Needs authentication"; fi
+  sleep "${SLOW_LIST:-0}"
   echo "Checking MCP server health…"; echo
   echo "plugin:p:srv: http://127.0.0.1:1/mcp (HTTP) - $s"
   echo "other: /bin/cat - ✔ Connected" ;;
@@ -105,7 +108,9 @@ esac
     const CODEX: &str = r#"#!/bin/sh
 case "$1 $2" in
 "mcp list")
+  echo codex >> "$STATE/lists"
   if [ -f "$STATE/codex-in" ]; then s=o_auth; else s=not_logged_in; fi
+  sleep "${SLOW_LIST:-0}"
   echo "[{\"name\":\"srv\",\"auth_status\":\"$s\"}]" ;;
 "mcp login")
   echo "Authorize the MCP server by opening this URL in your browser:"
@@ -161,27 +166,70 @@ esac
     }
 }
 
+/// A "browser" that keeps each page it is sent, and approves it when `approve` says so.
 #[cfg(unix)]
-#[test]
-fn one_sign_in_runs_each_agents_own_login_in_turn() {
-    let fake = fake::fake("turn");
-    let logins = Arc::new(McpLogins::default());
+fn browser(state: PathBuf, approve: bool) -> (Open, Arc<Mutex<Vec<String>>>) {
     let opened = Arc::new(Mutex::new(Vec::<String>::new()));
-    let (seen, state) = (opened.clone(), fake.dir.clone());
-    // The "browser": approves each page as it opens.
+    let seen = opened.clone();
     let open: Open = Arc::new(move |link: &str| {
         seen.lock().unwrap().push(link.to_owned());
-        let agent = link.rsplit("state=").next().unwrap();
-        std::fs::write(state.join(format!("go-{agent}")), "").unwrap();
+        if approve {
+            approve_page(&state, link);
+        }
     });
-    let target = Target {
+    (open, opened)
+}
+
+#[cfg(unix)]
+fn approve_page(state: &Path, link: &str) {
+    let agent = link.rsplit("state=").next().unwrap();
+    std::fs::write(state.join(format!("go-{agent}")), "").unwrap();
+}
+
+#[cfg(unix)]
+fn plugin_target() -> Target {
+    Target {
         server: "srv".into(),
         plugin: Some("p".into()),
         project: None,
-    };
-    let id = logins.start(fake.clis.clone(), target.clone(), open.clone());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn one_sign_in_runs_every_agents_own_login_at_once() {
+    let fake = fake::fake("together");
+    let logins = Arc::new(McpLogins::default());
+    let (open, opened) = browser(fake.dir.clone(), false);
+    let target = plugin_target();
+    let id = logins.start(fake.clis.clone(), target.clone(), open);
+    // Both pages wait in the browser together: Codex's doesn't wait for Claude's sign-in.
+    fake::wait(&logins, &id, |p| {
+        p.agents.len() == 2
+            && p.agents
+                .iter()
+                .all(|a| a.state == AgentSignInState::InBrowser)
+    });
+    let pages = opened.lock().unwrap().clone();
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    // The browser approves Codex's first; Claude's is still waiting.
+    approve_page(
+        &fake.dir,
+        pages.iter().find(|l| l.ends_with("codex")).unwrap(),
+    );
+    let progress = fake::wait(&logins, &id, |p| {
+        p.agents
+            .iter()
+            .any(|a| a.state == AgentSignInState::SignedIn)
+    });
+    assert!(!progress.finished);
+    approve_page(
+        &fake.dir,
+        pages.iter().find(|l| l.ends_with("claude")).unwrap(),
+    );
     let progress = fake::wait(&logins, &id, |p| p.finished);
     assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    // In the agents' own order, whichever came first.
     assert_eq!(
         progress
             .agents
@@ -197,11 +245,9 @@ fn one_sign_in_runs_each_agents_own_login_in_turn() {
             (ProviderKind::Codex, "srv", AgentSignInState::SignedIn),
         ]
     );
-    // Claude first, then Codex.
-    let opened = opened.lock().unwrap().clone();
-    assert_eq!(opened.len(), 2);
-    assert!(opened[0].ends_with("state=claude") && opened[1].ends_with("state=codex"));
-    // The lists read afterwards say neither needs it.
+    // The lists say neither needs it, as each CLI said, without reading them again.
+    let lists = std::fs::read_to_string(fake.dir.join("lists")).unwrap();
+    assert_eq!(lists.lines().count(), 2, "{lists}");
     for agent in [Agent::Claude, Agent::Codex] {
         let listed = logins.listed(&fake.clis, agent, None).unwrap();
         assert!(
@@ -210,6 +256,7 @@ fn one_sign_in_runs_each_agents_own_login_in_turn() {
         );
     }
     // Again: nobody needs it.
+    let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), target, open);
     let progress = fake::wait(&logins, &id, |p| p.finished);
     assert!(
@@ -220,9 +267,91 @@ fn one_sign_in_runs_each_agents_own_login_in_turn() {
     );
 }
 
+/// The browser opens at once with the lists Settings showed, though reading them takes long;
+/// one that asks for a sign-in counts however old it is.
 #[cfg(unix)]
 #[test]
-fn a_cancelled_sign_in_stops_its_cli_and_skips_the_rest() {
+fn a_sign_in_starts_from_the_lists_settings_showed() {
+    let mut fake = fake::fake("shown");
+    fake.clis.env.push(("SLOW_LIST".into(), "30".into()));
+    let logins = Arc::new(McpLogins::default());
+    let shown = |name: &str| {
+        vec![Listed {
+            name: name.into(),
+            needs_sign_in: true,
+            failed: None,
+        }]
+    };
+    let long_ago = Instant::now()
+        .checked_sub(LIST_FRESH * 2)
+        .unwrap_or_else(Instant::now);
+    lock(&logins.lists).insert((Agent::Claude, None), (long_ago, shown("plugin:p:srv")));
+    lock(&logins.lists).insert((Agent::Codex, None), (Instant::now(), shown("srv")));
+    let (open, opened) = browser(fake.dir.clone(), true);
+    let id = logins.start(fake.clis.clone(), plugin_target(), open);
+    let progress = fake::wait(&logins, &id, |p| p.finished);
+    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_eq!(opened.lock().unwrap().len(), 2);
+    // No list was read, and the ones kept say both are signed in.
+    assert!(!fake.dir.join("lists").exists());
+    let lists = lock(&logins.lists);
+    assert!(
+        lists
+            .values()
+            .flat_map(|(_, listed)| listed)
+            .all(|entry| !entry.needs_sign_in),
+        "{:?}",
+        lists.values().collect::<Vec<_>>()
+    );
+}
+
+/// A list read while a CLI signs in says it needed a sign-in; read before the CLI said it
+/// signed in, it doesn't undo that. One read after says what the CLI says.
+#[cfg(unix)]
+#[test]
+fn a_list_read_before_a_sign_in_ended_does_not_undo_it() {
+    let mut fake = fake::fake("race");
+    fake.clis.env.push(("SLOW_LIST".into(), "1".into()));
+    let logins = Arc::new(McpLogins::default());
+    let codex = brigadier_registry::adapter::adapter(Agent::Codex);
+    let reading = {
+        let (logins, clis) = (logins.clone(), fake.clis.clone());
+        std::thread::spawn(move || logins.list(&clis, codex, None).unwrap())
+    };
+    // The list has begun (and found Codex signed out) before the sign-in ends.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fake.dir.join("lists").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    logins.signed(Agent::Codex, "srv");
+    let listed = reading.join().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(!listed[0].needs_sign_in, "{listed:?}");
+    // The CLI's own word, once read after.
+    let listed = logins.list(&fake.clis, codex, None).unwrap();
+    assert!(listed[0].needs_sign_in, "{listed:?}");
+}
+
+/// Who waits for a sign-in hears it finished the moment it does, not at its next look.
+#[cfg(unix)]
+#[test]
+fn waiting_for_a_sign_in_ends_when_it_does() {
+    let fake = fake::fake("wait");
+    let logins = Arc::new(McpLogins::default());
+    let (open, _) = browser(fake.dir.clone(), true);
+    let id = logins.start(fake.clis.clone(), plugin_target(), open);
+    let asked = Instant::now();
+    let progress = logins.finished(&id, Duration::from_secs(60)).unwrap();
+    assert!(progress.finished, "{progress:?}");
+    assert!(asked.elapsed() < Duration::from_secs(20));
+    assert_eq!(progress.status(), McpSignInStatus::SignedIn);
+    assert!(logins.finished("nope", Duration::ZERO).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cancelled_sign_in_stops_its_clis() {
     let fake = fake::fake("cancel");
     let logins = Arc::new(McpLogins::default());
     let open: Open = Arc::new(|_: &str| {});
@@ -233,9 +362,12 @@ fn a_cancelled_sign_in_stops_its_cli_and_skips_the_rest() {
     };
     let id = logins.start(fake.clis.clone(), target.clone(), open.clone());
     fake::wait(&logins, &id, |p| {
-        p.agents.first().map(|a| &a.state) == Some(&AgentSignInState::InBrowser)
+        p.agents.len() == 2
+            && p.agents
+                .iter()
+                .all(|a| a.state == AgentSignInState::InBrowser)
     });
-    // Asking again while it waits gives the same sign-in, its page opened again.
+    // Asking again while it waits gives the same sign-in, its pages opened again.
     assert_eq!(logins.start(fake.clis.clone(), target.clone(), open), id);
     assert_eq!(logins.pending(&target).as_deref(), Some(id.as_str()));
     logins.reopen(&id).unwrap();
@@ -249,7 +381,7 @@ fn a_cancelled_sign_in_stops_its_cli_and_skips_the_rest() {
             .all(|a| a.state == AgentSignInState::Cancelled),
         "{progress:?}"
     );
-    assert!(!fake.dir.join("claude-in").exists());
+    assert!(!fake.dir.join("claude-in").exists() && !fake.dir.join("codex-in").exists());
     assert_eq!(logins.pending(&target), None);
     assert!(logins.reopen(&id).is_err());
 }
@@ -276,6 +408,24 @@ fn a_login_that_fails_says_why_in_the_clis_words() {
         "{progress:?}"
     );
     assert_eq!(progress.agents.len(), 1);
+}
+
+/// An agent whose CLI isn't installed has nothing to sign in: the others' sign-in is whole.
+#[cfg(unix)]
+#[test]
+fn an_agent_without_its_cli_is_left_out() {
+    let mut fake = fake::fake("missing");
+    let bin = fake.dir.clone();
+    fake.clis.binary = Arc::new(move |agent| (agent == Agent::Claude).then(|| bin.join("claude")));
+    let logins = Arc::new(McpLogins::default());
+    let (open, _) = browser(fake.dir.clone(), true);
+    let id = logins.start(fake.clis.clone(), plugin_target(), open);
+    let progress = fake::wait(&logins, &id, |p| p.finished);
+    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_eq!(
+        progress.agents.iter().map(|a| a.agent).collect::<Vec<_>>(),
+        [ProviderKind::Claude]
+    );
 }
 
 /// A server only a project configures: each CLI lists, signs in to and signs out of it only
@@ -671,6 +821,16 @@ mod live {
             &project,
         );
 
+        // A server that is slow to answer, as an `npx` one is: Claude's list waits for it.
+        run(
+            "claude",
+            &[
+                "mcp", "add", "--scope", "user", "slow", "--", "/bin/sh", "-c", "sleep 5",
+            ],
+            &env,
+            &project,
+        );
+
         let logins = Arc::new(McpLogins::default());
         let which = |name: &str| {
             let path = std::env::var("PATH").unwrap();
@@ -686,9 +846,14 @@ mod live {
                 Agent::Codex => codex.clone(),
             }),
         };
+        // Settings shows the row first: the lists it shows are read while it is open.
+        for adapter in adapters() {
+            logins.list(&clis, adapter, Some(&project)).unwrap();
+        }
+        let clicked = Instant::now();
         // The "browser": follows the page to the CLI's own loopback callback.
-        let open: Open = Arc::new(|link: &str| {
-            println!("opening {link}");
+        let open: Open = Arc::new(move |link: &str| {
+            println!("{:>6.2}s opening {link}", clicked.elapsed().as_secs_f64());
             let link = link.to_owned();
             std::thread::spawn(move || {
                 let status = std::process::Command::new("/usr/bin/curl")
@@ -704,12 +869,21 @@ mod live {
         };
         let id = logins.start(clis.clone(), target, open);
         let deadline = Instant::now() + Duration::from_secs(120);
+        let mut seen = Vec::new();
         let progress = loop {
             let progress = logins.progress(&id).unwrap();
+            for agent in &progress.agents {
+                let at = (agent.agent, agent.state.clone());
+                if !seen.contains(&at) {
+                    println!("{:>6.2}s {at:?}", clicked.elapsed().as_secs_f64());
+                    seen.push(at);
+                }
+            }
             if progress.finished || Instant::now() > deadline {
+                println!("{:>6.2}s finished", clicked.elapsed().as_secs_f64());
                 break progress;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(10));
         };
         println!("progress: {progress:#?}");
         assert_eq!(progress.status(), McpSignInStatus::SignedIn);

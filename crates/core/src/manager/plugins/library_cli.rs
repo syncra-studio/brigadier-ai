@@ -3,7 +3,7 @@
 //! each agent's own setup; a worker can only list.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use brigadier_cli::protocol::{
     CliReply, ErrorCode, LibraryAgentResult, LibraryAgentState, LibraryItem, LibraryOutput,
@@ -17,7 +17,7 @@ use crate::manager::SessionManager;
 use crate::manager::cli::CliCaller;
 use crate::manager::mcp_login::{AgentSignInState, McpSignInProgress};
 
-/// How long `login` waits for the user to sign in, every agent in turn.
+/// How long `login` waits for the user to sign in, every agent at once.
 const SIGN_IN_WAIT: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Default, Deserialize)]
@@ -230,8 +230,8 @@ impl SessionManager {
         }
     }
 
-    /// `login <name>`: every agent that needs it signs in to the Library server `name`, one
-    /// after another, in the user's browser.
+    /// `login <name>`: every agent that needs it signs in to the Library server `name`, all at
+    /// once, in the user's browser; the answer comes the moment the last one did.
     async fn cli_library_login(&self, project: Option<String>, name: String) -> CliReply {
         let rows = match self.library_rows(project.clone()).await {
             Ok(rows) => rows,
@@ -255,18 +255,18 @@ impl SessionManager {
             Ok(id) => id,
             Err(err) => return failed(err.to_string()),
         };
-        let deadline = Instant::now() + SIGN_IN_WAIT;
-        let progress = loop {
-            match self.mcp_sign_in_progress(&id) {
-                Ok(progress) if progress.finished => break progress,
-                Ok(_) if Instant::now() > deadline => {
+        let (logins, waited) = (self.mcp_logins.clone(), id.clone());
+        let progress =
+            match tokio::task::spawn_blocking(move || logins.finished(&waited, SIGN_IN_WAIT)).await
+            {
+                Ok(Some(progress)) if progress.finished => progress,
+                Ok(Some(_)) => {
                     let _ = self.cancel_mcp_sign_in(&id);
                     return failed("the sign-in waited 15 minutes for the browser and stopped");
                 }
-                Ok(_) => tokio::time::sleep(Duration::from_millis(500)).await,
-                Err(err) => return failed(err.to_string()),
-            }
-        };
+                Ok(None) => return failed(format!("no sign-in `{id}`")),
+                Err(err) => return failed(format!("the sign-in stopped: {err}")),
+            };
         CliReply::ok(&LibraryOutput {
             action: "login".to_owned(),
             items: Vec::new(),

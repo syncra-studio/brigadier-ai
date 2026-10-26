@@ -1,22 +1,24 @@
-//! Signing in to a remote MCP server with each agent CLI's own `mcp login`, one agent after
-//! another (STRIP-DOWN-PLAN §9.4 X5): the CLI keeps the sign-in in its own store, so a plain
-//! `claude` or `codex` in a terminal is signed in too. Brigadier keeps no token.
+//! Signing in to a remote MCP server with each agent CLI's own `mcp login`, every agent at
+//! once (STRIP-DOWN-PLAN §9.4 X5): the CLI keeps the sign-in in its own store, so a plain
+//! `claude` or `codex` in a terminal is signed in too. Brigadier keeps no token, so the agents
+//! can't share one sign-in: each opens its own page.
 //!
 //! - Which agents need it, and under which name, comes from each CLI's own list (Claude names
-//!   a plugin's server `plugin:<plugin>:<server>`).
+//!   a plugin's server `plugin:<plugin>:<server>`): the one Settings showed, when it has it, as
+//!   Claude's takes as long as its slowest server (30 s for one that hangs).
 //! - Each login prints its sign-in page's address (`--no-browser`); Brigadier opens it in the
 //!   browser and waits for the CLI to finish. One that needs a terminal runs in a PTY.
-//! - A sign-in can be cancelled (its CLI is stopped) and its page opened again.
+//! - A sign-in can be cancelled (its CLIs are stopped) and its pages opened again.
 //!
 //! The lists are also what Settings shows: which agent still needs a sign-in, read again at most
-//! every [`LIST_FRESH`].
+//! every [`LIST_FRESH`]. A CLI's own word that it signed in is taken at once, not read again.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_providers::ProviderKind;
@@ -31,6 +33,8 @@ pub(crate) const LIST_FRESH: Duration = Duration::from_secs(60);
 const LIST_TIMEOUT: Duration = Duration::from_secs(90);
 /// The longest one agent's sign-in may wait for the user.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// How often a running CLI is asked whether it ended.
+const POLL: Duration = Duration::from_millis(20);
 
 /// Opens a link in the user's browser.
 pub(crate) type Open = Arc<dyn Fn(&str) + Send + Sync>;
@@ -43,7 +47,7 @@ pub(crate) type Open = Arc<dyn Fn(&str) + Send + Sync>;
     rename_all_fields = "camelCase"
 )]
 pub enum McpSignInStatus {
-    /// Still going: an agent is waiting for the user in their browser, or is next.
+    /// Still going: an agent is waiting for the user in their browser, or starting.
     Pending,
     /// Every agent that needed it is signed in.
     SignedIn,
@@ -81,7 +85,7 @@ pub struct AgentSignIn {
 pub enum AgentSignInState {
     /// It had a sign-in already.
     AlreadySignedIn,
-    /// Its turn comes after the agents before it.
+    /// Its sign-in starts next.
     Waiting,
     /// Its CLI is starting the sign-in.
     Starting,
@@ -153,10 +157,18 @@ pub(crate) struct Target {
 struct Run {
     target: Target,
     progress: McpSignInProgress,
-    /// The page of the agent signing in now, to open again.
-    link: Option<String>,
+    /// The pages waiting in the browser, each agent's, to open again.
+    links: Vec<(ProviderKind, String)>,
     open: Open,
     cancel: Arc<AtomicBool>,
+}
+
+impl Run {
+    fn open_again(&self) {
+        for (_, link) in &self.links {
+            (self.open)(link);
+        }
+    }
 }
 
 type ListKey = (Agent, Option<PathBuf>);
@@ -164,8 +176,13 @@ type ListKey = (Agent, Option<PathBuf>);
 #[derive(Default)]
 pub(crate) struct McpLogins {
     runs: Mutex<HashMap<String, Run>>,
+    /// Told whenever a sign-in moves on.
+    changed: Condvar,
     /// Each CLI's last list, by project.
     lists: Mutex<HashMap<ListKey, (Instant, Vec<Listed>)>>,
+    /// When each CLI said it signed in to a server, by the name it lists: a list read from
+    /// before then doesn't undo it. Taken with `lists` held.
+    signed_in: Mutex<HashMap<(Agent, String), Instant>>,
     /// Lists being read in the background.
     reading: Mutex<HashSet<ListKey>>,
 }
@@ -175,9 +192,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl McpLogins {
-    /// Starts signing every agent that needs it in to `target`, one after another, in the
-    /// background (a blocking thread): its id at once. One already going for the same server
-    /// is kept: its page opens again and its id comes back.
+    /// Starts signing every agent that needs it in to `target`, all at once, in the background
+    /// (blocking threads): its id at once. One already going for the same server is kept: its
+    /// pages open again and its id comes back.
     pub(crate) fn start(self: &Arc<Self>, clis: Clis, target: Target, open: Open) -> String {
         {
             let runs = lock(&self.runs);
@@ -185,9 +202,7 @@ impl McpLogins {
                 .iter()
                 .find(|(_, run)| run.target == target && !run.progress.finished)
             {
-                if let Some(link) = &run.link {
-                    (run.open)(link);
-                }
+                run.open_again();
                 return id.clone();
             }
         }
@@ -201,7 +216,7 @@ impl McpLogins {
                     agents: Vec::new(),
                     finished: false,
                 },
-                link: None,
+                links: Vec::new(),
                 open,
                 cancel: cancel.clone(),
             },
@@ -215,6 +230,23 @@ impl McpLogins {
         lock(&self.runs).get(id).map(|run| run.progress.clone())
     }
 
+    /// Sign-in `id` once it finished, the moment it does, or as it is after `timeout`.
+    pub(crate) fn finished(&self, id: &str, timeout: Duration) -> Option<McpSignInProgress> {
+        let deadline = Instant::now() + timeout;
+        let mut runs = lock(&self.runs);
+        loop {
+            let progress = runs.get(id)?.progress.clone();
+            let left = deadline.saturating_duration_since(Instant::now());
+            if progress.finished || left.is_zero() {
+                return Some(progress);
+            }
+            runs = match self.changed.wait_timeout(runs, left) {
+                Ok((runs, _)) => runs,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+    }
+
     /// The sign-in going for `target`, if one is.
     #[cfg(all(test, unix))]
     pub(crate) fn pending(&self, target: &Target) -> Option<String> {
@@ -224,7 +256,7 @@ impl McpLogins {
             .map(|(id, _)| id.clone())
     }
 
-    /// Stops sign-in `id`: the agent signing in now is stopped and the ones after it skipped.
+    /// Stops sign-in `id`: the agents signing in are stopped and the ones not started skipped.
     pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
         let runs = lock(&self.runs);
         let run = runs.get(id).ok_or_else(|| format!("no sign-in `{id}`"))?;
@@ -232,112 +264,167 @@ impl McpLogins {
         Ok(())
     }
 
-    /// Opens sign-in `id`'s current page again.
+    /// Opens sign-in `id`'s waiting pages again.
     pub(crate) fn reopen(&self, id: &str) -> Result<(), String> {
         let runs = lock(&self.runs);
         let run = runs.get(id).ok_or_else(|| format!("no sign-in `{id}`"))?;
-        match (&run.link, run.progress.finished) {
-            (Some(link), false) => {
-                (run.open)(link);
-                Ok(())
-            }
-            _ => Err("No sign-in page is waiting.".to_owned()),
+        if run.links.is_empty() || run.progress.finished {
+            return Err("No sign-in page is waiting.".to_owned());
         }
+        run.open_again();
+        Ok(())
     }
 
     fn update(&self, id: &str, change: impl FnOnce(&mut Run)) {
         if let Some(run) = lock(&self.runs).get_mut(id) {
             change(run);
         }
+        self.changed.notify_all();
     }
 
-    fn set_state(&self, id: &str, index: usize, state: AgentSignInState) {
+    fn set_state(&self, id: &str, agent: ProviderKind, state: AgentSignInState) {
         self.update(id, |run| {
-            if let Some(agent) = run.progress.agents.get_mut(index) {
-                agent.state = state;
+            if let Some(step) = run.progress.agents.iter_mut().find(|a| a.agent == agent) {
+                step.state = state;
             }
         });
     }
 
-    /// The whole sign-in, blocking.
+    /// The whole sign-in, blocking: every agent's at once.
     fn sign_in(&self, id: &str, clis: &Clis, target: &Target, cancel: &AtomicBool) {
-        let mut steps = Vec::new();
-        for adapter in adapters() {
-            let listed = match self.list(clis, adapter, target.project.as_deref()) {
-                Ok(listed) => listed,
-                Err(reason) => {
-                    steps.push((
-                        adapter,
-                        AgentSignIn {
-                            agent: provider(adapter.agent()),
-                            server: target.server.clone(),
-                            state: AgentSignInState::Failed { reason },
-                        },
-                    ));
-                    continue;
-                }
-            };
-            let plugin = target.plugin.as_deref();
-            if let Some(entry) = listed
-                .iter()
-                .find(|entry| adapter.is_server(&entry.name, &target.server, plugin))
-            {
-                steps.push((
-                    adapter,
-                    AgentSignIn {
-                        agent: provider(adapter.agent()),
-                        server: entry.name.clone(),
-                        state: if entry.needs_sign_in {
-                            AgentSignInState::Waiting
-                        } else {
-                            AgentSignInState::AlreadySignedIn
-                        },
-                    },
-                ));
+        std::thread::scope(|scope| {
+            for adapter in adapters() {
+                scope.spawn(move || self.sign_agent_in(id, clis, target, cancel, adapter));
             }
-        }
-        self.update(id, |run| {
-            run.progress.agents = steps.iter().map(|(_, step)| step.clone()).collect();
         });
-        for (index, (adapter, step)) in steps.iter().enumerate() {
-            if step.state != AgentSignInState::Waiting {
-                continue;
-            }
-            if cancel.load(Ordering::SeqCst) {
-                self.set_state(id, index, AgentSignInState::Cancelled);
-                continue;
-            }
-            self.set_state(id, index, AgentSignInState::Starting);
-            let call = adapter.login(&step.server, target.project.as_deref());
-            let opened = |link: &str| {
-                let mut open = None;
-                self.update(id, |run| {
-                    run.link = Some(link.to_owned());
-                    if let Some(agent) = run.progress.agents.get_mut(index) {
-                        agent.state = AgentSignInState::InBrowser;
-                    }
-                    open = Some(run.open.clone());
-                });
-                if let Some(open) = open {
-                    open(link);
-                }
-            };
-            let state = match clis
-                .command(*adapter)
-                .and_then(|(binary, env)| login(&binary, &call, &env, &opened, cancel))
-            {
-                Ok(()) => AgentSignInState::SignedIn,
-                Err(_) if cancel.load(Ordering::SeqCst) => AgentSignInState::Cancelled,
-                Err(reason) => AgentSignInState::Failed { reason },
-            };
-            self.update(id, |run| run.link = None);
-            self.set_state(id, index, state);
-        }
-        // What Settings shows is read again.
-        for (adapter, _) in &steps {
-            let _ = self.list(clis, *adapter, target.project.as_deref());
-        }
         self.update(id, |run| run.progress.finished = true);
+    }
+
+    /// One agent's part of sign-in `id`: none when its CLI isn't installed (Settings shows no
+    /// sign-in of it) or its list hasn't the server.
+    fn sign_agent_in(
+        &self,
+        id: &str,
+        clis: &Clis,
+        target: &Target,
+        cancel: &AtomicBool,
+        adapter: &dyn AgentAdapter,
+    ) {
+        if (clis.binary)(adapter.agent()).is_none() {
+            return;
+        }
+        let agent = provider(adapter.agent());
+        let step = match self.entry(clis, adapter, target) {
+            Ok(None) => return,
+            Ok(Some(entry)) => AgentSignIn {
+                agent,
+                server: entry.name,
+                state: if entry.needs_sign_in {
+                    AgentSignInState::Waiting
+                } else {
+                    AgentSignInState::AlreadySignedIn
+                },
+            },
+            Err(reason) => AgentSignIn {
+                agent,
+                server: target.server.clone(),
+                state: AgentSignInState::Failed { reason },
+            },
+        };
+        let waiting = step.state == AgentSignInState::Waiting;
+        let server = step.server.clone();
+        // In the agents' own order, whichever list came in first.
+        let rank = |agent: ProviderKind| {
+            adapters()
+                .iter()
+                .position(|adapter| provider(adapter.agent()) == agent)
+        };
+        self.update(id, |run| {
+            let agents = &mut run.progress.agents;
+            let at = agents
+                .iter()
+                .position(|other| rank(other.agent) > rank(agent))
+                .unwrap_or(agents.len());
+            agents.insert(at, step);
+        });
+        if !waiting {
+            return;
+        }
+        if cancel.load(Ordering::SeqCst) {
+            self.set_state(id, agent, AgentSignInState::Cancelled);
+            return;
+        }
+        self.set_state(id, agent, AgentSignInState::Starting);
+        let call = adapter.login(&server, target.project.as_deref());
+        let opened = |link: &str| {
+            let mut open = None;
+            self.update(id, |run| {
+                run.links.push((agent, link.to_owned()));
+                if let Some(step) = run.progress.agents.iter_mut().find(|a| a.agent == agent) {
+                    step.state = AgentSignInState::InBrowser;
+                }
+                open = Some(run.open.clone());
+            });
+            if let Some(open) = open {
+                open(link);
+            }
+        };
+        let state = match clis
+            .command(adapter)
+            .and_then(|(binary, env)| login(&binary, &call, &env, &opened, cancel))
+        {
+            Ok(()) => {
+                self.signed(adapter.agent(), &server);
+                AgentSignInState::SignedIn
+            }
+            Err(_) if cancel.load(Ordering::SeqCst) => AgentSignInState::Cancelled,
+            Err(reason) => AgentSignInState::Failed { reason },
+        };
+        self.update(id, |run| run.links.retain(|(other, _)| *other != agent));
+        self.set_state(id, agent, state);
+    }
+
+    /// How `adapter`'s CLI lists `target`, if it does: from the list Settings showed while it
+    /// is fresh, or however old when it asks for a sign-in (one more page at worst), else read
+    /// now.
+    fn entry(
+        &self,
+        clis: &Clis,
+        adapter: &dyn AgentAdapter,
+        target: &Target,
+    ) -> Result<Option<Listed>, String> {
+        let project = target.project.as_deref();
+        let find = |listed: &[Listed]| {
+            listed
+                .iter()
+                .find(|entry| {
+                    adapter.is_server(&entry.name, &target.server, target.plugin.as_deref())
+                })
+                .cloned()
+        };
+        let key = (adapter.agent(), project.map(Path::to_owned));
+        if let Some((at, listed)) = lock(&self.lists).get(&key) {
+            let entry = find(listed);
+            if at.elapsed() <= LIST_FRESH || entry.as_ref().is_some_and(|e| e.needs_sign_in) {
+                return Ok(entry);
+            }
+        }
+        Ok(find(&self.list(clis, adapter, project)?))
+    }
+
+    /// `agent`'s CLI said it signed in to the server it lists as `name`: every list of it
+    /// says so from now on.
+    fn signed(&self, agent: Agent, name: &str) {
+        let mut lists = lock(&self.lists);
+        lock(&self.signed_in).insert((agent, name.to_owned()), Instant::now());
+        for (_, listed) in lists
+            .iter_mut()
+            .filter_map(|((of, _), list)| (*of == agent).then_some(list))
+        {
+            for entry in listed.iter_mut().filter(|entry| entry.name == name) {
+                entry.needs_sign_in = false;
+            }
+        }
     }
 
     /// Reads `adapter`'s CLI's own list for `project` now, and keeps it.
@@ -349,9 +436,20 @@ impl McpLogins {
     ) -> Result<Vec<Listed>, String> {
         let call = adapter.list_servers(project);
         let (binary, env) = clis.command(adapter)?;
+        let started = Instant::now();
         let output = capture(&binary, &call, &env, LIST_TIMEOUT)?;
-        let listed = adapter.parse_servers(&output);
-        lock(&self.lists).insert(
+        let mut listed = adapter.parse_servers(&output);
+        let mut lists = lock(&self.lists);
+        let signed_in = lock(&self.signed_in);
+        for entry in &mut listed {
+            if signed_in
+                .get(&(adapter.agent(), entry.name.clone()))
+                .is_some_and(|at| *at > started)
+            {
+                entry.needs_sign_in = false;
+            }
+        }
+        lists.insert(
             (adapter.agent(), project.map(Path::to_owned)),
             (Instant::now(), listed.clone()),
         );
@@ -470,7 +568,7 @@ fn capture(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -634,22 +732,18 @@ fn login(
     let mut output = String::new();
     let mut link = None;
     let ended = loop {
-        loop {
-            match source.recv_timeout(Duration::from_millis(100)) {
-                Ok(chunk) => output.push_str(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    std::thread::sleep(Duration::from_millis(50));
-                    break;
-                }
-            }
-            if link.is_none()
-                && let Some(found) = sign_in_link(&output)
-            {
-                opened(&found);
-                link = Some(found);
-            }
+        match source.recv_timeout(POLL) {
+            Ok(chunk) => output.push_str(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(POLL),
         }
+        if link.is_none()
+            && let Some(found) = sign_in_link(&output)
+        {
+            opened(&found);
+            link = Some(found);
+        }
+        // Asked every time, so a success counts the moment the CLI ends.
         if let Some(success) = running.ended() {
             break success;
         }
@@ -662,15 +756,14 @@ fn login(
             return Err("The sign-in took too long.".to_owned());
         }
     };
-    // What it printed last.
+    if ended {
+        return Ok(());
+    }
+    // What it printed last, to say why.
     while let Ok(chunk) = source.recv_timeout(Duration::from_millis(200)) {
         output.push_str(&chunk);
     }
-    if ended {
-        Ok(())
-    } else {
-        Err(last_words(&output).unwrap_or_else(|| format!("{} couldn't sign in.", call.program)))
-    }
+    Err(last_words(&output).unwrap_or_else(|| format!("{} couldn't sign in.", call.program)))
 }
 
 #[cfg(test)]
