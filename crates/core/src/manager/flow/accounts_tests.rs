@@ -174,6 +174,40 @@ async fn a_switch_notice_masks_an_account_named_by_its_email() {
     flow.stop().await;
 }
 
+#[tokio::test]
+async fn a_switch_notice_names_the_own_login_by_the_name_it_was_given() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-switch-own-name",
+        Options::default(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.accounts[0].name = "Work #2".into();
+    settings.own_account_names = vec![crate::model::OwnAccountName {
+        provider: ProviderKind::Claude,
+        name: "Work".into(),
+    }];
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    flow.say("Do the thing.").await;
+    flow.settled().await;
+    let moments = moments(&flow).await;
+    assert!(
+        moments
+            .iter()
+            .any(|text| text == "Claude Code hit its usage limit on Work; continuing on Work #2."),
+        "{moments:#?}"
+    );
+    flow.stop().await;
+}
+
 /// #505: account switching is off (Use picked `acct-c`) while the session still runs on
 /// `acct-b`, where it hits its limit. Another Claude account has quota, so the session goes on
 /// on Claude, on the picked account, and says so; Codex doesn't stand in.

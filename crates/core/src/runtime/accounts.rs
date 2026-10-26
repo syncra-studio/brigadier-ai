@@ -364,11 +364,18 @@ impl Runtime {
         self.signed_in(&self.monitor.lead(provider))
     }
 
-    /// How the app names `account` to the user (in notices): the user's own login is "this
-    /// computer's login"; an extra account its name, else its email, an email masked either way.
+    /// How the app names `account` to the user (in notices): the user's own login its name,
+    /// else "this computer's login"; an extra account its name, else its email, an email masked
+    /// either way.
     pub fn account_label(&self, account: &AccountRef) -> String {
         let Some(id) = &account.account else {
-            return "this computer's login".into();
+            let settings = self.core.settings();
+            let name = settings.own_account_name(account.provider).trim();
+            return if name.is_empty() {
+                "this computer's login".into()
+            } else {
+                mask_email(name)
+            };
         };
         let (name, status) = match self.accounts().get(id) {
             Some(live) => (live.entry.name.clone(), live.status.clone()),
