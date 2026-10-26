@@ -634,6 +634,10 @@ export async function send(
     });
     storeConversation(conversation);
     conversationId = conversation.id;
+    // A new session's first send opens its card, once and however it was left on the draft:
+    // floating where the pane is too narrow to keep it beside the thread. The user's show or
+    // hide decides from then on.
+    if (conversation.kind === "session" && conversation.setup?.type === "session") setPinnedSummary(true, conversationId);
     updateThread(conversationId, () => emptyThread);
     // A new conversation has nothing to read: it shows at once, its events filling it.
     keepBoard({ ...emptyBoard(conversationId), loaded: true });

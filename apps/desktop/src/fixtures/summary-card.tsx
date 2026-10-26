@@ -4,11 +4,13 @@
  * conversation view on a fresh profile. A window as wide as the default window's thread pane
  * beside its sidebar (1280px less 18rem), then a narrow one. Requests are answered here and never reach a daemon.
  * - A new chat, first thing: the card is closed.
+ * - A new session's draft with its card closed: its first send opens the card by itself, once.
  * - A session with no project and branch yet: still closed, with nothing to show.
  * - Its setup arrives: the card opens by itself, and the user's long one-line message wraps
  *   before it.
  * - Closed by the user: a preview arriving or coming back to the session leaves it closed.
- * - In a pane too narrow to keep the thread beside it, a session's setup doesn't open it.
+ * - In a pane too narrow to keep the thread beside it, a session's setup doesn't open it; a new
+ *   session's first send there opens it once, floating, and closed it stays closed.
  *
  * The checks go to `<pre id="summary-card-result">`.
  */
@@ -22,7 +24,7 @@ import { fixtureInput } from "@/fixtures/input";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
-import { select } from "@/state/actions";
+import { select, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
@@ -54,6 +56,9 @@ const conversations: Record<string, Conversation> = {
   narrow: session("narrow", "A narrow window"),
 };
 
+/** The sessions the new-session screen's first sends make, in turn, set up as the daemon makes them. */
+const made = [withSetup(session("started", "A new session")), withSetup(session("startedNarrow", "A new narrow session"))];
+
 function messages(id: string): Message[] {
   if (id !== "first") return [];
   return [
@@ -83,6 +88,10 @@ mockIPC((command, payload) => {
   switch (req.method) {
     case "getConversation":
       return { method: req.method, view: view(req.id) };
+    case "createConversation":
+      return { method: req.method, conversation: made.shift() };
+    case "sendMessage":
+      return { method: req.method, outcome: { type: "sent" } };
     case "listMessages":
       return { method: req.method, page: { items: [], hasMore: false } };
     case "getPullRequest":
@@ -139,6 +148,26 @@ async function drive(): Promise<Record<string, unknown>> {
   await frames();
   seen.freshClosed = !open() && !card();
 
+  // A new session's screen, its card left closed (opened and closed again), then its first send.
+  await select({ type: "draft", kind: "session", projectId: "project" });
+  await until(() => toggle() && measured(), "the new session's screen");
+  toggle()!.click();
+  await until(pressed, "Context to open the draft's card");
+  toggle()!.click();
+  await until(() => !pressed(), "Context to close the draft's card");
+  await frames();
+  seen.draftClosed = !open();
+  void send({ text: "Start the release notes", attachments: [], mentions: [] }, { kind: "session", projectId: "project", setup: null }).catch(() => {});
+  await until(() => useApp.getState().selection.type === "conversation" && measured(), "the new session's thread");
+  await until(() => pressed() && card(), "the new session's card to open by itself").catch(() => {});
+  seen.firstSendOpened = pressed() && !!card();
+  toggle()!.click();
+  await until(() => !pressed(), "Context to close the new session's card");
+  await frames();
+  useApp.setState((state) => ({ conversations: { ...state.conversations, started: { ...state.conversations.started!, title: "Renamed" } } }));
+  await frames();
+  seen.firstSendOnce = !open();
+
   await select({ type: "conversation", id: "first" });
   await until(() => bubble() && measured(), "the session's thread");
   await frames();
@@ -179,6 +208,22 @@ async function drive(): Promise<Record<string, unknown>> {
   await frames();
   await frames();
   seen.narrowClosed = !open() && !card();
+
+  // The same narrow pane: a new session's first send opens its card once, floating over the thread.
+  await select({ type: "draft", kind: "session", projectId: "project" });
+  await until(() => toggle() && measured() && useSummary.getState().layout === "float", "the narrow new session's screen");
+  await frames();
+  seen.narrowDraftClosed = !open() && !card();
+  void send({ text: "Start in a narrow window", attachments: [], mentions: [] }, { kind: "session", projectId: "project", setup: null }).catch(() => {});
+  await until(() => useApp.getState().selection.type === "conversation" && measured(), "the narrow new session's thread");
+  await until(() => useSummary.getState().floating && card(), "the narrow new session's card to float open").catch(() => {});
+  seen.narrowFirstSendFloats = useSummary.getState().floating && !!card();
+  if (seen.narrowFirstSendFloats) {
+    toggle()!.click();
+    await until(() => !useSummary.getState().floating, "Context to close the floating card");
+    await frames();
+  }
+  seen.narrowClosedStays = !open() && useApp.getState().summaryShown.startedNarrow === false;
   return seen;
 }
 
