@@ -4,7 +4,7 @@ The helper that lets Brigadier's agents see and drive apps on this Mac in the
 background: Accessibility-tree first, input posted to the target process (no
 focus change, no pointer movement), window-scoped screenshots and a browser
 `page` tool. Brigadier's agents show no cursor on screen; the per-session agent
-cursor is only drawn for a helper started by hand. macOS only.
+cursor is only drawn for a helper started by hand. macOS, Windows and Linux.
 
 It is a separate Cargo workspace (the root workspace excludes it) and ships
 inside Brigadier.app as `Helpers/Brigadier Computer Use.app`, signed with
@@ -15,8 +15,8 @@ Screen Recording to the outermost app bundle.
 ## Origin
 
 The driving itself (Accessibility, input, capture, the agent cursor, the
-tool set) is an MIT-licensed driver's macOS backend, vendored unmodified in
-`upstream/` at one pinned release. `upstream/UPSTREAM.md` names the release,
+tool set) comes from an MIT-licensed driver's macOS, Windows and Linux
+backends, vendored unmodified in `upstream/` at one pinned release. `upstream/UPSTREAM.md` names the release,
 the few hooks in `patches/`, and how to move to a newer one
 (`scripts/sync-upstream.sh`). Brigadier's own behaviour sits on top of it in
 `crates/cu-layer`.
@@ -31,7 +31,8 @@ What Brigadier changed and added:
 - Removed self-update and update checks, the ffmpeg installer, the skill
   installer, autostart, all telemetry, the unauthenticated HTTP transport,
   and a compatibility profile for another desktop client.
-- Removed the Windows and Linux backends.
+- Removed the Windows and Linux backends (brought back with driver v0.36.0, see
+  `upstream/UPSTREAM.md`).
 - One home directory (`--home <dir>` or `BRIGADIER_CU_HOME`) holds the
   socket, PID file, config, journal and activity store.
 - Socket peers must carry the daemon's own code signature when it runs from
