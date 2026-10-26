@@ -207,6 +207,21 @@ export function namedTasks(text: string, tasks: Readonly<Record<string, Task>>, 
   });
 }
 
+/** A worker the user @-mentioned in their own words, as they wrote it: `@task-N`. */
+const MENTION = /@task-(\d+)\b/g;
+
+/**
+ * The user's words as they read them: each `@task-N` they mention as `@` and that worker's name
+ * (`names`, by number); a number with no worker stays. What is sent keeps `@task-N`.
+ */
+export function namedMentions(text: string, names: ReadonlyMap<number, string>): string {
+  if (!text.includes("@task-")) return text;
+  return text.replace(MENTION, (whole, number: string) => {
+    const name = names.get(Number(number));
+    return name === undefined ? whole : `@${name}`;
+  });
+}
+
 /**
  * A row about the machine ("Paused cargo test to let the Mac cool down"); `machine` is how
  * the OS's computer is called ("the Mac").

@@ -1,8 +1,9 @@
+import { useNamedMentions, useWorkerName } from "@/app/conversation/workerNames";
 import { TooltipIconButton } from "@/components/controls";
 import { X } from "@/components/icons";
 import type { SentToWorker } from "@/ipc/generated";
 
-/** A queued message the session sent on to one of its workers: where it went, with ×. */
+/** A queued message the session sent on to one of its workers: where it went, by the worker's name, with ×. */
 export function SentToWorkerNotice({
   notice,
   onDismiss,
@@ -10,13 +11,16 @@ export function SentToWorkerNotice({
   notice: SentToWorker;
   onDismiss: () => void;
 }) {
+  const named = useNamedMentions();
+  const text = named(notice.text);
+  const name = useWorkerName(notice.worker) ?? notice.workerTitle;
   return (
     <li
       data-slot="message-queue-sent"
       className="text-muted-foreground min-h-row flex items-center gap-2 ps-3 pe-1 text-sm"
     >
-      <span className="min-w-0 flex-1 truncate" title={notice.text}>
-        Sent to worker #{notice.workerNumber} “{notice.workerTitle}”: {notice.text}
+      <span className="min-w-0 flex-1 truncate" title={text}>
+        Sent to {name}: {text}
       </span>
       <TooltipIconButton
         tooltip="Dismiss"

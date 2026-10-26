@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import { machineWords, namedTasks, shortWorkerName, workerName } from "@/app/conversation/rowWords";
+import { machineWords, namedMentions, namedTasks, shortWorkerName, workerName } from "@/app/conversation/rowWords";
 import type { Task } from "@/ipc/generated";
 
 const tasks = night.tasks as unknown as Record<string, Task>;
@@ -61,4 +61,11 @@ test("machine holds name memory separately from heat, while pauses remain heat-o
   assert.equal(machineWords("waitingToCool", null, "the Mac", "heat"), "Waiting for the Mac to cool down");
   assert.equal(machineWords("waitingToCool", null, "the Mac"), "Waiting for the Mac to cool down");
   assert.equal(machineWords("paused", "cargo test", "the Mac", "heat"), "Paused cargo test to let the Mac cool down");
+});
+
+test("the user's @-mentions read as the workers' names; one the session has no worker for, or not a mention, stays", () => {
+  const names = new Map([[1, "Build the importer"], [12, "Write the docs"]]);
+  assert.equal(namedMentions("@task-1 and @task-12, then @task-1.", names), "@Build the importer and @Write the docs, then @Build the importer.");
+  assert.equal(namedMentions("@task-7 and task-1 and @task-1x", names), "@task-7 and task-1 and @task-1x");
+  assert.equal(namedMentions("nothing here", names), "nothing here");
 });

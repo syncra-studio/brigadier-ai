@@ -1,20 +1,22 @@
 import { createContext, memo, useContext, useState } from "react";
 
-import { rowName, workerStateOf } from "@/app/conversation/activity/workerState";
-import { namedTasks, plainLine, workerName } from "@/app/conversation/rowWords";
+import { workerStateOf } from "@/app/conversation/activity/workerState";
+import { namedTasks, plainLine } from "@/app/conversation/rowWords";
+import { useWorkerName } from "@/app/conversation/workerNames";
 import { WorkerGlyph } from "@/components/conversation";
 import { useNow } from "@/hooks/use-now";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { workersOf } from "@/state/nativeWorkers";
 import { useBoard } from "@/state/board";
-import { useCliThread, useWorkerRow, workerRowIn } from "@/state/cliThread";
+import { useWorkerRow } from "@/state/cliThread";
 
 /**
  * A worker named anywhere in the conversation: its chip (glyph and name in a pill, which opens
  * it in the Workers panel), and what the chip is made of, shared by every place that names one.
  */
+
+export { useWorkerName } from "@/app/conversation/workerNames";
 
 /** Which worker the Workers tab shows: `null` for the list, `undefined` when the tab is closed. */
 export type AgentsPanelState = string | null | undefined;
@@ -44,24 +46,6 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
 /** A task's state in words; a task paused for quota waits for it rather than for the user. */
 export function taskStateLabel(task: Task): string {
   return task.state === "paused" && task.quotaWait ? "Waiting for quota" : TASK_STATE_LABELS[task.state];
-}
-
-/**
- * What a worker is called, rather than its `task-N`: its row's name among its session's rows
- * (`rowName`). A worker no thread read lists yet (a view still loading, a stored run's) keeps the
- * board's name for it (`workerName`).
- */
-export function useWorkerName(taskId: string): string | null {
-  const fromRow = useCliThread((s) => {
-    const found = workerRowIn(s.views, taskId);
-    return found ? rowName(workersOf(found.conversationId, s.views[found.conversationId]!), taskId) : null;
-  });
-  const fromBoard = useBoard((s) => {
-    if (fromRow !== null) return null;
-    const task = s.board?.tasks[taskId];
-    return task && s.board ? workerName(s.board.tasks, task) : null;
-  });
-  return fromRow ?? fromBoard;
 }
 
 /** Worker prose uses job names; paths and code identifiers keep their literal spelling. */

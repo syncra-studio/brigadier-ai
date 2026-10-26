@@ -58,7 +58,7 @@ import {
   sameImages,
   splitAtMarkers,
 } from "@/app/conversation/inlineImages";
-import { DIRECT_ITEM, directTaskOf, mentionOf } from "@/app/conversation/Mentions";
+import { DIRECT_ITEM, directTaskOf, mentionOf, type MentionTarget } from "@/app/conversation/Mentions";
 import { usePlanMode } from "@/app/conversation/PlusMenu";
 import { askPausedSend } from "@/app/conversation/PausedSend";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/components/conversation/pasteContent";
@@ -102,6 +102,7 @@ export type ComposerInputProps = {
 const RICH_CHIPS: ChipKinds = { code: false, links: true };
 /** The plain field's: code and links stay literal text; mentions, images and pastes are chips. */
 const PLAIN_CHIPS: ChipKinds = { code: false, links: false };
+const NO_TARGETS: readonly MentionTarget[] = [];
 
 /**
  * The text field (assistant-ui's Lexical input): grows with its text up to a quarter of the
@@ -116,14 +117,14 @@ export default function ComposerEditor({
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
   const memory = target?.mentions ?? null;
-  const targets = target?.targets;
-  useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
+  const targets = target?.targets ?? NO_TARGETS;
   const rich = useRichComposer();
   const kinds = rich ? RICH_CHIPS : PLAIN_CHIPS;
-  // One formatter per memory: a new one would rebuild every chip.
+  // One formatter per memory and set of workers: a new one reads the field's text again, so a
+  // draft read back before the session's workers were known has its `@task-N` chips once they are.
   const formatter = useMemo(
-    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, inlineMarkerAt, kinds),
-    [memory, kinds],
+    () => chipFormatter((text, at) => memory?.match(text, at, targets) ?? null, inlineMarkerAt, kinds),
+    [memory, kinds, targets],
   );
   // Images and pasted texts whose chip was deleted, by number, for undo to bring back.
   const deleted = useMemo(() => new Map<number, File | CreateAttachment>(), []);
