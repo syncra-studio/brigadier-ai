@@ -273,6 +273,13 @@ async function drive() {
     const againSend = await send();
     seen.copiedAgain = { text: againSend.text, kinds: kinds(againSend.attachments), content: content(againSend.attachments[0]) };
 
+    // Backticks typed around a pasted chip never put the chip in a code mark: it is sent as a chip.
+    await type("e `");
+    pasteData({ "text/plain": long });
+    await until("the chip between backticks", () => pasteChip() !== null);
+    await type("`");
+    seen.ticked = (await send()).text;
+
     // Text too long to go whole says so on its chip.
     await type("big ");
     pasteData({ "text/plain": "y".repeat(210_000) });
