@@ -135,11 +135,17 @@ impl Lookups for System {
 }
 
 /// The executable's name without its directory or `.exe`.
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 fn executable_name(path: &std::path::Path) -> Option<String> {
     let file = path.file_name()?.to_string_lossy().into_owned();
     let stem = match file.len().checked_sub(4) {
-        Some(cut) if file[cut..].eq_ignore_ascii_case(".exe") => file[..cut].to_owned(),
+        Some(cut)
+            if file
+                .get(cut..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe")) =>
+        {
+            file[..cut].to_owned()
+        }
         _ => file,
     };
     (!stem.is_empty()).then_some(stem)
@@ -356,6 +362,18 @@ mod tests {
 mod build_folder_tests {
     use super::is_development_build;
     use std::path::Path;
+
+    #[test]
+    fn executable_names_need_not_have_ascii_character_boundaries() {
+        assert_eq!(
+            super::executable_name(Path::new("/usr/bin/程序")),
+            Some("程序".into())
+        );
+        assert_eq!(
+            super::executable_name(Path::new("/apps/程序.EXE")),
+            Some("程序".into())
+        );
+    }
 
     #[test]
     fn a_program_in_a_cargo_build_folder_is_a_development_build() {
