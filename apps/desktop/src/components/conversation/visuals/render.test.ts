@@ -5,12 +5,22 @@ import { renderToReadableStream } from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
 
 let server: ViteDevServer;
+let renderReply: (text: string) => Promise<string>;
 let render: (code: string, language: string, chat: boolean, writing?: boolean) => Promise<string>;
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   const { CodeBlock } = await server.ssrLoadModule("/src/components/conversation/code-block.tsx");
+  const { MarkdownText } = await server.ssrLoadModule("/src/components/conversation/markdown-text.tsx");
+  const { TextMessagePartProvider } = await server.ssrLoadModule("@assistant-ui/react");
   const { VisualsContext } = await server.ssrLoadModule("/src/components/conversation/visuals/bridge.ts");
   const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
+  renderReply = async (text) => {
+    const stream = await renderToReadableStream(React.createElement(TooltipProvider, null,
+      React.createElement(VisualsContext.Provider, { value: { running: false, prefill() {}, openLink() {} } },
+        React.createElement(TextMessagePartProvider, { text, isRunning: false }, React.createElement(MarkdownText)))));
+    await stream.allReady;
+    return new Response(stream).text();
+  };
   render = async (code, language, chat, writing = false) => {
     const stream = await renderToReadableStream(React.createElement(TooltipProvider, null,
       React.createElement(VisualsContext.Provider, { value: chat ? { running: false, prefill() {}, openLink() {} } : null },
@@ -61,4 +71,18 @@ test("all chart kinds expose their data in words", async () => {
     assert.match(html, /Train: 35/);
     assert.match(html, /Minutes; illustrative/);
   }
+});
+
+test("a recovered complete reply draws every visual fence without live stream state", async () => {
+  const reply = [
+    "```brigadier-table", table, "```", "",
+    "```brigadier-chart", JSON.stringify({ kind: "bar", title: "Time", description: "Minutes", data: [{ label: "Train", value: 35 }] }), "```", "",
+    "```brigadier-html", "<p>Recovered visual</p>", "```",
+  ].join("\n");
+  const html = await renderReply(reply);
+  assert.match(html, /<table/);
+  assert.match(html, /<figure/);
+  assert.match(html, /<iframe/);
+  assert.match(html, /title="Interactive visual"/);
+  assert.doesNotMatch(html, /Drawing…|data-slot="code-block"/);
 });

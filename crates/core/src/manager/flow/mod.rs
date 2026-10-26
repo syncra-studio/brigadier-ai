@@ -2593,3 +2593,6 @@ mod archive_delete_tests;
 
 #[cfg(unix)]
 mod delete_leak_tests;
+
+#[cfg(unix)]
+mod visuals_tests;
