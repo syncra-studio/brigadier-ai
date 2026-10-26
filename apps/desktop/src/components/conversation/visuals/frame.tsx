@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { VisualsContext, receiveFrameMessage } from "./bridge";
 import { IDIOMORPH_JS } from "./idiomorph";
 import { extractCompleteStyles, processPartialHtml } from "./partial-html";
@@ -10,6 +10,17 @@ export function VisualFrame({ code, writing }: { code: string; writing: boolean 
 
 function Frame({ code, writing }: { code: string; writing: boolean }) {
   const visuals = useContext(VisualsContext);
+  useLayoutEffect(() => {
+    // Keep the same navigation boundary in dev builds, whose page comes from Vite.
+    if (document.head.querySelector('[data-visual-frame-policy]')) return;
+    const policy = document.createElement("meta");
+    policy.httpEquiv = "Content-Security-Policy";
+    policy.content = navigator.userAgent.includes("Windows")
+      ? "frame-src http://brigadier-ui.localhost"
+      : "frame-src brigadier-ui:";
+    policy.dataset.visualFramePolicy = "";
+    document.head.appendChild(policy);
+  }, []);
   const frame = useRef<HTMLIFrameElement>(null);
   const port = useRef<MessagePort | null>(null);
   const [ready, setReady] = useState(false);

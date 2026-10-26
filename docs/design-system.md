@@ -448,6 +448,12 @@ table's scrolling, copy and expand controls. Charts use the app's colour tokens,
 container and a text description of the values. Invalid data shows a plain error; open table
 and chart fences show “Drawing…”.
 
+The shell seals network APIs and native IPC lookups before model scripts run. The native
+startup hook applies the same restrictions to child realms; the shell CSP denies child loads.
+On macOS a WebKit content rule blocks network resources and connection hints from visual
+frames. The frame response waits for that rule to be installed, and fails closed if it cannot
+be installed. The parent frame policy is also applied when developing through Vite.
+
 HTML previews update at most once a second with scripts removed. A closed fence gets a fresh,
 offline frame with the app's text, surface, border, spacing and control tokens. The frame can
 resize from 50 to 4000 pixels. A follow-up click puts text in the composer for the user to send;
