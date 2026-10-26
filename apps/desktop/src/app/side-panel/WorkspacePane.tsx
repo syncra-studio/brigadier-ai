@@ -5,7 +5,7 @@ import { PaneViewTabs } from "@/app/side-panel/PaneViewTabs";
 import { FilesTab } from "@/app/side-panel/FilesTab";
 import { ProjectDraftPane } from "@/app/side-panel/ProjectDraftPane";
 import { SearchPanel } from "@/app/side-panel/SearchPanel";
-import { SourcePanel } from "@/app/side-panel/SourcePanel";
+import { SessionSource } from "@/app/side-panel/WorkerSource";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SidebarGlyph } from "@/components/shared";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/layout";
@@ -142,8 +142,8 @@ export function WorkspacePaneToggle() {
 }
 
 /**
- * The right sidebar: Files, Search or Source for the open session, or before it starts for its
- * project's folder. A column at the window's end edge below the titlebar, its views' icons in a
+ * The right sidebar: Files, Search or Source (the session's checkout, or a worker's changes) for
+ * the open session, or before it starts for its project's folder. A column at the window's end edge below the titlebar, its views' icons in a
  * row at its top; the Workers panel, when open too, sits between it and the content.
  */
 export function WorkspacePane() {
@@ -198,7 +198,7 @@ export function WorkspacePane() {
               pane.active === "files" ? <FilesTab key={pane.conversationId} conversationId={pane.conversationId} searchRequest={pane.searchRequest}
                 onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />
                 : pane.active === "search" ? <SessionSearch key={pane.conversationId} conversationId={pane.conversationId} />
-                  : <SourcePanel key={pane.conversationId} target={{ type: "conversation", conversationId: pane.conversationId }} />
+                  : <SessionSource key={pane.conversationId} conversationId={pane.conversationId} />
             ) : pane.projectId && <ProjectDraftPane key={`project:${pane.projectId}`} projectId={pane.projectId} tab={pane.active}
               searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />)}
           </div>

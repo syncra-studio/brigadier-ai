@@ -1356,6 +1356,7 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetProjectSourceState { .. }
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
+            | Request::GetWorkerSource { .. }
             | Request::PrepareTurnRevert { .. }
             | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
@@ -1807,6 +1808,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         }
         Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
             diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
+        },
+        Request::GetWorkerSource {
+            conversation_id,
+            task_id,
+        } => Response::GetWorkerSource {
+            source: heap(|| sessions.worker_source(&conversation_id, &task_id)).await?,
         },
         Request::SteerQueued {
             conversation_id,
@@ -2948,6 +2955,10 @@ mod tests {
             Request::GetSessionDiff { id: id() },
             Request::GetWorkerDiffs {
                 conversation_id: id(),
+            },
+            Request::GetWorkerSource {
+                conversation_id: id(),
+                task_id: brigadier_core::TaskId("t1".into()),
             },
             Request::GetPendingChanges {
                 conversation_id: id(),

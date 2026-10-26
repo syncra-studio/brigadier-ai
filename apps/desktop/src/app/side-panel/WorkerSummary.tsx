@@ -5,6 +5,7 @@ import { Counts } from "@/components/shared";
 import { nowInLine, workerNow } from "@/app/conversation/activity/workerNow";
 import { finishedWords, rowFinished } from "@/app/conversation/activity/workerState";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
+import { showWorkerSource } from "@/app/side-panel/sourceTarget";
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import { useNow } from "@/hooks/use-now";
 import type { WorkerRow } from "@/ipc/generated";
@@ -23,8 +24,9 @@ const TICK_MS = 30_000;
 /**
  * A worker at work: its glyph, its name, in a soft word what it does while it works ("running
  * pnpm build", shimmering) or its state ("needs you"), and its +N −N against the session's branch.
+ * The row opens the worker's panel; its +N −N, the right sidebar's Source on the worker's changes.
  */
-const WorkerLineRow: FC<{ row: WorkerRow; now: number }> = ({ row, now }) => {
+const WorkerLineRow: FC<{ conversationId: string; row: WorkerRow; now: number }> = ({ conversationId, row, now }) => {
   const name = useWorkerName(row.id);
   const { setPanel } = useContext(AgentsPanelContext);
   const state = workerNow(row, now);
@@ -36,7 +38,19 @@ const WorkerLineRow: FC<{ row: WorkerRow; now: number }> = ({ row, now }) => {
       title={name ?? undefined}
       onClick={() => setPanel(row.id)}
       icon={<span className="flex h-lh items-center"><WorkerGlyph taskId={row.id} className="size-4" /></span>}
-      meta={stat && stat.insertions + stat.deletions > 0 && <Counts insertions={stat.insertions} deletions={stat.deletions} />}
+      action={stat && stat.insertions + stat.deletions > 0 && (
+        <button
+          type="button"
+          data-slot="workers-summary-changes"
+          aria-label={`Show ${name ?? "the worker"}'s changes in Source`}
+          title="Show changes in Source"
+          onClick={() => showWorkerSource(conversationId, row.id)}
+          className="rounded-sm text-xs hover:bg-foreground/8 focus-visible:ring-ring cursor-pointer outline-none focus-visible:ring-1"
+        >
+          <Counts insertions={stat.insertions} deletions={stat.deletions} />
+        </button>
+      )}
+      actionVisible
     >
       <span className="block truncate">
         {name}
@@ -64,7 +78,7 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
       {lines ? (
         <>
-          {active.map((row) => <WorkerLineRow key={row.id} row={row} now={now} />)}
+          {active.map((row) => <WorkerLineRow key={row.id} conversationId={conversationId} row={row} now={now} />)}
           {finished && (
             <SummaryRowButton
               aria-label="Open workers"

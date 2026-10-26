@@ -122,7 +122,8 @@ const PICK_PLACEHOLDER: Record<Picking, string> = {
 /** A name box open: a new branch's (from what is checked out, or `from`), or the branch's new name. */
 type Naming = { kind: "create"; from: string | null } | { kind: "rename" };
 
-export function SourcePanel({ target }: { target: SourceTarget }) {
+/** `scopeSwitch`, under the title, switches a session's Source to one of its workers' changes. */
+export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; scopeSwitch?: ReactNode }) {
   const { state, error, set, load, cacheTarget } = useSourceState(target);
   const conversationId = sessionOf(target);
   const readOnly = target.type === "project" && target.readOnly;
@@ -352,6 +353,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
           />
         }
       />
+      {scopeSwitch}
       {picker && (
         <BranchPicker
           placeholder={PICK_PLACEHOLDER[picker]}
@@ -652,10 +654,14 @@ const OpenFileButton: FC<{ onClick: () => void }> = ({ onClick }) => (
   </TooltipIconButton>
 );
 
-/** A changed file: click to open its diff (once there is a Review tab); its actions show on hover. */
-const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: ReactNode }> = ({
+/**
+ * A changed file: click to open its diff (once there is a Review tab); its actions show on hover,
+ * its `counts` (a worker's file's +N −N) before its letter.
+ */
+export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; counts?: ReactNode; children?: ReactNode }> = ({
   file,
   onOpen,
+  counts,
   children,
 }) => {
   const status = LETTERS[file.status];
@@ -692,6 +698,7 @@ const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: Rea
       <span className="hidden shrink-0 items-center group-focus-within/source-row:flex group-hover/source-row:flex">
         {children}
       </span>
+      {counts}
       <span
         title={status.label}
         className={cn("w-4 shrink-0 text-center font-mono text-xs font-medium", status.className)}

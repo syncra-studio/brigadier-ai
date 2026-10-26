@@ -118,7 +118,7 @@ export function ReviewTab({
   active?: boolean;
 }) {
   // One file's diff: the file's own, or its part of a commit's or a turn's (a Changes card's row).
-  const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" ? (target.path ?? null) : null;
+  const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" || target.type === "worker" ? (target.path ?? null) : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;
   // The diff is read again only when what it compares changes (it goes by the scope's text).
@@ -170,7 +170,7 @@ export function ReviewTab({
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground px-1.5 text-sm">
-          {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
+          {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "worker" ? "Worker changes" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
         </span>
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} />

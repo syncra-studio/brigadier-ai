@@ -120,7 +120,9 @@ async function drive(): Promise<string> {
   const rows = [...card()!.querySelectorAll<HTMLElement>('[data-slot="summary-row"], [data-slot="workers-summary"], [data-slot="workers-summary-worker"]')].filter((row) => !row.closest("[data-activities]"));
   seen.rowHeights = [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))];
   seen.odd = rows.filter((row) => Math.round(row.getBoundingClientRect().height) !== 28).map((row) => row.outerHTML.slice(0, 300));
-  seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] [data-slot^="workers-summary"]')].map((row) => row.textContent);
+  // A worker's line: its row, then its +N −N, a button of its own beside it.
+  seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] :is([data-slot="workers-summary"], [data-slot="workers-summary-worker"])')]
+    .map((row) => `${row.textContent}${row.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? row.nextElementSibling.textContent : ""}`);
   const height = card()!.getBoundingClientRect().height;
   const project = card()!.querySelector('[data-slot="summary-section"]')!;
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
