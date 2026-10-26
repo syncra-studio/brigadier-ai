@@ -27,6 +27,7 @@ struct Observation {
     status: String,
     complete: bool,
     next: i64,
+    account_failed: bool,
 }
 
 impl SessionManager {
@@ -392,7 +393,10 @@ impl SessionManager {
                     match result {
                         Ok(seen) => {
                             account_next = account_next.max(seen.next);
-                            failed |= seen.status.starts_with("GitHub unavailable");
+                            failed |= seen.account_failed;
+                            if seen.status.starts_with("GitHub unavailable") {
+                                next = next.max(now + 120_000);
+                            }
                             pr.pull_request = Some(seen.pr);
                             pr.viewer = Some(seen.viewer);
                             pr.status = seen.status;
@@ -401,7 +405,10 @@ impl SessionManager {
                             next = next.max(seen.next);
                         }
                         Err(reason) => {
-                            failed = true;
+                            failed |= reason.starts_with("GitHub unavailable")
+                                || reason.starts_with("Account unavailable")
+                                || reason.starts_with("Selected GitHub account")
+                                || reason == "GitHub account identity unavailable";
                             pr.status = reason;
                             pr.complete = false;
                             next = now + 120_000;
@@ -703,6 +710,7 @@ struct FirstPage {
     value: Value,
     headers: String,
     success: bool,
+    account_error: bool,
 }
 async fn observe_pages(
     gh: &super::gh::Gh,
@@ -728,8 +736,13 @@ async fn observe_pages(
         if !app_open() {
             return Err("App closed; status is stale".into());
         }
-        let (value, headers, success) = if let Some(first) = first.take() {
-            (first.value, first.headers, first.success)
+        let (value, headers, success, account_error) = if let Some(first) = first.take() {
+            (
+                first.value,
+                first.headers,
+                first.success,
+                first.account_error,
+            )
         } else {
             let body = json!({"query":QUERY,"variables":cursors}).to_string();
             let output = gh
@@ -752,6 +765,7 @@ async fn observe_pages(
                 serde_json::from_str::<Value>(payload).unwrap_or(Value::Null),
                 headers.to_owned(),
                 output.success(),
+                false,
             )
         };
         if let Some(delay) = retry_after(&headers, now) {
@@ -780,7 +794,8 @@ async fn observe_pages(
                 viewer: tracked.viewer.clone().unwrap_or_default(),
                 status: "GitHub unavailable; status is stale".into(),
                 complete: false,
-                next: next.max(now + 120_000),
+                next,
+                account_failed: !success || account_error,
             });
         }
         viewer = value
@@ -993,6 +1008,7 @@ async fn observe_pages(
         status,
         complete,
         next,
+        account_failed: false,
     })
 }
 fn unknown_pr(identity: &PrIdentity) -> PullRequest {
@@ -1232,6 +1248,11 @@ print('HTTP/2.0 200\r\n\r\n'+(root/('page-'+str(i)+'.json')).read_text())
         let results = observe_batch(&gh, &[a, b], 0, || true).await;
         assert_eq!(results[0].as_ref().unwrap().status, "Ready to merge");
         assert!(!results[1].as_ref().unwrap().complete);
+        assert!(
+            !results[1].as_ref().unwrap().account_failed,
+            "a PR permission error is retried independently from its healthy account peers"
+        );
+        assert_eq!(results[1].as_ref().unwrap().next, 0, "a PR alias error sets no account-wide deadline");
         assert_eq!(std::fs::read_to_string(dir.join("count")).unwrap(), "1");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1569,6 +1590,15 @@ async fn observe_batch(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let account_error = errors.iter().any(|error| {
+            let path = error.pointer("/path/0").and_then(Value::as_str);
+            path.is_none()
+                || matches!(path, Some("viewer" | "rateLimit"))
+                || error["type"] == "RATE_LIMITED"
+                || error
+                    .pointer("/extensions/code")
+                    .is_some_and(|code| code == "RATE_LIMITED")
+        });
         if !errors.is_empty() {
             normalized["errors"] = json!(errors);
         }
@@ -1581,6 +1611,7 @@ async fn observe_batch(
                     value: normalized,
                     headers: headers.into(),
                     success: output.success() && !value.is_null(),
+                    account_error,
                 }),
                 &app_open,
             )

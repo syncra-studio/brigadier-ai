@@ -20,7 +20,7 @@ export function PullRequestHistory({ sessionId }: { sessionId: string }) {
       title: <button className="text-start hover:underline focus-visible:underline" onClick={() => openLink(url)}>{event.identity.repo} #{event.identity.number} · {event.action}</button>,
       detail: `${new Date(event.atMs).toLocaleDateString()} · ${event.actor}${event.account ? ` · ${event.account}` : ""} · ${event.detail}`,
       more: pr && !pr.forgotten && work.prHistory.find((item) => item.identity.host === event.identity.host && item.identity.owner === event.identity.owner && item.identity.repo === event.identity.repo && item.identity.number === event.identity.number)?.id === event.id ? (
-        <Button variant="ghost" size="sm" disabled={pending === key} onClick={() => {
+        <Button variant="ghost" size="sm" className="self-start" disabled={pending === key} onClick={() => {
           setPending(key);
           void forgetPr(sessionId, key).catch((cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" })).finally(() => setPending(null));
         }}>Forget pull request</Button>
