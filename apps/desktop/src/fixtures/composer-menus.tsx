@@ -122,6 +122,12 @@ function show(selection: Selection, mode: string) {
   );
 }
 
+const plus = () => document.querySelector<HTMLButtonElement>('[data-slot="plus-trigger"]');
+const plusRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="plus-menu"] [role=menuitem]')];
+
+const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusion"));
+const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
+
 async function exercise(mode: "rich" | "plain") {
   const seen: Record<string, unknown> = {};
   setRichComposer(mode === "rich");
@@ -202,10 +208,6 @@ async function exercise(mode: "rich" | "plain") {
   await key("Escape");
   await clear();
   // Fusion is absent in sessions, including their drafts.
-  const plus = () => document.querySelector<HTMLButtonElement>('[data-slot="plus-trigger"]');
-  const plusRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="plus-menu"] [role=menuitem]')];
-  const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusion"));
-  const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
   await openPlus();
   seen.sessionFusion = !!fusionRow();
   await key("Escape");
