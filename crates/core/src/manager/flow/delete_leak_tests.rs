@@ -947,3 +947,87 @@ async fn the_orphan_sweep_keeps_a_deleted_sessions_uncommitted_work() {
     assert!(dir.root().is_dir());
     flow.stop().await;
 }
+
+/// What a session and its workers wrote for themselves goes with Delete, archived first or not:
+/// the reports, plans and screenshots in its `record/`, and a worker's own folders beside its
+/// record (`shots/`, `tools/`), which Archive keeps. A page the user saved stays (the 10-26
+/// artifact rule).
+async fn delete_takes_what_the_session_wrote_and_keeps_a_saved_page(archive_first: bool) {
+    let flow = Flow::start(
+        if archive_first {
+            "20261026-artifacts-on-delete-archived"
+        } else {
+            "20261026-artifacts-on-delete"
+        },
+        options(),
+        script(),
+    )
+    .await;
+    let pages = Arc::new(crate::pages::Pages::open(flow.repo.with_file_name("pages")));
+    flow.manager.set_pages(pages.clone());
+    let id = flow.conversation.clone();
+    flow.say("Start workers").await;
+    flow.settled().await;
+    let tasks = reported_workers(&flow, &id, 2).await;
+    let dir = flow.manager.session_dir(&id);
+    let mut written = vec![
+        dir.record().join("final-completion.md"),
+        dir.record().join("plans").join("plan.md"),
+        dir.record().join("titles-shots").join("rail.png"),
+    ];
+    for task in &tasks {
+        let worker = dir.worker(task);
+        written.push(worker.join("record").join("report.md"));
+        written.push(worker.join("shots").join("home.png"));
+        written.push(worker.join("tools").join("probe.mjs"));
+    }
+    for path in &written {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "session evidence").unwrap();
+    }
+    let link = flow
+        .manager
+        .save_report(crate::tools::SaveReport {
+            title: "Kept research".into(),
+            markdown: "What the user saved.".into(),
+        })
+        .await
+        .unwrap();
+    let page = link
+        .split("brigadier-page:")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .unwrap()
+        .to_owned();
+    let needles = needles(&flow, &id, &tasks, &[]);
+    if archive_first {
+        flow.manager.archive(id.clone()).await.unwrap();
+        flow.manager.cleanup_finished(&id).await;
+        for path in &written {
+            assert!(path.is_file(), "Archive keeps {}", path.display());
+        }
+    }
+    flow.manager.delete(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    assert!(flow.core.conversation(&id).is_err(), "the session is gone");
+    for path in &written {
+        assert!(!path.exists(), "{}", path.display());
+    }
+    assert!(!dir.root().exists(), "{}", dir.root().display());
+    let leaks = leak_scan(&flow, &flow.repo, &[flow.scratch()], &needles);
+    assert!(leaks.is_empty(), "{leaks:#?}");
+    let kept = pages.read(&page).unwrap();
+    assert_eq!(kept.content.title, "Kept research");
+    assert!(kept.content.body.contains("What the user saved."));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_deleted_session_takes_what_it_wrote_and_keeps_a_saved_page() {
+    delete_takes_what_the_session_wrote_and_keeps_a_saved_page(false).await;
+}
+
+#[tokio::test]
+async fn an_archived_then_deleted_session_takes_what_it_wrote_and_keeps_a_saved_page() {
+    delete_takes_what_the_session_wrote_and_keeps_a_saved_page(true).await;
+}

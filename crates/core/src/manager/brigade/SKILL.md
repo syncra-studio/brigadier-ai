@@ -50,6 +50,7 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one. |
 | `brigadier sessions [--all]` | Other sessions; message one if asked. |
+| `brigadier session propose --title "2-4 words" "<self-contained brief>"` | Work apart from this session, offered as a new one on a card: a call, never a promise. |
 | `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |
 | `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |
 
@@ -70,6 +71,7 @@ The user's routing decides each worker's agent, model and effort. Before each `b
 Add "Ask me (your parent) if something blocks you; don't guess on scope."
 
 - The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).
+- Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.
 - A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to the user, never a silent fill.
 
 ## One short job: four calls
@@ -121,6 +123,6 @@ Started something that ends after your turn (CI, a PR's checks, the nightly)? Ke
 
 ## Report to the user
 
-After a block of work, at most 3 to 5 short lines; full reports stay with you.
+After a block of work, at most 3 to 5 short lines with the results themselves; full reports, plans and evidence stay with you, never linked (a report only for research or a document the user asked for).
 
 When the user writes after a gap, raise the oldest open question first (`brigadier ledger show --open`) and say how many more wait.
