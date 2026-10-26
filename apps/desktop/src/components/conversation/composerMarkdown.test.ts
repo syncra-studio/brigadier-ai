@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { $isDirectiveNode } from "@assistant-ui/react-lexical";
+import { $createDirectiveNodeWithFormatter, $isDirectiveNode } from "@assistant-ui/react-lexical";
 import { createHeadlessEditor } from "@lexical/headless";
 import { $dfs } from "@lexical/utils";
 import { $createLineBreakNode, $createParagraphNode, $createTextNode, $getRoot, $isTextNode, type LexicalEditor } from "lexical";
 
 import { inlineMarkerAt } from "@/app/conversation/inlineImages";
-import { chipFormatter } from "@/components/conversation/elements/chipText";
+import { chipFormatter, imageChip, pasteChip } from "@/components/conversation/elements/chipText";
 
 import { $exportComposer, $importComposer, CARET, COMPOSER_NODES } from "./composerMarkdown";
 
@@ -149,4 +149,35 @@ test("the caret's place in the Markdown is where the menus look for `@` and `/`"
   assert.equal(caretAt("- see @", "see @", 5), "- see @".length);
   assert.equal(caretAt("**b** @", " @", 2), "**b** @".length);
   assert.equal(caretAt("# T\n> q /x", "q /x", 4), "# T\n> q /x".length);
+});
+
+test("backticks typed around a pasted chip never put the chip in a code mark (the user's `[Pasted text #1] `)", () => {
+  for (const [chip, text] of [[pasteChip(1), "[Pasted text #1]"], [imageChip(2), "[Image #2]"]] as const) {
+    const field = editor();
+    field.update(
+      () => $getRoot().append($createParagraphNode().append(
+        $createTextNode("Eric messaged me this `"),
+        $createDirectiveNodeWithFormatter(chip, formatter),
+        $createTextNode(" `"),
+      )),
+      { discrete: true },
+    );
+    const markdown = exported(field);
+    assert.equal(markdown, `Eric messaged me this \\\`${text} \\\``);
+    // Read back, it is the same chip between the same backticks, none of it code.
+    const back = imported(markdown);
+    assert.deepEqual(chips(back), [chip.id]);
+    back.getEditorState().read(() => {
+      assert.equal($getRoot().getTextContent(), `Eric messaged me this \`${text} \``);
+      assert.ok([...$dfs()].every(({ node }) => !$isTextNode(node) || !node.hasFormat("code")));
+    });
+    assert.equal(roundTrip(markdown), markdown);
+  }
+  // Inline code beside a backtick typed as text: the backtick goes escaped too.
+  const field = editor();
+  field.update(
+    () => $getRoot().append($createParagraphNode().append($createTextNode("a ` b "), $createTextNode("x").toggleFormat("code"), $createTextNode(" c"))),
+    { discrete: true },
+  );
+  assert.equal(exported(field), "a \\` b `x` c");
 });
