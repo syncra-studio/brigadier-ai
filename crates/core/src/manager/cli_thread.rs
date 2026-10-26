@@ -95,7 +95,9 @@ impl SessionManager {
             // first item of its own before any user message (Claude's stream doesn't say the
             // notice its file keeps). It goes on with the turn before, which reads as open until
             // it ends, and its end is that turn's; a message the user sends meanwhile is a steer
-            // of that turn, its request one more of that turn's.
+            // of that turn, its request one more of that turn's. A compaction is no such item:
+            // Claude says `/compact`'s (or the message it compacted for) only after it, and
+            // that message starts the turn.
             let on_its_own = live.open
                 && live.awaiting_user
                 && event.is_some_and(|event| {
@@ -105,7 +107,7 @@ impl SessionManager {
                             ProviderEvent::Message {
                                 role: Role::User,
                                 ..
-                            }
+                            } | ProviderEvent::CompactionEnded { .. }
                         )
                 });
             if on_its_own {
