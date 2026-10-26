@@ -1,4 +1,4 @@
-import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "@/app/settings/plugins/adapter";
+import type { PluginAgentResult, PluginDraft, PluginsAdapter, SignInStep } from "@/app/settings/plugins/adapter";
 import { failures } from "@/app/settings/plugins/dialogs";
 import { pickFolder, request } from "@/ipc/client";
 import type { McpSignInProgress, PluginJobView } from "@/ipc/generated";
@@ -7,8 +7,10 @@ import { setFolderTrust } from "@/state/trust";
 
 /** The agents' setup keeps changing while Settings is open; the page is cheap to read again. */
 const POLL_MS = 5000;
-/** How often a running change is asked how it goes. */
-const JOB_MS = 300;
+/** How often a running change is asked how it goes: an in-memory read, so often costs nothing. */
+const JOB_MS = 100;
+/** How often a sign-in is asked how it goes: each agent's step shows as soon as it happens. */
+const SIGN_IN_MS = 100;
 
 /** Waits for change `id` to finish. */
 async function settled(id: string): Promise<PluginJobView> {
@@ -36,12 +38,13 @@ function results(job: PluginJobView): PluginAgentResult[] {
 /** The sign-in going on for each item, by its key: what Cancel stops. */
 const signIns = new Map<string, string>();
 
-/** Waits for sign-in `id` to finish; how each agent's went. */
-async function signedIn(id: string): Promise<PluginAgentResult[]> {
+/** Waits for sign-in `id` to finish, telling `onProgress` each agent's step as it goes; how each agent's went. */
+async function signedIn(id: string, onProgress?: (steps: SignInStep[]) => void): Promise<PluginAgentResult[]> {
   for (;;) {
     const { progress } = await request({ method: "getMcpSignInProgress", id });
+    onProgress?.(progress.agents.map(({ agent, state }) => ({ agent, state })));
     if (progress.finished) return signInResults(progress);
-    await new Promise((resolve) => setTimeout(resolve, JOB_MS));
+    await new Promise((resolve) => setTimeout(resolve, SIGN_IN_MS));
   }
 }
 
@@ -104,11 +107,11 @@ export function livePlugins(): PluginsAdapter {
       if (problem) throw new Error(problem);
       return { type: "saved" };
     },
-    signIn: async (key, serverId, projectId) => {
+    signIn: async (key, serverId, projectId, onProgress) => {
       const { id } = await request({ method: "signInMcpServer", serverId, projectId });
       signIns.set(key, id);
       try {
-        return await signedIn(id);
+        return await signedIn(id, onProgress);
       } finally {
         if (signIns.get(key) === id) signIns.delete(key);
       }

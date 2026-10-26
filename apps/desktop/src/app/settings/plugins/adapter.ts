@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ProviderKind } from "@/ipc/generated";
+import type { AgentSignInState, ProviderKind } from "@/ipc/generated";
 import type { PluginItemDetails, PluginKind, PluginsView } from "./types";
 
 /** Something read from what the user pasted, before it is added. */
@@ -26,6 +26,9 @@ export type PluginAgentResult = {
   /** Why it didn't (or what to know although it did), in words for the user. */
   message: string | null;
 };
+
+/** One agent's sign-in as it goes. */
+export type SignInStep = { agent: ProviderKind; state: AgentSignInState };
 
 /** How a SKILL.md save went: written, or refused because the file changed since it was opened. */
 export type SkillSave = { type: "saved" } | { type: "changed"; current: string };
@@ -62,10 +65,11 @@ export type PluginsAdapter = {
    */
   saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<SkillSave>;
   /**
-   * Signs each agent in to a server in turn, opening the browser for the next: `serverId` and
-   * `projectId` from its problem. Absent while the daemon can't: the page offers no Sign in then.
+   * Signs every agent in to a server at once, each in its own browser tab: `serverId` and
+   * `projectId` from its problem; `onProgress` hears each agent's step as it happens. Absent
+   * while the daemon can't: the page offers no Sign in then.
    */
-  signIn?: (key: string, serverId: string, projectId: string | null) => Promise<PluginAgentResult[]>;
+  signIn?: (key: string, serverId: string, projectId: string | null, onProgress?: (steps: SignInStep[]) => void) => Promise<PluginAgentResult[]>;
   cancelSignIn?: (key: string) => Promise<void>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;

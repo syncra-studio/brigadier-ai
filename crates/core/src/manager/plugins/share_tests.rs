@@ -1622,3 +1622,115 @@ fn review_failed_secret_commit_keeps_previous_credentials_and_reports_deletion_f
     home.sync().unwrap();
     assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "rotated");
 }
+
+/// pencil as the user has it: each agent's own, one server tuned per agent, and the Library
+/// item added through Brigadier from Claude Code's (its arguments in both copies), installed for
+/// both agents.
+fn pencil(home: &Home) {
+    write(
+        &home.home.join(".claude.json"),
+        r#"{"mcpServers": {"pencil": {"type": "stdio", "command": "/opt/pen/mcp", "args": ["--app", "desktop", "--agent", "claudeCodeCLI"], "env": {}}}}"#,
+    );
+    let config = home.home.join(".codex/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &format!(
+            "{text}\n[mcp_servers.pencil]\ncommand = \"/opt/pen/mcp\"\nargs = [\"--app\", \"desktop\", \"--agent\", \"codexCLI\"]\n"
+        ),
+    );
+    let item = Item::Server(ServerSpec {
+        name: "pencil".into(),
+        transport: TransportSpec::Stdio {
+            command: "/opt/pen/mcp".into(),
+            args: ["--app", "desktop", "--agent", "claudeCodeCLI"]
+                .map(str::to_owned)
+                .to_vec(),
+            env: Vec::new(),
+            cwd: None,
+        },
+        oauth: None,
+    });
+    home.library
+        .pack("pencil", &item, None, &[], false, &home.secrets)
+        .unwrap();
+    home.with(|ctx, run| ops::set_places_with(ctx, "lib:pencil", None, run))
+        .unwrap();
+    assert!(home.installed(Agent::Claude, "pencil") && home.installed(Agent::Codex, "pencil"));
+}
+
+#[test]
+fn one_server_tuned_per_agent_is_one_item_with_its_library_copy_and_no_conflict() {
+    let home = Home::new("pencil", &["app"]);
+    pencil(&home);
+    let view = home.view();
+    let pencils: Vec<&str> = view
+        .items
+        .iter()
+        .filter(|item| item.name == "pencil")
+        .map(|item| item.key.as_str())
+        .collect();
+    assert_eq!(
+        pencils,
+        ["server:pencil"],
+        "one row, Brigadier's copy in it"
+    );
+    let item = home.item("server:pencil");
+    assert_eq!(item.problem, None, "the same command: no conflict");
+    assert_eq!(item.removal, PluginRemoval::Copies);
+    // A different command under the name stays two setups.
+    let config = home.home.join(".codex/config.toml");
+    let tuned = std::fs::read_to_string(&config).unwrap();
+    write(&config, &tuned.replace("/opt/pen/mcp", "/opt/other/mcp"));
+    assert!(matches!(
+        home.item("server:pencil").problem,
+        Some(PluginProblem::Conflict { .. })
+    ));
+    write(&config, &tuned);
+
+    // Sharing leaves the user's item where it is, each agent's copy with its own arguments.
+    home.ran();
+    home.sync().unwrap();
+    let entry = home.library.entry("pencil").unwrap();
+    let args = |file: &str| -> Vec<String> {
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(entry.dir.join(file)).unwrap()).unwrap();
+        serde_json::from_value(json["mcpServers"]["pencil"]["args"].clone()).unwrap()
+    };
+    assert_eq!(
+        args(".mcp.json"),
+        ["--app", "desktop", "--agent", "claudeCodeCLI"]
+    );
+    assert_eq!(
+        args(".codex.mcp.json"),
+        ["--app", "desktop", "--agent", "codexCLI"]
+    );
+    assert!(home.installed(Agent::Claude, "pencil") && home.installed(Agent::Codex, "pencil"));
+    assert!(home.placed(Agent::Claude, "pencil").global);
+    assert!(
+        home.sharing().failed.is_empty(),
+        "{:?}",
+        home.sharing().failed
+    );
+    // Once each has its own, the next pass finds nothing to do.
+    home.ran();
+    home.sync().unwrap();
+    assert_eq!(home.ran(), Vec::<String>::new());
+}
+
+#[test]
+fn saved_in_names_a_plugins_file_without_dot_parts() {
+    let home = Home::new("saved-in", &[]);
+    pencil(&home);
+    let files = home.item("server:pencil").files;
+    let copy = home
+        .library
+        .entry("pencil")
+        .unwrap()
+        .dir
+        .join(".mcp.json")
+        .display()
+        .to_string();
+    assert!(files.contains(&copy), "{files:?}");
+    assert!(files.iter().all(|file| !file.contains("/./")), "{files:?}");
+}

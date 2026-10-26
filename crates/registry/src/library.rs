@@ -245,6 +245,22 @@ impl Library {
         replace: bool,
         secrets: &dyn SecretSink,
     ) -> Result<Packed, LibraryError> {
+        self.pack_tuned(name, item, skill_dir, taken, replace, secrets, &[])
+    }
+
+    /// [`Self::pack`], a stdio server's arguments in `tuned` agents' copies their own: the same
+    /// server each agent runs with its own arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_tuned(
+        &self,
+        name: &str,
+        item: &Item,
+        skill_dir: Option<&Path>,
+        taken: &[String],
+        replace: bool,
+        secrets: &dyn SecretSink,
+        tuned: &[(Agent, Vec<String>)],
+    ) -> Result<Packed, LibraryError> {
         check_name(name)?;
         if !replace && self.entry(name).is_some() {
             return Err(LibraryError::NameTaken(name.to_owned()));
@@ -263,7 +279,7 @@ impl Library {
                     return Err(LibraryError::ServerNameTaken(spec.name.clone()));
                 }
                 check_name(&spec.name)?;
-                self.write_server(name, &dir, &staging, spec, secrets)?;
+                self.write_server(name, &dir, &staging, spec, secrets, tuned)?;
                 values = match &spec.transport {
                     TransportSpec::Stdio { env, .. } => env,
                     TransportSpec::Http { headers, .. } => headers,
@@ -421,6 +437,7 @@ impl Library {
         staging: &Path,
         spec: &ServerSpec,
         secrets: &dyn SecretSink,
+        tuned: &[(Agent, Vec<String>)],
     ) -> Result<(), LibraryError> {
         let id = format!("{plugin}/{}", spec.name);
         let brigadier = self.brigadier.display().to_string();
@@ -438,9 +455,17 @@ impl Library {
                 }
                 // Codex runs a relative command in the project and keeps templates literal:
                 // its copy names the plugin's folder outright.
+                let own = |agent: Agent| {
+                    tuned
+                        .iter()
+                        .find(|(known, _)| *known == agent)
+                        .map_or(args, |(_, args)| args)
+                };
                 let root = dir.display().to_string();
-                let codex_args: Vec<String> =
-                    args.iter().map(|arg| plugin_root(arg, &root)).collect();
+                let codex_args: Vec<String> = own(Agent::Codex)
+                    .iter()
+                    .map(|arg| plugin_root(arg, &root))
+                    .collect();
                 let codex_command = plugin_root(command, &root);
                 let wrap = |command: String, args: Vec<String>| {
                     if env.is_empty() {
@@ -461,7 +486,7 @@ impl Library {
                     server
                 };
                 (
-                    stdio(wrap(command.clone(), args.clone())),
+                    stdio(wrap(command.clone(), own(Agent::Claude).clone())),
                     stdio(wrap(codex_command, codex_args)),
                 )
             }

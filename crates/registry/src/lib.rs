@@ -387,6 +387,63 @@ impl Catalog {
         catalog
     }
 
+    /// The user's catalog `self` with `project`'s entries: [`Self::read`] for `project`, the
+    /// user's part not read again.
+    pub fn for_project(&self, roots: &Roots, project: &Path) -> Self {
+        let mut catalog = self.clone();
+        catalog.add_project(roots, project);
+        catalog
+    }
+
+    /// The plugins [`Self::read`] lists (`plugins`), read without anything else: what loads a
+    /// plugin is a few settings files, while a whole catalog reads every skill too.
+    pub fn plugins(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
+        let codex = servers::codex_config(roots, &mut Vec::new());
+        let mut plugins = plugins::claude(roots, None);
+        plugins.extend(plugins::codex(roots, codex.as_ref()));
+        let Some(project) = project else {
+            return plugins;
+        };
+        // As `add_project`: the project's settings switch Claude's, its installs count there.
+        let here = plugins::claude(roots, Some(project));
+        plugins.retain(|plugin| {
+            plugin.agent != Agent::Claude
+                || here
+                    .iter()
+                    .any(|other| other.id == plugin.id && other.root == plugin.root)
+        });
+        plugins.extend(here.into_iter().filter(|plugin| plugin.project.is_some()));
+        // As `add_codex_layer`.
+        let trusted = codex
+            .as_ref()
+            .map(servers::codex_trusted)
+            .unwrap_or_default();
+        if !trusted.iter().any(|path| path == project) {
+            return plugins;
+        }
+        let Some(layer) = servers::read_toml(
+            &adapter::codex::project_file(project),
+            Source::CodexProject,
+            Some(project),
+            &mut Vec::new(),
+        ) else {
+            return plugins;
+        };
+        for (plugin, on) in plugins::codex_switched(roots, Some(&layer), Some(project)) {
+            let known = plugins
+                .iter()
+                .position(|known| known.agent == Agent::Codex && known.id == plugin.id);
+            match (known, on) {
+                (Some(at), false) => {
+                    plugins.remove(at);
+                }
+                (None, true) => plugins.push(plugin),
+                _ => {}
+            }
+        }
+        plugins
+    }
+
     fn user(roots: &Roots) -> Self {
         let mut problems = Vec::new();
         let codex = servers::codex_config(roots, &mut problems);

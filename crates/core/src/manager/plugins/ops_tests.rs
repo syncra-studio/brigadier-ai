@@ -557,7 +557,9 @@ fn plain_clis_get_what_another_agent_has() {
 }
 
 /// Does what `step` asks to the fixture's files, as the CLIs would: Claude's `enabledPlugins`
-/// in its user or local settings, Codex's `enabled` keys.
+/// in its user or local settings, Codex's `enabled` keys. As claude 2.1.310 does, a switch to
+/// what holds there already (the user's switch counting in a project) writes nothing: it
+/// answers `alreadyInGoalState`, which counts as done.
 fn simulate(home: &Path, step: &Step) {
     fn set_toml(file: &Path, key: &[String], value: Option<&toml::Value>) {
         let text = std::fs::read_to_string(file).unwrap_or_default();
@@ -607,14 +609,24 @@ fn simulate(home: &Path, step: &Step) {
                 "disable" => false,
                 other => panic!("not simulated: plugin {other}"),
             };
+            let user = home.join(".claude/settings.json");
             let file = if call.args.contains(&"user".to_owned()) {
-                home.join(".claude/settings.json")
+                user.clone()
             } else {
                 call.cwd
                     .as_ref()
                     .unwrap()
                     .join(".claude/settings.local.json")
             };
+            let switch = |file: &Path| -> Option<bool> {
+                let settings: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+                settings["enabledPlugins"][&call.args[2]].as_bool()
+            };
+            let holds = switch(&file).or_else(|| switch(&user)).unwrap_or(false);
+            if holds == on {
+                return;
+            }
             let mut settings: serde_json::Value = std::fs::read_to_string(&file)
                 .ok()
                 .and_then(|text| serde_json::from_str(&text).ok())
@@ -709,11 +721,14 @@ fn the_picker_moves_an_item_between_global_and_projects_on_before_off() {
     };
     assert_eq!(places_now(&ctx), both(true, &["proj", "proj2"]));
 
-    // Global to one project: on there by itself first, then off for every project.
+    // Global to one project: on there by itself first, then off for every project. Claude
+    // Code takes the project's switch on as done while every project's has it on, so it is
+    // switched off there first (bug: "it is off in every project after the change").
     set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &run).unwrap();
     assert_eq!(
         taken(),
         [
+            "Claude claude plugin disable tidy@brigadier --scope local --json".to_owned(),
             "Claude claude plugin enable tidy@brigadier --scope local --json".to_owned(),
             format!("Codex project plugins.tidy@brigadier.enabled = {ON:?}"),
             "Claude claude plugin disable tidy@brigadier --scope user --json".to_owned(),
@@ -749,6 +764,22 @@ fn the_picker_moves_an_item_between_global_and_projects_on_before_off() {
         "{global:?}"
     );
     assert_eq!(places_now(&ctx), both(true, &["proj", "proj2"]));
+}
+
+#[test]
+fn some_projects_of_an_item_on_everywhere_stays_on_there_in_claude_code() {
+    // pencil, on for every project in ~/.claude/settings.json, put on only in one project.
+    let (fx, projects) = two_projects("places-goal-state", Some(true), Some(true));
+    let ctx = places_ctx(&fx, &projects);
+    let run = simulated(&fx);
+    set_places_with(&ctx, "lib:tidy", Some(&projects[..1]), &run).unwrap();
+    assert_eq!(places_now(&ctx), vec![(false, vec!["proj".to_owned()]); 2]);
+    // Its own switch in the project, not the user's: it stays on there.
+    let local: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.project.join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(local["enabledPlugins"]["tidy@brigadier"], true);
 }
 
 #[test]
@@ -1070,4 +1101,46 @@ fn review_legacy_server_restore_is_idempotent_and_retains_secrets() {
             .unwrap()
             .contains("somebody-elses-command")
     );
+}
+
+#[test]
+fn the_plugins_alone_read_as_the_whole_catalog_lists_them() {
+    let (fx, projects) = two_projects("plugins-alone", Some(true), Some(true));
+    // Claude Code: off by the first project's settings; an install of the second's own.
+    claude_here(&projects[0], false);
+    let installs = fx.home.join(".claude/plugins/installed_plugins.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&installs).unwrap()).unwrap();
+    let mut local = json["plugins"]["tidy@brigadier"][0].clone();
+    local["scope"] = "local".into();
+    local["projectPath"] = projects[1].display().to_string().into();
+    json["plugins"]["tidy@brigadier"]
+        .as_array_mut()
+        .unwrap()
+        .push(local);
+    write(&installs, &json.to_string());
+    // Codex: off by the second project's own file.
+    write(
+        &projects[1].join(".codex/config.toml"),
+        "[plugins.\"tidy@brigadier\"]\nenabled = false\n",
+    );
+    let sorted = |plugins: Vec<brigadier_registry::Plugin>| {
+        let mut plugins: Vec<String> = plugins
+            .into_iter()
+            .map(|plugin| format!("{plugin:?}"))
+            .collect();
+        plugins.sort();
+        plugins
+    };
+    for project in [
+        None,
+        Some(projects[0].as_path()),
+        Some(projects[1].as_path()),
+    ] {
+        assert_eq!(
+            sorted(Catalog::plugins(&fx.roots, project)),
+            sorted(Catalog::read(&fx.roots, project).plugins),
+            "{project:?}"
+        );
+    }
 }

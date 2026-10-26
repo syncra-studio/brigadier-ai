@@ -16,11 +16,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::{AgentAdapter, Place, Step, adapter, adapters, apply};
+use brigadier_registry::adapter::{
+    AgentAdapter, Place, ProjectScope, Step, adapter, adapters, apply,
+};
 use brigadier_registry::add_parse;
 use brigadier_registry::item::{Item, ServerSpec, SkillSource, SkillSpec, TransportSpec};
 use brigadier_registry::library::{self, Entry, Library, Origin, SecretSink, plugin_id};
-use brigadier_registry::{Agent, Catalog, Roots, Secret};
+use brigadier_registry::{Agent, Catalog, Plugin, Roots, Secret};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -152,22 +154,55 @@ pub(super) fn just_me(project: &Path) -> Place {
     }
 }
 
-/// Whether `agent` loads plugin `id` in `catalog`: anywhere (`project` `None`: one on for every
-/// project), or there.
-fn plugin_on(catalog: &Catalog, agent: Agent, id: &str, only_here: bool) -> bool {
-    catalog.plugins.iter().any(|plugin| {
+/// Whether `agent` loads plugin `id` among a catalog's `plugins`: anywhere (`project` `None`:
+/// one on for every project), or there.
+fn plugin_on(plugins: &[Plugin], agent: Agent, id: &str, only_here: bool) -> bool {
+    plugins.iter().any(|plugin| {
         plugin.agent == agent && plugin.id == id && (!only_here || plugin.project.is_some())
     })
+}
+
+/// The plugins on for every project and in each of the user's projects ([`Catalog::plugins`]:
+/// their settings files only), read once: what a change's moves and its read-back look at
+/// until its next command runs.
+pub(super) struct Plugins {
+    user: Vec<Plugin>,
+    /// In the order of [`Ctx::projects`].
+    projects: Vec<Vec<Plugin>>,
+}
+
+impl Plugins {
+    pub(super) fn read(ctx: &Ctx<'_>) -> Self {
+        Self {
+            user: Catalog::plugins(ctx.roots, None),
+            projects: ctx
+                .projects
+                .iter()
+                .map(|path| Catalog::plugins(ctx.roots, Some(path)))
+                .collect(),
+        }
+    }
+
+    /// Whether `agent` loads plugin `id` in `project`, or (`None`) for every project.
+    fn on(&self, ctx: &Ctx<'_>, agent: Agent, id: &str, project: Option<&Path>) -> bool {
+        match project {
+            None => plugin_on(&self.user, agent, id, false),
+            Some(path) => match ctx.projects.iter().position(|known| known == path) {
+                Some(at) => plugin_on(&self.projects[at], agent, id, false),
+                None => plugin_on(&Catalog::plugins(ctx.roots, Some(path)), agent, id, false),
+            },
+        }
+    }
 }
 
 /// Whether `project` keeps plugin `id` on for `adapter`'s agent by itself, so it stays on there
 /// once it is off for every project: it counts only there, or the project's own settings switch
 /// it on over every project's.
 fn kept_on_in(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str, project: &Path) -> bool {
-    let catalog = ctx.read(Some(project));
+    let plugins = Catalog::plugins(ctx.roots, Some(project));
     let agent = adapter.agent();
-    plugin_on(&catalog, agent, id, true)
-        || (plugin_on(&catalog, agent, id, false) && adapter.switched_on_in(project, id))
+    plugin_on(&plugins, agent, id, true)
+        || (plugin_on(&plugins, agent, id, false) && adapter.switched_on_in(project, id))
 }
 
 /// `agent`'s id for the plugin named `name` (another marketplace's), wherever it has it, on or
@@ -238,13 +273,20 @@ impl Placed {
     }
 }
 
+/// Where `adapter`'s agent has Library plugin `id` now.
+#[cfg(test)]
 pub(super) fn placed(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
+    placed_in(&Plugins::read(ctx), ctx, adapter, id)
+}
+
+/// Where `adapter`'s agent has Library plugin `id`, as `now` read it.
+fn placed_in(now: &Plugins, ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
     let agent = adapter.agent();
-    let global = plugin_on(&ctx.read(None), agent, id, false);
+    let global = now.on(ctx, agent, id, None);
     let on_in: Vec<PathBuf> = ctx
         .projects
         .iter()
-        .filter(|path| plugin_on(&ctx.read(Some(path)), agent, id, false))
+        .filter(|path| now.on(ctx, agent, id, Some(path)))
         .cloned()
         .collect();
     let has = global
@@ -268,8 +310,13 @@ struct Held {
 }
 
 fn held(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Held {
+    held_in(&Plugins::read(ctx), ctx, adapter, id)
+}
+
+/// [`held`], as `now` read it.
+fn held_in(now: &Plugins, ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Held {
     Held {
-        placed: placed(ctx, adapter, id),
+        placed: placed_in(now, ctx, adapter, id),
         installed: adapter.installed(ctx.roots, id),
         installed_in: adapter
             .installed_in_projects(ctx.roots, id)
@@ -315,8 +362,10 @@ impl Move {
     }
 }
 
+/// The steps of `step`, planned against the plugins as `now` read them.
 fn move_steps(
     ctx: &Ctx<'_>,
+    now: &Plugins,
     adapter: &dyn AgentAdapter,
     id: &str,
     step: &Move,
@@ -333,11 +382,26 @@ fn move_steps(
     let mut steps = Vec::new();
     match step {
         Move::Keep(path) if adapter.switched_on_in(path, id) => {}
-        Move::Keep(path) if installed || installed_in(path) => steps.extend(
-            adapter
-                .set_plugin(id, &just_me(path), true)
-                .map_err(unsupported)?,
-        ),
+        Move::Keep(path) if installed || installed_in(path) => {
+            // On there already through every project's switch, an agent whose own command
+            // sets the project's (Claude Code) takes it as done (`alreadyInGoalState`) and
+            // writes nothing, so it would go off with every project's: switched off there
+            // first, the project's own switch is written. A project file is written as asked.
+            if adapter.capabilities().project_scope == ProjectScope::Native
+                && now.on(ctx, agent, id, Some(path))
+            {
+                steps.extend(
+                    adapter
+                        .set_plugin(id, &just_me(path), false)
+                        .map_err(unsupported)?,
+                );
+            }
+            steps.extend(
+                adapter
+                    .set_plugin(id, &just_me(path), true)
+                    .map_err(unsupported)?,
+            );
+        }
         Move::Keep(path) => {
             steps.extend(ctx.library.market_steps(adapter));
             steps.extend(
@@ -361,7 +425,7 @@ fn move_steps(
             );
         }
         Move::Set(path, on) => {
-            if plugin_on(&ctx.read(Some(path)), agent, id, false) != *on {
+            if now.on(ctx, agent, id, Some(path)) != *on {
                 steps.extend(
                     adapter
                         .set_plugin(id, &just_me(path), *on)
@@ -370,7 +434,7 @@ fn move_steps(
             }
         }
         Move::Global(on) => {
-            let now = plugin_on(&ctx.read(None), agent, id, false);
+            let now = now.on(ctx, agent, id, None);
             if *on && !installed {
                 steps.extend(ctx.library.market_steps(adapter));
                 steps.extend(
@@ -541,30 +605,43 @@ pub(crate) type Runner<'a> = &'a dyn Fn(&dyn AgentAdapter, &[Step]) -> Result<()
 /// starts, then reads each again: an agent that isn't where it should be failed.
 /// `seen` keeps how each agent's settings read after its last move: one that reads otherwise
 /// later was changed by someone else meanwhile.
+///
+/// The plugins are read once a round, after its moves: one agent's moves leave every other
+/// agent's settings as they are, and one move in a round leaves the others' projects alone.
 fn drive(
     ctx: &Ctx<'_>,
     id: &str,
     wants: &[(Agent, Placed)],
     run: Runner<'_>,
     seen: &mut Vec<(Agent, Held)>,
+    mut now: Plugins,
 ) -> Result<(), (Agent, String)> {
     for round in 0..3 {
+        let mut moved = Vec::new();
         for (agent, want) in wants {
             let adapter = adapter(*agent);
             let moves = &moves_to(want, ctx.projects)[round];
-            for step in moves {
-                move_steps(ctx, adapter, id, step)
+            let failed = moves.iter().find_map(|step| {
+                move_steps(ctx, &now, adapter, id, step)
                     .and_then(|steps| run(adapter, &steps))
-                    .map_err(|reason| (*agent, reason))?;
-            }
+                    .err()
+            });
             if !moves.is_empty() {
-                seen.retain(|(known, _)| known != agent);
-                seen.push((*agent, held(ctx, adapter, id)));
+                moved.push(*agent);
             }
+            if let Some(reason) = failed {
+                // How the agents moved before it read now: the put-back knows them as its own.
+                remember(ctx, id, seen, &moved, &Plugins::read(ctx));
+                return Err((*agent, reason));
+            }
+        }
+        if !moved.is_empty() {
+            now = Plugins::read(ctx);
+            remember(ctx, id, seen, &moved, &now);
         }
     }
     for (agent, want) in wants {
-        let is = placed(ctx, adapter(*agent), id);
+        let is = placed_in(&now, ctx, adapter(*agent), id);
         if !is.same(want) {
             return Err((
                 *agent,
@@ -578,6 +655,20 @@ fn drive(
     Ok(())
 }
 
+/// Keeps how each of `moved` reads in `now`, as its settings after its last move.
+fn remember(
+    ctx: &Ctx<'_>,
+    id: &str,
+    seen: &mut Vec<(Agent, Held)>,
+    moved: &[Agent],
+    now: &Plugins,
+) {
+    for agent in moved {
+        seen.retain(|(known, _)| known != agent);
+        seen.push((*agent, held_in(now, ctx, adapter(*agent), id)));
+    }
+}
+
 /// Puts each agent of `before` back where it had it: every move that puts it on somewhere
 /// first, then, only if all of those went, the moves that take it off. Whether every move went.
 fn put_back_with(ctx: &Ctx<'_>, id: &str, before: &[(Agent, Placed)], run: Runner<'_>) -> bool {
@@ -589,11 +680,12 @@ fn put_back_with(ctx: &Ctx<'_>, id: &str, before: &[(Agent, Placed)], run: Runne
         for round in 0..3 {
             for (agent, was) in before {
                 let adapter = adapter(*agent);
+                let now = Plugins::read(ctx);
                 for step in moves_to(was, ctx.projects)[round]
                     .iter()
                     .filter(|step| step.enables() == enabling)
                 {
-                    all &= move_steps(ctx, adapter, id, step)
+                    all &= move_steps(ctx, &now, adapter, id, step)
                         .and_then(|steps| run(adapter, &steps))
                         .is_ok();
                 }
@@ -615,18 +707,19 @@ pub(super) fn change(
     wants: &[(Agent, Placed)],
     run: Runner<'_>,
 ) -> Result<(), String> {
-    let read = || -> Vec<(Agent, Held)> {
+    let read = |now: &Plugins| -> Vec<(Agent, Held)> {
         adapters()
             .into_iter()
-            .map(|adapter| (adapter.agent(), held(ctx, adapter, id)))
+            .map(|adapter| (adapter.agent(), held_in(now, ctx, adapter, id)))
             .collect()
     };
-    let before = read();
+    let now = Plugins::read(ctx);
+    let before = read(&now);
     for (agent, _) in wants {
         (ctx.report)(*agent, PluginStep::Working);
     }
     let mut seen = Vec::new();
-    let Err((agent, reason)) = drive(ctx, id, wants, run, &mut seen) else {
+    let Err((agent, reason)) = drive(ctx, id, wants, run, &mut seen, now) else {
         for (agent, _) in wants {
             (ctx.report)(*agent, PluginStep::Done);
         }
@@ -650,7 +743,7 @@ pub(super) fn change(
         .map(|(agent, held)| (*agent, held.placed.clone()))
         .collect();
     put_back_with(ctx, id, &back, run);
-    let after = read();
+    let after = read(&Plugins::read(ctx));
     let label = adapter(agent).label();
     let stop = if reason.ends_with(['.', '!', '?']) {
         ""
@@ -679,9 +772,10 @@ fn library_id(ctx: &Ctx<'_>, key: &str) -> Result<String, String> {
 }
 
 fn every_placed(ctx: &Ctx<'_>, id: &str) -> Vec<(Agent, Placed)> {
+    let now = Plugins::read(ctx);
     adapters()
         .into_iter()
-        .map(|adapter| (adapter.agent(), placed(ctx, adapter, id)))
+        .map(|adapter| (adapter.agent(), placed_in(&now, ctx, adapter, id)))
         .collect()
 }
 

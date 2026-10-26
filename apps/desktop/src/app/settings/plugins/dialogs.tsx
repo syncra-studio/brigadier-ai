@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { useAction } from "@/app/conversation/useAction";
@@ -7,7 +7,7 @@ import { Badge, Button, ErrorLine } from "@/components/controls";
 import { Spinner, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
 import { cn } from "@/lib/utils";
-import type { PluginAgentResult, PluginsAdapter } from "./adapter";
+import type { PluginAgentResult, PluginsAdapter, SignInStep } from "./adapter";
 import { AgentRow, type PluginAgent } from "./parts";
 import type { PluginItemView } from "./types";
 
@@ -114,9 +114,28 @@ export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
   );
 }
 
+/** An agent's sign-in step, as its row says it: its line, its tone, and whether it's signed in. */
+function stepRow(step: SignInStep): { line: string; tone: "muted" | "error"; done: boolean } {
+  switch (step.state.type) {
+    case "signedIn":
+    case "alreadySignedIn":
+      return { line: "Signed in", tone: "muted", done: true };
+    case "failed":
+      return { line: step.state.reason || "Couldn't sign in.", tone: "error", done: false };
+    case "cancelled":
+      return { line: "Cancelled.", tone: "muted", done: false };
+    case "inBrowser":
+      return { line: "Waiting for your browser…", tone: "muted", done: false };
+    case "starting":
+      return { line: "Opening your browser…", tone: "muted", done: false };
+    case "waiting":
+      return { line: "Waiting…", tone: "muted", done: false };
+  }
+}
+
 /**
- * Sign in: each agent signs in to the server in turn, its browser opening for the next. The rows
- * are the agents the sign-in reports once it's done; until then the browser is waited on.
+ * Sign in: every agent signs in to the server at once, each in its own browser tab. Each agent's
+ * row shows its step as it happens; the page is read again as soon as one is signed in.
  */
 export function SignInDialog({ item, serverId, projectId, adapter, refresh, onClose }: {
   item: PluginItemView;
@@ -128,12 +147,23 @@ export function SignInDialog({ item, serverId, projectId, adapter, refresh, onCl
   onClose: () => void;
 }) {
   const [results, setResults] = useState<PluginAgentResult[] | null>(null);
+  const [steps, setSteps] = useState<SignInStep[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // How many agents were signed in at the last step heard: one more reads the page again.
+  const signedIn = useRef(0);
+  const progress = (next: SignInStep[]) => {
+    setSteps(next);
+    const done = next.filter((step) => stepRow(step).done).length;
+    if (done > signedIn.current) refresh();
+    signedIn.current = done;
+  };
   const start = () => {
     setError(null);
     setResults(null);
+    setSteps([]);
+    signedIn.current = 0;
     if (!adapter.signIn) return;
-    adapter.signIn(item.key, serverId, projectId).then(
+    adapter.signIn(item.key, serverId, projectId, progress).then(
       (done) => {
         setResults(done);
         refresh();
@@ -154,12 +184,28 @@ export function SignInDialog({ item, serverId, projectId, adapter, refresh, onCl
   return (
     <PluginDialog slot="sign-in" onClose={waiting ? cancel : onClose} title={`Sign in to ${item.name}`} description="Each agent keeps its own sign-in, so your browser asks once per agent. After the first one it usually just confirms.">
       <div className="flex flex-col gap-3">
-        {waiting && (
+        {waiting && steps.length === 0 && (
           <div data-slot="sign-in-waiting" className="text-foreground/65 flex items-center gap-3 text-label">
             <Spinner aria-label="Waiting" className="size-icon-sm animate-spin" />
             Waiting for your browser…
           </div>
         )}
+        {waiting && steps.map((step) => {
+          const row = stepRow(step);
+          return (
+            <AgentRow
+              key={step.agent}
+              agent={agentOf(step.agent)}
+              tone={row.tone}
+              line={row.line}
+              end={row.done
+                ? <Badge variant="success">Signed in</Badge>
+                : row.tone === "error"
+                  ? <span className="text-destructive text-xs">Failed</span>
+                  : <Spinner aria-label="Waiting" className="text-foreground/65 size-icon-sm animate-spin" />}
+            />
+          );
+        })}
         {results?.map((result) => (
           <AgentRow
             key={result.agent}

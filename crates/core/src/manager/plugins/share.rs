@@ -179,16 +179,18 @@ pub(crate) struct Catalogs {
 
 impl Catalogs {
     pub fn read(ctx: &Ctx<'_>) -> Self {
+        let (user, catalogs) = model::read_catalogs(ctx.roots, ctx.projects);
         Self {
-            user: Catalog::read(ctx.roots, None),
+            user,
             projects: ctx
                 .projects
                 .iter()
-                .map(|path| ProjectCatalog {
+                .zip(catalogs)
+                .map(|(path, catalog)| ProjectCatalog {
                     id: path.display().to_string(),
                     name: ops::folder_name(path),
                     path: path.clone(),
-                    catalog: Catalog::read(ctx.roots, Some(path)),
+                    catalog,
                 })
                 .collect(),
         }
@@ -628,6 +630,27 @@ fn sync_row(
     if row.conflict || sharing.is_declined(row) || cant_share(row).is_some() {
         return Ok(());
     }
+    if let Some(lib) = row
+        .lib
+        .as_ref()
+        .filter(|lib| !sharing.items.contains_key(*lib))
+    {
+        // Added through Brigadier, not made by sharing: the user's to place. An agent with
+        // neither its own nor the copy gets the copy, as any item added through Brigadier.
+        tune(ctx, row, lib, run)?;
+        let id = plugin_id(lib);
+        let holders = row.holders();
+        let lacking = adapters().into_iter().any(|adapter| {
+            !holders.contains(&adapter.agent())
+                && !row.copy.anywhere.contains(&adapter.agent())
+                && !adapter.installed(ctx.roots, &id)
+                && adapter.installed_in_projects(ctx.roots, &id).is_empty()
+        });
+        if lacking {
+            ops::add_missing_with(ctx, &format!("lib:{lib}"), run)?;
+        }
+        return Ok(());
+    }
     let wants = wanted(row, ctx.projects);
     let lib = match &row.lib {
         Some(lib) => lib.clone(),
@@ -712,6 +735,76 @@ fn sync_row(
     } else {
         Err(format!(
             "Not every agent took its new version: {}",
+            failed.join("; ")
+        ))
+    }
+}
+
+/// Library item `lib`, the same server as `row`'s own: each agent's copy runs with that agent's
+/// own arguments (one server tuned per agent: `--agent claudeCodeCLI`, `--agent codexCLI`).
+/// Only a server without values: one with values keeps what was added.
+fn tune(ctx: &Ctx<'_>, row: &Row, lib: &str, run: Runner<'_>) -> Result<(), String> {
+    let (Some(entry), Some(original @ Origin::Server { server, .. })) =
+        (ctx.library.entry(lib), row.original())
+    else {
+        return Ok(());
+    };
+    let plain = |server: &Server| match &server.transport {
+        Transport::Stdio { env, .. } => env.is_empty(),
+        Transport::Http { .. } => false,
+    };
+    if !plain(server) || !ctx.library.value_names(lib).is_empty() {
+        return Ok(());
+    }
+    let same = model::command_of(server);
+    let tuned: Vec<(Agent, Vec<String>)> = adapters()
+        .into_iter()
+        .filter_map(|adapter| {
+            let agent = adapter.agent();
+            row.own.sources.iter().find_map(|source| match source {
+                Origin::Server { agent: own, server }
+                    if *own == agent && model::command_of(server) == same && plain(server) =>
+                {
+                    Some((agent, model::args_of(server)?))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    let behind = tuned.iter().any(|(agent, args)| {
+        ctx.library
+            .server_command(&entry, *agent)
+            .is_some_and(|(_, has)| has != *args)
+    });
+    // A plugin-root path is written out per agent: never the same as the original's.
+    let rooted = tuned
+        .iter()
+        .any(|(_, args)| args.iter().any(|arg| arg.contains("${CLAUDE_PLUGIN_ROOT}")));
+    if !behind || rooted {
+        return Ok(());
+    }
+    let (item, _) = item_of(original, &row.key.name);
+    let mut taken = ops::server_names(ctx, Some(lib));
+    taken.retain(|known| *known != row.key.name);
+    let packed = ctx
+        .library
+        .pack_tuned(lib, &item, None, &taken, true, &Staged::default(), &tuned)
+        .map_err(|err| err.to_string())?;
+    if !packed.changed {
+        return Ok(());
+    }
+    let id = plugin_id(lib);
+    let mut failed = Vec::new();
+    for adapter in adapters() {
+        if let Err(err) = ops::refresh_copy(ctx, adapter, &id, run) {
+            failed.push(format!("{}: {err}", adapter.label()));
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Not every agent took its own settings: {}",
             failed.join("; ")
         ))
     }
