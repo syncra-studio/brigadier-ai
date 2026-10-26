@@ -485,6 +485,33 @@ fn enforce_executable_launch(
         let id = executable.to_ascii_lowercase();
         let id = id.strip_suffix(".exe").unwrap_or(&id);
         let id = id.strip_suffix(".desktop").unwrap_or(id);
+        // XDG desktop launchers commonly use `env NAME=value app`. Check
+        // the app rather than disabling those GUI launchers. More complex
+        // env flags fail closed, including -S (which can hide a shell).
+        let wrapped;
+        let id = if id == "env" {
+            let mut words = reference.split_whitespace().skip(1).chain(
+                args["additional_arguments"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str),
+            );
+            let command = words.find(|word| !word.contains('='));
+            match command.filter(|word| !word.starts_with('-')) {
+                Some(command) => {
+                    wrapped = command
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(command)
+                        .to_ascii_lowercase();
+                    wrapped.strip_suffix(".exe").unwrap_or(&wrapped)
+                }
+                None => id,
+            }
+        } else {
+            id
+        };
         check(
             tool,
             &TargetIdentity {
@@ -942,6 +969,8 @@ mod tests {
             json!({"launch_path": "shell:appsFolder\\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"}),
             json!({"name": "/usr/bin/gnome-terminal --wait"}),
             json!({"launch_path": "/usr/bin/bash -c whoami"}),
+            json!({"launch_path": "/usr/bin/env VAR=value /usr/bin/bash -c whoami"}),
+            json!({"name": "env", "additional_arguments":["bash","-c","whoami"]}),
             json!({"launch_path": "/opt/Brigadier/brigadier-app"}),
             json!({"launch_path": "polkit-gnome-authentication-agent-1"}),
         ] {
@@ -953,6 +982,7 @@ mod tests {
         for args in [
             json!({"path":"C:\\Windows\\notepad.exe"}),
             json!({"launch_path":"gedit --new-window"}),
+            json!({"launch_path":"env GDK_BACKEND=x11 /usr/bin/gedit --new-window"}),
         ] {
             assert!(enforce_executable_launch("launch_app", &args, &[]).is_ok());
         }
