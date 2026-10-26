@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
+mod discovery;
+
 #[derive(Default)]
 pub(super) struct Poller {
     state: Mutex<HashMap<String, PollSlot>>,
@@ -164,44 +166,92 @@ impl SessionManager {
         }
         Ok(())
     }
-    /// Backfill every recorded generation of both the lead and its workers. Reads only.
+    /// Replay each native generation with its own evidence, then checkpoint every lookup.
     pub async fn discover_pull_requests(&self, id: &ConversationId) -> Result<()> {
-        let mut records = vec![("session".to_owned(), self.session_dir(id).record())];
+        let mut records = vec![(
+            "session".to_owned(),
+            self.session_dir(id).record(),
+            self.recorded_workspace(id).map(|w| w.path),
+        )];
         for task in self.core.tasks(id).await? {
-            records.push((format!("worker {}", task.number), self.worker_record(&task)));
+            let cwd = task
+                .workspace
+                .as_ref()
+                .and_then(|w| w.worktree.as_ref())
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    task.plain
+                        .as_ref()
+                        .filter(|p| p.local)
+                        .and_then(|_| self.recorded_workspace(id).map(|w| w.path))
+                });
+            records.push((
+                format!("worker {}", task.number),
+                self.worker_record(&task),
+                cwd,
+            ));
         }
         let candidates = blocking(move || {
             let mut found = Vec::new();
-            for (actor, record) in records {
+            for (actor, record, cwd) in records {
+                let captured = discovery::captured_heads(&record);
                 for generation in super::session_dir::read_lineage(&record) {
                     let Some(file) = generation.file else {
                         continue;
                     };
                     let path =
                         session_file::locate(generation.provider, std::path::Path::new(&file));
-                    for entry in session_file::read(generation.provider, &path).unwrap_or_default()
-                    {
-                        if let Some((identity, account, action, item)) = candidate(&entry.event) {
-                            let source = format!(
-                                "touch:{}",
-                                blake3::hash(
-                                    format!(
-                                        "{actor}:{}:{item}:{}:{action}",
-                                        generation.session_id,
-                                        identity.key()
+                    let mut reader = discovery::Reader::default();
+                    let mut entries =
+                        session_file::read(generation.provider, &path).unwrap_or_default();
+                    entries.sort_by_key(|entry| entry.updated_at_ms.or(entry.at_ms));
+                    for entry in entries {
+                        let head = if let ProviderEvent::Command {
+                            item_id, command, ..
+                        } = &entry.event
+                        {
+                            captured
+                                .get(&(item_id.clone(), command.clone()))
+                                .map(String::as_str)
+                        } else {
+                            None
+                        };
+                        if let Some(action) = reader.observe(
+                            &entry.event,
+                            cwd.as_deref(),
+                            entry.updated_at_ms.or(entry.at_ms),
+                            entry.at_ms,
+                            head,
+                        ) {
+                            let source = if let Some(identity) = &action.identity {
+                                format!(
+                                    "touch:{}",
+                                    blake3::hash(
+                                        format!(
+                                            "{actor}:{}:{}:{}:{}",
+                                            generation.session_id,
+                                            action.item,
+                                            identity.key(),
+                                            action.action
+                                        )
+                                        .as_bytes()
                                     )
-                                    .as_bytes()
+                                    .to_hex()
                                 )
-                                .to_hex()
-                            );
-                            found.push((
-                                actor.clone(),
-                                identity,
-                                account,
-                                action,
-                                source,
-                                entry.updated_at_ms.or(entry.at_ms),
-                            ));
+                            } else {
+                                format!(
+                                    "touch-lookup:{}",
+                                    blake3::hash(
+                                        format!(
+                                            "{actor}:{}:{}:{}",
+                                            generation.session_id, action.item, action.action
+                                        )
+                                        .as_bytes()
+                                    )
+                                    .to_hex()
+                                )
+                            };
+                            found.push((actor.clone(), action, source));
                         }
                     }
                 }
@@ -209,18 +259,162 @@ impl SessionManager {
             Ok(found)
         })
         .await?;
-        for (actor, identity, account, action, source, at) in candidates {
-            self.touch_pr(
-                id,
-                identity,
-                account,
-                &actor,
-                &action,
-                Some((source, at)),
-                false,
-            )
-            .await?;
+        // The same coordinator serializes discovery API cost with display observations.
+        let _round = self.pr_poll.round.lock().await;
+        let mut checkpoints = self.discovery_checkpoints(id).await?;
+        let history = self.tracked_work(id).await?;
+        {
+            let mut state = self.pr_poll.state.lock().unwrap();
+            for checkpoint in checkpoints.values() {
+                if let Some(host) = &checkpoint.host {
+                    let key = format!(
+                        "account:{host}:{}",
+                        checkpoint.account.as_deref().unwrap_or("unresolved")
+                    );
+                    let slot = state.entry(key).or_default();
+                    slot.next = slot.next.max(checkpoint.account_until);
+                }
+            }
         }
+        let mut budget = 20;
+        for (actor, action, source) in candidates {
+            if history.pr_history.iter().any(|event| event.id == source) {
+                continue;
+            }
+            let cached = checkpoints.get(&source);
+            if cached.is_some_and(|c| {
+                c.identity.is_none() && c.retry_at.is_none_or(|at| at > crate::now_ms())
+            }) {
+                continue;
+            }
+            let identity = if let Some(identity) = action.identity.clone() {
+                Some(identity)
+            } else if let Some(identity) = cached.and_then(|c| c.identity.clone()) {
+                Some(identity)
+            } else {
+                if !self.app.is_open() || budget == 0 {
+                    continue;
+                }
+                let Some(lookup) = &action.lookup else {
+                    continue;
+                };
+                let account_key = format!(
+                    "account:{}:{}",
+                    lookup.host(),
+                    action.account.as_deref().unwrap_or("unresolved")
+                );
+                if self
+                    .pr_poll
+                    .state
+                    .lock()
+                    .unwrap()
+                    .get(&account_key)
+                    .is_some_and(|slot| slot.next > crate::now_ms())
+                {
+                    continue;
+                }
+                let Some(gh) = self.gh() else { continue };
+                let gh = if let Some(account) = &action.account {
+                    let Some(gh) = gh.for_account(lookup.host(), account).await else {
+                        let checkpoint = discovery::Checkpoint {
+                            source: source.clone(),
+                            identity: None,
+                            retry_at: Some(crate::now_ms() + 120_000),
+                            host: Some(lookup.host().into()),
+                            account: action.account.clone(),
+                            account_until: crate::now_ms() + 120_000,
+                        };
+                        self.keep_discovery_checkpoint(id, &checkpoint).await?;
+                        checkpoints.insert(source.clone(), checkpoint);
+                        continue;
+                    };
+                    gh
+                } else {
+                    gh
+                };
+                let resolved = discovery::resolve(&gh, &action, crate::now_ms(), &mut budget).await;
+                if resolved.account_until > crate::now_ms() {
+                    self.pr_poll
+                        .state
+                        .lock()
+                        .unwrap()
+                        .entry(account_key)
+                        .or_default()
+                        .next = resolved.account_until;
+                }
+                let checkpoint = discovery::Checkpoint {
+                    source: source.clone(),
+                    identity: resolved.identity.clone(),
+                    retry_at: resolved.retry_at,
+                    host: Some(lookup.host().into()),
+                    account: action.account.clone(),
+                    account_until: resolved.account_until,
+                };
+                self.keep_discovery_checkpoint(id, &checkpoint).await?;
+                checkpoints.insert(source.clone(), checkpoint);
+                resolved.identity
+            };
+            if let Some(identity) = identity {
+                self.touch_pr(
+                    id,
+                    identity,
+                    action.account,
+                    &actor,
+                    &action.action,
+                    Some((source, action.at)),
+                    false,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+    async fn discovery_checkpoints(
+        &self,
+        id: &ConversationId,
+    ) -> Result<HashMap<String, discovery::Checkpoint>> {
+        let mut before = None;
+        let mut found = HashMap::new();
+        loop {
+            let page = self
+                .core
+                .store()
+                .read_stream(
+                    format!("pr-discovery:{id}"),
+                    brigadier_store::StreamPage {
+                        before,
+                        kinds: vec![],
+                        limit: 500,
+                    },
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            before = page.last().map(|e| e.stream_seq);
+            for event in page {
+                let checkpoint: discovery::Checkpoint = serde_json::from_str(event.payload.get())
+                    .map_err(|source| Error::Corrupt {
+                    seq: event.stream_seq,
+                    source,
+                })?;
+                found.entry(checkpoint.source.clone()).or_insert(checkpoint);
+            }
+        }
+        Ok(found)
+    }
+    async fn keep_discovery_checkpoint(
+        &self,
+        id: &ConversationId,
+        checkpoint: &discovery::Checkpoint,
+    ) -> Result<()> {
+        let event = brigadier_store::NewEvent::new(
+            format!("pr-discovery:{id}"),
+            "pr.discovery",
+            crate::now_ms(),
+            checkpoint,
+        )?;
+        self.core.store().append(vec![event]).await?;
         Ok(())
     }
     pub async fn tracked_work_status(&self, id: &ConversationId) -> Result<TrackedWork> {
@@ -505,152 +699,13 @@ impl SessionManager {
 }
 
 /// Only a single proven-successful gh mutation or checkout. Never execute transcript text.
+#[cfg(test)]
 fn candidate(event: &ProviderEvent) -> Option<(PrIdentity, Option<String>, String, String)> {
-    let ProviderEvent::Command {
-        item_id,
-        command,
-        status: brigadier_providers::model::ItemStatus::Completed,
-        exit_code: Some(0),
-        output,
-        ..
-    } = event
-    else {
-        return None;
-    };
-    // A known credential-binding expression is parsed as provenance, never evaluated.
-    // Literal tokens and unknown wrappers remain unresolved and are never retained.
-    static BINDING: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"^(?:GH_CONFIG_DIR=[A-Za-z0-9_./-]+\s+)?(?:GH_TOKEN|GITHUB_TOKEN)=\$\(gh auth token (?P<flags>[A-Za-z0-9_ .-]+)\)\s+(?P<command>gh .+)$").unwrap()
-    });
-    let binding = BINDING.captures(command);
-    let mut account = None;
-    let text = if let Some(binding) = &binding {
-        let flags = literal_words(binding.name("flags")?.as_str())?;
-        let index = flags.iter().position(|w| w == "--user")?;
-        account = Some(flags.get(index + 1)?.clone());
-        binding.name("command")?.as_str()
-    } else {
-        command
-    };
-    let words = literal_words(text)?;
-    let start = words.iter().position(|w| w == "gh")?;
-    if words[..start].iter().any(|w| {
-        w != "env"
-            && !w.starts_with("GH_REPO=")
-            && !w.starts_with("GH_HOST=")
-            && !w.starts_with("GH_CONFIG_DIR=")
-    }) {
-        return None;
-    }
-    let args = &words[start + 1..];
-    if args.first()?.as_str() != "pr" {
-        return None;
-    }
-    let action = match args.get(1)?.as_str() {
-        "create" => "opened",
-        "review" => "reviewed",
-        "comment" => "commented",
-        "edit" => "updated",
-        "merge" => "merged",
-        "close" => "closed",
-        "reopen" => "reopened",
-        "checkout" => "checked out",
-        _ => return None,
-    };
-    let mut identities: HashSet<String> = HashSet::new();
-    let mut identity = None;
-    let output_words = output
-        .as_deref()
-        .unwrap_or("")
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    // Body/title flags may contain arbitrary PR links; only the positional selector and
-    // create's canonical output identify the PR that was actually acted upon.
-    if action == "opened" {
-        for word in &output_words {
-            if let Some(found) = PrIdentity::parse(word) {
-                identities.insert(found.key());
-                identity = Some(found);
-            }
-        }
-    } else {
-        let mut selector = None;
-        let mut repo = None;
-        let mut skip = false;
-        for (index, word) in args.iter().enumerate().skip(2) {
-            if skip {
-                skip = false;
-                continue;
-            }
-            if word == "-R" || word == "--repo" {
-                repo = args.get(index + 1).map(String::as_str);
-                skip = true;
-                continue;
-            }
-            if let Some(value) = word.strip_prefix("--repo=") {
-                repo = Some(value);
-                continue;
-            }
-            if [
-                "-b",
-                "--body",
-                "-F",
-                "--body-file",
-                "-c",
-                "--comment",
-                "--subject",
-                "--title",
-                "-t",
-                "--base",
-                "-B",
-            ]
-            .contains(&word.as_str())
-            {
-                skip = true;
-                continue;
-            }
-            if word.starts_with('-') {
-                continue;
-            }
-            if selector.replace(word.as_str()).is_some() {
-                return None;
-            }
-        }
-        if let Some(selector) = selector {
-            identity = PrIdentity::parse(selector);
-            if identity.is_none()
-                && let Ok(number) = selector.parse::<u32>()
-            {
-                let repo = repo.or_else(|| {
-                    words[..start]
-                        .iter()
-                        .find_map(|w| w.strip_prefix("GH_REPO="))
-                })?;
-                let host = words[..start]
-                    .iter()
-                    .find_map(|w| w.strip_prefix("GH_HOST="))
-                    .unwrap_or("github.com");
-                let repo = repo.strip_prefix("https://").unwrap_or(repo);
-                let parts: Vec<_> = repo.split('/').collect();
-                let url = match parts.as_slice() {
-                    [owner, repo] => format!("https://{host}/{owner}/{repo}/pull/{number}"),
-                    [host, owner, repo] => format!("https://{host}/{owner}/{repo}/pull/{number}"),
-                    _ => return None,
-                };
-                identity = PrIdentity::parse(&url);
-            }
-        }
-        if let Some(found) = &identity {
-            identities.insert(found.key());
-        }
-    }
-    if identities.len() != 1 {
-        return None;
-    }
-    Some((identity?, account, action.into(), item_id.clone()))
+    let action = discovery::Reader::default().observe(event, None, None, None, None)?;
+    Some((action.identity?, action.account, action.action, action.item))
 }
 
+#[cfg(test)]
 fn literal_words(command: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();

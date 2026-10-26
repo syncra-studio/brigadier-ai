@@ -1492,6 +1492,8 @@ impl SessionManager {
             streams::legacy_orchestrator(&id),
             streams::inbox(&id),
             streams::draft(&id.to_string()),
+            format!("tracked-work:{id}"),
+            format!("pr-discovery:{id}"),
         ];
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
         self.forget_brain_conversation(&id, conversation.project_id.clone())
