@@ -40,7 +40,10 @@ fn instructions_for(brigadier: bool, host_manages_session: bool) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 const BRIGADIER_INSTRUCTIONS: &str = "Tools for seeing and operating the interfaces of apps on this Mac. Load the `computer-use` skill before your first call and follow it.";
+#[cfg(not(target_os = "macos"))]
+const BRIGADIER_INSTRUCTIONS: &str = "Tools for seeing and operating the interfaces of apps on this computer. Load the `computer-use` skill before your first call and follow it.";
 
 /// Whether the host that started this process already gives each connection its own session
 /// (and with it the agent cursor): every call then carries that session, and the connection
@@ -59,7 +62,7 @@ fn agent_instructions(host_manages_session: bool) -> String {
     } else {
         "0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids."
     };
-    r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element targets (element_token from the Accessibility tree) over pixel coordinates; they work on hidden, covered and background windows.
+    let instructions = r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element targets (element_token from the Accessibility tree) over pixel coordinates; they work on hidden, covered and background windows.
 
 Each turn:
 SESSION_STEP
@@ -71,7 +74,15 @@ SESSION_STEP
 If the `computer-use` skill is available, follow it for the full workflow.
 
 Calls that target the user's Brigadier, terminal apps, or macOS security surfaces return target_not_allowed; do not retry them."#
-        .replace("SESSION_STEP", session_step)
+        .replace("SESSION_STEP", session_step);
+    if cfg!(target_os = "macos") {
+        instructions
+    } else {
+        instructions.replace("this Mac", "this computer").replace(
+            "macOS security surfaces",
+            "system authentication and security surfaces",
+        )
+    }
 }
 
 // ── Tool list ─────────────────────────────────────────────────────────────────
@@ -158,7 +169,8 @@ async fn handle_request(
                             &value,
                             brigadier_audience(),
                         ) {
-                            let image = invoke_for_mcp(registry, &call.name, fallback).await;
+                            let image =
+                                invoke_for_mcp(registry, "get_window_state", fallback).await;
                             lean::merge_screenshot(
                                 &mut value,
                                 serde_json::to_value(image).unwrap_or_default(),

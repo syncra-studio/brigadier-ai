@@ -290,6 +290,27 @@ impl View {
         read: &Value,
         brigadier: bool,
     ) -> Option<Value> {
+        if brigadier && name == "run_steps" {
+            let observation = &read["structuredContent"]["observation"];
+            if observation["ok"] != true {
+                return None;
+            }
+            let state = &observation["state"];
+            let mut args = original
+                .get("observe")
+                .filter(|v| v.is_object())
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            // Use the window actually observed (including failure recovery),
+            // rather than guessing from the batch's original last step.
+            args["pid"] = state["pid"].clone();
+            args["window_id"] = state["window_id"].clone();
+            if let Some(session) = original.get("session") {
+                args["session"] = session.clone();
+            }
+            let observed = serde_json::json!({"structuredContent":state,"content":read["content"]});
+            return self.fallback_arguments("get_window_state", &args, &observed, true);
+        }
         if !brigadier || name != "get_window_state" || read["isError"] == true {
             return None;
         }
@@ -328,6 +349,10 @@ impl View {
 }
 
 fn thin_state(state: &Value) -> bool {
+    // A partial walk may omit the entire rendered body after a rich toolbar.
+    if state["truncated"] == true {
+        return true;
+    }
     if let Some(markdown) = state["tree_markdown"].as_str() {
         thin_tree(markdown)
     } else if let Some(elements) = state["elements"].as_array() {
@@ -457,8 +482,16 @@ pub fn merge_screenshot(read: &mut Value, image: Value) {
             content.extend(blocks.iter().filter(|b| b["type"] == "image").cloned());
         }
     }
+    let is_batch = read
+        .pointer("/structuredContent/observation/state")
+        .is_some();
+    let state = if is_batch {
+        &mut read["structuredContent"]["observation"]["state"]
+    } else {
+        &mut read["structuredContent"]
+    };
     if let Some(metadata) = image["structuredContent"].as_object() {
-        if let Some(state) = read["structuredContent"].as_object_mut() {
+        if let Some(state) = state.as_object_mut() {
             for (key, value) in metadata {
                 if key.starts_with("screenshot")
                     || matches!(
@@ -474,7 +507,7 @@ pub fn merge_screenshot(read: &mut Value, image: Value) {
             }
         }
     }
-    if let Some(state) = read["structuredContent"].as_object_mut() {
+    if let Some(state) = state.as_object_mut() {
         state.insert("screenshot_note".into(), note.into());
         if image["isError"] == true {
             state.insert("screenshot_failure".into(), image);
@@ -827,6 +860,39 @@ mod tests {
         ] {
             assert!(line.contains(expected), "{expected}: {line}");
         }
+    }
+
+    #[test]
+    fn batch_final_observation_gets_pixels_without_repeating_any_steps() {
+        let mut batch = json!({"isError":true,"content":[],"structuredContent":{"failed_step":1,"observation":{"ok":true,"state":{"pid":12,"window_id":34,"snapshot_id":"s1","tree_markdown":"[1] AXImage \"Graph\""}}}});
+        let original =
+            json!({"session":"owned","observe":{},"steps":[{"click":{"pid":99,"window_id":100}}]});
+        let fallback = View::default()
+            .fallback_arguments("run_steps", &original, &batch, true)
+            .unwrap();
+        assert_eq!(fallback["pid"], 12);
+        assert_eq!(fallback["window_id"], 34);
+        assert_eq!(fallback["session"], "owned");
+        assert_eq!(fallback["include_accessibility_tree"], false);
+        assert!(fallback.get("steps").is_none());
+        merge_screenshot(
+            &mut batch,
+            json!({"content":[{"type":"image","data":"pixels"}],"structuredContent":{"capture_id":"frame"}}),
+        );
+        assert_eq!(batch["content"][0]["type"], "image");
+        assert_eq!(
+            batch["structuredContent"]["observation"]["state"]["snapshot_id"],
+            "s1"
+        );
+        assert_eq!(
+            batch["structuredContent"]["observation"]["state"]["capture_id"],
+            "frame"
+        );
+        assert_eq!(batch["isError"], true);
+        let explicit = json!({"observe":{"include_screenshot":false}});
+        assert!(View::default()
+            .fallback_arguments("run_steps", &explicit, &batch, true)
+            .is_none());
     }
 
     #[test]

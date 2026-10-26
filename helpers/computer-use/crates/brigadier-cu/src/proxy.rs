@@ -1261,7 +1261,7 @@ async fn forward_tool_call(
         crate::mcp::lean::arguments(&name, args.clone(), crate::mcp::brigadier_audience());
     match call_daemon_tool(socket_path, session_id, &name, prepared).await {
         Ok(mut response) => {
-            if response.ok {
+            if response.ok || name == "run_steps" {
                 if let Some(read) = response.result.as_mut() {
                     if let Some(fallback) = options.view.fallback_arguments(
                         &name,
@@ -1269,7 +1269,7 @@ async fn forward_tool_call(
                         read,
                         crate::mcp::brigadier_audience(),
                     ) {
-                        let image = match call_daemon_tool(socket_path, session_id, &name, fallback)
+                        let image = match call_daemon_tool(socket_path, session_id, "get_window_state", fallback)
                             .await
                         {
                             Ok(reply) => reply.result.unwrap_or_else(|| serde_json::json!({
