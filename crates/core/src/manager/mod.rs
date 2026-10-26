@@ -17,6 +17,7 @@ mod accounts;
 mod add_project;
 mod app_call;
 mod app_state;
+mod background_history;
 mod brains;
 mod branch_names;
 mod branches;
@@ -141,6 +142,9 @@ use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
 use crate::work::{DiffStat, TaskId, WorkerDiff};
 use crate::{Core, Error, Result};
 
+pub use background_history::{
+    BackgroundHistoryOutput, BackgroundHistoryPage, BackgroundHistoryRecord,
+};
 pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;

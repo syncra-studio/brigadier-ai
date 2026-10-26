@@ -2029,6 +2029,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,
         },
+        Request::GetBackgroundHistory {
+            conversation_id,
+            before,
+            limit,
+        } => Response::GetBackgroundHistory {
+            history: heap(|| sessions.background_history(&conversation_id, before, limit)).await?,
+        },
+        Request::ReadBackgroundHistoryOutput {
+            conversation_id,
+            record_id,
+        } => Response::ReadBackgroundHistoryOutput {
+            output: heap(|| sessions.background_history_output(&conversation_id, &record_id))
+                .await?,
+        },
         Request::GetTrackedWork { conversation_id } => Response::GetTrackedWork {
             work: heap(|| sessions.tracked_work_status(&conversation_id)).await?,
         },
