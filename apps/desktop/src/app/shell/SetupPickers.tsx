@@ -144,7 +144,7 @@ export function PermissionPicker({
           side="top"
           align="start"
           data-slot="permission-menu"
-          className="w-max min-w-125 max-w-(--radix-dropdown-menu-content-available-width) p-1.5"
+          className="w-125 max-w-(--radix-dropdown-menu-content-available-width) p-1.5"
         >
           <div className="flex items-end justify-between gap-6 px-2 pt-1 pb-1.5 text-sm">
             <p className="text-muted-foreground">How should the agent’s actions be approved?</p>
