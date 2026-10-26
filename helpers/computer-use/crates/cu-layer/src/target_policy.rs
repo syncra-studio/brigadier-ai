@@ -387,15 +387,19 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
                 | "alacritty"
                 | "wezterm"
                 | "hyper"
-                | "windows terminal"
-                | "command prompt"
-                | "powershell"
-                | "konsole"
-                | "xterm"
-                | "gnome terminal"
-                | "console"
-                | "ptyxis"
         )
+        || (cfg!(not(target_os = "macos"))
+            && matches!(
+                name,
+                "windows terminal"
+                    | "command prompt"
+                    | "powershell"
+                    | "konsole"
+                    | "xterm"
+                    | "gnome terminal"
+                    | "console"
+                    | "ptyxis"
+            ))
 }
 
 /// Terminals and shells on Windows (executables and the Windows Terminal
@@ -580,6 +584,17 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_console_is_not_a_windows_terminal() {
+        let console = TargetIdentity {
+            name: "Console".into(),
+            bundle_id: Some("com.apple.Console".into()),
+            pid: Some(42),
+        };
+        assert_eq!(classify(&console, &[]), None);
+    }
 
     fn app(name: &str, bundle: &str, pid: i64) -> TargetIdentity {
         TargetIdentity {
@@ -961,10 +976,16 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn native_targets_fail_closed_when_the_process_cannot_be_identified() {
-        let resolver = TargetResolver { app_for_pid: &|_| None, pid_for_window: &|_| None };
+        let resolver = TargetResolver {
+            app_for_pid: &|_| None,
+            pid_for_window: &|_| None,
+        };
         for args in [json!({"pid":4242}), json!({"window_id":123})] {
             let error = enforce("click", &args, &[], &resolver).unwrap_err();
-            assert_eq!(error.structured_content.unwrap()["code"], "target_identity_unavailable");
+            assert_eq!(
+                error.structured_content.unwrap()["code"],
+                "target_identity_unavailable"
+            );
             assert!(enforce("list_windows", &args, &[], &resolver).is_ok());
         }
     }
