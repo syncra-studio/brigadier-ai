@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
-import { Badge, Button, SettingsSelect, selectTrigger } from "@/components/controls";
+import { Button, SettingsSelect, selectTrigger } from "@/components/controls";
 import { request, revealPath } from "@/ipc/client";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
@@ -265,11 +265,7 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
         value={value}
         options={PERMISSION_LEVELS.map((level) => ({
           value: level,
-          // A plain choice in the menu like the others; the closed pill keeps Full access's chip.
           label: PERMISSION_LABELS[level],
-          ...(level === "full" && {
-            shown: <Badge className="bg-full-access/15 text-full-access">{PERMISSION_LABELS[level]}</Badge>,
-          }),
           hint: LEVEL_COPY[level],
         }))}
         onChange={(level) => save.run(() => setSetting("defaultPermission", level))}
