@@ -548,12 +548,27 @@ impl Ops {
 /// itself runs with: a browser started with another home can't find its keychain.
 #[cfg(unix)]
 pub(crate) fn open_in_browser(link: &str) {
+    let background = std::env::var_os(brigadier_sandbox::BACKGROUND_LAUNCH_ENV)
+        .is_some_and(|value| value == "1");
+    match browser_command(link, background).spawn() {
+        // Reaped off the runtime; it ends as soon as the browser has the link.
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(error) => tracing::warn!(%error, "the sign-in page didn't open"),
+    }
+}
+
+/// A preview's consent page stays in the background along with its app.
+#[cfg(unix)]
+fn browser_command(link: &str, background: bool) -> std::process::Command {
     let opener = if cfg!(target_os = "macos") {
         "/usr/bin/open"
     } else {
         "xdg-open"
     };
     let mut command = std::process::Command::new(opener);
+    if cfg!(target_os = "macos") && background {
+        command.arg("-g");
+    }
     command
         .arg(link)
         .stdin(std::process::Stdio::null())
@@ -562,11 +577,7 @@ pub(crate) fn open_in_browser(link: &str) {
     if let Ok(Some(user)) = nix::unistd::User::from_uid(nix::unistd::getuid()) {
         command.env("HOME", user.dir);
     }
-    match command.spawn() {
-        // Reaped off the runtime; it ends as soon as the browser has the link.
-        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
-        Err(error) => tracing::warn!(%error, "the sign-in page didn't open"),
-    }
+    command
 }
 
 /// Opens the sign-in page in the user's normal Windows browser. Passing it as an argument
@@ -1182,6 +1193,36 @@ mod tests {
     use brigadier_providers::claude::Claude;
 
     use super::*;
+
+    #[test]
+    fn browser_command_preserves_url_and_only_backgrounds_macos_previews() {
+        let link = "http://127.0.0.1:1234/authorize?state=a%26b&client_id=test";
+        for background in [false, true] {
+            let command = browser_command(link, background);
+            let expected_args = if cfg!(target_os = "macos") && background {
+                vec!["-g", link]
+            } else {
+                vec![link]
+            };
+            assert_eq!(command.get_args().collect::<Vec<_>>(), expected_args);
+            assert_eq!(
+                command.get_program(),
+                if cfg!(target_os = "macos") {
+                    "/usr/bin/open"
+                } else {
+                    "xdg-open"
+                }
+            );
+            let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+                .unwrap()
+                .unwrap();
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| { key == "HOME" && value == Some(user.dir.as_os_str()) })
+            );
+        }
+    }
 
     /// A scratch home with no agent in it, removed when dropped however the test ends.
     struct Home(PathBuf);
