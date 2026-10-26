@@ -38,6 +38,7 @@ import {
   type TextNode,
 } from "lexical";
 
+import { IMAGE_CHIP, PASTE_CHIP } from "@/components/conversation/elements/chipText";
 import { DIVIDER } from "@/components/views/page-editor/pageMarkdown";
 
 /**
@@ -211,13 +212,16 @@ const PRIVATE = /[\ue000-\uf8ff]/gu;
 /**
  * Replaces the composer's content with `markdown`, its chips (as `parse` finds them) as chips.
  * A chip's text is held out of the Markdown while it is read, so a mention named `*draft*`
- * stays that mention; in code it is its text again. Call inside an update.
+ * stays that mention; in code it is its text again. Returns whether a pasted text or image came
+ * out of inline code, where the Markdown no longer says what the field shows. Call inside an
+ * update.
  */
 export function $importComposer(
   markdown: string,
   parse: (text: string) => readonly Unstable_DirectiveSegment[],
   formatter: Unstable_DirectiveFormatter,
-): void {
+): boolean {
+  let lifted = false;
   const chips: Extract<Unstable_DirectiveSegment, { kind: "mention" }>[] = [];
   let held = "";
   for (const segment of parse(markdown.replace(PRIVATE, ""))) {
@@ -231,40 +235,51 @@ export function $importComposer(
   $convertFromMarkdownString(held, COMPOSER_TRANSFORMERS, undefined, true);
   for (const { node } of $dfs()) {
     if (!$isTextNode(node)) continue;
-    const code = $inCode(node);
-    const text = node.getTextContent();
-    if (!HOLDS.test(text)) continue;
+    const block = $isCodeNode(node.getParent());
+    const code = block || node.hasFormat("code");
     const chipOf = (char: string) => chips[char.charCodeAt(0) - HOLD];
-    if (code) {
-      node.setTextContent(
-        text.replace(HELD, (char) => {
-          const chip = chipOf(char);
-          return chip ? formatter.serialize(chip) : "";
-        }),
-      );
+    // In code a chip is its text again, but a pasted text or image (whose text says nothing of
+    // it) comes out of inline code as itself: so the composer once left backticks bare around
+    // one, in drafts and messages still read back.
+    const text = node.getTextContent().replace(HELD, (char) => {
+      const chip = chipOf(char);
+      if (!chip) return "";
+      return code && (block || !PASTED_CHIPS.has(chip.type)) ? formatter.serialize(chip) : char;
+    });
+    if (!HOLDS.test(text)) {
+      if (text !== node.getTextContent()) node.setTextContent(text);
       continue;
     }
+    lifted ||= code;
     // Split at each held chip: text before it stays this node's (with its format), the chip
     // goes after it.
     const pieces = text.split(HELD);
     let last: LexicalNode = node;
-    node.setTextContent(pieces[0] ?? "");
     for (let index = 1; index < pieces.length; index += 2) {
-      const chip = chipOf(pieces[index]!);
-      if (chip) {
-        const directive = $createDirectiveNodeWithFormatter(chip, formatter);
-        last.insertAfter(directive);
-        last = directive;
-      }
+      const directive = $createDirectiveNodeWithFormatter(chipOf(pieces[index]!)!, formatter);
+      last.insertAfter(directive);
+      last = directive;
       const rest = pieces[index + 1];
       if (rest) {
         const after = $copyText(node, rest);
+        $plainIfBlank(after);
         last.insertAfter(after);
         last = after;
       }
     }
+    node.setTextContent(pieces[0] ?? "");
+    $plainIfBlank(node);
     if (node.getTextContent() === "") node.remove();
   }
+  return lifted;
+}
+
+/** Chips that stand for something pasted, never for their own text: kept chips even in inline code. */
+const PASTED_CHIPS = new Set([IMAGE_CHIP, PASTE_CHIP]);
+
+/** Inline code left blank beside a chip taken out of it is plain text: a space, not a code span. */
+function $plainIfBlank(node: TextNode): void {
+  if (node.hasFormat("code") && node.getTextContent().trim() === "") node.toggleFormat("code");
 }
 
 /** A new text node with `text` and `from`'s format and style. */

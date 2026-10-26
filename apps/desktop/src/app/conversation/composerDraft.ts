@@ -26,24 +26,47 @@ export function typeInto(scope: string, edit: (text: string) => string): boolean
   return type !== undefined;
 }
 
+/** A whole message the daemon didn't take: its text, stored attachments and mentions. */
+export type SentDraft = { text: string; attachments: AttachmentRef[]; mentions: Mention[] };
+
+/** The composers open now by draft scope, each taking a message back before its text (`putBack`). */
+const putters = new Map<string, (draft: SentDraft) => void>();
+
 /**
  * Puts a message the daemon didn't take (a refusal, a failed send) back into the composer of
- * `scope`, before anything typed since; into its kept draft when no composer for it is open.
+ * `scope`, its pasted texts, images and files with it, before anything typed since; into its
+ * kept draft when no composer for it is open. A pasted text or image whose number the text
+ * since has taken stays a label: its marker would be the other's.
  */
-export function putBack(scope: string, text: string): void {
-  if (text === "" || typeInto(scope, (now) => (now === "" ? text : `${text}\n${now}`))) return;
+export function putBack(scope: string, draft: SentDraft): void {
+  if (draft.text === "" && draft.attachments.length === 0) return;
+  const put = putters.get(scope);
+  if (put) {
+    put(draft);
+    return;
+  }
   const saved = loadDraft(scope);
-  const shift = saved?.text ? text.length + 1 : 0;
+  const shift = saved?.text ? draft.text.length + 1 : 0;
   saveDraft(
     scope,
-    saved?.text ? `${text}\n${saved.text}` : text,
-    saved?.attachments ?? [],
-    (saved?.mentions ?? []).map((mention) => ({ ...mention, at: mention.at + shift })),
+    joined(draft.text, saved?.text ?? ""),
+    [...draft.attachments.filter((ref) => !takenIn(saved?.text ?? "", ref)), ...(saved?.attachments ?? [])],
+    [
+      ...mentionsAt(draft.text, named(draft.mentions)),
+      ...(saved?.mentions ?? []).map((mention) => ({ ...mention, at: mention.at + shift })),
+    ],
   );
 }
 
-/** A whole message the daemon didn't take: its text, stored attachments and mentions. */
-export type SentDraft = { text: string; attachments: AttachmentRef[]; mentions: Mention[] };
+/** A message put back before the text typed since. */
+function joined(back: string, now: string): string {
+  return now === "" ? back : back === "" ? now : `${back}\n${now}`;
+}
+
+/** Whether `ref`'s marker (`[Image #n]`, `[Pasted text #n]`) is in `text` already. */
+function takenIn(text: string, ref: AttachmentRef): boolean {
+  return ref.inline !== null && markersIn(inlineKind(ref), text).has(ref.inline);
+}
 
 /** The composers open now by draft scope, each taking a whole message back (`restoreDraft`). */
 const restorers = new Map<string, (draft: SentDraft) => boolean>();
@@ -152,11 +175,22 @@ export function useComposerDraft(
       for (const ref of draft.attachments) void composer.addAttachment(attachments.adopt(ref));
       return true;
     };
+    const put = (draft: SentDraft) => {
+      const composer = aui.composer();
+      const now = composer.getState().text;
+      memory.recall(draft.mentions);
+      composer.setText(joined(draft.text, now));
+      for (const ref of draft.attachments) {
+        if (!takenIn(now, ref)) void composer.addAttachment(attachments.adopt(ref));
+      }
+    };
     typists.set(scope, type);
     restorers.set(scope, restore);
+    putters.set(scope, put);
     return () => {
       if (typists.get(scope) === type) typists.delete(scope);
       if (restorers.get(scope) === restore) restorers.delete(scope);
+      if (putters.get(scope) === put) putters.delete(scope);
     };
   }, [aui, attachments, memory, scope]);
 }

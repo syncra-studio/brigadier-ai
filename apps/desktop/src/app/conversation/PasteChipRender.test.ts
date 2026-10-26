@@ -9,6 +9,19 @@ for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in t
   const image = { pasted: false, inline: 1, mime: "image/png" };
   const markdown = { pasted: true, inline: 1, mime: "text/markdown" };
   assert.deepEqual(seen.draft, { text: "[Image #1] see [Pasted text #1]", kinds: [image, markdown] });
+  const whole = { opens: true, thumbnail: true };
+  const list = "## Title\n\n- a\n- b";
+  // A draft kept with bare backticks around its pasted text, back from Settings by the back
+  // arrow: both chips whole, the pasted text no code (the rich field reads the backticks as
+  // its code span's; the plain field keeps them as typed).
+  assert.deepEqual(seen.returned, mode === "rich"
+    ? { typed: "back Pasted text #1  and Image #1 ", ...whole, sent: { text: "back [Pasted text #1]  and [Image #1]", kinds: [image, markdown], content: list } }
+    : { typed: "back `Pasted text #1 ` and Image #1 ", ...whole, sent: { text: "back `[Pasted text #1] ` and [Image #1]", kinds: [image, markdown], content: list } });
+  // A refused send comes back with its pasted text and image, which go with it once taken.
+  assert.deepEqual(seen.refused, { typed: "refused Pasted text #1 and Image #1", ...whole, sent: { text: "refused [Pasted text #1] and [Image #1]", kinds: [image, markdown], content: list } });
+  // A new chat's: back from Settings by Esc, and refused.
+  assert.deepEqual(seen.newChat, { typed: "new Pasted text #1 and Image #1 ", ...whole });
+  assert.deepEqual(seen.newChatRefused, { typed: "new Pasted text #1 and Image #1", ...whole });
   assert.deepEqual(seen.queued, { text: "queued Pasted text #1", image: false });
   assert.deepEqual(seen.recalled, { text: "earlier [Image #1] [Pasted text #1]", kinds: [image, markdown] });
   assert.deepEqual(seen.rich, { text: "see [Pasted text #1] ok", kinds: [markdown], content: "## Title\n\n- a\n- b" });
