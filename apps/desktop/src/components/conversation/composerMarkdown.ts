@@ -148,6 +148,16 @@ let caretAt: { key: string; offset: number } | null = null;
 /** Each block's text while the Markdown is exported, by its key (see `$lineOf`). */
 const lines = new Map<string, string>();
 
+/** `parent`'s text in Markdown: its chips as their text, inline code as a pair of backticks. */
+function inlineText(parent: ElementNode): string {
+  return parent.getChildren().map((child: LexicalNode) => {
+    if ($isTextNode(child)) return child.hasFormat("code") ? "``" : child.getTextContent();
+    if ($isLineBreakNode(child)) return "\n";
+    if ($isElementNode(child)) return child.isInline() ? inlineText(child) : "";
+    return child.getTextContent();
+  }).join("");
+}
+
 /**
  * The text of `node`'s block as its backticks read in Markdown: its chips as their text and its
  * inline code as a pair of backticks (a nested block's text aside).
@@ -158,14 +168,7 @@ function $lineOf(node: TextNode): string {
   if (!block) return node.getTextContent();
   const known = lines.get(block.getKey());
   if (known !== undefined) return known;
-  const text = (parent: ElementNode): string =>
-    parent.getChildren().map((child: LexicalNode) => {
-      if ($isTextNode(child)) return child.hasFormat("code") ? "``" : child.getTextContent();
-      if ($isLineBreakNode(child)) return "\n";
-      if ($isElementNode(child)) return child.isInline() ? text(child) : "";
-      return child.getTextContent();
-    }).join("");
-  const line = text(block);
+  const line = inlineText(block);
   lines.set(block.getKey(), line);
   return line;
 }

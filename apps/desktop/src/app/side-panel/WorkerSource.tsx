@@ -107,6 +107,8 @@ function useWorkerSource(conversationId: string, worker: WorkerRow) {
     load();
     window.addEventListener("focus", load);
     return () => window.removeEventListener("focus", load);
+    // `moved` reads the list again when the worker's changes move.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [load, moved]);
   return { source, error, load };
 }

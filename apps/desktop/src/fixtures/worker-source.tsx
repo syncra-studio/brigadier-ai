@@ -178,7 +178,7 @@ function Fixture() {
       await pick(/^Cart fixes/);
       await until(() => scope() === "worker" && groups().join() === "Changes2");
       useCliThread.setState((state) => ({
-        views: { ...state.views, [id]: { ...state.views[id]!, workers: state.views[id]!.workers!.map((row) => row.id === "t1" ? { ...row, diff: null } : row) } },
+        views: { ...state.views, [id]: { ...state.views[id]!, workers: state.views[id]!.workers!.map((worker) => worker.id === "t1" ? { ...worker, diff: null } : worker) } },
       }));
       await until(() => scope() === "session" && groups().length === 1);
       seen.closedGone = { switch: text(document.querySelector('[data-slot="source-scope"]')), scope: useSourceScopes.getState()[id] ?? null };
