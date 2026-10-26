@@ -14,17 +14,19 @@ export function FusionChip() {
   const armed = useFusionArmed(scope);
   const ready = useFusionReady();
   const available = target?.conversation ? isFusionChat(target.conversation) : target?.resolved.kind === "chat";
-  if (!available || !armed) return null;
+  if (!available) return null;
   return (
     <>
       <span aria-hidden className="bg-foreground/15 mx-1 h-icon-md w-px" />
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" aria-pressed data-slot="fusion-chip" className={cn(composerPill, "text-muted-foreground")} onClick={() => armFusionSend(scope, false)}>
-            <Merge />Fusion
-          </button>
+          <span className="inline-flex">
+            <button type="button" aria-pressed={armed} disabled={!ready} data-slot="fusion-chip" className={cn(composerPill, "text-muted-foreground aria-pressed:bg-foreground/8 aria-pressed:text-foreground")} onClick={() => armFusionSend(scope, !armed)}>
+              <Merge />Fusion
+            </button>
+          </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{ready ? "Turn Fusion off" : `${FUSION_HINT}. Click to turn Fusion off.`}</TooltipContent>
+        <TooltipContent side="bottom">{ready ? (armed ? "Turn Fusion off" : "Turn Fusion on") : FUSION_HINT}</TooltipContent>
       </Tooltip>
     </>
   );

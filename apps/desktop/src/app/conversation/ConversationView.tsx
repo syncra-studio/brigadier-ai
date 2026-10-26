@@ -99,7 +99,7 @@ import {
   sendToWorker,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
-import { armFusionSend, isFusionChat, takeFusionSend } from "@/state/fusionSend";
+import { isFusionArmed, isFusionChat, moveFusionSend } from "@/state/fusionSend";
 import { takeBackgroundSend } from "@/state/backgroundSend";
 import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
 import { holdDirect } from "@/state/heldDirect";
@@ -825,7 +825,6 @@ export function ConversationView({
       if (conversationId && directTo !== null) {
         // This send's marks are void: it goes to neither a new session nor the paused queue.
         takeBackgroundSend(conversationId);
-        takeFusionSend(conversationId);
         takeQueueSend(conversationId);
         sendDirect(message, conversationId, directTo);
         return;
@@ -840,7 +839,7 @@ export function ConversationView({
       const slot = pulled.take(conversationId);
       if (!text && refs.length === 0) return;
       const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
-      const fusion = (source ? isFusionChat(source) : draftTarget?.kind === "chat") && takeFusionSend(conversationId ?? NEW_CHAT_SCOPE);
+      const fusion = (source ? isFusionChat(source) : draftTarget?.kind === "chat") && isFusionArmed(conversationId ?? NEW_CHAT_SCOPE);
       setError(null);
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
@@ -848,7 +847,6 @@ export function ConversationView({
       // draft's goes to the conversation made for it, which shows by then.
       let target = conversationId;
       const keep = (cause: unknown) => {
-        if (fusion) armFusionSend(target ?? NEW_CHAT_SCOPE, true);
         putBack(target ?? NEW_CHAT_SCOPE, text);
         fail(cause);
       };
@@ -868,6 +866,7 @@ export function ConversationView({
           queueIndex: into === "steer" ? null : (slot?.index ?? null),
           to: conversationId,
           onTarget: (id) => {
+            if (!conversationId && draftTarget?.kind === "chat") moveFusionSend(NEW_CHAT_SCOPE, id);
             target = id;
           },
         },

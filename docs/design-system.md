@@ -440,6 +440,12 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer menus, rail & queue | `Rail item/Card` | `app/conversation/Notices.tsx` | `Notices` | look of `Rail item/Card` (the tray); its notice rows are code only |
 | — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
+Top-level Chat composers, including new-chat drafts, always show the Fusion pill after the
+permission picker and a vertical divider. It toggles between unpressed and pressed and stays
+on for that Chat until turned off, including when a draft becomes a Chat. With fewer than two
+ready CLIs it is disabled with the “Needs two ready CLIs” tooltip. Sessions, side chats and
+tab chats have no Fusion toggle; the + menu has no Fusion entry. Typed `/fusion` still works.
+
 ## Inline visuals
 
 Top-level Chats draw `brigadier-table`, `brigadier-chart` and `brigadier-html` fences inline.

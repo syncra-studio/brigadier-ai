@@ -34,10 +34,16 @@ export function armFusionSend(scope: string, on: boolean): void {
   for (const listener of listeners) listener();
 }
 
-export function takeFusionSend(scope: string): boolean {
-  const on = armed.has(scope);
-  if (on) armFusionSend(scope, false);
-  return on;
+/** Fusion stays on for this Chat until its toggle is turned off. */
+export function isFusionArmed(scope: string): boolean {
+  return armed.has(scope);
+}
+
+/** A sent draft becomes this Chat; the next new-chat draft starts with Fusion off. */
+export function moveFusionSend(from: string, to: string): void {
+  if (from === to || !armed.delete(from)) return;
+  armed.add(to);
+  for (const listener of listeners) listener();
 }
 
 export function useFusionArmed(scope: string): boolean {

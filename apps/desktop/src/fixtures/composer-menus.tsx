@@ -15,6 +15,7 @@ import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationView as View, Mention, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { setRichComposer } from "@/state/composerMode";
+import { armFusionSend } from "@/state/fusionSend";
 import { type Selection, useApp } from "@/state/store";
 
 const id = "menus-session";
@@ -130,14 +131,19 @@ const plus = () => document.querySelector<HTMLButtonElement>('[data-slot="plus-t
 const plusRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="plus-menu"] [role=menuitem]')];
 
 const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusion"));
+const fusionChip = () => document.querySelector<HTMLButtonElement>('[data-slot="fusion-chip"]');
+const fusionOn = () => fusionChip()?.getAttribute("aria-pressed") === "true";
 const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
 
 async function exercise(mode: "rich" | "plain") {
+  armFusionSend("new", false);
+  armFusionSend(other.id, false);
   useApp.setState({ conversations: { [id]: session, [other.id]: other } });
   const seen: Record<string, unknown> = {};
   setRichComposer(mode === "rich");
   show({ type: "conversation", id }, mode);
   await until("the field", () => field() !== null);
+  seen.sessionFusion = !!fusionChip();
   field()!.focus();
   await until("the files listed", () => listings.includes(`session:${id}`));
 
@@ -194,6 +200,7 @@ async function exercise(mode: "rich" | "plain") {
   show({ type: "draft", kind: "chat" }, mode);
   // Its own field: the one shown before stays until the new view renders.
   await until("the new chat's field", () => field() !== null && field() !== beforeChat);
+  seen.draftFusionVisible = fusionChip()?.getAttribute("aria-pressed") === "false";
   field()!.focus();
   await type("@");
   await until("the new chat's @ menu", () => menu().includes("# Chats"));
@@ -203,9 +210,9 @@ async function exercise(mode: "rich" | "plain") {
 
   // An armed Chat draft must not turn a subsequent session draft's send into Fusion.
   useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
-  await openPlus();
-  fusionRow()!.click();
-  await until("the draft's Fusion chip", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
+  await until("the draft's Fusion toggle ready", () => fusionChip()?.disabled === false);
+  fusionChip()!.click();
+  await until("the draft's Fusion toggle on", fusionOn);
 
   // A new session: its project's files.
   const beforeSession = field();
@@ -219,47 +226,96 @@ async function exercise(mode: "rich" | "plain") {
   await key("Escape");
   await clear();
   // Fusion is absent in sessions, including their drafts.
-  await openPlus();
-  seen.sessionFusion = !!fusionRow();
-  await key("Escape");
+  seen.sessionDraftChip = !!fusionChip();
   const beforeDraftSend = sends.length;
   field()!.focus();
   await type("Keep this a session.");
   await key("Enter");
   await until("the session draft's send", () => sends.length > beforeDraftSend);
   seen.sessionDraftFusion = fusionSends.at(-1)?.text === "Keep this a session.";
+
+  // The Chat draft kept its toggle while visiting a session. Its created Chat inherits it.
+  const beforeReturn = field();
+  show({ type: "draft", kind: "chat" }, mode);
+  await until("the Chat draft again", () => field() !== null && field() !== beforeReturn);
+  await until("the draft still on", fusionOn);
+  const beforeDraftFusion = fusionSends.length;
+  field()!.focus();
+  await type("Compare draft options.");
+  await key("Enter");
+  await until("the Chat draft sent", () => fusionSends.length > beforeDraftFusion);
+  const created = useApp.getState().selection;
+  if (created.type !== "conversation") throw new Error("The Chat draft did not become a conversation");
+  const beforeCreated = field();
+  show(created, mode);
+  await until("the created Chat", () => field() !== null && field() !== beforeCreated && fusionOn());
+  seen.draftFusionCarry = true;
+  field()!.focus();
+  await type("Compare once more.");
+  await key("Enter");
+  await until("the created Chat's next Fusion send", () => fusionSends.length === beforeDraftFusion + 2);
+  seen.draftFusionSticky = fusionOn();
+  const beforeFresh = field();
+  show({ type: "draft", kind: "chat" }, mode);
+  await until("a fresh draft", () => field() !== null && field() !== beforeFresh);
+  seen.freshDraftFusionOff = fusionChip()?.getAttribute("aria-pressed") === "false";
+
   const old = field();
   show({ type: "conversation", id: other.id }, mode);
   await until("the Chat field", () => field() !== null && field() !== old);
+  seen.fusionVisible = fusionChip()?.getAttribute("aria-pressed") === "false";
   useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders.slice(0, 1), sessions: [], fixtures: [] } } }));
-  await openPlus();
-  seen.fusionDisabled = fusionRow()?.getAttribute("aria-disabled") === "true";
-  seen.fusionHint = fusionRow()?.textContent?.includes("Needs two ready CLIs");
-  await key("Escape");
+  await until("the disabled Fusion toggle", () => fusionChip()?.disabled === true);
+  seen.fusionDisabled = fusionChip()!.disabled;
+  const disabledChip = fusionChip()!.getBoundingClientRect();
+  await fixtureInput({ type: "pointer", x: disabledChip.x + disabledChip.width / 2, y: disabledChip.y + disabledChip.height / 2 });
+  await until("the disabled Fusion hint", () => document.querySelector('[role="tooltip"]')?.textContent === "Needs two ready CLIs");
+  seen.fusionHint = true;
+  await fixtureInput({ type: "pointer", x: 0, y: 0 });
+  field()!.focus();
   useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
+  await until("the Fusion toggle ready", () => fusionChip()?.disabled === false);
   await openPlus();
-  fusionRow()!.click();
-  await until("the Fusion chip", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
-  document.querySelector<HTMLButtonElement>('[data-slot="fusion-chip"]')!.click();
-  await until("Fusion turned off", () => document.querySelector('[data-slot="fusion-chip"]') === null);
-  seen.fusionOff = true;
-  await openPlus();
-  fusionRow()!.click();
-  await until("the Fusion chip again", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
+  seen.fusionMenuEntry = !!fusionRow();
+  await key("Escape");
+  fusionChip()!.click();
+  await until("Fusion turned on", fusionOn);
+  fusionChip()!.click();
+  await until("Fusion turned off", () => fusionChip()?.getAttribute("aria-pressed") === "false");
+  seen.fusionOff = !!fusionChip();
+  fusionChip()!.click();
+  await until("Fusion turned on again", fusionOn);
+  const beforeFusion = fusionSends.length;
   field()!.focus();
   await type("Compare the options.");
   await key("Enter");
-  await until("the Fusion send", () => fusionSends.length > 0 && document.querySelector('[data-slot="fusion-chip"]') === null);
+  await until("the Fusion send", () => fusionSends.length > beforeFusion);
   seen.fusionSend = fusionSends.at(-1);
   await until("the Fusion pill", () => document.querySelector('[data-slot="fusion-message-pill"]') !== null);
   seen.fusionPill = document.querySelector('[data-slot="fusion-message-pill"]')?.textContent;
   seen.rawFusion = document.querySelector('[data-role="user"]')?.textContent?.includes("$fusion");
   await until("an empty field after Fusion", () => typed() === "");
+  await type("Compare sync safety.");
+  await key("Enter");
+  await until("the next Fusion send", () => fusionSends.length === beforeFusion + 2 && typed() === "");
+  seen.fusionSticky = fusionOn();
+  fusionChip()!.click();
+  await until("Fusion off after sending", () => !fusionOn());
+  await type("A normal message.");
+  const beforeNormal = sends.length;
+  await key("Enter");
+  await until("a normal send", () => sends.length > beforeNormal && typed() === "");
+  seen.normalAfterFusion = fusionSends.length === beforeFusion + 2;
   await type("/");
   await until("the Chat / menu", () => commands() !== null);
   seen.fusionSlashRow = commands()?.textContent?.includes("Fusion");
   await key("Escape");
   await clear();
+  await type("/fusion A typed question.");
+  const beforeTyped = sends.length;
+  await key("Enter");
+  await until("a typed Fusion invocation", () => sends.length > beforeTyped && typed() === "");
+  seen.typedFusion = sends.at(-1)?.text;
   return seen;
 }
 

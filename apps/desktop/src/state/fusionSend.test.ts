@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { fusionProviders } from "@/fixtures/fusionProviders";
-import { armFusionSend, fusionQuestion, fusionReady, isFusionChat, takeFusionSend } from "@/state/fusionSend";
+import { armFusionSend, fusionQuestion, fusionReady, isFusionArmed, isFusionChat, moveFusionSend } from "@/state/fusionSend";
 import { useApp } from "@/state/store";
 import type { Conversation } from "@/ipc/generated";
 
@@ -24,14 +24,26 @@ test("Fusion belongs only to active top-level Chats", () => {
   assert.equal(isFusionChat({ ...chat, tabChat: { tabId: "browser:1", target: { type: "browser" } } }), false);
 });
 
-test("Fusion is armed per composer and consumed once", () => {
+test("Fusion stays on per Chat across sends until toggled off", () => {
   armFusionSend("first", true);
-  assert.equal(takeFusionSend("second"), false);
-  assert.equal(takeFusionSend("first"), true);
-  assert.equal(takeFusionSend("first"), false);
-  armFusionSend("first", true);
+  assert.equal(isFusionArmed("second"), false);
+  assert.equal(isFusionArmed("first"), true);
+  assert.equal(isFusionArmed("first"), true);
   armFusionSend("first", false);
-  assert.equal(takeFusionSend("first"), false);
+  assert.equal(isFusionArmed("first"), false);
+});
+
+test("a new Chat inherits its draft's Fusion state without arming the next draft", () => {
+  armFusionSend("new", true);
+  moveFusionSend("new", "created");
+  assert.equal(isFusionArmed("created"), true);
+  assert.equal(isFusionArmed("created"), true);
+  assert.equal(isFusionArmed("new"), false);
+  moveFusionSend("new", "next");
+  assert.equal(isFusionArmed("next"), false);
+  moveFusionSend("created", "created");
+  assert.equal(isFusionArmed("created"), true);
+  armFusionSend("created", false);
 });
 
 test("typed Fusion hides only its whole invocation prefix", () => {
