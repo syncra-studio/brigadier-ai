@@ -14,7 +14,7 @@ export function usePullRequest(conversationId: string | null): PullRequestStatus
   useEffect(() => {
     if (!conversationId) return;
     let current = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+
     const refresh = async () => {
       let status: PullRequestStatus = EMPTY;
       try {
@@ -24,14 +24,12 @@ export function usePullRequest(conversationId: string | null): PullRequestStatus
       }
       if (!current) return;
       setFound({ id: conversationId, status });
-      if (status.pullRequest?.state !== "merged" && status.pullRequest?.state !== "closed") {
-        timer = setTimeout(() => void refresh(), 60_000);
-      }
+
     };
     void refresh();
     return () => {
       current = false;
-      clearTimeout(timer);
+
     };
     // A finished push or gh pr command refreshes even a previously terminal PR.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
