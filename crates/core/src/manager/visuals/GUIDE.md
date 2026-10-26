@@ -20,6 +20,12 @@ Use `brigadier-chart` with JSON. Choose `bar`, `line` or `pie`. Supply a title (
 {"kind":"bar","title":"Travel time","description":"Minutes; illustrative values","data":[{"label":"Train","value":35},{"label":"Bus","value":50}]}
 ```
 
+For comparisons across criteria or multiple lines over time, use named series in bar or line charts: add `series` (1–5 unique, nonblank names, at most 200 characters each), and replace each point's `value` with `values`, an object with one finite number for every series name and no extra names. Each series gets its own colour and legend entry. Keep each criterion or time on the x-axis; do not flatten comparisons into labels like "Simplicity: Markdown" and "Simplicity: SQLite". Pie charts accept only the single `value` shape above. There are no colour, axis or scale options.
+
+```brigadier-chart
+{"kind":"bar","title":"Personal knowledge base options","description":"Scores 1–5, higher is better; illustrative judgments","series":["Markdown","SQLite"],"data":[{"label":"Simplicity","values":{"Markdown":5,"SQLite":3}},{"label":"Search","values":{"Markdown":3,"SQLite":5}},{"label":"Sync safety","values":{"Markdown":4,"SQLite":2}},{"label":"Portability","values":{"Markdown":5,"SQLite":4}}]}
+```
+
 ## Diagrams and tools
 
 Use `mermaid` for a simple static diagram. For a custom SVG drawing or interactive tool, use `brigadier-html`: one fragment with a complete `<style>` first, markup next and inline `<script>` last. The open fence shows a preview without scripts. Close the fence to run the scripts in a fresh frame. Keep scripts short and all data inline.

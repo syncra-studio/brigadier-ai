@@ -3,6 +3,7 @@
 use super::SessionManager;
 use super::conversation::SendOutcome;
 use crate::model::{Conversation, ConversationId, ConversationKind, Lifecycle};
+use crate::sessions::fusion_question;
 use crate::tools::OfferFusion;
 use crate::work::OrchestratorStepKind;
 use crate::{Error, Result};
@@ -24,15 +25,6 @@ fn fusion_chat(conversation: &Conversation) -> Result<()> {
     Ok(())
 }
 
-fn question(text: &str) -> Option<&str> {
-    let text = text.trim_start();
-    ["/fusion", "$fusion"].into_iter().find_map(|prefix| {
-        text.strip_prefix(prefix)
-            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-            .map(str::trim)
-    })
-}
-
 impl SessionManager {
     /// The Fusion button's message, also used by a clicked offer. It still uses the normal
     /// send queue and lanes; the prefix only invokes the skill in the selected CLI.
@@ -44,7 +36,7 @@ impl SessionManager {
             .as_ref()
             .map(|setup| setup.choice().provider)
             .unwrap_or_else(|| self.default_chat_choice().provider);
-        Ok(provider.skill_invocation("fusion", question(&text).unwrap_or(&text)))
+        Ok(provider.skill_invocation("fusion", fusion_question(&text).unwrap_or(&text)))
     }
 
     pub(super) fn normalize_fusion_message(
@@ -52,7 +44,7 @@ impl SessionManager {
         id: &ConversationId,
         text: String,
     ) -> Result<String> {
-        if question(&text).is_some() {
+        if fusion_question(&text).is_some() {
             self.fusion_message(id, text)
         } else {
             Ok(text)

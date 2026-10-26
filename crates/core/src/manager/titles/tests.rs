@@ -149,6 +149,46 @@ async fn provisional_is_immediate_and_first_visible_message_alone_starts_generat
 }
 
 #[tokio::test]
+async fn fusion_titles_use_the_question_for_the_provisional_and_generation_input() {
+    let data = Data::new().await;
+    let seen: Arc<Mutex<Vec<TitleRequest>>> = Arc::default();
+    let capture = seen.clone();
+    data.core
+        .set_title_hook(Box::new(move |r| capture.lock().unwrap().push(r)));
+    let question = "For a small personal knowledge base, compare Markdown and SQLite";
+    let plain = data.conversation(ConversationKind::Chat).await;
+    data.core
+        .append_message(plain.clone(), question.into())
+        .await
+        .unwrap();
+    let expected = data.core.conversation(&plain).unwrap().title;
+    assert_eq!(expected, "For a small personal knowledge");
+    // The button and typed invocations share this path; Codex stores the $ spelling.
+    for prefix in ["/fusion ", "$fusion ", "  /fusion\n\t"] {
+        let id = data.conversation(ConversationKind::Chat).await;
+        let text = format!("{prefix}{question}");
+        let message = data
+            .core
+            .append_message(id.clone(), text.clone())
+            .await
+            .unwrap();
+        assert_eq!(message.text, text);
+        assert_eq!(data.core.conversation(&id).unwrap().title, expected);
+        let request = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(request.input, question);
+    }
+    for text in [
+        "/fusionation compare options",
+        "Explain /fusion",
+        "$fusion-extra",
+    ] {
+        assert_eq!(title_text(text, &[]), text);
+    }
+    assert_eq!(title_text("/fusion", &[]), "");
+    data.done().await;
+}
+
+#[tokio::test]
 async fn every_manual_rename_wins_including_same_text_and_away_and_back() {
     let data = Data::new().await;
     let seen: Arc<Mutex<Vec<TitleRequest>>> = Arc::default();
