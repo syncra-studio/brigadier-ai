@@ -628,6 +628,17 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // that started them, as one more turn of it.
   const joined = new Map<Block, ThreadTurn[]>();
   const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
+  // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
+  const join = (each: Block, position: number, atMs: number | undefined) => {
+    const last = turnOf.get(each);
+    joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
+    turnOf.set(each, view.turns[turn]);
+    for (const request of view.turns[turn]?.requests ?? []) if (!each.requestIds.includes(request)) each.requestIds.push(request);
+    if (atMs !== undefined) times.at(-1)?.push([position, atMs]);
+  };
+  // A turn the user's message started while the block before still held (its workers or its
+  // CLI's background commands still ran) goes on in that block, as the daemon says.
+  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && !!view.turns[turn]?.joins;
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
@@ -729,13 +740,12 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           (woke && carries.some((request) => before.requestIds.includes(request))) ||
           // Brigadier's `/compact` that Claude told a background command's end in: one more turn
           // of the block before, as Codex's word of its command's end is (D44, D52).
-          (compacting && noticed.has(turn)));
+          (compacting && noticed.has(turn)) ||
+          // A queued message still in the rail that woke the session to judge it while the
+          // block before held: that block's, no bubble until it joins.
+          goesOn(before));
       if (joins && block) {
-        const last = turnOf.get(block);
-        joined.set(block, [...(joined.get(block) ?? []), ...(last ? [last] : [])]);
-        turnOf.set(block, view.turns[turn]);
-        for (const request of view.turns[turn]?.requests ?? []) if (!block.requestIds.includes(request)) block.requestIds.push(request);
-        if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
+        join(block, position, entry.atMs);
       } else if (startsTurn(entry)) {
         if (block) close(block);
         block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[turn]?.requests ?? []);
@@ -749,10 +759,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      if (block) close(block);
       const requests = view.turns[turn]?.requests ?? [];
       const atMs = entry.atMs ?? 0;
-      block = emptyBlock(event.itemId, atMs, requests);
       // A turn of a request an earlier turn carried (a background command's end, told after its
       // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message
       // the CLI began a turn with is its own request, which the turn names only once it joined:
@@ -765,6 +773,15 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           ? first
           : event.itemId;
       const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
+      // Sent while the block before still held: its bubble goes in that block, where it came,
+      // and the turn's work goes on there.
+      if (goesOn(block)) {
+        join(block, position, entry.atMs);
+        block.steers.push({ ...said, position });
+        return;
+      }
+      if (block) close(block);
+      block = emptyBlock(event.itemId, atMs, requests);
       block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
       blocks.push(block);
       turnOf.set(block, view.turns[turn]);

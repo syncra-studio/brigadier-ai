@@ -19,8 +19,9 @@ impl SessionManager {
     /// events ended): its items, and its end, written to `record/turns.jsonl`.
     pub(super) async fn follow_cli_thread(&self, conv: &ConvLive, event: Option<&ProviderEvent>) {
         let at = now_ms();
-        // Brigadier's requests the turn carries, as the conversation knows them now: when the
-        // CLI says a user message (a turn's, or a steer's) and when the turn ends.
+        // Brigadier's requests the turn carries, as the conversation knows them now, and whether
+        // it joins the work before it: when the CLI says a user message (a turn's, or a steer's)
+        // and when the turn ends.
         let carried = match event {
             Some(
                 ProviderEvent::Message {
@@ -29,7 +30,7 @@ impl SessionManager {
                 | ProviderEvent::TurnCompleted { .. }
                 | ProviderEvent::Exited { .. },
             )
-            | None => Some(conv.carried_requests().await),
+            | None => Some(conv.carried_turn().await),
             _ => None,
         };
         let mut news = Vec::new();
@@ -162,8 +163,9 @@ impl SessionManager {
                     if !steer {
                         live.awaiting_user = false;
                         live.user_message = Some(item_id.clone());
+                        live.joins = carried.as_ref().is_some_and(|(_, joins)| *joins);
                     }
-                    if let Some(carried) = &carried {
+                    if let Some((carried, _)) = &carried {
                         thread_view::add_requests(&mut live.requests, carried);
                         noted = Some(TurnRecord {
                             user_message: live.user_message.clone(),
@@ -173,6 +175,7 @@ impl SessionManager {
                             requests: live.requests.clone(),
                             limit: None,
                             context_window: None,
+                            joins: live.joins,
                         });
                     }
                     let entry = FileEntry {
@@ -220,7 +223,7 @@ impl SessionManager {
             }
             if let Some(end) = ended {
                 live.open = false;
-                if let Some(carried) = &carried {
+                if let Some((carried, _)) = &carried {
                     thread_view::add_requests(&mut live.requests, carried);
                 }
                 noted = Some(TurnRecord {
@@ -231,6 +234,7 @@ impl SessionManager {
                     requests: live.requests.clone(),
                     limit: live.limit.take(),
                     context_window: live.context_window,
+                    joins: live.joins,
                 });
             }
             if let Some(record) = &noted

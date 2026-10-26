@@ -852,3 +852,58 @@ test("a reply with no words is no text of its turn, so the turn's parts and text
   );
   assert.deepEqual(blocks[0]!.texts.map((text) => text.messageId), ["a1", "a2"]);
 });
+
+/** A block held for its worker, a message the user sent meanwhile woke the session to judge (its turn joins it), its worker's word, then a message after it all. */
+const heldTurns = (joinedRequests: string[]): ThreadTurn[] => [
+  { ...turn("u1", 1000, 1200, "done"), requests: ["r1"] },
+  { ...turn("q1", 3000, 3300, "done"), requests: joinedRequests, joins: true },
+  turn("n1", 6000, 6200, "done"),
+  { ...turn("u2", 9000, 9200, "done"), requests: ["r2"] },
+];
+
+test("a message sent while the block still held for its workers goes on in that block: none of its own while judged, then its bubble where the CLI read it; once the work ended a message starts its own block", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const words = "Also make it fast.";
+  const news = (itemId: string, worker: string, atMs: number) => user(itemId, `[worker events wn-0123456789ab] Worker "Fix" (${worker}): finished · Done. (ev-1234abcd)`, atMs);
+  const entries = [
+    user("u1", "Fix it with a worker", 1000),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 1100),
+    // Its turn over, its worker still working: the user's message woke the session to judge it.
+    user("q1", `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`, 3000),
+    at({ type: "command", itemId: "c1", command: "brigadier queue feedbeef join", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 40 }, 3100),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "That goes with the fix." }, 3200),
+    news("n1", "aa11bb22", 6000),
+    at({ type: "message", itemId: "a3", role: "assistant", text: "Fixed, and fast." }, 6100),
+    // Everything over: the user's next message.
+    user("u2", "Thanks, now the docs", 9000),
+    at({ type: "message", itemId: "a4", role: "assistant", text: "On it." }, 9100),
+  ];
+  const workers = [row("aa11bb22", 1050)];
+  const queued = { id, text: words, attachments: [], mentions: [], queuedAtMs: 2990, editedAtMs: null, deciding: true, delivered: true };
+
+  // Still judged: the rail has it, and the turn it woke goes on in the held block, no block of its own.
+  const judging = cliBlocks({ entries, turns: heldTurns([]), workers }, "conv", { ...NO_BOARD, queueItems: [queued] });
+  assert.deepEqual(judging.map((block) => [block.key, block.user?.kind === "message" ? block.user.text : null]), [
+    ["u1", "Fix it with a worker"],
+    ["u2", "Thanks, now the docs"],
+  ]);
+  assert.deepEqual(judging[0]!.steers, []);
+  assert.deepEqual(judging[0]!.texts.map((text) => text.messageId), ["a1", "a2", "a3"]);
+
+  // Joined: its bubble is in the held block where the CLI read it, before the work it led to.
+  const joined = cliBlocks({ entries, turns: heldTurns([id]), workers }, "conv", NO_BOARD);
+  assert.deepEqual(joined.map((block) => block.key), ["u1", "u2"]);
+  const [held, after] = joined;
+  assert.deepEqual(held!.steers.map((steer) => [steer.message.id, steer.text]), [[id, words]]);
+  assert.ok(held!.steers[0]!.position < held!.texts[1]!.position);
+  assert.deepEqual(held!.requestIds, ["r1", id]);
+  // One block of work: from its first message to its last turn, the wait for its worker between.
+  assert.equal(held!.state, "done");
+  assert.equal(held!.startedAtMs, 1000);
+  assert.deepEqual(held!.worked, [{ fromMs: 1000, toMs: 1200 }, { fromMs: 3000, toMs: 3300 }, { fromMs: 6000, toMs: 6200 }]);
+  // The worker's word still joins the block that started it.
+  assert.deepEqual(held!.taskNotices.map((notice) => notice.inWork), [true]);
+  // The message after the work ended starts its own block.
+  assert.equal(after!.user?.kind === "message" && after!.user.text, "Thanks, now the docs");
+  assert.deepEqual(after!.steers, []);
+});

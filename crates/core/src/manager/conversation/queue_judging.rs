@@ -142,7 +142,8 @@ impl ConvLive {
 impl SessionManager {
     /// Queues a message sent while the conversation works, Deciding, and gives it to its CLI to
     /// judge: steered into the running turn under its frame. When no turn can take it now, it
-    /// waits plainly.
+    /// waits plainly; unless `wake`: the session's work holds with no turn running, and a turn
+    /// starts now with it to judge.
     pub(super) async fn queue_to_judge(
         &self,
         conv: &Arc<ConvLive>,
@@ -150,6 +151,7 @@ impl SessionManager {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         queue_index: Option<u32>,
+        wake: bool,
     ) -> Result<SendOutcome> {
         let item = conv
             .user_write(self.core.enqueue_as(
@@ -161,13 +163,16 @@ impl SessionManager {
                 true,
             ))
             .await?;
-        Ok(SendOutcome::Queued(self.deliver_to_judge(conv, item).await))
+        Ok(SendOutcome::Queued(
+            self.deliver_to_judge(conv, item, wake).await,
+        ))
     }
 
     async fn deliver_to_judge(
         &self,
         conv: &Arc<ConvLive>,
         mut item: QueuedMessage,
+        wake: bool,
     ) -> QueuedMessage {
         let _routing = conv.queue_routing.lock().await;
         let shown = short(&item.id);
@@ -193,7 +198,25 @@ impl SessionManager {
             }
             None => false,
         };
-        if !steered {
+        // The session's work holds with no turn running: a turn of its own wakes it to judge
+        // the message, under the same frame, and goes on with that work (`ThreadTurn::joins`).
+        let woke = !steered
+            && wake
+            && !state.busy
+            && !state.closing
+            && !state.compacting
+            && !state.seam.held
+            && state.hand_over.is_none();
+        if woke {
+            conv.frame(&item.id, deciding_frame(&shown));
+            state.woken.insert(item.id.clone());
+            // The turn serves the request it becomes once joined (its id is the item's): what
+            // the turn starts before the session judges it (a job, a worker) is that request's.
+            let mut message = as_message(&conv.id, &item);
+            message.request_id = Some(item.id.clone());
+            state.pending.push(message);
+        }
+        if !steered && !woke {
             drop(state);
             if let Err(err) = self
                 .core
@@ -232,6 +255,9 @@ impl SessionManager {
                 .await;
         }
         self.judge_within(conv, &item.id);
+        if woke {
+            self.kick(conv);
+        }
         item.delivered = true;
         item.held_by = held;
         item
@@ -314,6 +340,16 @@ impl SessionManager {
                     held,
                 )
             } else {
+                // Woken to be judged, its turn not begun yet: that turn carries it as the
+                // user's message now, unframed.
+                if state.woken.remove(item_id) {
+                    conv.take_frame(item_id);
+                    for pending in &mut state.pending {
+                        if pending.id == item_id {
+                            *pending = message.clone();
+                        }
+                    }
+                }
                 (None, None)
             }
         };
@@ -356,6 +392,7 @@ impl SessionManager {
         let unjudged: Vec<String> = {
             let mut state = conv.state.lock().await;
             state.judging_ended = true;
+            state.woken.clear();
             let claimed = state.claimed.clone();
             let (kept, unjudged) = std::mem::take(&mut state.deciding)
                 .into_iter()
@@ -430,6 +467,12 @@ impl SessionManager {
         let mut state = conv.state.lock().await;
         state.deciding.retain(|id| id != item_id);
         state.held_items.retain(|id| id != item_id);
+        // Woken to be judged, its turn not begun yet: the session never had it.
+        if state.woken.remove(item_id) {
+            state.pending.retain(|pending| pending.id != item_id);
+            conv.take_frame(item_id);
+            return;
+        }
         let cli = state
             .cli
             .clone()

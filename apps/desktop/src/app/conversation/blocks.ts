@@ -297,6 +297,18 @@ export function workedMs(spans: readonly WorkSpan[], now: number): number {
 }
 
 /**
+ * How long the spans took on the clock, from the first one's start to the last one's end, the
+ * waits between them counted (an open span runs until `now`): a block's turns and the waits for
+ * its workers between them are one piece of work.
+ */
+export function wallMs(spans: readonly WorkSpan[], now: number): number {
+  if (spans.length === 0) return 0;
+  const from = Math.min(...spans.map((span) => span.fromMs));
+  const to = Math.max(...spans.map((span) => Math.max(span.fromMs, span.toMs ?? now)));
+  return Math.max(0, to - from);
+}
+
+/**
  * When the spans last stopped working, or `null` when none has. A span still open belongs to a
  * follow-up that waits for quota, not to the wait for the user.
  */
@@ -312,9 +324,10 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
 
 /**
  * The time a turn shows: while it works, waits for quota or for the answer to its question
- * card, how long it worked so far; while it waits for the user otherwise, how long it has
- * waited; once over, how long it worked, its waits for the user left out ([`waitedTime`]
- * gives its card waits).
+ * card, how long it has worked so far; while it waits for the user otherwise, how long it has
+ * waited; once over, how long it worked. Worked time is on the clock, from its first turn's
+ * start to its last one's end (or to where its final answer started), the waits for its
+ * workers between its turns counted.
  */
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; cardWait: boolean; endedAtMs: number | null },
@@ -327,12 +340,12 @@ export function turnTime(
     const spans = meta.worked
       .filter((span) => span.fromMs < answerAtMs)
       .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
-    return workedMs(spans, until(now));
+    return wallMs(spans, until(now));
   }
   if (meta.state === "waiting" && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
-  return workedMs(meta.worked, now);
+  return wallMs(meta.worked, now);
 }
 
 /** Whether a task is over: its worker is gone and it will not run again. */

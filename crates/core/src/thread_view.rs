@@ -240,6 +240,11 @@ pub struct ThreadTurn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<LimitHit>,
+    /// It started with a message the user sent while the work before it still held (its
+    /// workers or its background commands still ran): it goes on with that work, in its block.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub joins: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -273,6 +278,9 @@ pub(crate) struct TurnRecord {
     /// never records it (#540).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub joins: bool,
 }
 
 /// What the live stream added for a conversation, sent as it comes.
@@ -347,6 +355,8 @@ pub(crate) struct LiveTurn {
     pub limit: Option<LimitHit>,
     /// Brigadier's requests it carries.
     pub requests: Vec<String>,
+    /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
+    pub joins: bool,
     /// The CLI's background tasks: they outlast the turn that started them, so a turn that
     /// opens keeps them.
     pub background: Vec<BackgroundTask>,
@@ -553,6 +563,7 @@ pub(crate) fn view(
             turn.limit.clone_from(&live.limit);
         }
         add_requests(&mut turn.requests, &live.requests);
+        turn.joins |= live.joins;
     }
     ThreadView {
         entries,
@@ -609,13 +620,14 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         .collect();
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
-    let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>)> = HashMap::new();
+    let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>, bool)> = HashMap::new();
     for record in records {
         let Some(id) = record.user_message.as_deref() else {
             continue;
         };
-        let (requests, end) = recorded.entry(id).or_default();
+        let (requests, end, joins) = recorded.entry(id).or_default();
         add_requests(requests, &record.requests);
+        *joins |= record.joins;
         if record.end.is_some() {
             *end = Some(record);
         }
@@ -639,6 +651,7 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 error: None,
                 requests: Vec::new(),
                 limit: None,
+                joins: false,
             };
             let marker = inside.iter().find_map(|entry| match &entry.event {
                 ProviderEvent::TurnCompleted { status, .. } if entry.parent.is_none() => {
@@ -671,12 +684,13 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                         .zip(turn.started_at_ms)
                         .is_some_and(|(ended, started)| started <= ended)
             });
-            let cut = noted.as_ref().is_some_and(|(_, end)| end.is_none());
-            let (requests, record) = noted.unwrap_or_default();
+            let cut = noted.as_ref().is_some_and(|(_, end, _)| end.is_none());
+            let (requests, record, joins) = noted.unwrap_or_default();
             if within.is_none() {
                 before = record;
             }
             turn.requests = requests;
+            turn.joins = joins;
             turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
             if let Some(record) = record {
                 turn.end = record.end;
@@ -898,6 +912,7 @@ mod tests {
             requests: Vec::new(),
             limit: None,
             context_window: None,
+            joins: false,
         };
         let live = LiveTurn {
             entries: vec![notice.clone(), message("a2", Role::Assistant)],
@@ -951,6 +966,7 @@ mod tests {
             requests: vec!["r1".into()],
             limit: None,
             context_window: None,
+            joins: false,
         };
         let compaction = entry(ProviderEvent::CompactionEnded {
             automatic: false,
