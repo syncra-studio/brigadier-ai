@@ -602,7 +602,31 @@ async fn a_workers_source_lists_its_committed_and_uncommitted_files_against_its_
     assert!(!review.patch.contains("elsewhere"), "{}", review.patch);
     assert_eq!(review.base.as_deref(), Some("worker-base"));
 
+    // A worker that is gone is not found, so its Source scope and Review tab close quietly.
     let missing = crate::model::TaskId("no-such-worker".into());
-    assert!(flow.manager.worker_source(&chat, &missing).await.is_err());
+    assert!(matches!(
+        flow.manager.worker_source(&chat, &missing).await,
+        Err(crate::Error::NotFound(_))
+    ));
+    super::git(
+        &flow.repo,
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    assert!(matches!(
+        flow.manager.worker_source(&chat, &task.id).await,
+        Err(crate::Error::NotFound(_))
+    ));
+    let gone = flow
+        .manager
+        .review_diff(
+            &chat,
+            crate::work::ReviewScope::Worker {
+                task_id: task.id.clone(),
+            },
+            false,
+            false,
+        )
+        .await;
+    assert!(matches!(gone, Err(crate::Error::NotFound(_))), "{gone:?}");
     flow.stop().await;
 }

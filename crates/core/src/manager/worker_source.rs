@@ -30,7 +30,9 @@ pub(super) fn worker_range(repo: &Repo, base: &str) -> Result<(Oid, Oid, BTreeSe
 
 impl SessionManager {
     /// Where the conversation's worker `task_id` works, while it has a worktree. Its base is
-    /// the one its +N −N counts from: the branch it targets, else the session's.
+    /// the one its +N −N counts from: the branch it targets, else the session's. A worker that
+    /// is gone (not on the board, or its worktree removed) is not found, so its views close
+    /// quietly.
     pub(super) async fn worker_checkout(
         &self,
         id: &ConversationId,
@@ -44,7 +46,8 @@ impl SessionManager {
         let workspace = task.workspace.as_ref();
         let path = workspace
             .and_then(|workspace| workspace.worktree.clone())
-            .ok_or_else(|| Error::Invalid("this worker has no worktree".into()))?;
+            .filter(|path| Path::new(path).exists())
+            .ok_or_else(|| Error::NotFound(format!("worker {task_id}'s worktree")))?;
         let base = workspace
             .and_then(|workspace| workspace.target.clone())
             .or_else(|| self.changes_checkout(id).and_then(|(_, branch)| branch))

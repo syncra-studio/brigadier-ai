@@ -2,19 +2,22 @@
  * A worker's changes in Source: its +N −N in the context card opens the right sidebar's Source on
  * them (the row itself still opens its panel); the switch under Source's title goes back to the
  * session's checkout and on to another worker; a worker's files are read only, each opening its
- * part of the worker's diff in the Review tab.
+ * part of the worker's diff in the Review tab. A worker that is gone (the daemon no longer finds
+ * it, or it leaves the rows) closes its Review tab and leaves the session's scope, with no error.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
+import { ReviewTab } from "@/app/side-panel/ReviewTab";
+import { useSourceScopes } from "@/app/side-panel/sourceTarget";
 import { SessionSource } from "@/app/side-panel/WorkerSource";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
 import { TooltipProvider } from "@/components/overlays";
 import type { Request, SourceState, ThreadView, WorkerRow, WorkerSource } from "@/ipc/generated";
 import { useCliThread } from "@/state/cliThread";
-import { sessionTabs } from "@/state/sessionTabs";
+import { REVIEW_TAB, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useWorkspacePaneState } from "@/state/workspacePane";
 
@@ -52,6 +55,9 @@ const SOURCES: Record<string, WorkerSource> = {
   },
 };
 const calls: Request[] = [];
+/** Workers the daemon no longer finds: closed, or their worktree removed. */
+const gone = new Set<string>();
+const notFound = (taskId: string) => ({ code: "notFound", message: `worker ${taskId} not found` });
 /** The worker panels the summary's rows asked to open. */
 const panels: (string | null)[] = [];
 mockIPC((command, args) => {
@@ -62,7 +68,14 @@ mockIPC((command, args) => {
     case "getSourceState":
       return { method: req.method, state: parent };
     case "getWorkerSource":
+      if (gone.has(req.taskId)) throw notFound(req.taskId);
       return { method: req.method, source: SOURCES[req.taskId] };
+    case "getReviewDiff":
+      if (req.scope.type === "worker" && gone.has(req.scope.taskId)) throw notFound(req.scope.taskId);
+      return {
+        method: req.method,
+        review: { scope: req.scope, files: [], insertions: 0, deletions: 0, patch: "", fullFiles: true, commits: [], branch: null, base: null },
+      };
     default:
       return { method: req.method };
   }
@@ -147,6 +160,28 @@ function Fixture() {
       await pick(/^Readme fixes/);
       await until(() => scope() === "worker" && groups().join() === "Changes1");
       seen.other = { switch: text(document.querySelector('[data-slot="source-scope"]')), files: all('[data-slot="source-panel"] li').map(text) };
+
+      // Gone: its Review tab closes, and Source goes back to the session's checkout, quietly.
+      gone.add("t2");
+      (all('[data-slot="source-panel"] li button')[0] as HTMLButtonElement).click();
+      await until(() => calls.some((call) => call.method === "getReviewDiff" && call.scope.type === "worker" && call.scope.taskId === "t2"));
+      await until(() => !sessionTabs(id).tabs.some((tab) => tab.id === REVIEW_TAB));
+      seen.reviewGone = { active: sessionTabs(id).active, error: text(document.querySelector('[data-slot="review-tab"] .text-destructive')) };
+      (all('[data-slot="source-panel"] button').find((button) => text(button) === "Refresh") as HTMLButtonElement).click();
+      await until(() => scope() === "session" && groups().length === 1);
+      seen.sourceGone = {
+        switch: text(document.querySelector('[data-slot="source-scope"]')),
+        scope: useSourceScopes.getState()[id] ?? null,
+        error: text(document.querySelector('[data-slot="source-panel"] .text-destructive')),
+      };
+      // A worker that leaves the rows (closed, its worktree gone) leaves the session's scope too.
+      await pick(/^Cart fixes/);
+      await until(() => scope() === "worker" && groups().join() === "Changes2");
+      useCliThread.setState((state) => ({
+        views: { ...state.views, [id]: { ...state.views[id]!, workers: state.views[id]!.workers!.map((row) => row.id === "t1" ? { ...row, diff: null } : row) } },
+      }));
+      await until(() => scope() === "session" && groups().length === 1);
+      seen.closedGone = { switch: text(document.querySelector('[data-slot="source-scope"]')), scope: useSourceScopes.getState()[id] ?? null };
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);
@@ -156,11 +191,18 @@ function Fixture() {
         <div className="bg-background text-foreground flex h-screen">
           <div className="w-80"><WorkersSummary conversationId={id} /></div>
           <div className="flex w-80 flex-col"><SessionSource conversationId={id} /></div>
+          <ReviewHost />
         </div>
         {result && <pre id="worker-source-result">{result}</pre>}
       </AgentsPanelContext.Provider>
     </TooltipProvider>
   );
+}
+
+/** The session's Review tab while it is open, as the tab bar shows it. */
+function ReviewHost() {
+  const tab = useSessionTabs((s) => s.sessions[id]?.tabs.find((entry) => entry.id === REVIEW_TAB));
+  return tab?.kind === "review" ? <div className="flex w-80 flex-col"><ReviewTab conversationId={id} target={tab.target} /></div> : null;
 }
 
 createRoot(document.getElementById("root")!).render(<Fixture />);

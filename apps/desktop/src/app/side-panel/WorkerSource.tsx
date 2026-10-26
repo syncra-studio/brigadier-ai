@@ -10,7 +10,7 @@ import { TooltipIconButton } from "@/components/controls";
 import { Branch, ChevronDown, FileDocument } from "@/components/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/overlays";
 import { Counts } from "@/components/shared";
-import { request } from "@/ipc/client";
+import { request, RequestError } from "@/ipc/client";
 import type { WorkerRow, WorkerSource } from "@/ipc/generated";
 import { useWorkerRows } from "@/state/cliThread";
 import { openReviewTab } from "@/state/sessionTabs";
@@ -26,6 +26,11 @@ export function SessionSource({ conversationId }: { conversationId: string }) {
   const all = useWorkerRows(conversationId);
   const workers = all.filter((row) => row.diff !== null);
   const worker = workers.find((row) => row.id === picked) ?? null;
+  // A worker that left the list (closed, its worktree gone) leaves the session's scope in its place.
+  const stale = picked !== null && worker === null;
+  useEffect(() => {
+    if (stale) setSourceScope(conversationId, null);
+  }, [conversationId, stale]);
   const scopeSwitch = workers.length > 0 && (
     <SourceScopeSwitch conversationId={conversationId} workers={workers} shown={worker?.id ?? null} />
   );
@@ -91,7 +96,11 @@ function useWorkerSource(conversationId: string, worker: WorkerRow) {
         setSource(next);
         setError(null);
       })
-      .catch((cause: unknown) => setError(reason(cause)));
+      .catch((cause: unknown) => {
+        // Gone (closed, its worktree removed): the session's own scope shows instead, quietly.
+        if (cause instanceof RequestError && cause.code === "notFound") setSourceScope(conversationId, null);
+        else setError(reason(cause));
+      });
   }, [conversationId, taskId]);
   const moved = `${worker.diff?.insertions}:${worker.diff?.deletions}:${worker.working}:${worker.lastEnd}`;
   useEffect(() => {
