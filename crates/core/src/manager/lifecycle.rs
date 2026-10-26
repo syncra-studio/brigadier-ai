@@ -176,6 +176,10 @@ impl SessionManager {
                 continue;
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
+                if task.quota_wait.is_some() && conversation.lifecycle == Lifecycle::Active {
+                    self.arm_worker_quota_retry(&task).await;
+                    continue;
+                }
                 // Its hand-off a restart came in goes on from its record (D14), whether its
                 // session heard its last turn end (a count's note turn) or not (a cut-off's).
                 if task.plain.is_some()

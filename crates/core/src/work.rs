@@ -1019,10 +1019,22 @@ pub struct Task {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerQuotaPolicy {
+    pub work: Option<String>,
+    pub pin: Pin,
+    pub avoid_providers: Vec<ProviderKind>,
+}
+
 /// How a `brigadier start` worker runs ([`Task::plain`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlainWorker {
+    /// The start's routing restrictions, retained for quota recovery. Missing on legacy
+    /// workers: those retain their provider rather than guessing their original intent.
+    #[serde(default)]
+    pub quota_policy: Option<WorkerQuotaPolicy>,
     /// Its CLI's permission mode: its session's unless `--permission` said (Q8).
     pub permission: crate::model::PermissionLevel,
     /// It works in its session's checkout (`--local`; a Chat's worker: `repo`'s), not a

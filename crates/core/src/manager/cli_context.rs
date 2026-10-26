@@ -1166,6 +1166,7 @@ mod tests {
     #[test]
     fn a_worker_has_no_skills_and_only_its_granted_servers() {
         let naked = PlainWorker {
+            quota_policy: None,
             permission: crate::model::PermissionLevel::Ask,
             local: false,
             repo: None,

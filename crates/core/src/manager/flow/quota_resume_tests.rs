@@ -606,3 +606,62 @@ async fn a_manual_account_selection_wakes_pending_work_without_a_message() {
     );
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn a_failed_recovery_send_has_no_completed_transition() {
+    let (flow, turns) = waiting_flow("quota-refused-send").await;
+    flow.behavior
+        .refuse_sends
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.clear();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    flow.until("refused recovery failed", |board| {
+        board.run == crate::work::RunState::Failed
+    })
+    .await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    assert!(
+        flow.board()
+            .await
+            .orchestrator_steps
+            .iter()
+            .all(|step| !matches!(step.kind, OrchestratorStepKind::ProviderTransition { .. }))
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_durable_cancellation_marker_blocks_a_stale_wait_after_restart() {
+    let (mut flow, turns) = waiting_flow("quota-cancelled-wait-replay").await;
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    flow.manager.dont_resume(&flow.conversation).await.unwrap();
+    // Simulate an old persisted wait surviving its database clear: its independent
+    // cancellation marker still wins at recovery.
+    flow.core
+        .set_conversation_wait(&flow.conversation, Some(wait))
+        .await
+        .unwrap();
+    flow.crash().await;
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.manager.retry_waiting_conversations().await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    flow.stop().await;
+}
