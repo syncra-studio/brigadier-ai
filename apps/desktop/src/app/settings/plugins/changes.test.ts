@@ -50,6 +50,7 @@ test("a failed change's error stays with its item: gone on leaving, or once the 
   assert.equal(changes.failure("item:server:pencil"), null);
 
   // On the list: a failed switch, then one that works, takes the error away.
+  changes.leave("list");
   await changes.run("server:playwright", "list", { on: false }, async () => {
     throw new Error("Codex said no");
   });
@@ -60,13 +61,20 @@ test("a failed change's error stays with its item: gone on leaving, or once the 
   assert.equal(changes.failure("list"), null);
 });
 
-test("a change shows at once, items don't wait on each other, and a newer change replaces one waiting", async () => {
+test("queued switches, scope and generic changes run in order while other items run independently", async () => {
   const changes = new Changes(async () => {});
   const shown = (key: string, from: PluginsView) => changes.apply(from).items.find((entry) => entry.key === key)!;
   const page = view(item("server:pencil", true), item("server:railway", true));
+  const saved = item("server:pencil", true);
+  const scope = { type: "someProjects" as const, projectIds: ["p1"], folders: [] };
+  const ran: string[] = [];
 
   const first = later();
-  const running = changes.run("server:pencil", "list", { on: false }, first.work);
+  const running = changes.run("server:pencil", "list", { on: false }, async () => {
+    ran.push("off");
+    await first.work();
+    saved.on = false;
+  });
   assert.equal(shown("server:pencil", page).on, false, "the switch moves before the agents take it");
   assert.equal(changes.pending("server:pencil"), true);
 
@@ -75,18 +83,94 @@ test("a change shows at once, items don't wait on each other, and a newer change
   await changes.run("server:railway", "list", { on: false }, async () => void (railway = true));
   assert.equal(railway, true);
 
-  // Two more for pencil while the first runs: only the newest of them runs, after it.
-  const ran: string[] = [];
-  const replaced = changes.run("server:pencil", "list", { on: true }, async () => void ran.push("on"));
-  const newest = changes.run("server:pencil", "list", { scope: { type: "someProjects", projectIds: ["p1"], folders: [] } }, async () => void ran.push("scope"));
-  await replaced;
-  assert.deepEqual(ran, [], "nothing runs beside the running change");
-  assert.deepEqual(shown("server:pencil", page).scope, { type: "someProjects", projectIds: ["p1"], folders: [] });
+  // Off is running, then On and Some are requested: neither may replace the other.
+  const second = later();
+  const on = changes.run("server:pencil", "list", { on: true }, async () => {
+    ran.push("on");
+    await second.work();
+    saved.on = true;
+  });
+  const some = changes.run("server:pencil", "list", { scope }, async () => {
+    ran.push("scope");
+    saved.scope = scope;
+  });
+  const generic = changes.run("server:pencil", "list", {}, async () => void ran.push("generic"));
+  assert.deepEqual(ran, ["off"], "nothing runs beside this item's running change");
+  assert.equal(shown("server:pencil", page).on, true);
+  assert.deepEqual(shown("server:pencil", page).scope, scope);
   first.settle();
   await running;
-  await newest;
-  assert.deepEqual(ran, ["scope"]);
+  assert.deepEqual(ran, ["off", "on"]);
+  assert.equal(changes.pending("server:pencil"), true);
+  assert.equal(shown("server:pencil", page).on, true, "queued intent stays visible between actions");
+  assert.deepEqual(shown("server:pencil", page).scope, scope);
+  second.settle();
+  await Promise.all([on, some, generic]);
+  assert.deepEqual(ran, ["off", "on", "scope", "generic"]);
+  assert.equal(saved.on, true, "the agents' final state matches the optimistic switch");
+  assert.deepEqual(saved.scope, scope, "the agents' final scope matches the optimistic scope");
   // Done: the page as read shows again.
   assert.equal(changes.pending("server:pencil"), false);
   assert.equal(shown("server:pencil", page).on, true);
+});
+
+test("a failure arriving after leaving and returning cannot revive an error", async () => {
+  const changes = new Changes(async () => {});
+  const pencil = "item:server:pencil";
+  const railway = "item:server:railway";
+  changes.leave(pencil);
+  const first = later();
+  const running = changes.run("server:pencil", pencil, { on: false }, first.work);
+  changes.leave(railway);
+  changes.leave(pencil);
+  first.settle(new Error("late pencil failure"));
+  await running;
+  assert.equal(changes.failure(pencil), null);
+  assert.equal(changes.failure(railway), null);
+  assert.equal(changes.pending("server:pencil"), false);
+
+  // New requests on the returned page can still report and clear their own error.
+  await changes.run("server:pencil", pencil, {}, async () => {
+    throw new Error("current pencil failure");
+  });
+  assert.equal(changes.failure(pencil), "current pencil failure");
+  await changes.run("server:pencil", pencil, {}, async () => {});
+  assert.equal(changes.failure(pencil), null);
+});
+
+test("stale results cannot replace or clear another item's current error", async () => {
+  for (const error of [undefined, new Error("stale pencil failure")]) {
+    const changes = new Changes(async () => {});
+    const pencil = "item:server:pencil";
+    const railway = "item:server:railway";
+    changes.leave(pencil);
+    const first = later();
+    const running = changes.run("server:pencil", pencil, {}, first.work);
+    changes.leave(railway);
+    await changes.run("server:railway", railway, {}, async () => {
+      throw new Error("current railway failure");
+    });
+    assert.equal(changes.pending("server:pencil"), true, "railway finishes while pencil is pending");
+    first.settle(error);
+    await running;
+    assert.equal(changes.failure(railway), "current railway failure");
+    assert.equal(changes.failure(pencil), null);
+  }
+});
+
+test("queued requests also lose their error after leaving and returning", async () => {
+  const changes = new Changes(async () => {});
+  const place = "item:server:pencil";
+  changes.leave(place);
+  const first = later();
+  const running = changes.run("server:pencil", place, { on: false }, first.work);
+  const queued = changes.run("server:pencil", place, { on: true }, async () => {
+    throw new Error("queued before leaving");
+  });
+  changes.leave("list");
+  changes.leave(place);
+  first.settle();
+  await Promise.all([running, queued]);
+  assert.equal(changes.failure(place), null);
+  assert.equal(changes.pending("server:pencil"), false);
 });
