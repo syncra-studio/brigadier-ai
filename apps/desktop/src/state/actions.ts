@@ -988,6 +988,16 @@ export async function startSessionFrom(source: Conversation, outgoing: Outgoing)
   return conversation;
 }
 
+/**
+ * "Start as session" on the thread's offer `offerId`: the daemon starts its task as a new
+ * background session of `conversationId`'s project, on its own worktree; the user stays here.
+ */
+export async function startOfferedSession(conversationId: string, offerId: string): Promise<Conversation> {
+  const { conversation } = await request({ method: "startOfferedSession", conversationId, offerId });
+  storeConversation(conversation);
+  return conversation;
+}
+
 export async function steerQueued(conversationId: string, itemId: string): Promise<void> {
   await request({ method: "steerQueued", conversationId, itemId });
 }

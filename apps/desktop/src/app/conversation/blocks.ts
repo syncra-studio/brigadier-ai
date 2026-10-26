@@ -364,8 +364,6 @@ const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["created
 const OLD_RECORDS: ReadonlySet<OrchestratorStepKind["type"]> = new Set([
   "fullAccessSuggested",
   "settingSuggested",
-  "sessionOffered",
-  "sessionOfferTaken",
   "ciWatch",
 ]);
 
@@ -445,11 +443,10 @@ export function boardItems(board: BoardDigest): BoardItem[] {
   for (const step of transitionSteps(board.orchestratorSteps)) {
     // The CLI's calls are in its file.
     if (step.kind.type === "tool") continue;
-    // The user's answer to a feedback offer shows on the offer itself.
-    if (step.kind.type === "feedbackAnswered") continue;
+    // The user's answer to a feedback or session offer shows on the offer itself.
+    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
     // Old records of what Brigadier no longer does: not shown. A suggestion of Full access (from
-    // when it had a sandbox of its own), a suggested setting, an offer to start a session and its
-    // answer, a CI watch.
+    // when it had a sandbox of its own), a suggested setting, a CI watch.
     if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
@@ -778,13 +775,13 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards and feedback offers that stay in view (decisions, failures, what
+ * and the cards, feedback and session offers that stay in view (decisions, failures, what
  * needs the user), and the dividers of its limits and switches (#506).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 
