@@ -166,7 +166,7 @@ pub enum OnlyInReason {
 pub enum PluginRemoval {
     /// Added through Brigadier: Remove takes it from every agent.
     Everything,
-    /// Remove takes only Brigadier's copies; the agents' own entry stays.
+    /// Remove takes Brigadier's copies and the off flags it added; the original stays.
     Copies,
     /// Brigadier made nothing for it: no Remove.
     None,
@@ -419,7 +419,7 @@ pub(crate) fn build(
         let key = row.key.text();
         let everywhere = row.everywhere();
         let here = row.here();
-        let on = row.on();
+        let on = row.on() && sharing.chosen.get(&key).is_none_or(|c| c.on);
         let in_project = |path: &Path| {
             here.iter()
                 .filter(|(at, _)| at == path)
@@ -430,7 +430,15 @@ pub(crate) fn build(
             .iter()
             .filter(|project| !in_project(&project.path).is_empty())
             .collect();
-        let scope = if !on {
+        let scope = if let Some(choice) = sharing.chosen.get(&key) {
+            match &choice.scope {
+                None => PluginScope::AllProjects,
+                Some(paths) => PluginScope::SomeProjects {
+                    project_ids: distinct(paths.iter().filter_map(|p| project_id(projects, p))),
+                    folders: vec![],
+                },
+            }
+        } else if !on {
             match sharing.off_scopes.get(&key) {
                 Some(Some(paths)) => PluginScope::SomeProjects {
                     project_ids: distinct(
@@ -586,6 +594,7 @@ pub(crate) fn build(
         let removal = match (&row.lib, own) {
             (Some(_), true) => PluginRemoval::Copies,
             (Some(_), false) => PluginRemoval::Everything,
+            (None, _) if sharing.owned.iter().any(|f| f.owner == key) => PluginRemoval::Copies,
             (None, _) => PluginRemoval::None,
         };
         let name = row
@@ -889,6 +898,12 @@ impl super::SessionManager {
             registry: self.registry(),
             library: self.library(),
             cli: self.brigadier_cli(),
+            claude_configs: self
+                .runtime
+                .account_homes(ProviderKind::Claude)
+                .into_iter()
+                .map(|home| home.join(".claude.json"))
+                .collect(),
             binary: self.clis().binary,
             projects: self
                 .plugin_projects()

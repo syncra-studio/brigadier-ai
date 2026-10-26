@@ -112,6 +112,7 @@ impl Home {
             library: &self.library,
             secrets: &self.secrets,
             projects: &self.projects,
+            claude_configs: &[],
             report: &|_: Agent, _: PluginStep| {},
             binary: &|_| None,
         };
@@ -172,6 +173,24 @@ impl Home {
         self.with(|ctx, _| ops::placed(ctx, adapter(agent), &plugin_id(name)))
     }
 
+    fn copy_loaded(&self, agent: Agent, name: &str) -> Vec<PathBuf> {
+        self.projects
+            .iter()
+            .filter(|path| {
+                let catalog = Catalog::read(&self.roots, Some(path));
+                let session = model::session(agent, Some(path));
+                catalog.servers.iter().any(|server| {
+                    server
+                        .plugin
+                        .as_ref()
+                        .is_some_and(|p| p.id == plugin_id(name))
+                        && catalog.server_native(server, &session)
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
     fn sharing(&self) -> Sharing {
         Sharing::load(&self.library).unwrap()
     }
@@ -180,6 +199,20 @@ impl Home {
     fn simulate(&self, step: &Step) {
         let home = &self.home;
         match step {
+            Step::ClaudeFlags { files, flags } => {
+                for file in if files.is_empty() {
+                    vec![self.roots.claude_json.clone()]
+                } else {
+                    files.clone()
+                } {
+                    brigadier_registry::claude_config::set_off_flags(
+                        &file,
+                        flags,
+                        std::time::Duration::ZERO,
+                    )
+                    .unwrap();
+                }
+            }
             Step::Run(call) if call.args.get(1).map(String::as_str) == Some("marketplace") => {}
             Step::Run(call) if call.args.first().map(String::as_str) == Some("mcp") => {
                 panic!(
@@ -366,6 +399,7 @@ fn copy(from: &Path, to: &Path) {
 
 fn line(step: &Step) -> String {
     match step {
+        Step::ClaudeFlags { flags, .. } => format!("claude flags {flags:?}"),
         Step::Run(call) => format!("{} {}", call.program, call.args.join(" ")),
         Step::UserConfig(TomlEdit { key, value }) => format!("user {} = {value:?}", key.join(".")),
         Step::ProjectFile {
@@ -432,12 +466,7 @@ fn shares_to_lacking_agents_only_and_leaves_originals_byte_identical() {
     let docs = home.item("server:docs");
     assert_eq!(docs.removal, PluginRemoval::Copies);
     assert_eq!(docs.problem, None);
-    assert!(
-        docs.locked
-            .as_deref()
-            .unwrap()
-            .starts_with("Claude Code keeps it on")
-    );
+    assert!(docs.locked.is_none());
     assert_eq!(docs.detail, "/opt/docs-mcp --port 1");
     // The second pass finds nothing to do.
     home.ran();
@@ -659,7 +688,7 @@ fn scope_and_switch_move_a_codex_original_and_its_copy_together() {
     );
     let claude = home.placed(Agent::Claude, "pg");
     assert_eq!(
-        (claude.global, claude.on_in.clone()),
+        (claude.global, home.copy_loaded(Agent::Claude, "pg")),
         (false, vec![one.clone()])
     );
     assert_eq!(
@@ -675,7 +704,7 @@ fn scope_and_switch_move_a_codex_original_and_its_copy_together() {
     assert!(!off.on);
     assert!(
         !home.placed(Agent::Claude, "pg").global
-            && home.placed(Agent::Claude, "pg").on_in.is_empty()
+            && home.copy_loaded(Agent::Claude, "pg").is_empty()
     );
     assert!(matches!(off.scope, PluginScope::SomeProjects { .. }));
     home.with(|ctx, run| switch(ctx, key, true, run)).unwrap();
@@ -689,14 +718,15 @@ fn scope_and_switch_move_a_codex_original_and_its_copy_together() {
 }
 
 #[test]
-fn locked_rows_refuse_switch_and_scope_and_touch_nothing() {
+fn skill_rows_refuse_switch_and_scope_and_touch_nothing() {
     let home = Home::new("locked", &["proj"]);
     write(&home.home.join(".claude.json"), CLAUDE_DOCS);
     let skill = tidy(&home.home, "body");
     home.sync().unwrap();
     let before = (snapshot(&home.home.join(".claude.json")), snapshot(&skill));
     home.ran();
-    for key in ["server:docs", "skill:tidy"] {
+    {
+        let key = "skill:tidy";
         let why = home.item(key).locked.unwrap();
         assert_eq!(
             home.with(|ctx, run| switch(ctx, key, false, run)),
@@ -734,24 +764,20 @@ fn synced_and_system_skills_are_neither_shown_nor_shared() {
 }
 
 #[test]
-fn a_team_server_is_shared_in_its_project_only_and_locked() {
+fn an_approved_team_server_is_shared_in_its_project_and_switchable() {
     let home = Home::new("team", &["proj", "other"]);
     let project = home.projects[0].clone();
     write(
         &project.join(".mcp.json"),
         r#"{"mcpServers": {"team": {"command": "/opt/team-mcp"}}}"#,
     );
+    approve(&home, &project, "team");
     home.sync().unwrap();
     let codex = home.placed(Agent::Codex, "team");
     assert!(codex.has && !codex.global);
     assert_eq!(codex.on_in, std::slice::from_ref(&project));
     let item = home.item("server:team");
-    assert!(
-        item.locked
-            .as_deref()
-            .unwrap()
-            .starts_with("Shared with your team")
-    );
+    assert!(item.locked.is_none());
 }
 
 #[test]
@@ -1112,7 +1138,7 @@ fn review_scope_survives_sync() {
         );
     }
     assert!(!home.placed(Agent::Claude, "pg").global);
-    assert_eq!(home.placed(Agent::Claude, "pg").on_in, home.projects[..1]);
+    assert_eq!(home.copy_loaded(Agent::Claude, "pg"), home.projects[..1]);
 }
 
 #[test]
@@ -1133,7 +1159,7 @@ fn review_scope_back_to_all_stays_switchable() {
         &home.projects[1].join(".codex/config.toml"),
         "[mcp_servers.pg]\ncommand = \"/opt/pg-mcp\"\n",
     );
-    assert!(home.item("server:pg").locked.is_some());
+    assert!(home.item("server:pg").locked.is_none());
 }
 
 #[test]
@@ -1239,7 +1265,7 @@ fn review_disabled_project_original_is_in_inventory() {
     home.sync().unwrap();
     let item = home.item("server:quiet");
     assert!(!item.on);
-    assert!(item.locked.is_some());
+    assert!(item.locked.is_none());
     assert_eq!(snapshot(&original), before);
     assert!(!home.placed(Agent::Claude, "quiet").global);
 }
@@ -1400,6 +1426,7 @@ fn stub_job_setup(home: &Home, script: &str) -> super::super::jobs::Setup {
         library: home.library.clone(),
         cli: binary,
         projects: home.projects.clone(),
+        claude_configs: vec![],
         binary: std::sync::Arc::new(move |_| Some(path.clone())),
     }
 }
@@ -1531,6 +1558,7 @@ fn review_aliases_in_different_scopes_cover_both_agents_in_each_project() {
         &home.projects[1].join(".codex/config.toml"),
         "[mcp_servers.second]\nurl = \"https://example.org/mcp\"\n",
     );
+    approve(&home, &home.projects[0], "first");
     home.sync().unwrap();
     for agent in [Agent::Claude, Agent::Codex] {
         for path in &home.projects {
@@ -1566,6 +1594,7 @@ fn review_project_change_during_sync_reads_the_latest_roots() {
         &home.projects[1].join(".mcp.json"),
         r#"{"mcpServers":{"second":{"url":"https://example.org/mcp"}}}"#,
     );
+    approve(&home, &home.projects[1], "second");
     let setup = stub_job_setup(
         &home,
         "#!/bin/sh\nif [ \"$1\" = secret ]; then : > \"$HOME/entered\"; exec /bin/sleep 30; fi\nexit 0\n",
@@ -1621,4 +1650,707 @@ fn review_failed_secret_commit_keeps_previous_credentials_and_reports_deletion_f
     assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "abc123");
     home.sync().unwrap();
     assert_eq!(home.secrets.load("docs/docs").unwrap()["TOKEN"], "rotated");
+}
+
+/// pencil as the user has it: each agent's own, one server tuned per agent, and the Library
+/// item added through Brigadier from Claude Code's (its arguments in both copies), installed for
+/// both agents.
+fn pencil(home: &Home) {
+    write(
+        &home.home.join(".claude.json"),
+        r#"{"mcpServers": {"pencil": {"type": "stdio", "command": "/opt/pen/mcp", "args": ["--app", "desktop", "--agent", "claudeCodeCLI"], "env": {}}}}"#,
+    );
+    let config = home.home.join(".codex/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &format!(
+            "{text}\n[mcp_servers.pencil]\ncommand = \"/opt/pen/mcp\"\nargs = [\"--app\", \"desktop\", \"--agent\", \"codexCLI\"]\n"
+        ),
+    );
+    let item = Item::Server(ServerSpec {
+        name: "pencil".into(),
+        transport: TransportSpec::Stdio {
+            command: "/opt/pen/mcp".into(),
+            args: ["--app", "desktop", "--agent", "claudeCodeCLI"]
+                .map(str::to_owned)
+                .to_vec(),
+            env: Vec::new(),
+            cwd: None,
+        },
+        oauth: None,
+    });
+    home.library
+        .pack("pencil", &item, None, &[], false, &home.secrets)
+        .unwrap();
+    home.with(|ctx, run| ops::set_places_with(ctx, "lib:pencil", None, run))
+        .unwrap();
+    assert!(home.installed(Agent::Claude, "pencil") && home.installed(Agent::Codex, "pencil"));
+}
+
+#[test]
+fn one_server_tuned_per_agent_is_one_item_with_its_library_copy_and_no_conflict() {
+    let home = Home::new("pencil", &["app"]);
+    pencil(&home);
+    let view = home.view();
+    let pencils: Vec<&str> = view
+        .items
+        .iter()
+        .filter(|item| item.name == "pencil")
+        .map(|item| item.key.as_str())
+        .collect();
+    assert_eq!(
+        pencils,
+        ["server:pencil"],
+        "one row, Brigadier's copy in it"
+    );
+    let item = home.item("server:pencil");
+    assert_eq!(item.problem, None, "the same command: no conflict");
+    assert_eq!(item.removal, PluginRemoval::Copies);
+    // A different command under the name stays two setups.
+    let config = home.home.join(".codex/config.toml");
+    let tuned = std::fs::read_to_string(&config).unwrap();
+    write(&config, &tuned.replace("/opt/pen/mcp", "/opt/other/mcp"));
+    assert!(matches!(
+        home.item("server:pencil").problem,
+        Some(PluginProblem::Conflict { .. })
+    ));
+    write(&config, &tuned);
+
+    // Sharing leaves the user's item where it is, each agent's copy with its own arguments.
+    home.ran();
+    home.sync().unwrap();
+    let entry = home.library.entry("pencil").unwrap();
+    let args = |file: &str| -> Vec<String> {
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(entry.dir.join(file)).unwrap()).unwrap();
+        serde_json::from_value(json["mcpServers"]["pencil"]["args"].clone()).unwrap()
+    };
+    assert_eq!(
+        args(".mcp.json"),
+        ["--app", "desktop", "--agent", "claudeCodeCLI"]
+    );
+    assert_eq!(
+        args(".codex.mcp.json"),
+        ["--app", "desktop", "--agent", "codexCLI"]
+    );
+    assert!(home.installed(Agent::Claude, "pencil") && home.installed(Agent::Codex, "pencil"));
+    assert!(home.placed(Agent::Claude, "pencil").global);
+    assert!(
+        home.sharing().failed.is_empty(),
+        "{:?}",
+        home.sharing().failed
+    );
+    // Once each has its own, the next pass finds nothing to do.
+    home.ran();
+    home.sync().unwrap();
+    assert_eq!(home.ran(), Vec::<String>::new());
+}
+
+#[test]
+fn saved_in_names_a_plugins_file_without_dot_parts() {
+    let home = Home::new("saved-in", &[]);
+    pencil(&home);
+    let files = home.item("server:pencil").files;
+    let copy = home
+        .library
+        .entry("pencil")
+        .unwrap()
+        .dir
+        .join(".mcp.json")
+        .display()
+        .to_string();
+    assert!(files.contains(&copy), "{files:?}");
+    assert!(files.iter().all(|file| !file.contains("/./")), "{files:?}");
+}
+
+fn approve(home: &Home, project: &Path, name: &str) {
+    let file = &home.roots.claude_json;
+    let mut value: serde_json::Value = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let key = brigadier_registry::claude_config::project_key(project)
+        .display()
+        .to_string();
+    value["projects"][&key]["hasTrustDialogAccepted"] = true.into();
+    value["projects"][&key]["enabledMcpjsonServers"] = serde_json::json!([name]);
+    write(file, &value.to_string());
+}
+
+fn off_here(home: &Home, project: &Path, name: &str) -> bool {
+    brigadier_registry::claude_config::project_settings(&home.roots.claude_json, project)
+        .unwrap()
+        .off
+        .contains(&name.to_owned())
+}
+
+fn never_twice(home: &Home, name: &str, extra: &[PathBuf]) {
+    for path in home.projects.iter().chain(extra) {
+        let catalog = Catalog::read(&home.roots, Some(path));
+        for agent in [Agent::Claude, Agent::Codex] {
+            let session = model::session(agent, Some(path));
+            let count = catalog
+                .servers
+                .iter()
+                .filter(|s| s.name == name && catalog.server_native(s, &session))
+                .count();
+            assert!(
+                count <= 1,
+                "{agent:?} loads {count} copies of {name} in {}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn copy_off_claude_user_some_off_on_and_remove_preserve_the_original() {
+    let home = Home::new("copy-user", &["one", "two"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    home.sync().unwrap();
+    home.with(|ctx, run| {
+        set_scope(
+            ctx,
+            "server:docs",
+            Some(&home.projects[..1]),
+            &|a, steps| {
+                run(a, steps)?;
+                never_twice(&home, "docs", &[]);
+                Ok(())
+            },
+        )
+    })
+    .unwrap();
+    assert!(!off_here(&home, &home.projects[0], "docs"));
+    assert!(off_here(&home, &home.projects[1], "docs"));
+    assert!(!home.installed(Agent::Claude, "docs"));
+    assert_eq!(home.copy_loaded(Agent::Codex, "docs"), home.projects[..1]);
+    home.with(|ctx, run| switch(ctx, "server:docs", false, run))
+        .unwrap();
+    assert!(!home.item("server:docs").on);
+    home.with(|ctx, run| switch(ctx, "server:docs", true, run))
+        .unwrap();
+    assert_eq!(home.copy_loaded(Agent::Codex, "docs"), home.projects[..1]);
+    home.with(|ctx, run| remove(ctx, "server:docs", run))
+        .unwrap();
+    assert!(!off_here(&home, &home.projects[1], "docs"));
+    let text = std::fs::read_to_string(&home.roots.claude_json).unwrap();
+    // Inserting/removing project flags leaves the original object's exact bytes in place.
+    let original = CLAUDE_DOCS
+        .trim()
+        .strip_prefix('{')
+        .unwrap()
+        .strip_suffix('}')
+        .unwrap()
+        .trim();
+    assert!(text.contains(original));
+    assert!(home.sharing().owned.is_empty());
+}
+
+#[test]
+fn copy_off_local_all_stages_exclusions_before_install_including_foreign_folders() {
+    let home = Home::new("copy-local-all", &["one", "two"]);
+    let foreign = home.home.join("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    write(&home.roots.claude_json, &serde_json::json!({"projects": {
+        home.projects[0].display().to_string(): {"mcpServers": {"playwright": {"url":"https://playwright.example.test/mcp"}}},
+        foreign.display().to_string(): {"mcpServers": {"playwright": {"url":"https://playwright.example.test/mcp"}}}
+    }}).to_string());
+    home.with(|ctx, run| {
+        set_scope(ctx, "server:playwright", None, &|agent, steps| {
+            // Check every individual step, including the install before the global enable.
+            for step in steps {
+                run(agent, std::slice::from_ref(step))?;
+                never_twice(&home, "playwright", std::slice::from_ref(&foreign));
+            }
+            Ok(())
+        })
+    })
+    .unwrap();
+    assert!(off_here(
+        &home,
+        &home.projects[0],
+        "plugin:playwright:playwright"
+    ));
+    assert!(off_here(&home, &foreign, "plugin:playwright:playwright"));
+    assert!(!off_here(&home, &foreign, "playwright"));
+    assert_eq!(
+        home.item("server:playwright").scope,
+        PluginScope::AllProjects
+    );
+    home.with(|ctx, run| switch(ctx, "server:playwright", false, run))
+        .unwrap();
+    assert!(off_here(&home, &foreign, "playwright"));
+    home.with(|ctx, run| switch(ctx, "server:playwright", true, run))
+        .unwrap();
+    assert!(!off_here(&home, &foreign, "playwright"));
+    never_twice(&home, "playwright", &[foreign]);
+}
+
+#[test]
+fn copy_off_explicit_on_clears_user_flags_and_remove_keeps_unowned_flags() {
+    let home = Home::new("copy-user-flags", &["one", "two"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[
+            brigadier_registry::claude_config::OffFlag {
+                folder: home.projects[0].clone(),
+                name: "docs".into(),
+                off: true,
+            },
+            brigadier_registry::claude_config::OffFlag {
+                folder: home.projects[1].clone(),
+                name: "docs".into(),
+                off: true,
+            },
+        ],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    // An explicit scope on an off item remembers its choice; switch on clears all /mcp offs.
+    home.with(|ctx, run| switch(ctx, "server:docs", true, run))
+        .unwrap();
+    assert!(!off_here(&home, &home.projects[0], "docs"));
+    assert!(!off_here(&home, &home.projects[1], "docs"));
+    home.with(|ctx, run| switch(ctx, "server:docs", false, run))
+        .unwrap();
+    // The user's unrelated edit is untouched by Remove.
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: home.projects[0].clone(),
+            name: "unrelated".into(),
+            off: true,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.with(|ctx, run| remove(ctx, "server:docs", run))
+        .unwrap();
+    assert!(off_here(&home, &home.projects[0], "unrelated"));
+}
+
+#[test]
+fn copy_off_remove_restores_codex_projects_exact_prior_enabled_value() {
+    let home = Home::new("copy-codex-prior", &["one"]);
+    let file = home.projects[0].join(".codex/config.toml");
+    write(
+        &file,
+        "# keep\n[mcp_servers.pg]\ncommand = '/opt/pg'\nenabled = true\n",
+    );
+    home.with(|ctx, run| switch(ctx, "server:pg", false, run))
+        .unwrap();
+    assert_eq!(codex_switch_in(&home.projects[0], "pg"), Some(false));
+    assert_eq!(home.item("server:pg").removal, PluginRemoval::Copies);
+    home.with(|ctx, run| remove(ctx, "server:pg", run)).unwrap();
+    assert_eq!(codex_switch_in(&home.projects[0], "pg"), Some(true));
+    assert_eq!(
+        read_toml(&file)["mcp_servers"]["pg"]["command"].as_str(),
+        Some("/opt/pg")
+    );
+}
+
+#[test]
+fn copy_off_uncopyable_row_allows_off_and_refuses_a_needed_copy_before_any_native_write() {
+    let home = Home::new("copy-cant", &["one", "two"]);
+    write(&home.roots.claude_json, r#"{"projects": {}}"#);
+    let mut config = serde_json::json!({"projects": {}});
+    config["projects"][home.projects[0].display().to_string()]["mcpServers"] =
+        serde_json::json!({"tmpl":{"command":"${TOOL}"}});
+    write(&home.roots.claude_json, &config.to_string());
+    assert!(home.item("server:tmpl").locked.is_none());
+    let before = snapshot(&home.roots.claude_json);
+    assert!(
+        home.with(|ctx, run| set_scope(ctx, "server:tmpl", None, run))
+            .unwrap_err()
+            .contains("${VAR}")
+    );
+    assert_eq!(snapshot(&home.roots.claude_json), before);
+    home.with(|ctx, run| switch(ctx, "server:tmpl", false, run))
+        .unwrap();
+    assert!(off_here(&home, &home.projects[0], "tmpl"));
+}
+
+#[test]
+fn copy_off_team_approval_refuses_before_writes_and_approved_team_can_switch() {
+    let home = Home::new("copy-team", &["one"]);
+    write(
+        &home.projects[0].join(".mcp.json"),
+        r#"{"mcpServers":{"team":{"command":"/opt/team"}}}"#,
+    );
+    let before = snapshot(&home.home);
+    let error = home
+        .with(|ctx, run| switch(ctx, "server:team", true, run))
+        .unwrap_err();
+    assert!(error.contains("approve it in Claude Code first"));
+    assert_eq!(snapshot(&home.home), before);
+    approve(&home, &home.projects[0], "team");
+    home.with(|ctx, run| switch(ctx, "server:team", true, run))
+        .unwrap();
+    home.with(|ctx, run| switch(ctx, "server:team", false, run))
+        .unwrap();
+    assert!(off_here(&home, &home.projects[0], "team"));
+}
+
+#[test]
+fn copy_off_aliases_refuse_a_split_before_any_write() {
+    let home = Home::new("copy-alias", &["one", "two"]);
+    std::fs::create_dir_all(home.home.join(".git")).unwrap();
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    let before = snapshot(&home.home);
+    let error = home
+        .with(|ctx, run| set_scope(ctx, "server:docs", Some(&home.projects[..1]), run))
+        .unwrap_err();
+    assert!(error.contains("pick both or neither"));
+    assert_eq!(snapshot(&home.home), before);
+}
+
+#[test]
+fn copy_off_native_reenable_stays_some_and_new_projects_stay_off() {
+    let home = Home::new("copy-adopt", &["one", "two", "new"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    home.with(|ctx, run| set_scope(ctx, "server:docs", Some(&home.projects[..1]), run))
+        .unwrap();
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: home.projects[1].clone(),
+            name: "docs".into(),
+            off: false,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.sync().unwrap();
+    let chosen = home.sharing().chosen["server:docs"].clone();
+    assert_eq!(chosen.scope.unwrap(), home.projects[..2]);
+    assert!(off_here(&home, &home.projects[2], "docs"));
+    assert_eq!(home.copy_loaded(Agent::Codex, "docs"), home.projects[..2]);
+}
+
+#[test]
+fn copy_off_crash_after_offs_recovers_before_the_next_pass() {
+    let home = Home::new("copy-crash", &["one", "two"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    home.sync().unwrap();
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        home.with(|ctx, run| {
+            switch(ctx, "server:docs", false, &|agent, steps| {
+                run(agent, steps)?;
+                if steps.iter().any(|s| matches!(s, Step::ClaudeFlags { .. })) {
+                    panic!("simulated crash after native offs");
+                }
+                Ok(())
+            })
+        })
+    }));
+    assert!(crashed.is_err());
+    assert!(home.sharing().pending.is_some());
+    home.sync().unwrap();
+    assert!(home.sharing().pending.is_none());
+    assert!(!off_here(&home, &home.projects[0], "docs"));
+    assert!(home.item("server:docs").on);
+    never_twice(&home, "docs", &[]);
+}
+
+#[test]
+fn copy_off_a_failed_copy_move_compensates_flags_and_preserves_originals() {
+    let home = Home::new("copy-fail", &["one", "two"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    let before = snapshot(&home.roots.claude_json);
+    let once = std::sync::atomic::AtomicBool::new(false);
+    let error = home.with(|ctx, run| set_scope(ctx, "server:docs", Some(&home.projects[..1]), &|a, steps| {
+        if a.agent() == Agent::Codex && steps.iter().any(|s| matches!(s, Step::Run(c) if c.args.get(1).is_some_and(|s| s == "add")))
+            && !once.swap(true, std::sync::atomic::Ordering::SeqCst) { return Err("injected copy failure".into()); }
+        run(a, steps)?; never_twice(&home, "docs", &[]); Ok(())
+    })).unwrap_err();
+    assert!(error.contains("put back"), "{error}");
+    assert!(!off_here(&home, &home.projects[1], "docs"));
+    assert!(home.sharing().pending.is_none());
+    let original: serde_json::Value = serde_json::from_slice(&before[0].1).unwrap();
+    let after: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&home.roots.claude_json).unwrap()).unwrap();
+    assert_eq!(original["mcpServers"], after["mcpServers"]);
+}
+
+#[test]
+fn copy_off_flags_reach_every_running_account_and_remove_restores_each_prior() {
+    let home = Home::new("copy-accounts", &["one", "two"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    let extra = home.home.join("account/.claude.json");
+    write(
+        &extra,
+        &serde_json::json!({"login":"keep", "projects": {
+            home.projects[1].display().to_string(): {"disabledMcpServers":["docs","mine"]}
+        }})
+        .to_string(),
+    );
+    let files = [extra.clone()];
+    home.with(|ctx, run| {
+        let ctx = Ctx {
+            claude_configs: &files,
+            ..*ctx
+        };
+        set_scope(&ctx, "server:docs", Some(&home.projects[..1]), run)?;
+        assert!(
+            brigadier_registry::claude_config::project_settings(&extra, &home.projects[1])?
+                .off
+                .contains(&"docs".into())
+        );
+        remove(&ctx, "server:docs", run)
+    })
+    .unwrap();
+    let flags = brigadier_registry::claude_config::project_settings(&extra, &home.projects[1])
+        .unwrap()
+        .off;
+    assert_eq!(flags, ["docs", "mine"]);
+    let extra: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(extra).unwrap()).unwrap();
+    assert_eq!(extra["login"], "keep");
+    assert!(!off_here(&home, &home.projects[1], "docs"));
+}
+
+#[test]
+fn copy_off_refuses_a_tracked_codex_original_before_any_native_write() {
+    let home = Home::new("copy-tracked", &["one"]);
+    let project = &home.projects[0];
+    write(
+        &project.join(".codex/config.toml"),
+        "[mcp_servers.pg]\ncommand='/opt/pg'\n",
+    );
+    for args in [vec!["init", "--quiet"], vec!["add", ".codex/config.toml"]] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(project)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let before = snapshot(&project.join(".codex/config.toml"));
+    let error = home
+        .with(|ctx, run| switch(ctx, "server:pg", false, run))
+        .unwrap_err();
+    assert!(error.contains("committed"), "{error}");
+    assert_eq!(snapshot(&project.join(".codex/config.toml")), before);
+    assert!(home.sharing().pending.is_none());
+}
+
+#[test]
+#[ignore = "runs real agent plugin commands using only a throwaway HOME and CODEX_HOME"]
+fn live_copy_off_action_timings() {
+    assert!(
+        std::env::var_os("CLAUDE_CONFIG_DIR").is_none(),
+        "unset CLAUDE_CONFIG_DIR before any live test"
+    );
+    let home = Home::new("live-copy-off", &["freelogo", "brigadier", "third"]);
+    write(&home.roots.claude_json, &serde_json::json!({
+        "hasCompletedOnboarding": true,
+        "mcpServers": {"railway": {"url":"https://railway.example.test/mcp"}},
+        "projects": {home.projects[0].display().to_string(): {"mcpServers":{"playwright":{"command":"/opt/playwright-mcp"}}}}
+    }).to_string());
+    let config = home.roots.codex_home.join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("\n[mcp_servers.railway]\nurl='https://railway.example.test/mcp'\n");
+    write(&config, &text);
+    let env = vec![
+        ("HOME".into(), home.home.display().to_string()),
+        (
+            "CODEX_HOME".into(),
+            home.roots.codex_home.display().to_string(),
+        ),
+        ("PATH".into(), std::env::var("PATH").unwrap()),
+        ("ANTHROPIC_API_KEY".into(), "test-key-never-used".into()),
+    ];
+    home.with(|base, _| {
+        let ctx = Ctx { env: &env, ..*base };
+        let run = |a: &dyn AgentAdapter, steps: &[Step]| {
+            ctx.run(a, steps)?;
+            never_twice(&home, "railway", &[]);
+            never_twice(&home, "playwright", &[]);
+            Ok(())
+        };
+        for (label, action) in [
+            ("railway -> Only some", 0),
+            ("playwright -> All", 1),
+            ("railway switch off", 2),
+            ("railway switch on", 3),
+        ] {
+            let started = std::time::Instant::now();
+            let result = match action {
+                0 => set_scope(&ctx, "server:railway", Some(&home.projects[..1]), &run),
+                1 => set_scope(&ctx, "server:playwright", None, &run),
+                2 => switch(&ctx, "server:railway", false, &run),
+                _ => switch(&ctx, "server:railway", true, &run),
+            };
+            println!(
+                "TIMING {label}: {:.3} ms; {result:?}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            result.unwrap();
+        }
+        assert!(off_here(&home, &home.projects[1], "railway"));
+        assert_eq!(
+            home.item("server:playwright").scope,
+            PluginScope::AllProjects
+        );
+    });
+}
+
+#[test]
+fn copy_off_each_copy_command_can_crash_and_recover_without_two_servers() {
+    // A fresh local original going to All exercises install, enable, both agents, and C flags.
+    for boundary in 1..=8 {
+        let home = Home::new(&format!("copy-crash-step-{boundary}"), &["one", "two"]);
+        write(&home.roots.claude_json, &serde_json::json!({"projects": {
+            home.projects[0].display().to_string(): {"mcpServers":{"local":{"url":"https://local.example.test/mcp"}}}
+        }}).to_string());
+        let calls = std::cell::Cell::new(0);
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            home.with(|ctx, run| {
+                set_scope(ctx, "server:local", None, &|a, steps| {
+                    for step in steps {
+                        run(a, std::slice::from_ref(step))?;
+                        never_twice(&home, "local", &[]);
+                        calls.set(calls.get() + 1);
+                        if calls.get() == boundary {
+                            panic!("simulated crash at command {boundary}");
+                        }
+                    }
+                    Ok(())
+                })
+            })
+        }));
+        if crashed.is_err() {
+            home.sync().unwrap();
+            assert!(home.sharing().pending.is_none());
+            assert!(!off_here(&home, &home.projects[0], "local"));
+            never_twice(&home, "local", &[]);
+        }
+    }
+}
+
+#[test]
+fn copy_off_user_flags_on_copies_are_adopted_but_original_exclusions_are_repaired() {
+    let home = Home::new("copy-user-copy-flags", &["one", "two", "three"]);
+    codex_pg(&home);
+    home.with(|ctx, run| set_scope(ctx, "server:pg", Some(&home.projects[..1]), run))
+        .unwrap();
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: home.projects[1].clone(),
+            name: "plugin:pg:pg".into(),
+            off: false,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.sync().unwrap();
+    assert_eq!(home.copy_loaded(Agent::Claude, "pg"), home.projects[..2]);
+    assert_eq!(
+        home.sharing().chosen["server:pg"].scope.as_ref().unwrap(),
+        &home.projects[..2]
+    );
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: home.projects[0].clone(),
+            name: "plugin:pg:pg".into(),
+            off: true,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.sync().unwrap();
+    assert_eq!(home.copy_loaded(Agent::Claude, "pg"), home.projects[1..2]);
+    home.with(|ctx, run| remove(ctx, "server:pg", run)).unwrap();
+    assert!(off_here(&home, &home.projects[0], "plugin:pg:pg"));
+}
+
+#[test]
+fn copy_off_an_empty_some_never_silently_succeeds_or_promotes_itself_to_all() {
+    let home = Home::new("copy-empty-some", &["one"]);
+    write(&home.roots.claude_json, CLAUDE_DOCS);
+    home.with(|ctx, run| set_scope(ctx, "server:docs", Some(&home.projects), run))
+        .unwrap();
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: home.projects[0].clone(),
+            name: "docs".into(),
+            off: true,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.sync().unwrap();
+    assert!(!home.item("server:docs").on);
+    assert_eq!(
+        home.with(|ctx, run| switch(ctx, "server:docs", true, run))
+            .unwrap_err(),
+        "Pick a project, or All projects."
+    );
+    assert!(!home.item("server:docs").on);
+    home.with(|ctx, run| set_scope(ctx, "server:docs", None, run))
+        .unwrap();
+    home.with(|ctx, run| switch(ctx, "server:docs", true, run))
+        .unwrap();
+    assert!(home.item("server:docs").on);
+}
+
+#[test]
+fn copy_off_server_copies_in_some_switch_with_flags_without_project_plugin_commands() {
+    let home = Home::new("copy-flag-speed", &["one", "two", "three"]);
+    codex_pg(&home);
+    home.with(|ctx, run| set_scope(ctx, "server:pg", Some(&home.projects[..1]), run))
+        .unwrap();
+    home.ran();
+    home.with(|ctx, run| switch(ctx, "server:pg", false, run))
+        .unwrap();
+    assert!(!home.item("server:pg").on);
+    home.with(|ctx, run| switch(ctx, "server:pg", true, run))
+        .unwrap();
+    assert_eq!(home.copy_loaded(Agent::Claude, "pg"), home.projects[..1]);
+    assert!(
+        home.ran()
+            .iter()
+            .all(|line| !line.starts_with("claude plugin"))
+    );
+}
+
+#[test]
+fn copy_off_native_reenable_of_a_foreign_local_original_is_kept() {
+    let home = Home::new("copy-foreign-adopt", &["one"]);
+    let foreign = home.home.join("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    write(&home.roots.claude_json, &serde_json::json!({"projects": {
+        foreign.display().to_string(): {"mcpServers":{"local":{"url":"https://local.example.test/mcp"}}}
+    }}).to_string());
+    home.with(|ctx, run| switch(ctx, "server:local", false, run))
+        .unwrap();
+    assert!(off_here(&home, &foreign, "local"));
+    brigadier_registry::claude_config::set_off_flags(
+        &home.roots.claude_json,
+        &[brigadier_registry::claude_config::OffFlag {
+            folder: foreign.clone(),
+            name: "local".into(),
+            off: false,
+        }],
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    home.sync().unwrap();
+    assert!(!off_here(&home, &foreign, "local"));
+    assert!(home.item("server:local").on);
+    assert_eq!(
+        home.sharing().chosen["server:local"]
+            .scope
+            .as_ref()
+            .unwrap(),
+        &[foreign]
+    );
 }

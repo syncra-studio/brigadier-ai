@@ -65,8 +65,10 @@ fn claude_keeps_one_project_with_its_own_scopes() {
             None
         )
     );
-    // No per-project off for the user's own servers: the Library first (D9).
-    assert!(claude.set_server("pencil", &project(), false).is_err());
+    // The same per-project off flag that Claude's /mcp writes, without changing the original.
+    assert!(
+        matches!(&claude.set_server("pencil", &project(), false).unwrap()[0], Step::ClaudeFlags { flags, .. } if flags[0].name == "pencil" && flags[0].off)
+    );
     assert!(claude.login("plugin:x:s", None).needs_terminal);
 }
 
@@ -165,7 +167,8 @@ fn each_cli_signs_in_on_its_own_list_and_prints_the_page() {
         "Checking MCP server health…\r\n\r\n\
          plugin:oauth:oauth-probe: http://127.0.0.1:53127/mcp (HTTP) - \u{1b}[33m! Needs authentication\u{1b}[39m\n\
          user-one: /usr/bin/python3 /tmp/server.py - \u{1b}[32m✔ Connected\u{1b}[39m\n\
-         broken: /usr/bin/false  - \u{1b}[31m✘ Failed to connect — CONNECTION_CLOSED: Connection closed\u{1b}[39m\n",
+         broken: /usr/bin/false  - \u{1b}[31m✘ Failed to connect — CONNECTION_CLOSED: Connection closed\u{1b}[39m\n\
+         railway: /bin/cat railway - ⊘ Disabled for this project (re-enable via /mcp)\n",
     );
     assert_eq!(
         listed,

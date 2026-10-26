@@ -29,6 +29,7 @@
 
 pub mod adapter;
 pub mod add_parse;
+pub mod claude_config;
 pub mod item;
 pub mod library;
 mod plugins;
@@ -45,7 +46,8 @@ pub use plugins::Plugin;
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Agent {
     Claude,
     Codex,
@@ -78,7 +80,9 @@ pub struct Roots {
     pub home: PathBuf,
     /// Claude Code's configuration folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
     pub claude_dir: PathBuf,
-    /// Claude Code's `.claude.json`: in `CLAUDE_CONFIG_DIR` when that is set, else in the home.
+    /// Claude Code's config file: `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set, else
+    /// in the home; an old install's `.config.json` in Claude's folder wins when it is there
+    /// ([`claude_config::config_file`]).
     pub claude_json: PathBuf,
     /// `CODEX_HOME`, else `~/.codex`.
     pub codex_home: PathBuf,
@@ -110,8 +114,7 @@ impl Roots {
         let claude_dir = claude_config
             .clone()
             .unwrap_or_else(|| home.join(".claude"));
-        let claude_json =
-            claude_config.map_or_else(|| home.join(".claude.json"), |dir| dir.join(".claude.json"));
+        let claude_json = claude_config::config_file(&home, claude_config.as_deref());
         let desktop_config = if cfg!(target_os = "macos") {
             Some(home.join("Library/Application Support/Claude"))
         } else if cfg!(windows) {
@@ -353,6 +356,14 @@ pub struct Catalog {
     pub codex_off_here: Vec<String>,
     /// What the user's own setup has but switches off for every project.
     pub off: SwitchedOff,
+    /// The servers Claude Code switches off in the read project (`disabledMcpServers` of its
+    /// entry in the config file, what `/mcp` writes), by the name Claude Code lists them under.
+    pub claude_off_here: Vec<String>,
+    /// Why the read project's entry in Claude Code's config file couldn't be read: its off
+    /// flags are unknown then, never taken as none.
+    pub claude_off_error: Option<String>,
+    /// The approval of each of the read project's team servers (`.mcp.json`), by name.
+    pub claude_approval: Vec<(String, claude_config::Approval)>,
 }
 
 /// Items an agent has but switches off for every project: none of a catalog's other lists hold
@@ -377,6 +388,63 @@ impl Catalog {
         catalog
     }
 
+    /// The user's catalog `self` with `project`'s entries: [`Self::read`] for `project`, the
+    /// user's part not read again.
+    pub fn for_project(&self, roots: &Roots, project: &Path) -> Self {
+        let mut catalog = self.clone();
+        catalog.add_project(roots, project);
+        catalog
+    }
+
+    /// The plugins [`Self::read`] lists (`plugins`), read without anything else: what loads a
+    /// plugin is a few settings files, while a whole catalog reads every skill too.
+    pub fn plugins(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
+        let codex = servers::codex_config(roots, &mut Vec::new());
+        let mut plugins = plugins::claude(roots, None);
+        plugins.extend(plugins::codex(roots, codex.as_ref()));
+        let Some(project) = project else {
+            return plugins;
+        };
+        // As `add_project`: the project's settings switch Claude's, its installs count there.
+        let here = plugins::claude(roots, Some(project));
+        plugins.retain(|plugin| {
+            plugin.agent != Agent::Claude
+                || here
+                    .iter()
+                    .any(|other| other.id == plugin.id && other.root == plugin.root)
+        });
+        plugins.extend(here.into_iter().filter(|plugin| plugin.project.is_some()));
+        // As `add_codex_layer`.
+        let trusted = codex
+            .as_ref()
+            .map(servers::codex_trusted)
+            .unwrap_or_default();
+        if !trusted.iter().any(|path| path == project) {
+            return plugins;
+        }
+        let Some(layer) = servers::read_toml(
+            &adapter::codex::project_file(project),
+            Source::CodexProject,
+            Some(project),
+            &mut Vec::new(),
+        ) else {
+            return plugins;
+        };
+        for (plugin, on) in plugins::codex_switched(roots, Some(&layer), Some(project)) {
+            let known = plugins
+                .iter()
+                .position(|known| known.agent == Agent::Codex && known.id == plugin.id);
+            match (known, on) {
+                (Some(at), false) => {
+                    plugins.remove(at);
+                }
+                (None, true) => plugins.push(plugin),
+                _ => {}
+            }
+        }
+        plugins
+    }
+
     fn user(roots: &Roots) -> Self {
         let mut problems = Vec::new();
         let codex = servers::codex_config(roots, &mut problems);
@@ -399,6 +467,9 @@ impl Catalog {
             plugins: Vec::new(),
             codex_off_here: Vec::new(),
             off: SwitchedOff::default(),
+            claude_off_here: Vec::new(),
+            claude_off_error: None,
+            claude_approval: Vec::new(),
         };
         skills::add_user(&mut catalog.skills, roots);
         let mut plugins = plugins::claude(roots, None);
@@ -470,6 +541,48 @@ impl Catalog {
             }
         }
         self.add_codex_layer(roots, project);
+        self.add_claude_entry(roots, project);
+    }
+
+    /// What the project's entry in Claude Code's config file switches: its servers off there,
+    /// its team servers approved or not.
+    fn add_claude_entry(&mut self, roots: &Roots, project: &Path) {
+        let settings = match claude_config::project_settings(&roots.claude_json, project) {
+            Ok(settings) => settings,
+            Err(err) => {
+                self.claude_off_error = Some(err);
+                return;
+            }
+        };
+        let mut team: Vec<&str> = self
+            .servers
+            .iter()
+            .chain(&self.off.servers)
+            .filter(|server| {
+                server.source == Source::ClaudeProject && server.project.as_deref() == Some(project)
+            })
+            .map(|server| server.name.as_str())
+            .collect();
+        team.sort_unstable();
+        team.dedup();
+        self.claude_approval = team
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    claude_config::team_approval(&settings, &roots.claude_dir, project, name),
+                )
+            })
+            .collect();
+        self.claude_off_here = settings.off;
+    }
+
+    /// The approval of the read project's team server `name`; `None` for another.
+    pub fn claude_approval(&self, name: &str) -> Option<claude_config::Approval> {
+        self.claude_approval
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, approval)| *approval)
     }
 
     /// What a trusted project's own `.codex/config.toml` switches: the user's plugins and
@@ -543,21 +656,41 @@ impl Catalog {
     /// Whether `session`'s agent loads `server`'s entry, overridden or not.
     fn loads(&self, server: &Server, session: &Session<'_>) -> bool {
         let project = server.project.as_deref();
+        // Switched off in the session's project (`/mcp`), under the name Claude Code lists.
+        let claude_off = |name: &str| {
+            session.project.is_some() && self.claude_off_here.iter().any(|off| off == name)
+        };
         match (server.source, session.agent) {
-            (Source::ClaudeUser, Agent::Claude) => true,
+            (Source::ClaudeUser, Agent::Claude) => !claude_off(&server.name),
             (Source::CodexUser, Agent::Codex) => {
                 !(session.project.is_some() && self.codex_off_here.contains(&server.name))
             }
-            // Claude keys its local scope on the exact folder a session starts in.
-            (Source::ClaudeLocal, Agent::Claude) => project == Some(session.cwd),
-            (Source::ClaudeProject, Agent::Claude) => project == session.project,
+            // Claude keys its local scope on the repository's main folder: a session in a
+            // subfolder or a linked worktree of it loads it too.
+            (Source::ClaudeLocal, Agent::Claude) => {
+                !claude_off(&server.name)
+                    && project.is_some_and(|project| {
+                        claude_config::project_key(project)
+                            == claude_config::project_key(session.cwd)
+                    })
+            }
+            // Team approval is separate from /mcp off flags: never bypass the approval gate.
+            (Source::ClaudeProject, Agent::Claude) => {
+                project == session.project
+                    && !claude_off(&server.name)
+                    && self.claude_approval(&server.name) == Some(claude_config::Approval::Approved)
+            }
             // Codex loads a project's layers only where the user trusts it in Codex.
             (Source::CodexProject, Agent::Codex) => {
                 project == session.project
                     && project
                         .is_some_and(|project| self.codex_trusted.iter().any(|p| p == project))
             }
-            (Source::ClaudePlugin, Agent::Claude) | (Source::CodexPlugin, Agent::Codex) => server
+            (Source::ClaudePlugin, Agent::Claude) => server.plugin.as_ref().is_some_and(|plugin| {
+                plugin.counts_in(session.project)
+                    && !claude_off(&format!("plugin:{}:{}", plugin.name, server.name))
+            }),
+            (Source::CodexPlugin, Agent::Codex) => server
                 .plugin
                 .as_ref()
                 .is_some_and(|plugin| plugin.counts_in(session.project)),

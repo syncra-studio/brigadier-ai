@@ -76,7 +76,7 @@ pub fn apply(
     let mut env = env.to_vec();
     env.extend(adapter.home_env(roots));
     for step in steps {
-        check(adapter, catalog, step, &env)?;
+        check(adapter, roots, catalog, step, &env)?;
     }
     let program = binary.unwrap_or_else(|| Path::new(adapter.program()));
     let mut applied = Applied::default();
@@ -93,14 +93,54 @@ pub fn apply(
             }
             Step::UserConfig(edit) => adapter.write_user_config(roots, &env, program, edit)?,
             Step::ProjectFile { file, edit, shared } => project_file(file, edit, *shared, &env)?,
+            Step::ClaudeFlags { files, flags } => {
+                for file in claude_files(roots, files) {
+                    crate::claude_config::set_off_flags(&file, flags, FLAG_SETTLE)
+                        .map_err(ApplyError::Failed)?;
+                }
+            }
         }
     }
     Ok(applied)
 }
 
+/// How long after writing Claude Code's off flags they are read again (Claude Code may write its
+/// older copy over them just then).
+const FLAG_SETTLE: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_millis(300)
+};
+
+/// The config files a [`Step::ClaudeFlags`] goes to: those it names, else the user's own.
+fn claude_files(roots: &Roots, files: &[PathBuf]) -> Vec<PathBuf> {
+    if files.is_empty() {
+        vec![roots.claude_json.clone()]
+    } else {
+        files.to_vec()
+    }
+}
+
+/// Whether every step of `steps`, planned by `adapter`, can run: what [`apply`] checks before
+/// it runs any, without running them. `env` is the environment the CLIs would run with.
+pub fn check_steps(
+    adapter: &dyn AgentAdapter,
+    roots: &Roots,
+    catalog: &Catalog,
+    steps: &[Step],
+    env: &[(String, String)],
+) -> Result<(), ApplyError> {
+    let mut env = env.to_vec();
+    env.extend(adapter.home_env(roots));
+    steps
+        .iter()
+        .try_for_each(|step| check(adapter, roots, catalog, step, &env))
+}
+
 /// Whether `step` can run at all.
 fn check(
     adapter: &dyn AgentAdapter,
+    roots: &Roots,
     catalog: &Catalog,
     step: &Step,
     env: &[(String, String)],
@@ -108,6 +148,13 @@ fn check(
     match step {
         Step::Run(call) if call.needs_terminal => Err(ApplyError::NeedsTerminal(command(call))),
         Step::Run(_) | Step::UserConfig(_) => Ok(()),
+        // Each file must read cleanly: a flag is never written over a file Brigadier can't read.
+        Step::ClaudeFlags { files, flags } => {
+            for file in claude_files(roots, files) {
+                crate::claude_config::check_flags(&file, flags).map_err(ApplyError::Failed)?;
+            }
+            Ok(())
+        }
         Step::ProjectFile { file, edit, shared } => {
             let project = project_of(file)?;
             if !adapter.trusts(catalog, project) {

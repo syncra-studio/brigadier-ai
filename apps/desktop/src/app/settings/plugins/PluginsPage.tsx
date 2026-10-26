@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import { Button } from "@/components/controls";
@@ -12,6 +11,7 @@ import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginAgentResult, type PluginsAdapter } from "./adapter";
+import { Changes, type Overlay } from "./changes";
 import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog, SignInDialog } from "./dialogs";
 import { FileDialog } from "./FileDialog";
@@ -39,19 +39,18 @@ type Open =
   | { type: "file"; key: string };
 
 export function PluginsPage() {
-  const { view, adapter, error, refresh, reload } = usePlugins();
-  return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} reload={reload} />;
+  const { view, adapter, error, refresh } = usePlugins();
+  return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} />;
 }
 
 const TABS: PluginKind[] = ["server", "skill"];
 const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
-function PluginsScreen({ view, adapter, error, refresh, reload }: {
+function PluginsScreen({ view: read, adapter, error, refresh }: {
   view: PluginsView;
   adapter: PluginsAdapter | null;
   error: string | null;
   refresh: () => void;
-  reload: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
   const [query, setQuery] = useState("");
@@ -73,7 +72,14 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
       unsubscribe();
     };
   }, [setDialog]);
-  const action = useAction();
+  // Each change shows at once; its agents take it meanwhile. It reads the page again through
+  // the connection there is when it's done.
+  const [changes] = useState(() => new Changes(() => usePlugins.getState().reload()));
+  useSyncExternalStore(changes.subscribe, changes.snapshot);
+  // Where a change is asked for: its failure shows there only, and goes once the user leaves.
+  const place = selected ? `item:${selected}` : "list";
+  useEffect(() => changes.leave(place), [changes, place]);
+  const view = changes.apply(read);
   useEffect(() => useReveal.subscribe(({ label }) => {
     if (label === "Skills" || label === "MCP servers") {
       setTab(revealTab(label));
@@ -87,19 +93,21 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
     }
   }), []);
   const find = (key: string) => view.items.find((item) => item.key === key);
-  const busy = action.busy || !adapter;
+  const busy = !adapter;
 
-  /** Runs a change the agents take, then reads the page again. */
-  const change = (run: () => Promise<PluginAgentResult[]>, after?: () => void) => {
+  /**
+   * Runs a change to item `key` that the agents take in the background, the item showing
+   * `overlay` meanwhile; the page is read again once it's done.
+   */
+  const change = (key: string | null, overlay: Overlay, run: () => Promise<PluginAgentResult[]>, after?: () => void) => {
     if (!adapter) return;
-    action.run(async () => {
+    void changes.run(key, place, overlay, async () => {
       await checked(run);
-      await reload();
       after?.();
     });
   };
   /** The card's switch: the whole item on or off, in every agent, keeping where it's set to be. */
-  const flip = (item: PluginItemView, on: boolean) => adapter && change(() => adapter.switchPlugin(item.key, on));
+  const flip = (item: PluginItemView, on: boolean) => adapter && change(item.key, { on }, () => adapter.switchPlugin(item.key, on));
 
   const current = selected ? find(selected) : undefined;
   let page;
@@ -111,22 +119,23 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
         actions={{
           busy,
           onBack: () => openSettings("plugins"),
-          onScope: (projectIds) => change(() => adapter.setScope(current.key, projectIds)),
+          onScope: (projectIds) => change(
+            current.key,
+            { scope: projectIds ? { type: "someProjects", projectIds, folders: current.scope.type === "someProjects" ? current.scope.folders : [] } : { type: "allProjects" } },
+            () => adapter.setScope(current.key, projectIds),
+          ),
           onSignIn: adapter.signIn && current.problem?.type === "needsSignIn"
             ? (() => {
               const { serverId, projectId } = current.problem;
               return () => setDialog({ type: "signIn", key: current.key, serverId, projectId });
             })()
             : undefined,
-          onShare: () => change(() => adapter.share(current.key), () => toast(`${current.name} is in every agent now`)),
+          onShare: () => change(current.key, {}, () => adapter.share(current.key), () => toast(`${current.name} is in every agent now`)),
           onRemove: () => setDialog({ type: "remove", key: current.key }),
           onRetry: refresh,
-          onUpdate: () => change(() => adapter.update(current.key)),
+          onUpdate: () => change(current.key, {}, () => adapter.update(current.key)),
           onOpen: () => setDialog({ type: "file", key: current.key }),
-          onTrust: (projectId) => action.run(async () => {
-            await adapter.trustProject(projectId);
-            await reload();
-          }),
+          onTrust: (projectId) => void changes.run(null, place, {}, () => adapter.trustProject(projectId)),
         }}
       />
     );
@@ -160,6 +169,7 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
     save: (path: string, contents: string, expected: string) => adapter.saveSkill(fileKey, path, contents, expected),
   } : null, [adapter, fileKey]);
   const close = () => setDialog(null);
+  const failure = changes.failure(place);
   return (
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
@@ -184,7 +194,7 @@ function PluginsScreen({ view, adapter, error, refresh, reload }: {
       {fileCalls && open?.type === "file" && target && (
         <FileDialog key={target.key} item={target} details={fileCalls.details} save={fileCalls.save} onClose={close} />
       )}
-      {(action.error || error) && <p role="alert" className="text-destructive bg-background absolute right-5 bottom-4 left-5 text-xs whitespace-pre-wrap">{action.error ?? error}</p>}
+      {(failure || error) && <p role="alert" className="text-destructive bg-background absolute right-5 bottom-4 left-5 text-xs whitespace-pre-wrap">{failure ?? error}</p>}
     </div>
   );
 }

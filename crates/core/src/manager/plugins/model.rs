@@ -22,6 +22,20 @@ pub(crate) struct ProjectCatalog {
     pub catalog: Catalog,
 }
 
+/// The user's catalog and each of `projects`' (in their order), read now: the user's once,
+/// each project's own entries over it.
+pub(crate) fn read_catalogs(
+    roots: &brigadier_registry::Roots,
+    projects: &[PathBuf],
+) -> (Catalog, Vec<Catalog>) {
+    let user = Catalog::read(roots, None);
+    let catalogs = projects
+        .iter()
+        .map(|path| user.for_project(roots, path))
+        .collect();
+    (user, catalogs)
+}
+
 /// A session of `agent` in `project` (or none: what every project gets).
 pub(crate) fn session(agent: Agent, project: Option<&Path>) -> Session<'_> {
     Session {
@@ -152,6 +166,15 @@ impl Origin {
             Self::Skill { skill, .. } => skill.dir.display().to_string(),
         }
     }
+
+    /// Which server or skill it is, whatever arguments its agent gives it: a server's command
+    /// or address and what it signs in with (only its arguments may differ per agent).
+    fn identity(&self) -> String {
+        match self {
+            Self::Server { server, .. } => format!("{}{}", command_of(server), credentials(server)),
+            Self::Skill { .. } => self.definition(),
+        }
+    }
 }
 
 /// What a server is: what it reaches, as written (its command, arguments and folder, or its
@@ -160,6 +183,13 @@ impl Origin {
 /// that differ in any of it is two setups.
 pub(crate) fn endpoint(server: &Server) -> String {
     let mut text = reach(server);
+    text.push_str(&credentials(server));
+    text
+}
+
+/// What a server signs in with: its values' names and hashes, its OAuth client.
+fn credentials(server: &Server) -> String {
+    let mut text = String::new();
     let values = match &server.transport {
         Transport::Stdio { env, .. } => env,
         Transport::Http { headers, .. } => headers,
@@ -190,6 +220,55 @@ pub(crate) fn endpoint(server: &Server) -> String {
         ));
     }
     text
+}
+
+/// Which server `server` runs, its arguments left out: its command (unwrapped from a Library
+/// copy's `brigadier mcp run`) and folder, or its address. Two agents running one server, each
+/// with its own arguments, share it.
+pub(crate) fn command_of(server: &Server) -> String {
+    let written = &server.written;
+    match &server.transport {
+        Transport::Http { url, .. } => format!("url {}", written.url.as_deref().unwrap_or(url)),
+        Transport::Stdio {
+            command, args, cwd, ..
+        } => {
+            let (command, args) = match &written.command {
+                Some(command) => (command.as_str(), written.args.as_slice()),
+                None => (command.as_str(), args.as_slice()),
+            };
+            let (command, _) = unwrapped(command, args);
+            // The folder it is given, not the one it falls back to (a plugin's own).
+            let folder = cwd
+                .as_ref()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default();
+            format!("run {command}\0{folder}")
+        }
+    }
+}
+
+/// A stdio server's arguments as written, unwrapped from a Library copy's `brigadier mcp run`.
+pub(crate) fn args_of(server: &Server) -> Option<Vec<String>> {
+    let written = &server.written;
+    match &server.transport {
+        Transport::Http { .. } => None,
+        Transport::Stdio { command, args, .. } => {
+            let (command, args) = match &written.command {
+                Some(command) => (command.as_str(), written.args.as_slice()),
+                None => (command.as_str(), args.as_slice()),
+            };
+            Some(unwrapped(command, args).1.to_vec())
+        }
+    }
+}
+
+/// `path` as the user reads it: without `.` parts (a plugin's `./.mcp.json`).
+pub(crate) fn shown(path: &Path) -> String {
+    path.components()
+        .filter(|part| *part != Component::CurDir)
+        .collect::<PathBuf>()
+        .display()
+        .to_string()
 }
 
 /// What a server reaches, as written.
@@ -243,6 +322,9 @@ pub(crate) struct Presence {
     pub sources: Vec<Origin>,
     /// Why the switch and the scope can't change it.
     pub lock: Option<String>,
+    /// Each of its servers by name, with which server it is ([`command_of`] and what it signs
+    /// in with).
+    pub commands: Vec<(String, String)>,
 }
 
 impl Presence {
@@ -350,25 +432,6 @@ pub(crate) fn server_detail(server: &Server) -> (String, Option<String>) {
             }
             (text, None)
         }
-    }
-}
-
-/// Why the switch and the scope can't change an agent's own server.
-fn server_lock(server: &Server, home: &Path) -> Option<String> {
-    match server.source {
-        Source::ClaudeUser | Source::ClaudeLocal => Some(
-            "Claude Code keeps it on: it's in Claude Code's own settings, which Brigadier leaves as they are."
-                .to_owned(),
-        ),
-        Source::ClaudeProject => Some(format!(
-            "Shared with your team in {}: change it there.",
-            tilde(&server.file, home)
-        )),
-        Source::CodexProject => Some(format!(
-            "It's set up in {}: change it there.",
-            tilde(&server.file, home)
-        )),
-        _ => None,
     }
 }
 
@@ -500,14 +563,20 @@ fn gather(
         let presence = row(items, key);
         presence.kind = Some(PluginKind::Server);
         (presence.detail, presence.url) = server_detail(server);
-        push(&mut presence.files, server.file.display().to_string());
+        push(&mut presence.files, shown(&server.file));
+        push(
+            &mut presence.commands,
+            (
+                server.name.clone(),
+                format!("{}{}", command_of(server), credentials(server)),
+            ),
+        );
         // A project's entry that only switches the user's server is that server, not one of
         // the project's own: it neither counts as an original nor locks the row.
         if server.plugin.is_none()
             && !server.overrides_user
             && let Some(agent) = owner(server.source)
         {
-            presence.lock(server_lock(server, home));
             presence.origin(Origin::Server {
                 agent,
                 server: Box::new(server.clone()),
@@ -554,7 +623,7 @@ fn gather(
         );
         presence.kind = Some(PluginKind::Server);
         presence.problem = Some(problem.error.clone());
-        push(&mut presence.files, problem.file.display().to_string());
+        push(&mut presence.files, shown(&problem.file));
         if let Some(read) = &problem.read
             && presence.detail.is_empty()
         {
@@ -606,10 +675,16 @@ fn gather(
         if presence.detail.is_empty() {
             (presence.detail, presence.url) = server_detail(server);
         }
-        push(&mut presence.files, server.file.display().to_string());
+        push(&mut presence.files, shown(&server.file));
+        push(
+            &mut presence.commands,
+            (
+                server.name.clone(),
+                format!("{}{}", command_of(server), credentials(server)),
+            ),
+        );
         push(&mut presence.anywhere, agent);
         if server.plugin.is_none() {
-            presence.lock(server_lock(server, home));
             presence.origin(Origin::Server {
                 agent,
                 server: Box::new(server.clone()),
@@ -665,7 +740,7 @@ fn skill_row<'a>(items: &'a mut Vec<(Key, Presence)>, skill: &Skill) -> &'a mut 
             .display()
             .to_string();
     }
-    push(&mut presence.files, skill.skill_md().display().to_string());
+    push(&mut presence.files, shown(&skill.skill_md()));
     presence
 }
 
@@ -687,6 +762,33 @@ pub(crate) struct Row {
 }
 
 impl Row {
+    /// Server-only Claude copies use native flags for their per-project switch.
+    pub fn flag_only(&self, agent: Agent) -> bool {
+        self.kind == PluginKind::Server && agent == Agent::Claude
+    }
+
+    /// The native names Claude gives the Library copy's servers.
+    pub fn copy_servers(
+        &self,
+        library: &brigadier_registry::library::Library,
+        lib: &str,
+    ) -> Result<Vec<String>, String> {
+        let entry = library
+            .entry(lib)
+            .ok_or_else(|| format!("{lib} is no longer in the Library."))?;
+        let text =
+            std::fs::read_to_string(entry.dir.join(".mcp.json")).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let servers = value
+            .get("mcpServers")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| "The Library copy has no MCP servers.".to_owned())?;
+        Ok(servers
+            .keys()
+            .map(|name| format!("plugin:{lib}:{name}"))
+            .collect())
+    }
+
     /// Agents that have it: their own entry, the same server by another name, or (for another
     /// marketplace's plugin) the plugin.
     pub fn holders(&self) -> Vec<Agent> {
@@ -826,6 +928,12 @@ pub(crate) fn model(
             continue;
         };
         let presence = row(&mut items, key);
+        if agent == Agent::Claude
+            && brigadier_registry::claude_config::project_settings(&server.file, folder)
+                .is_ok_and(|settings| settings.off.contains(&server.name))
+        {
+            continue;
+        }
         presence.note(agent, Some(folder));
         push(&mut presence.native, (agent, server.name.clone(), None));
     }
@@ -863,16 +971,28 @@ pub(crate) fn model(
             conflict: false,
         })
         .collect();
-    // Each Library plugin joins the item sharing made it from; any other stands alone.
+    // Each Library plugin joins the item sharing made it from, or, added through Brigadier, the
+    // agents' own server it runs (same name, same command): one item. Any other stands alone.
     for (key, copy) in libraries {
         let kind = copy.kind.unwrap_or(PluginKind::Server);
-        let joined = sharing.items.get(&key.name).and_then(|record| {
-            rows.iter_mut().find(|row| {
+        let joined = match sharing.items.get(&key.name) {
+            Some(record) => rows.iter_mut().find(|row| {
                 row.kind == record.kind
                     && row.key.name == record.name
                     && matches!(row.key.kind, KeyKind::Server | KeyKind::Skill)
-            })
-        });
+            }),
+            None => rows.iter_mut().find(|row| {
+                row.lib.is_none()
+                    && row.key.kind == KeyKind::Server
+                    && kind == PluginKind::Server
+                    && row.own.sources.iter().any(|source| {
+                        matches!(source, Origin::Server { .. })
+                            && copy
+                                .commands
+                                .contains(&(row.key.name.clone(), source.identity()))
+                    })
+            }),
+        };
         match joined {
             Some(row) => {
                 row.lib = Some(key.name.clone());
@@ -895,6 +1015,15 @@ pub(crate) fn model(
                 equivalent: Vec::new(),
                 conflict: false,
             }),
+        }
+    }
+    for row in &mut rows {
+        for presence in [&mut row.own, &mut row.copy] {
+            presence.everywhere.retain(|agent| {
+                projects
+                    .iter()
+                    .all(|project| presence.here.contains(&(project.path.clone(), *agent)))
+            });
         }
     }
     // The same server under another name, per agent; two different setups of one name; an
@@ -930,11 +1059,20 @@ pub(crate) fn model(
                 }
             }
         }
-        let mut definitions: Vec<String> = Vec::new();
+        // Two setups: one agent's entries differ, or two agents run different servers (each
+        // agent may tune the same one with its own arguments).
+        let mut definitions: Vec<(Agent, String)> = Vec::new();
+        let mut identities: Vec<String> = Vec::new();
         for source in &row.own.sources {
-            push(&mut definitions, source.definition());
+            push(&mut definitions, (source.agent(), source.definition()));
+            push(&mut identities, source.identity());
         }
-        row.conflict = definitions.len() > 1
+        let differs = definitions
+            .iter()
+            .enumerate()
+            .any(|(at, (agent, _))| definitions[..at].iter().any(|(known, _)| known == agent));
+        row.conflict = differs
+            || identities.len() > 1
             || (row.lib.is_none()
                 && !row.own.sources.is_empty()
                 && standalone.contains(&(row.kind, row.key.name.clone())));

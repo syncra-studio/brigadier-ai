@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
-use brigadier_registry::adapter::adapters;
 use brigadier_registry::{
     Agent, Catalog, Registry, Roots, Server, Session, SkillRoot, Source, Transport,
 };
@@ -322,8 +321,8 @@ impl SessionManager {
         super::blocking(move || logins.sign_out(&clis, &target).map_err(Error::Invalid)).await
     }
 
-    /// Reads the agents' own lists again, so Settings › Plugins next shows who needs a
-    /// sign-in as of now.
+    /// Reads the agents' own lists again, all at once, so Settings › Plugins next shows who
+    /// needs a sign-in as of now.
     pub async fn ask_mcp_sign_in_again(
         &self,
         server_id: &str,
@@ -332,12 +331,9 @@ impl SessionManager {
         let target = self.signing_server(server_id, project).await?;
         let (logins, clis) = (self.mcp_logins.clone(), self.clis());
         super::blocking(move || {
-            for adapter in adapters() {
-                logins
-                    .list(&clis, adapter, target.project.as_deref())
-                    .map_err(Error::Invalid)?;
-            }
-            Ok(())
+            logins
+                .list_every(&clis, target.project.as_deref())
+                .map_err(Error::Invalid)
         })
         .await
     }

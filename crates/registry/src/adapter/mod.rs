@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::item::{ServerSpec, TransportSpec};
 use crate::{Agent, Catalog, Roots, Source};
 
-pub use apply::{Applied, ApplyError, CLI_TIMEOUT, apply, output_within, wait_within};
+pub use apply::{Applied, ApplyError, CLI_TIMEOUT, apply, check_steps, output_within, wait_within};
 pub use claude::Claude;
 pub use codex::Codex;
 
@@ -118,6 +118,13 @@ pub enum Step {
         file: PathBuf,
         edit: TomlEdit,
         shared: bool,
+    },
+    /// Claude Code's per-project off flags (`disabledMcpServers`, what `/mcp` writes) in each of
+    /// its config `files`: the user's own and each extra account's; none named, the user's own
+    /// ([`crate::Roots::claude_json`]).
+    ClaudeFlags {
+        files: Vec<PathBuf>,
+        flags: Vec<crate::claude_config::OffFlag>,
     },
 }
 

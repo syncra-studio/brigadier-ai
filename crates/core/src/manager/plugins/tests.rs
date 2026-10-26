@@ -265,19 +265,13 @@ fn the_page_shows_scope_lock_problems_and_order() {
         })
         .collect();
     let view = page(&user, &projects, &Unknown);
-    // Both agents have pencil: on everywhere, nothing to share, locked by Claude's own entry.
+    // Both agents have pencil: on everywhere, nothing to share, with switch and scope available.
     let pencil = item(&view, "server:pencil");
     assert!(pencil.on && pencil.problem.is_none());
     assert_eq!(pencil.scope, PluginScope::AllProjects);
     assert_eq!(pencil.removal, PluginRemoval::None);
-    assert!(
-        pencil
-            .locked
-            .as_deref()
-            .unwrap()
-            .starts_with("Claude Code keeps it on")
-    );
-    // Claude's own server in project a only: some projects, locked.
+    assert!(pencil.locked.is_none());
+    // Claude's own server in project a only: some projects, switchable.
     let postgres = item(&view, "server:postgres");
     assert_eq!(
         postgres.scope,
@@ -286,7 +280,7 @@ fn the_page_shows_scope_lock_problems_and_order() {
             folders: Vec::new()
         }
     );
-    assert!(postgres.locked.is_some());
+    assert!(postgres.locked.is_none());
     // A skill in ~/.claude/skills: locked, its description the subtitle.
     let grill = item(&view, "skill:grill");
     assert_eq!(grill.kind, PluginKind::Skill);
@@ -495,13 +489,13 @@ fn a_claude_server_kept_to_a_folder_that_isnt_a_project_says_where_it_is_on() {
             folders: vec![foreign.display().to_string()]
         }
     );
-    // Claude Code's own server: the switch and the scope can't change it.
-    assert!(codescene.locked.is_some());
+    // Claude Code's own server: native off flags make its controls available.
+    assert!(codescene.locked.is_none());
     std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
-fn a_foreign_folder_claude_server_locks_the_row_beside_a_codex_one() {
+fn a_foreign_folder_claude_server_is_switchable_beside_a_codex_one() {
     let home = home("foreign-and-codex");
     let foreign = home.join("clients/elsewhere");
     std::fs::create_dir_all(&foreign).unwrap();
@@ -518,8 +512,8 @@ fn a_foreign_folder_claude_server_locks_the_row_beside_a_codex_one() {
     );
     let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
     let view = page(&Catalog::read(&roots, None), &[], &Unknown);
-    // A Claude Code entry of its own locks the row, whatever Codex's can do.
-    assert!(item(&view, "server:codescene").locked.is_some());
+    // Both agents' own entries can be switched with their native flags.
+    assert!(item(&view, "server:codescene").locked.is_none());
     std::fs::remove_dir_all(home).unwrap();
 }
 
