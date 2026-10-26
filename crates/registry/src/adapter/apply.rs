@@ -98,6 +98,22 @@ pub fn apply(
     Ok(applied)
 }
 
+/// Whether every step of `steps`, planned by `adapter`, can run: what [`apply`] checks before
+/// it runs any, without running them. `env` is the environment the CLIs would run with.
+pub fn check_steps(
+    adapter: &dyn AgentAdapter,
+    roots: &Roots,
+    catalog: &Catalog,
+    steps: &[Step],
+    env: &[(String, String)],
+) -> Result<(), ApplyError> {
+    let mut env = env.to_vec();
+    env.extend(adapter.home_env(roots));
+    steps
+        .iter()
+        .try_for_each(|step| check(adapter, catalog, step, &env))
+}
+
 /// Whether `step` can run at all.
 fn check(
     adapter: &dyn AgentAdapter,

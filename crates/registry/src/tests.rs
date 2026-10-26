@@ -585,7 +585,8 @@ fn native_servers_depend_on_the_session() {
     };
     assert!(native("cu", claude_in_worktree));
     assert!(native("cp", claude_in_worktree));
-    // The local scope is keyed on the exact folder.
+    // The local scope is keyed on the repository's main folder: a folder that is neither it
+    // nor a checkout of it doesn't load it.
     assert!(native("cl", claude_in_project));
     assert!(!native("cl", claude_in_worktree));
     assert!(!native("xu", claude_in_worktree));
@@ -606,6 +607,136 @@ fn native_servers_depend_on_the_session() {
         ..codex_in_worktree
     };
     assert!(!native("xp", scratch));
+}
+
+/// A linked worktree of `main` at `worktree`, laid out as git lays it out.
+fn linked_worktree(main: &Path, worktree: &Path) {
+    std::fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+    write(&main.join(".git/worktrees/wt/commondir"), "../..\n");
+    write(
+        &worktree.join(".git"),
+        &format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+    );
+}
+
+#[test]
+fn claudes_per_project_off_flags_switch_its_servers_off_there_only() {
+    let home = fixture("claude-off");
+    let project = home.join("app");
+    let other = home.join("other");
+    let worktree = home.join("worktrees/task");
+    linked_worktree(&project, &worktree);
+    std::fs::create_dir_all(&other).unwrap();
+    let plugin_root = home.join(".claude/plugins/cache/lib/copy/1.0.0");
+    write(
+        &plugin_root.join(".claude-plugin/plugin.json"),
+        r#"{"name": "copy", "version": "1.0.0"}"#,
+    );
+    write(
+        &plugin_root.join(".mcp.json"),
+        r#"{"mcpServers": {"cu": {"command": "copy"}}}"#,
+    );
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &format!(
+            r#"{{"version": 2, "plugins": {{"copy@lib": [{{"scope": "user", "installPath": "{}", "version": "1.0.0"}}]}}}}"#,
+            plugin_root.display()
+        ),
+    );
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"copy@lib": true}}"#,
+    );
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"mcpServers": {{"cu": {{"command": "a"}}, "on": {{"command": "z"}}}},
+                "projects": {{"{}": {{
+                    "mcpServers": {{"cl": {{"command": "b"}}}},
+                    "disabledMcpServers": ["cu", "cl", "cp", "plugin:copy:cu"]
+                }}}}}}"#,
+            project.display()
+        ),
+    );
+    write(
+        &project.join(".mcp.json"),
+        r#"{"mcpServers": {"cp": {"command": "c"}}}"#,
+    );
+    let roots = roots(&home, &[]);
+    let catalog = Catalog::read(&roots, Some(&project));
+    assert_eq!(catalog.claude_off_error, None);
+    let session = |cwd| Session {
+        agent: Agent::Claude,
+        cwd,
+        project: Some(&project),
+        in_checkout: true,
+    };
+    let server = |name: &str, source: Source| {
+        catalog
+            .servers
+            .iter()
+            .find(|server| server.name == name && server.source == source)
+            .unwrap()
+    };
+    for cwd in [&project, &worktree] {
+        let session = session(cwd);
+        for (name, source) in [
+            ("cu", Source::ClaudeUser),
+            ("cl", Source::ClaudeLocal),
+            ("cp", Source::ClaudeProject),
+            ("cu", Source::ClaudePlugin),
+        ] {
+            assert!(
+                !catalog.server_native(server(name, source), &session),
+                "{name} {source:?} in {}",
+                cwd.display()
+            );
+        }
+        assert!(catalog.server_native(server("on", Source::ClaudeUser), &session));
+    }
+    // The local server loads in a linked worktree of its repository once it isn't switched
+    // off; the flags count in that project only.
+    let elsewhere = Catalog::read(&roots, Some(&other));
+    let in_other = Session {
+        agent: Agent::Claude,
+        cwd: &other,
+        project: Some(&other),
+        in_checkout: true,
+    };
+    let user = |name: &str| {
+        elsewhere
+            .servers
+            .iter()
+            .find(|server| server.name == name && server.source == Source::ClaudeUser)
+            .unwrap()
+    };
+    assert!(elsewhere.server_native(user("cu"), &in_other));
+    let mut on = catalog.clone();
+    on.claude_off_here.clear();
+    assert!(on.server_native(server("cl", Source::ClaudeLocal), &session(&worktree)));
+    assert!(on.server_native(server("cu", Source::ClaudePlugin), &session(&project)));
+    // Not trusted, its team server waits for approval.
+    assert_eq!(
+        catalog.claude_approval("cp"),
+        Some(claude_config::Approval::Pending)
+    );
+    assert_eq!(catalog.claude_approval("cu"), None);
+}
+
+#[test]
+fn an_unreadable_claude_config_leaves_the_off_flags_unknown() {
+    let home = fixture("claude-off-bad");
+    let project = home.join("app");
+    std::fs::create_dir_all(&project).unwrap();
+    write(&home.join(".claude.json"), "{ not json");
+    let catalog = Catalog::read(&roots(&home, &[]), Some(&project));
+    assert!(
+        catalog
+            .claude_off_error
+            .as_deref()
+            .is_some_and(|err| err.starts_with("Brigadier couldn't read"))
+    );
+    assert!(catalog.claude_off_here.is_empty());
 }
 
 #[test]

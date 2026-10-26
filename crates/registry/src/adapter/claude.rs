@@ -200,7 +200,8 @@ impl AgentAdapter for Claude {
     }
 
     /// One line a server: `<name>: <command or address> - <status>`, the status
-    /// `! Needs authentication` for one that needs a sign-in (2.1.310).
+    /// `! Needs authentication` for one that needs a sign-in (2.1.310). A server switched off
+    /// in the project (`⊘ Disabled for this project`) doesn't load there, so it isn't listed.
     fn parse_servers(&self, output: &str) -> Vec<Listed> {
         plain_text(output)
             .lines()
@@ -211,6 +212,9 @@ impl AgentAdapter for Claude {
                 let status = rest
                     .rsplit_once(" - ")
                     .map_or("", |(_, status)| status.trim());
+                if status.contains("Disabled for this project") {
+                    return None;
+                }
                 let failed = status
                     .contains("Failed")
                     .then(|| status.trim_start_matches(['✘', '✗', ' ']).to_owned());
