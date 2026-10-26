@@ -16,7 +16,7 @@ import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { NavRow } from "@/components/controls/nav-row";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
-import { fixtureInput } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
@@ -201,6 +201,9 @@ const tooltipText = () => {
   return content?.querySelector('[role="tooltip"]')?.textContent ?? content?.textContent;
 };
 
+/** The open menus' items. */
+const items = () => [...document.querySelectorAll("[role=menu] [role=menuitem]")];
+
 /** Measure the real pointer's hover on the row and each of its sibling action buttons. */
 async function hoverRow() {
   const title = "In this session we'll fix the sidebar session row hover and truncation";
@@ -214,7 +217,8 @@ async function hoverRow() {
   const pinWord = params.has("pinned") ? "Unpin" : "Pin";
   const noun = params.has("chats") ? "chat" : "session";
   const pin = row.querySelector<HTMLButtonElement>(`button[aria-label="${pinWord} ${title}"]`)!;
-  const archive = row.querySelector<HTMLButtonElement>(`button[aria-label="Archive ${title}"]`)!;
+  const dots = row.querySelector<HTMLButtonElement>(`button[aria-label="Actions for ${title}"]`)!;
+  const dotsTip = params.has("chats") ? "Chat actions" : "Session actions";
   const background = () => getComputedStyle(button).backgroundColor;
   const move = async (element: Element) => {
     const rect = element.getBoundingClientRect();
@@ -236,15 +240,15 @@ async function hoverRow() {
     background: background(),
     titleRight: text.getBoundingClientRect().right,
     titleWidth: text.getBoundingClientRect().width,
-    actionsLeft: pin.getBoundingClientRect().left,
+    actionsLeft: dots.getBoundingClientRect().left,
     statusVisible: getComputedStyle(status).display !== "none" && getComputedStyle(status).visibility !== "hidden",
     statusDisplay: getComputedStyle(status).display,
     overflowing: text.scrollWidth > text.clientWidth,
   };
   const actions = [];
-  for (const action of [pin, archive]) {
+  for (const action of [dots, pin]) {
     await move(action);
-    await until(() => tooltipText() === `${action === pin ? pinWord : "Archive"} ${noun}`);
+    await until(() => tooltipText() === (action === pin ? `${pinWord} ${noun}` : dotsTip));
     actions.push({
       background: background(),
       underPointer: action.matches(":hover"),
@@ -254,7 +258,19 @@ async function hoverRow() {
   }
   await fixtureInput({ type: "pointer", x: 1200, y: 900 });
   await wait(150);
-  return { idle, hovered, actions, navHoverBackground, after: { background: background(), titleWidth: text.getBoundingClientRect().width } };
+  const after = { background: background(), titleWidth: text.getBoundingClientRect().width };
+  // The ⋯ opens the tab's menu; no thread is around the sidebar, so it has no Fork.
+  await fixtureClick(dots);
+  await until(() => document.querySelector("[role=menu]") !== null);
+  const menu = items().map((item) => item.textContent?.trim());
+  await fixtureClick(items().find((item) => item.textContent?.trim() === "Copy")!);
+  await until(() => document.querySelectorAll("[role=menu]").length > 1);
+  const copyMenu = [...document.querySelectorAll("[role=menu]")].at(-1)!;
+  const copy = [...copyMenu.querySelectorAll("[role=menuitem]")].map((item) => item.textContent?.trim());
+  await fixtureInput({ type: "key", key: "Escape" });
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until(() => document.querySelector("[role=menu]") === null);
+  return { idle, hovered, actions, menu, copy, navHoverBackground, after };
 }
 
 /** The toasts on screen, by their text. */

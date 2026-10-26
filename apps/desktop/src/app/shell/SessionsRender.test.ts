@@ -7,6 +7,8 @@ type HoveredRow = {
   idle: { background: string; titleWidth: number; statusVisible: boolean; rowHeight: number; fontSize: number; actionWidth: number; iconWidth: number };
   hovered: { background: string; titleRight: number; titleWidth: number; actionsLeft: number; statusVisible: boolean; statusDisplay: string; overflowing: boolean };
   actions: { background: string; underPointer: boolean; tooltip: string; titleRight: number }[];
+  menu: string[];
+  copy: string[];
   navHoverBackground: string;
   after: { background: string; titleWidth: number };
 };
@@ -32,7 +34,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
     assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the state word regains its usual space after leaving");
   });
 
-  test(`${place}: pin and archive keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
+  test(`${place}: the ⋯ and pin keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
     assert.notEqual(seen.hovered.background, seen.idle.background, "the pointer gives an inactive row its hover fill");
     assert.equal(seen.hovered.background, seen.navHoverBackground, "the row uses NavRow's exact hover colour");
@@ -41,8 +43,14 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
       assert.equal(action.background, seen.navHoverBackground, `${action.tooltip}: the whole row keeps NavRow's hover colour`);
       assert.equal(action.titleRight, seen.hovered.titleRight, "moving onto actions does not shorten the title");
     }
-    assert.deepEqual(seen.actions.map((action) => action.tooltip), [`${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`, `Archive ${chat ? "chat" : "session"}`]);
+    assert.deepEqual(seen.actions.map((action) => action.tooltip), [chat ? "Chat actions" : "Session actions", `${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`]);
     assert.equal(seen.after.background, seen.idle.background, "leaving the row clears the hover fill");
+  });
+
+  test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id"]);
   });
 }
 

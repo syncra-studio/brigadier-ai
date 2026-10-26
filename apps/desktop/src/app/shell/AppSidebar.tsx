@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ChatActions } from "@/app/shell/ChatActions";
 import { TooltipIconButton, NavRow } from "@/components/controls";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
@@ -193,6 +194,7 @@ export function AppSidebar() {
         return pickClick("sidebar", id, shownRef.current, event, info?.platform === "macos", open);
       },
       picked: () => pickedIn("sidebar", shownRef.current),
+      Menu: RowMenu,
     }),
     [],
   );
@@ -328,6 +330,11 @@ export function AppSidebar() {
 }
 
 const NO_SESSIONS: Conversation[] = [];
+
+/** A row's ⋯: its tab's menu. */
+function RowMenu({ conversation, onRename }: { conversation: Conversation; onRename: () => void }) {
+  return <ChatActions conversation={conversation} onRename={onRename} row />;
+}
 
 // ----- the strip -------------------------------------------------------------------------
 
