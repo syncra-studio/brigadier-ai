@@ -9,18 +9,18 @@ const task = (kind: BackgroundTask["kind"], status: BackgroundTask["status"], en
   id: "t", itemId: null, kind, label: "t", status, startedAtMs: 0, endedAtMs, outputFile: null, summary, lastLine: null,
 });
 
-test("a background task keeps its row by the CLI's own rules: a command that ended about 5 min, a subagent 30 s (D21)", () => {
+test("only running tasks have live rows; ended records remain untouched for History", () => {
   const now = 1_000_000;
   for (const kind of ["shell", "terminal", "agent", "other"] as const) {
     assert.equal(taskShown(task(kind, "running"), now), true, `a running ${kind} shows`);
   }
   for (const kind of ["shell", "terminal", "other"] as const) {
     for (const status of ["completed", "failed", "stopped"] as const) {
-      assert.equal(taskShown(task(kind, status, now - COMMAND_STAYS_MS + 1), now), true, `a ${status} ${kind} stays`);
+      assert.equal(taskShown(task(kind, status, now - COMMAND_STAYS_MS + 1), now), false, `a ${status} ${kind} leaves at once`);
       assert.equal(taskShown(task(kind, status, now - COMMAND_STAYS_MS), now), false, `a ${status} ${kind} goes after 5 min`);
     }
   }
-  assert.equal(taskShown(task("agent", "completed", now - AGENT_STAYS_MS + 1), now), true);
+  assert.equal(taskShown(task("agent", "completed", now - AGENT_STAYS_MS + 1), now), false);
   assert.equal(taskShown(task("agent", "completed", now - AGENT_STAYS_MS), now), false);
 });
 
@@ -39,7 +39,7 @@ test("a task that ended says how, with its exit code when the CLI said one", () 
   assert.equal(words("completed", null), "finished");
 });
 
-test("the card's rows of the CLI's tasks: running, then how each ended for about 5 min", () => {
+test("task row projection excludes ended work immediately", () => {
   const now = 1_000_000;
   const tasks = [
     { ...task("shell", "running"), id: "a" },
@@ -47,5 +47,5 @@ test("the card's rows of the CLI's tasks: running, then how each ended for about
     { ...task("terminal", "completed", now - 1000), id: "c" },
     { ...task("shell", "stopped", now - COMMAND_STAYS_MS), id: "d" },
   ];
-  assert.deepEqual(taskRows(tasks, [], now).map((row) => [row.id, row.state]), [["task:a", "running"], ["task:b", "finished"], ["task:c", "finished"]]);
+  assert.deepEqual(taskRows(tasks, [], now).map((row) => [row.id, row.state]), [["task:a", "running"]]);
 });

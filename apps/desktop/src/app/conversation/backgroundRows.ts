@@ -10,8 +10,7 @@ import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/genera
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
- * A preview's row leaves as soon as it ends. A CLI's task that ended keeps its row a while by the
- * CLI's own rules (`taskShown`), saying how it ended (D21).
+ * A preview's row leaves as soon as it ends. Ended tasks are retained by durable History, never live Background rows.
  */
 
 export type BackgroundState =
@@ -87,7 +86,7 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 }
 
 /**
- * The CLI's tasks that still have a row at `now` (`taskShown`), excluding the session's worker
+ * Running CLI tasks (`taskShown`), excluding the session's worker
  * wait already covered by the workers card.
  */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {

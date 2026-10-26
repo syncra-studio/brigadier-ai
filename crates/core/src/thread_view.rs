@@ -81,6 +81,17 @@ impl CliJobs {
 }
 
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
+/// Exact daemon provenance marker; the raw native transcript remains untouched.
+pub(crate) const CUT_JOBS_MARK: &str = "[Brigadier background jobs stopped]";
+pub(crate) const BACKGROUND_RESULT_MARK: &str = "[Brigadier background job finished]";
+/// Only a native id previously bound to registered typed input can hide a user-shaped event.
+pub(crate) fn daemon_context(
+    event: &ProviderEvent,
+    known: &std::collections::HashSet<String>,
+) -> bool {
+    matches!(event, ProviderEvent::Message { role: Role::User, item_id, .. } if known.contains(item_id))
+}
+
 pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue this work.";
 /// How a successor's hand-off begins (`[Brigadier hand-off <n> · <session>]`) and ends; the
 /// first message of the successor follows it.
@@ -446,8 +457,9 @@ impl LiveTurn {
                 task.status == BackgroundTaskStatus::Running
                     && task.kind != BackgroundTaskKind::Agent
                     && !self.command_of(task).is_some_and(|command| {
-                        policy::runs_brigadier(command, "wait")
-                            || policy::runs_brigadier(command, "preview")
+                        policy::runs_only_brigadier(command)
+                            && (policy::runs_brigadier(command, "wait")
+                                || policy::runs_brigadier(command, "preview"))
                     })
             })
             .map(|task| task.id.clone())
@@ -841,6 +853,45 @@ mod tests {
 
     /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
     #[cfg(unix)]
+    #[test]
+    fn daemon_provenance_requires_known_native_id_and_respects_authored_markers() {
+        let text = format!("{CUT_JOBS_MARK} a watcher ended");
+        assert!(text.starts_with(CUT_JOBS_MARK));
+        let entry = message("native", Role::User);
+        assert!(!daemon_context(&entry.event, &Default::default()));
+        assert!(daemon_context(
+            &entry.event,
+            &std::collections::HashSet::from(["native".into()])
+        ));
+    }
+
+    #[test]
+    fn reconstructed_projection_keeps_assistant_followup_without_an_internal_workblock() {
+        let raw = vec![
+            message("real-user", Role::User),
+            message("answer-before", Role::Assistant),
+            message("daemon-input", Role::User),
+            message("answer-after", Role::Assistant),
+        ];
+        let known = std::collections::HashSet::from(["daemon-input".to_owned()]);
+        let projected: Vec<_> = raw
+            .iter()
+            .filter(|entry| !daemon_context(&entry.event, &known))
+            .cloned()
+            .collect();
+        let reconstructed = view(vec![Arc::new(projected)], None, &[]);
+        assert_eq!(reconstructed.turns.len(), 1);
+        assert_eq!(
+            ids(&reconstructed),
+            ["real-user", "answer-before", "answer-after"]
+        );
+        assert_eq!(raw.len(), 4, "native diagnostics/history remain untouched");
+        assert!(!daemon_context(
+            &message("authored-identical", Role::User).event,
+            &known
+        ));
+    }
+
     #[test]
     fn a_subagent_file_that_cannot_be_read_leaves_the_thread_whole() {
         let dir = std::env::temp_dir().join(format!("bg-thread-stamp-{}", std::process::id()));

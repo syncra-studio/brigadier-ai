@@ -16,7 +16,7 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, closeMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
-  sideChatName, sideChatTitle, openPastedTab } = await import("./sessionTabs");
+  sideChatName, sideChatTitle, openPastedTab, openPanelTab } = await import("./sessionTabs");
 const { tabTitle } = await import("./sessionTabTitle");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
 const { ensurePage, migrateDrafts } = await import("./pageTabs");
@@ -441,4 +441,27 @@ test("a sent \"Pasted text\" card, which has no number, opens its text in a tab 
   assert.deepEqual(tabs.map((tab) => tab.id), ["pasted:blob-2"]);
   assert.equal(active, id);
   assert.equal(tabTitle(tabs[0]!, tabs), "Pasted text");
+});
+
+
+test("Sources and both histories have distinct identities, restore and return to their opener", () => {
+  const id = "history-tabs";
+  const sources = openPanelTab(id, { type: "sources" }, "Sources");
+  const background = openPanelTab(id, { type: "backgroundHistory" }, "Background history");
+  const prs = openPanelTab(id, { type: "pr-history" }, "Pull request history");
+  const output = openPanelTab(id, { type: "output", source: "history", id: "record-1" }, "Test output");
+  assert.deepEqual(sessionTabs(id).tabs.map((tab) => tab.id), [sources, background, prs, output]);
+  assert.equal(new Set([sources, background, prs, output]).size, 4);
+  const restored = restoreSessionTabs({ [id]: structuredClone(sessionTabs(id)) })[id]!;
+  assert.equal(restored.tabs.length, 4);
+  assert.equal(restored.active, output);
+  closeTab(id, output);
+  assert.equal(sessionTabs(id).active, prs);
+  closeTab(id, prs);
+  assert.equal(sessionTabs(id).active, background);
+  closeTab(id, background);
+  assert.equal(sessionTabs(id).active, sources);
+  openPanelTab(id, { type: "backgroundHistory" }, "Background history");
+  openPanelTab(id, { type: "backgroundHistory" }, "Background history");
+  assert.equal(sessionTabs(id).tabs.filter((tab) => tab.id === background).length, 1);
 });

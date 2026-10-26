@@ -397,10 +397,24 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
 fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
     cli.is_some_and(|cli| {
         cli.open
-            || cli
-                .background
-                .iter()
-                .any(|job| job.status == brigadier_providers::BackgroundTaskStatus::Running)
+            || cli.background.iter().any(|job| {
+                job.status == brigadier_providers::BackgroundTaskStatus::Running
+                    && job.kind != brigadier_providers::BackgroundTaskKind::Agent
+                    && !cli
+                        .commands
+                        .iter()
+                        .find(|(id, _)| job.item_id.as_ref() == Some(id))
+                        .map(|(_, command)| command.as_str())
+                        .or_else(|| {
+                            (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                                .then_some(job.label.as_str())
+                        })
+                        .is_some_and(|command| {
+                            brigadier_providers::policy::runs_only_brigadier(command)
+                                && (brigadier_providers::policy::runs_brigadier(command, "preview")
+                                    || brigadier_providers::policy::runs_brigadier(command, "wait"))
+                        })
+            })
     }) && !task.state.is_final()
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
 }
