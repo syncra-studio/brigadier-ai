@@ -165,7 +165,7 @@ export function HistoricalOutput({ conversationId, recordId, initial, inline = f
   const itemStatus: ItemStatus = running ? "inProgress" : record.status === "failed" ? "failed" : "completed";
   return <>
     {!inline && <Header title={record.purpose} state={record.status === "unknown" ? "End not observed" : record.status} />}
-    {!inline && <p className="text-muted-foreground text-sm">{record.purpose}</p>}
+    {(!inline || record.purpose.includes("\n")) && <p className="text-muted-foreground text-sm whitespace-pre-wrap">{record.purpose}</p>}
     {record.cwd && <p className="text-muted-foreground text-xs break-all">{record.cwd}</p>}
     {record.summary && <p className="text-muted-foreground text-xs">{record.summary}</p>}
     {result.error && <div role="alert" className="flex items-center gap-2 text-sm"><p className="text-destructive">Couldn't load output: {result.error}</p><Button size="xs" variant="ghost" onClick={() => setRetry((n) => n + 1)}>Retry</Button></div>}
@@ -177,7 +177,7 @@ export function HistoricalOutput({ conversationId, recordId, initial, inline = f
       status={itemStatus} exit={record.exitCode} stopped={record.status === "stopped"} outcome={record.status === "unknown" ? "End not observed" : record.status === "completed" ? (record.exitCode === null ? "Finished" : `Finished · exit ${record.exitCode}`) : undefined} emptyOutput={record.outputAvailable ? "No output recorded" : "Output unavailable"} />
     <div className="flex flex-wrap gap-2">
       {inline && <Button size="xs" variant="ghost" onClick={() => openPanelTab(conversationId, { type: "output", source: "history", id: record.id }, record.purpose)}>Open output in a tab</Button>}
-      {running && record.kind !== "preview" && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, record.taskId, record.workerId ?? undefined))}>Stop</Button>}
+      {running && record.kind !== "preview" && (record.kind !== "agent" || record.taskId !== record.callId) && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, record.taskId, record.workerId ?? undefined))}>Stop</Button>}
       {running && record.kind === "preview" && <Button size="xs" variant="ghost" disabled={action.busy} onClick={() => action.run(() => stopPreview(conversationId, record.taskId))}>Stop</Button>}
     </div>
     {action.error && <p role="alert" className="text-destructive text-sm">{action.error}</p>}

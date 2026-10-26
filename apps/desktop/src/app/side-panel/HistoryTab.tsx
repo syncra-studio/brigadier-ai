@@ -27,6 +27,7 @@ export function HistoryTab({ conversationId }: { conversationId: string }) {
         {history.error && <div role="alert" className="flex items-center gap-2 text-sm"><p className="text-destructive">Couldn't load background history: {history.error}</p><Button size="xs" variant="ghost" disabled={history.busy} onClick={() => void loadBackgroundHistory(conversationId)}>Retry</Button></div>}
         <Timeline events={history.records.map((record) => {
           const isOpen = opened.has(record.id);
+          const name = record.purpose.split("\n")[0] || "Background command";
           const agent = record.kind === "agent" ? workers.find((row) => isNativeWorker(row) && (row.native.backgroundId === record.taskId || row.native.callId === record.callId)) : undefined;
           return {
             id: record.id,
@@ -34,7 +35,7 @@ export function HistoryTab({ conversationId }: { conversationId: string }) {
             failed: record.status === "failed" || (record.exitCode !== null && record.exitCode !== 0),
             time: new Date(record.startedAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             title: <button type="button" aria-expanded={isOpen} aria-controls={`background-${record.id}`} className="hover:underline rounded-control text-start underline-offset-4"
-              onClick={() => setOpened((shown) => { const next = new Set(shown); if (isOpen) next.delete(record.id); else next.add(record.id); return next; })}>{record.purpose || "Background command"}</button>,
+              title={record.purpose} onClick={() => setOpened((shown) => { const next = new Set(shown); if (isOpen) next.delete(record.id); else next.add(record.id); return next; })}>{name}</button>,
             detail: <><span>{record.workerId ? rowName(workers, record.workerId) ?? `Worker ${record.workerId.slice(0, 8)}` : "Session"}</span>{" · "}{historyOutcome(record)}{" · "}{historyDuration(record, now)}<span> · {new Date(record.startedAtMs).toLocaleDateString()}</span></>,
             more: isOpen ? <div id={`background-${record.id}`} className="flex min-w-0 flex-col gap-3 pt-2"><HistoricalOutput conversationId={conversationId} recordId={record.id} initial={record} inline />{agent && <Button size="xs" variant="ghost" onClick={() => { selectTab(conversationId, CHAT_TAB); askWorkerPanel(conversationId, agent.id); }}>Open its thread</Button>}</div> : undefined,
           };
