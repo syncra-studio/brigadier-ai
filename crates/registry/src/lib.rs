@@ -46,7 +46,8 @@ pub use plugins::Plugin;
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Agent {
     Claude,
     Codex,
@@ -673,13 +674,11 @@ impl Catalog {
                             == claude_config::project_key(session.cwd)
                     })
             }
-            // A team server turned down (`disabledMcpjsonServers`) never loads; one waiting for
-            // approval loads in a session that runs without a terminal (2.1.310), as
-            // Brigadier's do.
+            // Team approval is separate from /mcp off flags: never bypass the approval gate.
             (Source::ClaudeProject, Agent::Claude) => {
                 project == session.project
                     && !claude_off(&server.name)
-                    && self.claude_approval(&server.name) != Some(claude_config::Approval::Denied)
+                    && self.claude_approval(&server.name) == Some(claude_config::Approval::Approved)
             }
             // Codex loads a project's layers only where the user trusts it in Codex.
             (Source::CodexProject, Agent::Codex) => {

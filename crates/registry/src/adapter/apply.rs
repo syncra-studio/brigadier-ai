@@ -151,10 +151,7 @@ fn check(
         // Each file must read cleanly: a flag is never written over a file Brigadier can't read.
         Step::ClaudeFlags { files, flags } => {
             for file in claude_files(roots, files) {
-                for flag in flags {
-                    crate::claude_config::project_settings(&file, &flag.folder)
-                        .map_err(ApplyError::Failed)?;
-                }
+                crate::claude_config::check_flags(&file, flags).map_err(ApplyError::Failed)?;
             }
             Ok(())
         }

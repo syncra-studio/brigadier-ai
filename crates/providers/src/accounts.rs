@@ -170,11 +170,11 @@ pub fn main_config_file(env: &CliEnv) -> Option<PathBuf> {
         .var(home_var(ProviderKind::Claude))
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from);
-    let legacy = main_home(ProviderKind::Claude, env)?.join(".config.json");
-    if legacy.is_file() {
-        return Some(legacy);
-    }
-    Some(set.or_else(|| env.home())?.join(".claude.json"))
+    let home = env.home().or_else(|| set.clone())?;
+    Some(brigadier_registry::claude_config::config_file(
+        &home,
+        set.as_deref(),
+    ))
 }
 
 /// What [`carry_servers`] last copied from the main config file, kept in the account's home.
@@ -250,43 +250,32 @@ fn carry_once(
         serde_json::Map<String, serde_json::Value>,
     ),
 ) -> io::Result<Option<Carried>> {
-    let _lock = ConfigLock::take(path)?;
-    for _ in 0..RACES {
-        let before = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        let value: serde_json::Value = serde_json::from_str(&before)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let mut result = None;
+    brigadier_registry::claude_config::rewrite_locked(path, |before| {
+        if before.is_empty() && !path.exists() {
+            return Ok(None);
+        }
+        let value: serde_json::Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
         let serde_json::Value::Object(config) = value.clone() else {
-            // Not an object: the CLI's to sort out.
             return Ok(None);
         };
         let (config, now) = merge(config);
         let after = serde_json::Value::Object(config);
-        if after == value {
-            return Ok(Some((Vec::new(), now)));
-        }
         let wrote = carried_values(&after)
             .into_iter()
             .filter(|(at, now)| value.pointer(at) != Some(now))
             .collect();
-        let temp = temp_beside(path);
-        write_new_private(&temp, &after)?;
-        if std::fs::read_to_string(path).ok().as_deref() != Some(before.as_str()) {
-            // A session wrote it meanwhile: merge again from what it wrote.
-            let _ = std::fs::remove_file(&temp);
-            continue;
+        result = Some((wrote, now));
+        if after == value {
+            Ok(None)
+        } else {
+            serde_json::to_string_pretty(&after)
+                .map(|text| Some(text + "\n"))
+                .map_err(|e| e.to_string())
         }
-        std::fs::rename(&temp, path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&temp);
-        })?;
-        return Ok(Some((wrote, now)));
-    }
-    Err(io::Error::other(
-        "Claude Code kept rewriting the account's settings; its servers come at the next start",
-    ))
+    })
+    .map_err(io::Error::other)?;
+    Ok(result)
 }
 
 /// The values carrying sets in `config`, by JSON pointer: the user's servers, and each
@@ -341,10 +330,6 @@ fn put(
     }
     holder.insert(last.clone(), value);
 }
-
-/// How often the account's file may change between the read and the rename before
-/// [`carry_servers`] gives up (each try takes milliseconds).
-const RACES: usize = 20;
 
 /// The JSON in `path`; `None` when it isn't there.
 fn read_json(path: &Path) -> io::Result<Option<serde_json::Value>> {
@@ -485,50 +470,6 @@ fn carried(
         }
     }
     (config, now)
-}
-
-/// Claude Code's lock on its config file `file`: the folder `<file>.lock`, as Claude Code's
-/// proper-lockfile makes it. Held for milliseconds.
-struct ConfigLock(PathBuf);
-
-impl ConfigLock {
-    /// After at most a few seconds' wait; a lock untouched for ten seconds was left behind.
-    fn take(file: &Path) -> io::Result<Self> {
-        let mut path = file.as_os_str().to_owned();
-        path.push(".lock");
-        let path = PathBuf::from(path);
-        let start = std::time::Instant::now();
-        loop {
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&path)
-                        .and_then(|meta| meta.modified())
-                        .is_ok_and(|at| {
-                            at.elapsed()
-                                .is_ok_and(|age| age > std::time::Duration::from_secs(10))
-                        });
-                    if stale {
-                        let _ = std::fs::remove_dir(&path);
-                        continue;
-                    }
-                    if start.elapsed() > std::time::Duration::from_secs(5) {
-                        return Err(io::Error::other(
-                            "Claude Code is busy with the account's settings",
-                        ));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-                Err(err) => return Err(err),
-            }
-        }
-    }
-}
-
-impl Drop for ConfigLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
-    }
 }
 
 /// A fresh temporary file beside `path`.

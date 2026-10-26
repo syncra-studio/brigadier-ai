@@ -65,8 +65,10 @@ fn claude_keeps_one_project_with_its_own_scopes() {
             None
         )
     );
-    // No per-project off for the user's own servers: the Library first (D9).
-    assert!(claude.set_server("pencil", &project(), false).is_err());
+    // The same per-project off flag that Claude's /mcp writes, without changing the original.
+    assert!(
+        matches!(&claude.set_server("pencil", &project(), false).unwrap()[0], Step::ClaudeFlags { flags, .. } if flags[0].name == "pencil" && flags[0].off)
+    );
     assert!(claude.login("plugin:x:s", None).needs_terminal);
 }
 

@@ -94,6 +94,12 @@ pub fn project_settings(file: &Path, folder: &Path) -> Result<ProjectSettings, S
     let Some(config) = read_config(file)? else {
         return Ok(ProjectSettings::default());
     };
+    if !config.is_object() || config.get("projects").is_some_and(|p| !p.is_object()) {
+        return Err(unreadable(
+            file,
+            "expected a settings object and a projects object",
+        ));
+    }
     let key = key_text(&project_key(folder));
     let Some(entry) = config
         .get("projects")
@@ -101,6 +107,17 @@ pub fn project_settings(file: &Path, folder: &Path) -> Result<ProjectSettings, S
     else {
         return Ok(ProjectSettings::default());
     };
+    if !entry.is_object()
+        || entry.get("disabledMcpServers").is_some_and(|v| {
+            v.as_array()
+                .is_none_or(|a| a.iter().any(|v| !v.is_string()))
+        })
+    {
+        return Err(unreadable(
+            file,
+            "expected a project object with a disabledMcpServers list of names",
+        ));
+    }
     Ok(ProjectSettings {
         off: names(entry.get("disabledMcpServers")),
         trusted: entry.get("hasTrustDialogAccepted").and_then(Value::as_bool) == Some(true),
@@ -192,6 +209,30 @@ pub fn set_off_flags(file: &Path, flags: &[OffFlag], settle: Duration) -> Result
     Err("Claude Code rewrote its settings at the same moment; try again.".to_owned())
 }
 
+/// Read and validate a config under Claude's lock without writing it.
+pub fn check_flags(file: &Path, flags: &[OffFlag]) -> Result<(), String> {
+    rewrite_locked(file, |text| {
+        if text.trim().is_empty() && file.exists() {
+            return Err(unreadable(file, "the settings file is empty"));
+        }
+        let mut checked = if text.trim().is_empty() {
+            "{}".to_owned()
+        } else {
+            text.to_owned()
+        };
+        for flag in flags {
+            checked = splice::set_flag(
+                &checked,
+                &key_text(&project_key(&flag.folder)),
+                &flag.name,
+                flag.off,
+            )?;
+        }
+        Ok(None)
+    })
+    .map(|_| ())
+}
+
 /// Whether `file` has every flag of `keyed` as it should be.
 fn holds(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
     let config = read_config(file)?.unwrap_or(Value::Null);
@@ -209,6 +250,9 @@ fn holds(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
 /// One locked edit: read, splice, and rename only if the file is still what was read.
 fn write_once(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
     rewrite_locked(file, |before| {
+        if before.trim().is_empty() && file.exists() {
+            return Err(unreadable(file, "the settings file is empty"));
+        }
         let mut after = if before.trim().is_empty() {
             "{}\n".to_owned()
         } else {
@@ -232,7 +276,7 @@ pub fn rewrite_locked(
     mut edit: impl FnMut(&str) -> Result<Option<String>, String>,
 ) -> Result<bool, String> {
     let target = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
-    let _lock = Lock::take(&target)?;
+    let lock = Lock::take(&target)?;
     for _ in 0..RACES {
         let before = match std::fs::read_to_string(&target) {
             Ok(text) => text,
@@ -254,6 +298,9 @@ pub fn rewrite_locked(
         ));
         write_like(&temp, &after, &target).map_err(|err| unreadable(&target, &err.to_string()))?;
         let now = std::fs::read_to_string(&target).unwrap_or_default();
+        lock.check().inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+        })?;
         if now != before {
             // Claude Code wrote it meanwhile: start again from what it wrote.
             let _ = std::fs::remove_file(&temp);
@@ -289,9 +336,29 @@ fn write_like(temp: &Path, text: &str, like: &Path) -> std::io::Result<()> {
 
 /// Claude Code's lock on its config file: the folder `<file>.lock`, as proper-lockfile makes
 /// it. Held for milliseconds, far under the time after which another program may take it.
-struct Lock(PathBuf);
+struct Lock(PathBuf, std::fs::Metadata);
 
 impl Lock {
+    fn check(&self) -> Result<(), String> {
+        let same = std::fs::metadata(&self.0).is_ok_and(|meta| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                meta.dev() == self.1.dev() && meta.ino() == self.1.ino()
+            }
+            #[cfg(not(unix))]
+            {
+                meta.created().ok() == self.1.created().ok()
+                    && meta.modified().ok() == self.1.modified().ok()
+            }
+        });
+        if same {
+            Ok(())
+        } else {
+            Err("Claude Code's settings lock changed while saving; try again.".into())
+        }
+    }
+
     fn take(file: &Path) -> Result<Self, String> {
         let mut path = file.as_os_str().to_owned();
         path.push(".lock");
@@ -299,13 +366,17 @@ impl Lock {
         let start = Instant::now();
         loop {
             match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
+                Ok(()) => {
+                    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+                    return Ok(Self(path, meta));
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     let stale = std::fs::metadata(&path)
                         .and_then(|meta| meta.modified())
                         .is_ok_and(|at| at.elapsed().is_ok_and(|age| age > STALE));
                     if stale {
-                        let _ = std::fs::remove_dir(&path);
+                        std::fs::remove_dir(&path)
+                            .map_err(|e| format!("Couldn't remove the stale settings lock: {e}"))?;
                         continue;
                     }
                     if start.elapsed() > WAIT {
@@ -326,14 +397,15 @@ impl Lock {
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
+        if self.check().is_ok() {
+            let _ = std::fs::remove_dir(&self.0);
+        }
     }
 }
 
 /// The file parsed; `None` when it isn't there.
 fn read_config(file: &Path) -> Result<Option<Value>, String> {
     match std::fs::read_to_string(file) {
-        Ok(text) if text.trim().is_empty() => Ok(None),
         Ok(text) => serde_json::from_str(&text)
             .map(Some)
             .map_err(|err| unreadable(file, &err.to_string())),

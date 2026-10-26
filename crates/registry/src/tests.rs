@@ -541,7 +541,7 @@ fn native_servers_depend_on_the_session() {
         &home.join(".claude.json"),
         &format!(
             r#"{{"mcpServers": {{"cu": {{"command": "a"}}}},
-                "projects": {{"{}": {{"mcpServers": {{"cl": {{"command": "b"}}}}}}}}}}"#,
+                "projects": {{"{}": {{"mcpServers": {{"cl": {{"command": "b"}}}}, "hasTrustDialogAccepted":true, "enabledMcpjsonServers":["cp"]}}}}}}"#,
             project.display()
         ),
     );

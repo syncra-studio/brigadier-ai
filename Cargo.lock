@@ -665,6 +665,7 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
+ "brigadier-registry",
  "brigadier-sandbox",
  "dirs 7.0.0",
  "junction",

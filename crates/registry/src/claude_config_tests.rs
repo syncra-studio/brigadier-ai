@@ -539,3 +539,31 @@ fn live_claude_honours_the_flags_brigadier_writes() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_lock_stops_the_writer_without_removing_someone_elses_lock() {
+    let root = Scratch::new("compromised-lock");
+    let file = root.join(".claude.json");
+    write(&file, "{\"keep\":true}");
+    let lock = root.join(".claude.json.lock");
+    let error = rewrite_locked(&file, |_| {
+        std::fs::rename(&lock, root.join("old-lock")).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        Ok(Some("{\"keep\":false}".to_owned()))
+    })
+    .unwrap_err();
+    assert!(error.contains("lock changed"));
+    assert!(lock.is_dir());
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "{\"keep\":true}");
+}
+
+#[test]
+fn an_empty_existing_file_is_an_error_never_a_lost_flag_or_a_fresh_config() {
+    let root = Scratch::new("empty-config");
+    let file = root.join(".claude.json");
+    write(&file, "");
+    assert!(project_settings(&file, &root).is_err());
+    assert!(set_off_flags(&file, &[flag(&root, "kept", true)], NOW).is_err());
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "");
+}

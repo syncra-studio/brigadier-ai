@@ -15,6 +15,7 @@ codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
 aho-corasick = "1.1.5"
 base64.workspace = true
 brigadier-sandbox.workspace = true
+brigadier-registry.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

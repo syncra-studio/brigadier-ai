@@ -9,8 +9,8 @@
 //!   server under another name) gets no copy, and loses one it was given when it gets its own.
 //! - **Remove** takes only what Brigadier made and is remembered (L8): the item isn't shared
 //!   again until Share with every agent. It is written down before any copy goes.
-//! - **Locked** (L21): an original no agent command can switch off or keep to some projects
-//!   (Claude's own servers, skill folders) makes the switch and the scope refuse.
+//! - Server originals keep their entries and use native off flags; copies follow the saved
+//!   choice. Skill folders remain locked when the agent cannot switch them.
 //!
 //! What sharing remembers is `.sharing.json` in the Library's folder.
 
@@ -29,6 +29,9 @@ use super::model::{self, KeyKind, Model, Origin, ProjectCatalog, Row};
 use super::ops::{self, Ctx, Placed, Runner};
 use super::{PluginItemDetails, PluginKind, PluginServerSettings, PluginSkillFile, provider};
 
+#[path = "flags.rs"]
+mod flags;
+
 const FILE: &str = ".sharing.json";
 
 /// What sharing remembers.
@@ -36,6 +39,9 @@ const FILE: &str = ".sharing.json";
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct Sharing {
     pub version: u32,
+    pub(super) chosen: BTreeMap<String, flags::Choice>,
+    pub(super) owned: Vec<flags::Flag>,
+    pub(super) pending: Option<flags::Pending>,
     /// Each Library plugin sharing made, by its name.
     pub items: BTreeMap<String, Record>,
     /// Items the user removed: never shared again until Share with every agent.
@@ -149,7 +155,12 @@ impl Sharing {
         .map_err(|err| err.to_string())?;
         let temp = file.with_file_name(format!(".sharing.json.{}", std::process::id()));
         std::fs::create_dir_all(library.root())
-            .and_then(|()| std::fs::write(&temp, text))
+            .and_then(|()| {
+                use std::io::Write;
+                let mut out = std::fs::File::create(&temp)?;
+                out.write_all(text.as_bytes())?;
+                out.sync_all()
+            })
             .and_then(|()| std::fs::rename(&temp, &file))
             .map_err(|err| format!("Brigadier couldn't save {}: {err}", file.display()))
     }
@@ -538,10 +549,23 @@ pub(crate) fn sync(
     run: Runner<'_>,
 ) -> Result<(), String> {
     let mut sharing = Sharing::load(ctx.library)?;
+    flags::recover(ctx, &mut sharing, run)?;
     // A removal that started finishes first.
     for lib in sharing.pending_removal.clone() {
         if ctx.library.entry(&lib).is_some() {
             ops::remove_library_with(ctx, &lib, run)?;
+        }
+        if let Some(record) = sharing.items.get(&lib) {
+            let key = format!(
+                "{}:{}",
+                if record.kind == PluginKind::Server {
+                    "server"
+                } else {
+                    "skill"
+                },
+                record.name
+            );
+            flags::restore(ctx, &mut sharing, &key, run)?;
         }
         sharing.items.remove(&lib);
         sharing.pending_removal.retain(|known| *known != lib);
@@ -549,6 +573,22 @@ pub(crate) fn sync(
     }
     let catalogs = Catalogs::read(ctx);
     let model = catalogs.model(ctx, &sharing);
+    // Flags with neither an original nor a surviving copy no longer have a purpose.
+    let orphaned = sharing
+        .owned
+        .iter()
+        .filter(|f| {
+            !model.rows.iter().any(|r| r.key.text() == f.owner)
+                && !sharing
+                    .items
+                    .values()
+                    .any(|record| f.owner == format!("server:{}", record.name))
+        })
+        .map(|f| f.owner.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for key in orphaned {
+        flags::restore(ctx, &mut sharing, &key, run)?;
+    }
     // Rows with a copy first: a renamed twin (the same endpoint) never gets a second one.
     let mut rows: Vec<&Row> = model.rows.iter().collect();
     rows.sort_by_key(|row| row.lib.is_none());
@@ -627,14 +667,14 @@ fn sync_row(
         return Ok(());
     };
     let endpoint = row.endpoint();
-    if row.conflict || sharing.is_declined(row) || cant_share(row).is_some() {
+    if (row.conflict || sharing.is_declined(row) || cant_share(row).is_some())
+        && !sharing.chosen.contains_key(&row.key.text())
+    {
         return Ok(());
     }
-    if let Some(lib) = row
-        .lib
-        .as_ref()
-        .filter(|lib| !sharing.items.contains_key(*lib))
-    {
+    if let Some(lib) = row.lib.as_ref().filter(|lib| {
+        !sharing.items.contains_key(*lib) && !sharing.chosen.contains_key(&row.key.text())
+    }) {
         // Added through Brigadier, not made by sharing: the user's to place. An agent with
         // neither its own nor the copy gets the copy, as any item added through Brigadier.
         tune(ctx, row, lib, run)?;
@@ -650,6 +690,37 @@ fn sync_row(
             ops::add_missing_with(ctx, &format!("lib:{lib}"), run)?;
         }
         return Ok(());
+    }
+    if row.kind == PluginKind::Server {
+        flags::adopt(ctx, sharing, row)?;
+        if row.lib.is_none() && endpoint.as_ref().is_some_and(|mine| given.contains(mine)) {
+            return Ok(());
+        }
+        let choice = sharing
+            .chosen
+            .get(&row.key.text())
+            .cloned()
+            .unwrap_or_else(|| {
+                let global = !row.everywhere().is_empty()
+                    || row.equivalent.iter().any(|(_, at, on)| at.is_none() && *on);
+                let mut paths = row.here().into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+                paths.extend(
+                    row.equivalent
+                        .iter()
+                        .filter_map(|(_, p, on)| on.then_some(p.clone()).flatten()),
+                );
+                paths.sort();
+                paths.dedup();
+                flags::Choice {
+                    on: row.on() || row.equivalent.iter().any(|(_, _, on)| *on),
+                    scope: (!global).then_some(paths),
+                }
+            });
+        let result = flags::action(ctx, catalogs, sharing, row, choice, false, run);
+        if result.is_ok() {
+            given.extend(endpoint);
+        }
+        return result;
     }
     let wants = wanted(row, ctx.projects);
     let lib = match &row.lib {
@@ -836,9 +907,25 @@ fn sync_library(
         if record.absent_passes < 2 {
             return Ok(());
         }
+        let key = format!(
+            "{}:{}",
+            if record.kind == PluginKind::Server {
+                "server"
+            } else {
+                "skill"
+            },
+            record.name
+        );
         ops::remove_library_with(ctx, lib, run)?;
+        flags::restore(ctx, sharing, &key, run)?;
         sharing.items.remove(lib);
         return Ok(());
+    }
+    if row.kind == PluginKind::Server
+        && let Some(choice) = sharing.chosen.get(&row.key.text()).cloned()
+    {
+        flags::adopt(ctx, sharing, row)?;
+        return flags::action(ctx, catalogs, sharing, row, choice, false, run);
     }
     let id = plugin_id(lib);
     let lacking = adapters().into_iter().any(|adapter| {
@@ -1081,6 +1168,33 @@ pub(crate) fn switch(ctx: &Ctx<'_>, key: &str, on: bool, run: Runner<'_>) -> Res
     if let Some(why) = &row.own.lock {
         return Err(why.clone());
     }
+    if row.kind == PluginKind::Server && row.key.kind != KeyKind::Plugin {
+        flags::recover(ctx, &mut sharing, run)?;
+        let key = row.key.text();
+        let scope = sharing
+            .chosen
+            .get(&key)
+            .map(|c| c.scope.clone())
+            .unwrap_or_else(|| {
+                if row.on() {
+                    scope_now(&row, ctx.projects)
+                } else {
+                    sharing.off_scopes.get(&key).cloned().flatten()
+                }
+            });
+        if on && scope.as_ref().is_some_and(Vec::is_empty) {
+            return Err("Pick a project, or All projects.".to_owned());
+        }
+        return flags::action(
+            ctx,
+            &catalogs,
+            &mut sharing,
+            &row,
+            flags::Choice { on, scope },
+            true,
+            run,
+        );
+    }
     let key = row.key.text();
     if on {
         let scope = sharing
@@ -1125,6 +1239,25 @@ pub(crate) fn set_scope(
     if let Some(why) = &row.own.lock {
         return Err(why.clone());
     }
+    if row.kind == PluginKind::Server && row.key.kind != KeyKind::Plugin {
+        flags::recover(ctx, &mut sharing, run)?;
+        let on = sharing
+            .chosen
+            .get(&row.key.text())
+            .map_or_else(|| row.on(), |c| c.on);
+        return flags::action(
+            ctx,
+            &catalogs,
+            &mut sharing,
+            &row,
+            flags::Choice {
+                on,
+                scope: scope.map(<[PathBuf]>::to_vec),
+            },
+            true,
+            run,
+        );
+    }
     if row.on() {
         apply(ctx, &catalogs, &row, true, scope, run)
     } else {
@@ -1142,7 +1275,9 @@ pub(crate) fn set_scope(
 /// first.
 pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), String> {
     let mut sharing = Sharing::load(ctx.library)?;
+    flags::recover(ctx, &mut sharing, run)?;
     let (_, row) = find(ctx, &sharing, key)?;
+    flags::check_restore(ctx, &sharing, &row.key.text())?;
     let own = !row.own.sources.is_empty();
     let declined = Declined::of(&row);
     let Some(lib) = row.lib.clone() else {
@@ -1151,6 +1286,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
             if !sharing.declined.contains(&declined) {
                 sharing.declined.push(declined);
             }
+            flags::restore(ctx, &mut sharing, &row.key.text(), run)?;
             return sharing.save(ctx.library);
         }
         return Err(
@@ -1223,6 +1359,7 @@ pub(crate) fn remove(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Result<(), St
         let _ = std::fs::remove_dir_all(ops::moved_dir(ctx.library).join(&lib));
     }
     let key = row.key.text();
+    flags::restore(ctx, &mut sharing, &key, run)?;
     sharing.items.remove(&lib);
     sharing.pending_removal.retain(|known| *known != lib);
     sharing.off_scopes.remove(&key);

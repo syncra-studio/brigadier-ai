@@ -435,25 +435,6 @@ pub(crate) fn server_detail(server: &Server) -> (String, Option<String>) {
     }
 }
 
-/// Why the switch and the scope can't change an agent's own server.
-fn server_lock(server: &Server, home: &Path) -> Option<String> {
-    match server.source {
-        Source::ClaudeUser | Source::ClaudeLocal => Some(
-            "Claude Code keeps it on: it's in Claude Code's own settings, which Brigadier leaves as they are."
-                .to_owned(),
-        ),
-        Source::ClaudeProject => Some(format!(
-            "Shared with your team in {}: change it there.",
-            tilde(&server.file, home)
-        )),
-        Source::CodexProject => Some(format!(
-            "It's set up in {}: change it there.",
-            tilde(&server.file, home)
-        )),
-        _ => None,
-    }
-}
-
 /// The agent that finds skills in `root`.
 fn root_agent(root: &SkillRoot) -> Agent {
     match root {
@@ -596,7 +577,6 @@ fn gather(
             && !server.overrides_user
             && let Some(agent) = owner(server.source)
         {
-            presence.lock(server_lock(server, home));
             presence.origin(Origin::Server {
                 agent,
                 server: Box::new(server.clone()),
@@ -705,7 +685,6 @@ fn gather(
         );
         push(&mut presence.anywhere, agent);
         if server.plugin.is_none() {
-            presence.lock(server_lock(server, home));
             presence.origin(Origin::Server {
                 agent,
                 server: Box::new(server.clone()),
@@ -783,6 +762,33 @@ pub(crate) struct Row {
 }
 
 impl Row {
+    /// Server-only Claude copies use native flags for their per-project switch.
+    pub fn flag_only(&self, agent: Agent) -> bool {
+        self.kind == PluginKind::Server && agent == Agent::Claude
+    }
+
+    /// The native names Claude gives the Library copy's servers.
+    pub fn copy_servers(
+        &self,
+        library: &brigadier_registry::library::Library,
+        lib: &str,
+    ) -> Result<Vec<String>, String> {
+        let entry = library
+            .entry(lib)
+            .ok_or_else(|| format!("{lib} is no longer in the Library."))?;
+        let text =
+            std::fs::read_to_string(entry.dir.join(".mcp.json")).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let servers = value
+            .get("mcpServers")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| "The Library copy has no MCP servers.".to_owned())?;
+        Ok(servers
+            .keys()
+            .map(|name| format!("plugin:{lib}:{name}"))
+            .collect())
+    }
+
     /// Agents that have it: their own entry, the same server by another name, or (for another
     /// marketplace's plugin) the plugin.
     pub fn holders(&self) -> Vec<Agent> {
@@ -922,6 +928,12 @@ pub(crate) fn model(
             continue;
         };
         let presence = row(&mut items, key);
+        if agent == Agent::Claude
+            && brigadier_registry::claude_config::project_settings(&server.file, folder)
+                .is_ok_and(|settings| settings.off.contains(&server.name))
+        {
+            continue;
+        }
         presence.note(agent, Some(folder));
         push(&mut presence.native, (agent, server.name.clone(), None));
     }
@@ -1003,6 +1015,15 @@ pub(crate) fn model(
                 equivalent: Vec::new(),
                 conflict: false,
             }),
+        }
+    }
+    for row in &mut rows {
+        for presence in [&mut row.own, &mut row.copy] {
+            presence.everywhere.retain(|agent| {
+                projects
+                    .iter()
+                    .all(|project| presence.here.contains(&(project.path.clone(), *agent)))
+            });
         }
     }
     // The same server under another name, per agent; two different setups of one name; an

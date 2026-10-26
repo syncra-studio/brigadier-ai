@@ -140,6 +140,7 @@ fn lines(steps: &[Step]) -> Vec<String> {
     steps
         .iter()
         .map(|step| match step {
+            Step::ClaudeFlags { flags, .. } => format!("claude flags {flags:?}"),
             Step::Run(call) => format!("{} {}", call.program, call.args.join(" ")),
             Step::UserConfig(TomlEdit { key, value }) => {
                 format!("user {} = {value:?}", key.join("."))
@@ -173,6 +174,7 @@ fn remove_also_takes_an_install_a_project_has_of_its_own() {
         library: &fx.library,
         secrets: &fx.secrets,
         projects: &projects,
+        claude_configs: &[],
         report: &|_, _| {},
         binary: &|_| None,
     };
@@ -252,6 +254,7 @@ fn add_goes_to_every_agent_and_its_values_only_to_the_keychain() {
         library: &library,
         secrets: &secrets,
         projects: &[],
+        claude_configs: &[],
         report: &report,
         binary: &binary,
     };
@@ -334,6 +337,7 @@ fn an_original_server_is_saved_without_its_values_and_put_back_with_them() {
         library: &fx.library,
         secrets: &fx.secrets,
         projects: &projects,
+        claude_configs: &[],
         report: &|_, _| {},
         binary: &|_| None,
     };
@@ -529,6 +533,7 @@ fn plain_clis_get_what_another_agent_has() {
         library: &library,
         secrets: &secrets,
         projects: &projects,
+        claude_configs: &[],
         report: &|_, _| {},
         binary: &|_| None,
     };
@@ -584,6 +589,20 @@ fn simulate(home: &Path, step: &Step) {
         write(file, &toml::to_string(&doc).unwrap());
     }
     match step {
+        Step::ClaudeFlags { files, flags } => {
+            for file in if files.is_empty() {
+                vec![home.join(".claude.json")]
+            } else {
+                files.clone()
+            } {
+                brigadier_registry::claude_config::set_off_flags(
+                    &file,
+                    flags,
+                    std::time::Duration::ZERO,
+                )
+                .unwrap();
+            }
+        }
         // Adding the Library's marketplace changes nothing these tests read.
         Step::Run(call) if call.args.get(1).map(String::as_str) == Some("marketplace") => {}
         Step::Run(call) if call.program == "codex" && call.args[1] == "add" => {
@@ -671,6 +690,7 @@ fn places_ctx<'a>(fx: &'a Fixture, projects: &'a [PathBuf]) -> Ctx<'a> {
         library: &fx.library,
         secrets: &fx.secrets,
         projects,
+        claude_configs: &[],
         report: &|_, _| {},
         binary: &|_| None,
     }
@@ -1078,6 +1098,7 @@ fn review_legacy_server_restore_is_idempotent_and_retains_secrets() {
         library: &fx.library,
         secrets: &fx.secrets,
         projects: &projects,
+        claude_configs: &[],
         report: &|_, _| {},
         binary: &|_| None,
     };

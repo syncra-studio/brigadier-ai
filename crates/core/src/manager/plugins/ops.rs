@@ -107,6 +107,7 @@ pub(crate) struct Ctx<'a> {
     pub secrets: &'a dyn Secrets,
     /// The user's projects (folders): where an item may be on or off by itself.
     pub projects: &'a [PathBuf],
+    pub claude_configs: &'a [PathBuf],
     /// Tells the page how each agent's part goes.
     pub report: &'a (dyn Fn(Agent, PluginStep) + Sync),
     /// Each agent's CLI as sessions run it (the user's choice included); `None`: its name on
@@ -222,7 +223,7 @@ pub(super) fn plugin_id_of(ctx: &Ctx<'_>, agent: Agent, name: &str) -> Option<St
 }
 
 /// Where one agent has a plugin: what the scope sets, and what a failed move puts back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Placed {
     /// It has it at all: installed, for every project or one, or on somewhere.
     pub has: bool,
@@ -274,7 +275,6 @@ impl Placed {
 }
 
 /// Where `adapter`'s agent has Library plugin `id` now.
-#[cfg(test)]
 pub(super) fn placed(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Placed {
     placed_in(&Plugins::read(ctx), ctx, adapter, id)
 }
@@ -695,6 +695,58 @@ fn put_back_with(ctx: &Ctx<'_>, id: &str, before: &[(Agent, Placed)], run: Runne
     all
 }
 
+/// Checks every prospective move before a native off flag is written.
+pub(super) fn preflight(ctx: &Ctx<'_>, id: &str, wants: &[(Agent, Placed)]) -> Result<(), String> {
+    let now = Plugins::read(ctx);
+    for (agent, want) in wants {
+        let adapter = adapter(*agent);
+        for step in moves_to(want, ctx.projects).iter().flatten() {
+            let steps = move_steps(ctx, &now, adapter, id, step)?;
+            brigadier_registry::adapter::check_steps(
+                adapter,
+                ctx.roots,
+                &ctx.read(None),
+                &steps,
+                ctx.env,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(super) struct ChangeError {
+    pub agent: Agent,
+    pub reason: String,
+    pub restored: bool,
+    pub left: Option<String>,
+    pub rollback: Vec<(Agent, Placed)>,
+}
+
+impl std::fmt::Display for ChangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.restored {
+            write!(f, "Nothing was changed: ")?;
+        }
+        let stop = if self.reason.ends_with(['.', '!', '?']) {
+            ""
+        } else {
+            "."
+        };
+        write!(f, "{}: {}{stop}", adapter(self.agent).label(), self.reason)?;
+        if let Some(left) = &self.left {
+            write!(f, " {left}")?;
+        }
+        Ok(())
+    }
+}
+impl From<ChangeError> for String {
+    fn from(error: ChangeError) -> Self {
+        error.to_string()
+    }
+}
+
 /// Brings each agent of `wants` to its places for Library plugin `id`. If a move fails, those
 /// agents go back where they had it, as far as they can, and the error says what was left
 /// changed: "Nothing was changed" only when the agents' settings read the same as before.
@@ -706,7 +758,7 @@ pub(super) fn change(
     id: &str,
     wants: &[(Agent, Placed)],
     run: Runner<'_>,
-) -> Result<(), String> {
+) -> Result<(), ChangeError> {
     let read = |now: &Plugins| -> Vec<(Agent, Held)> {
         adapters()
             .into_iter()
@@ -744,19 +796,23 @@ pub(super) fn change(
         .collect();
     put_back_with(ctx, id, &back, run);
     let after = read(&Plugins::read(ctx));
-    let label = adapter(agent).label();
-    let stop = if reason.ends_with(['.', '!', '?']) {
-        ""
-    } else {
-        "."
-    };
-    Err(match left_changed(&before, &after, ctx.projects) {
-        Some(left) => format!("{label}: {reason}{stop} It couldn't all be put back: {left}"),
-        None if before == after => format!("Nothing was changed: {label}: {reason}{stop}"),
-        None => format!(
-            "{label}: {reason}{stop} Each agent has it where it had it again, but {}.",
-            settings_left(&before, &after).join("; ")
-        ),
+    let restored = before == after;
+    let left = left_changed(&before, &after, ctx.projects)
+        .map(|left| format!("It couldn't all be put back: {left}"))
+        .or_else(|| {
+            (!restored).then(|| {
+                format!(
+                    "Each agent has it where it had it again, but {}.",
+                    settings_left(&before, &after).join("; ")
+                )
+            })
+        });
+    Err(ChangeError {
+        agent,
+        reason,
+        restored,
+        left,
+        rollback: back,
     })
 }
 
@@ -797,7 +853,7 @@ pub(super) fn set_places_with(
         .into_iter()
         .map(|adapter| (adapter.agent(), want.clone()))
         .collect();
-    change(ctx, &id, &wants, run)
+    change(ctx, &id, &wants, run).map_err(Into::into)
 }
 
 /// Gives Library item `key` to the agents that lack it, where the others have it (installed
@@ -834,7 +890,7 @@ pub(super) fn add_missing_with(ctx: &Ctx<'_>, key: &str, run: Runner<'_>) -> Res
     if wants.is_empty() {
         return Ok(());
     }
-    change(ctx, &id, &wants, run)
+    change(ctx, &id, &wants, run).map_err(Into::into)
 }
 
 /// How an item reads in the Add dialog.

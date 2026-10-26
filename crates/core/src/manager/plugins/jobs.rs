@@ -184,6 +184,7 @@ pub(crate) struct Setup {
     pub library: Library,
     pub cli: PathBuf,
     pub projects: Vec<PathBuf>,
+    pub claude_configs: Vec<PathBuf>,
     /// Each agent's CLI as sessions run it.
     pub binary: Arc<dyn Fn(Agent) -> Option<PathBuf> + Send + Sync>,
 }
@@ -206,6 +207,7 @@ pub(crate) fn with_ctx<T>(
         library: &setup.library,
         secrets: &secrets,
         projects: &setup.projects,
+        claude_configs: &setup.claude_configs,
         report,
         binary: &*setup.binary,
     };
