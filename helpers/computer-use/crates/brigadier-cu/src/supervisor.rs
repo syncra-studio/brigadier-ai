@@ -34,6 +34,30 @@ pub const REFUSED_MESSAGE: &str = "Brigadier Computer Use refused this agent's c
      program the agent reached it through isn't signed as part of Brigadier. Start the agent \
      again from Brigadier";
 
+/// Windows and Linux: what an agent is told when Brigadier replaced this helper's build while
+/// the agent ran. Its program lies in a retired build folder; the new build's daemon only
+/// serves its own program, so this server can't reach it.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub const RETIRED_MESSAGE: &str = "Brigadier updated its computer-use helper while this \
+     session was running. Start a new session (or restart this one) to keep using apps";
+
+/// The mark Brigadier leaves in a build folder an update replaced.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const RETIRED_MARKER: &str = "retired";
+
+/// Whether this program's build folder was retired by an update (Windows and Linux).
+#[cfg(not(target_os = "macos"))]
+pub fn retired() -> bool {
+    std::env::current_exe().is_ok_and(|exe| retired_at(&exe))
+}
+
+/// Whether the build folder of the program at `exe` holds the retired mark.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn retired_at(exe: &Path) -> bool {
+    exe.parent()
+        .is_some_and(|folder| folder.join(RETIRED_MARKER).exists())
+}
+
 /// How long a probe may wait for the daemon to answer a `list` request.
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 /// How long a launched daemon may take to answer its first probe.
@@ -175,6 +199,11 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
     let off = || crate::lifecycle::is_off(&crate::lifecycle::home());
     if off() {
         anyhow::bail!(crate::lifecycle::OFF_MESSAGE);
+    }
+    // A replaced build neither probes nor starts a daemon: the new build's owns the socket.
+    #[cfg(not(target_os = "macos"))]
+    if retired() {
+        anyhow::bail!(RETIRED_MESSAGE);
     }
     if is_current(socket_path) {
         return Ok(());
@@ -394,14 +423,12 @@ fn is_helper_executable(path: &std::path::Path) -> bool {
         && parts.next().is_some()
 }
 
-/// Windows and Linux: whether `path` is the helper's executable,
-/// `brigadier-cu` (`brigadier-cu.exe`), wherever Brigadier placed it.
+/// Windows and Linux: whether `path` is this very program. Each build is placed in a folder
+/// of its own, so a daemon from another build (an older one an agent still runs, or a newer
+/// one) is never stopped by this one.
 #[cfg(not(target_os = "macos"))]
 fn is_helper_executable(path: &std::path::Path) -> bool {
-    path.file_name().is_some_and(|name| {
-        let name = name.to_string_lossy();
-        name == "brigadier-cu" || name.eq_ignore_ascii_case("brigadier-cu.exe")
-    })
+    std::env::current_exe().is_ok_and(|own| crate::peer_auth::same_path(&own, path))
 }
 
 /// Stop the daemon recorded in `pid_file`, if it is still ours. Sends
@@ -494,6 +521,32 @@ fn process_start_time(pid: u32) -> Option<SystemTime> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_retired_build_folder_is_known_by_its_mark() {
+        let folder = std::env::temp_dir().join(format!("cu-retired-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("brigadier-cu");
+        assert!(!retired_at(&exe));
+        std::fs::write(folder.join(RETIRED_MARKER), "abc").unwrap();
+        assert!(retired_at(&exe));
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// Windows and Linux: only this very program's daemon is ours to stop.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn only_this_program_is_the_helper() {
+        let own = std::env::current_exe().unwrap();
+        assert!(is_helper_executable(&own));
+        let other_build = own
+            .parent()
+            .unwrap()
+            .join("0123456789abcdef")
+            .join(own.file_name().unwrap());
+        assert!(!is_helper_executable(&other_build));
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_old_daemon_is_known_by_its_executable_wherever_its_bundle_moved() {
         let helper = |path: &str| is_helper_executable(std::path::Path::new(path));

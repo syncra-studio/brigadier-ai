@@ -246,27 +246,25 @@ impl SessionManager {
         )
     }
 
-    /// Windows and Linux: the placed program, else the one beside brigadierd.
+    /// Windows and Linux: the current build's placed program, else the one beside brigadierd.
     #[cfg(not(target_os = "macos"))]
     fn computer_binary(&self) -> Option<PathBuf> {
-        let placed = self
-            .computer_home()
-            .join("bin")
-            .join(super::computer_use::HELPER_APP);
-        if placed.exists() {
-            return Some(placed);
-        }
-        super::computer_use::bundled_helper(&self.config.daemon_exe)
+        super::computer_use::placed_program(&self.computer_home())
+            .or_else(|| super::computer_use::bundled_helper(&self.config.daemon_exe))
     }
 
-    /// The placed helper: its bundle on macOS, its program elsewhere.
+    /// The placed helper: its bundle on macOS.
+    #[cfg(target_os = "macos")]
+    fn computer_placed(&self) -> PathBuf {
+        self.computer_home().join(super::computer_use::HELPER_APP)
+    }
+
+    /// Windows and Linux: the current build's placed program (in its build's folder).
+    #[cfg(not(target_os = "macos"))]
     fn computer_placed(&self) -> PathBuf {
         let home = self.computer_home();
-        if cfg!(target_os = "macos") {
-            home.join(super::computer_use::HELPER_APP)
-        } else {
-            home.join("bin").join(super::computer_use::HELPER_APP)
-        }
+        super::computer_use::placed_program(&home)
+            .unwrap_or_else(|| home.join("bin").join(super::computer_use::HELPER_APP))
     }
 
     /// Runs `brigadier-cu host <args>` and returns its JSON line.

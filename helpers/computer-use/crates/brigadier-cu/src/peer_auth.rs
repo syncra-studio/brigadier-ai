@@ -16,7 +16,7 @@ pub fn validate(pid: Option<u32>) -> std::io::Result<()> {
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
-fn same_path(own: &std::path::Path, peer: &std::path::Path) -> bool {
+pub(crate) fn same_path(own: &std::path::Path, peer: &std::path::Path) -> bool {
     // Linux retains this suffix on a running binary replaced during update.
     let own = own.to_string_lossy();
     let peer = peer.to_string_lossy();
