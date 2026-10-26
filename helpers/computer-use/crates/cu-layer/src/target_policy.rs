@@ -113,6 +113,8 @@ pub fn enforce(
     if is_listing_tool(tool) {
         return Ok(());
     }
+    #[cfg(not(target_os = "macos"))]
+    enforce_executable_launch(tool, args, allowed)?;
     let own_pid = i64::from(std::process::id());
     let mut checked_pid = None;
     if let Some(pid) = args.get("pid").and_then(Value::as_i64) {
@@ -314,6 +316,17 @@ fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
             | "userpackagemanager"
             | "systemsettings"
             | "gnome-control-center"
+            | "systemsettings5"
+            | "systemsettings6"
+            | "xfce4-settings-manager"
+            | "xfce4-settings-editor"
+            | "mate-control-center"
+            | "cinnamon-settings"
+            | "control"
+            | "regedit"
+            | "mmc"
+            | "rundll32"
+            | "gnome-shell"
             | "lxpolkit"
             | "gcr-prompter"
             | "gcr-viewer"
@@ -406,7 +419,59 @@ fn is_windows_or_linux_terminal(bundle: &str) -> bool {
             | "terminology"
             | "cool-retro-term"
             | "blackbox"
+            | "bash"
+            | "sh"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "ksh"
+            | "wsl"
+            | "wslhost"
+            | "env"
     ) || bundle.starts_with("microsoft.windowsterminal")
+}
+
+/// Native launch aliases do not pass through the macOS `name`/`bundle_id`
+/// path. Check the actual command token as well as the display name.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn enforce_executable_launch(
+    tool: &str,
+    args: &Value,
+    allowed: &[String],
+) -> Result<(), ToolResult> {
+    if tool != "launch_app" {
+        return Ok(());
+    }
+    for key in ["name", "bundle_id", "aumid", "path", "launch_path"] {
+        let Some(reference) = args[key].as_str() else {
+            continue;
+        };
+        let reference = reference.trim();
+        let token = if let Some(quoted) = reference.strip_prefix('"') {
+            quoted.split('"').next().unwrap_or(quoted)
+        } else if reference.contains('!') {
+            reference
+        } else if reference.to_ascii_lowercase().contains(".exe") {
+            let end = reference.to_ascii_lowercase().find(".exe").unwrap() + 4;
+            &reference[..end]
+        } else {
+            reference.split_whitespace().next().unwrap_or(reference)
+        };
+        let executable = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        let id = executable.to_ascii_lowercase();
+        let id = id.strip_suffix(".exe").unwrap_or(&id);
+        let id = id.strip_suffix(".desktop").unwrap_or(id);
+        check(
+            tool,
+            &TargetIdentity {
+                name: id.to_owned(),
+                bundle_id: Some(id.to_owned()),
+                pid: None,
+            },
+            allowed,
+        )?;
+    }
+    Ok(())
 }
 
 /// `launch_app` accepts a display name or an app path; compare the app name.
@@ -830,6 +895,46 @@ mod tests {
             assert!(check("get_window_state", &exe(settings), &[]).is_ok());
             assert!(check("launch_app", &exe(settings), &[]).is_ok());
             assert!(check("click", &exe(settings), &[]).is_err());
+        }
+    }
+
+    #[test]
+    fn native_launch_aliases_cannot_launch_protected_executables() {
+        for args in [
+            json!({"path": "C:\\Windows\\System32\\cmd.exe"}),
+            json!({"launch_path": "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -Command whoami"}),
+            json!({"aumid": "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"}),
+            json!({"launch_path": "shell:appsFolder\\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"}),
+            json!({"name": "/usr/bin/gnome-terminal --wait"}),
+            json!({"launch_path": "/usr/bin/bash -c whoami"}),
+            json!({"launch_path": "/opt/Brigadier/brigadier-app"}),
+            json!({"launch_path": "polkit-gnome-authentication-agent-1"}),
+        ] {
+            assert!(
+                enforce_executable_launch("launch_app", &args, &[]).is_err(),
+                "{args}"
+            );
+        }
+        for args in [
+            json!({"path":"C:\\Windows\\notepad.exe"}),
+            json!({"launch_path":"gedit --new-window"}),
+        ] {
+            assert!(enforce_executable_launch("launch_app", &args, &[]).is_ok());
+        }
+        for settings in [
+            "systemsettings5",
+            "systemsettings6",
+            "xfce4-settings-manager",
+            "control",
+            "regedit",
+        ] {
+            let identity = TargetIdentity {
+                name: settings.into(),
+                bundle_id: Some(settings.into()),
+                pid: Some(42),
+            };
+            assert!(check("click", &identity, &[]).is_err(), "{settings}");
+            assert!(check("type_text", &identity, &[]).is_err(), "{settings}");
         }
     }
 }
