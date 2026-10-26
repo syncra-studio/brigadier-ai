@@ -60,14 +60,15 @@ screencapturekit = { version = "8.0.1", features = ["macos_15_0"] }
 
 
 [dev-dependencies]
-# Shared integration-test harness (MCP/CLI transports, child reaping, paths,
-# response accessors). Dev-only — never linked into the shipped driver.
-cu-testkit = { path = "../cu-testkit" }
 tokio = { workspace = true, features = ["full"] }
 base64 = { workspace = true }
 # Isolated HOME / cache directories for `version_check` unit tests so they
 # never touch the developer's real `~/.brigadier-cu/version_check.json`.
 tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# The desktop integration harness currently only implements macOS.
+cu-testkit = { path = "../cu-testkit" }
 
 [lints]
 workspace = true

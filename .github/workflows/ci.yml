@@ -203,6 +203,8 @@ jobs:
           cargo clippy --locked -p brigadier-cu -p cu-layer -- -D warnings
           cargo clippy --locked -p cu-layer --all-targets -- -D warnings
           cargo test --locked -p cu-layer --lib
+          cargo clippy --locked -p brigadier-cu --lib -- -D warnings
+          cargo test --locked -p brigadier-cu --lib
       - name: Windows Connect and project setup tests
         if: runner.os == 'Windows'
         # Connect's fakes use the real PowerShell runner and the daemon staged above as the
