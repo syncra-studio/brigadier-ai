@@ -440,6 +440,19 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer menus, rail & queue | `Rail item/Card` | `app/conversation/Notices.tsx` | `Notices` | look of `Rail item/Card` (the tray); its notice rows are code only |
 | — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
+## Inline visuals
+
+Top-level Chats draw `brigadier-table`, `brigadier-chart` and `brigadier-html` fences inline.
+Sessions, workers, side chats and tab chats keep the code card. Tables reuse the Markdown
+table's scrolling, copy and expand controls. Charts use the app's colour tokens, a bounded
+container and a text description of the values. Invalid data shows a plain error; open table
+and chart fences show “Drawing…”.
+
+HTML previews update at most once a second with scripts removed. A closed fence gets a fresh,
+offline frame with the app's text, surface, border, spacing and control tokens. The frame can
+resize from 50 to 4000 pixels. A follow-up click puts text in the composer for the user to send;
+it is ignored while a turn runs. HTTPS links follow the app's existing link path.
+
 ## Icons
 
 Every icon the app draws lives in `apps/desktop/src/components/icons/`, one folder per set, and

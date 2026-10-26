@@ -4,6 +4,9 @@ import {
   type FC,
   type ReactNode,
   type RefObject,
+  lazy,
+  Suspense,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,6 +14,9 @@ import {
   useState,
 } from "react";
 
+import { VisualsContext } from "./visuals/bridge";
+import { VisualFrame } from "./visuals/frame";
+import { VisualChart } from "./visuals/chart";
 import { holdInThread } from "@/components/conversation/thread-scroll";
 import { CopyButton } from "@/components/shared/copy-button";
 import { Button } from "@/components/controls/button";
@@ -27,6 +33,8 @@ import { ArrowRight, ChevronDown, ChevronUp, Code, DotsHorizontal, ExpandLg, Spi
 import { useFindSearching } from "@/lib/findSearching";
 import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";
+
+const VisualTable = lazy(() => import("./visuals/table").then((module) => ({ default: module.VisualTable })));
 
 /** How a block's language is named in its header ("Bash", "Diff", "TypeScript"). */
 const NAMES: Record<string, string> = {
@@ -298,6 +306,22 @@ const lineWord = (count: number) => `${count} ${count === 1 ? "line" : "lines"}`
  * says so with its line count. A mermaid block draws its diagram.
  */
 export const CodeBlock: FC<SyntaxHighlighterProps> = ({ code, language, node }) => {
+  const visuals = useContext(VisualsContext);
+  const kind = language.toLowerCase();
+  if (visuals && ["brigadier-table", "brigadier-chart", "brigadier-html"].includes(kind)) {
+    const writing = node?.properties["dataOpen"] === true;
+    if (kind === "brigadier-html") return <VisualFrame code={code} writing={writing} />;
+    if (writing) return <p role="status">Drawing…</p>;
+    let value: unknown;
+    try {
+      value = JSON.parse(code);
+    } catch {
+      return <p role="alert">This visual has invalid data. Ask for a new visual.</p>;
+    }
+    return kind === "brigadier-table" ? (
+      <Suspense fallback={<p role="status">Drawing…</p>}><VisualTable value={value} /></Suspense>
+    ) : <VisualChart value={value} />;
+  }
   if (language.toLowerCase() === "mermaid") return <Diagram code={code} />;
   return <CodeCard code={code} language={language} node={node} />;
 };

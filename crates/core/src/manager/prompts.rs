@@ -72,7 +72,8 @@ How to write:
 /// work, with sources inline and no layout of the model's own; the app draws cards only for
 /// real things (files, images, the edited files, a running local page).
 macro_rules! answer_style {
-    () => {
+    () => { answer_style!("") };
+    ($visuals:literal) => {
         concat!(
             "
 
@@ -86,7 +87,8 @@ How a final answer looks:
 - Cite a web source as a link on the words of the claim it supports, right where it stands ([the 2026 price list](https://…)): never numbered marks like [1], and never a list of sources at the end.
 - A comparison may be one plain Markdown table of at most 3 columns, with your pick said in the sentence before it.
 - Never leave out a warning, or anything the reader must know to stay safe. Write numbers as \"7 out of 10\", not percentages, and explain each term once, in passing.
-- Brigadier draws real things as cards of its own (a file or image you link, the files you edited, a local page you started): never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section."
+- Brigadier draws real things as cards of its own (a file or image you link, the files you edited, a local page you started): never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section.",
+            $visuals
         )
     };
 }
@@ -178,7 +180,8 @@ macro_rules! chat_thread {
 - With the browser tools listed, read or use pages yourself.
 - ",
             chat_app_rule!(),
-            " `brigadier --help` lists the rest."
+            " `brigadier --help` lists the rest.
+- Draw inline when a table, chart, diagram or interactive tool helps. First read `brigadier app visuals`; use its brigadier-table, brigadier-chart or brigadier-html fences."
         )
     };
 }
@@ -259,6 +262,13 @@ const SIDE_CHAT_THREAD: &str = side_chat_thread!();
 
 /// How a Chat writes, and shapes an answer with its report (Q79, Q87).
 const CHAT_VOICE: &str = concat!(
+    voice_core!(),
+    answer_style!(
+        " In this top-level Chat, the drawing guide's visual fences are an exception: use them when they help explain the answer."
+    ),
+    research_report!("`brigadier report save`")
+);
+const SIDE_CHAT_VOICE: &str = concat!(
     voice_core!(),
     answer_style!(),
     research_report!("`brigadier report save`")
@@ -399,8 +409,9 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
 /// A Chat's instructions, or a side chat's (`side`).
 pub(crate) fn chat(side: bool) -> String {
     let thread = if side { SIDE_CHAT_THREAD } else { CHAT_THREAD };
+    let voice = if side { SIDE_CHAT_VOICE } else { CHAT_VOICE };
     format!(
-        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{thread}\n- {CHAT_GRILLING}{CHAT_VOICE}",
+        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{thread}\n- {CHAT_GRILLING}{voice}",
         STANDING_INSTRUCTIONS.trim_end(),
         today()
     )
@@ -409,6 +420,21 @@ pub(crate) fn chat(side: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawing_is_offered_only_in_top_level_chats() {
+        assert!(chat(false).contains("brigadier app visuals"));
+        assert!(chat(false).contains("visual fences are an exception"));
+        for text in [
+            chat(true),
+            STANDING_INSTRUCTIONS.to_owned(),
+            TAB_CHAT_VOICE.to_owned(),
+            worker_instructions(&Settings::default(), ProviderKind::Claude),
+        ] {
+            assert!(!text.contains("brigadier app visuals"));
+            assert!(!text.contains("visual fences are an exception"));
+        }
+    }
 
     /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
     /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The orchestrator's

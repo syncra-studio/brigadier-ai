@@ -640,7 +640,7 @@ pub const COMMANDS: &[Command] = &[
                   <path>`, `diff last-turn|branch|uncommitted`, `output <id>`, `url <url>`, \
                   `worker <id>` or `page <id>`; `terminal-run \
                   <command…>` types a command in a terminal tab; `show-session <id>` shows \
-                  another session; `close-tab <tab>` closes a tab.",
+                  another session; `close-tab <tab>` closes a tab; `visuals` reads the Chat drawing guide.",
         args: &[
             action(
                 &[
@@ -650,6 +650,7 @@ pub const COMMANDS: &[Command] = &[
                     "terminal-run",
                     "show-session",
                     "close-tab",
+                    "visuals",
                 ],
                 "What to do.",
             ),

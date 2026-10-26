@@ -53,6 +53,7 @@
     "radix-ui": "1.6.7",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "recharts": "3.10.1",
     "remark-gfm": "4.0.1",
     "shiki": "4.4.3",
     "sigma": "3.0.3",

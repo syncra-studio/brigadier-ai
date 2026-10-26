@@ -707,7 +707,15 @@ fn main() {
         smoke,
     );
     tracing::info!(on = check_updates, "nightly updates");
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().register_uri_scheme_protocol("brigadier-ui", |_context, request| {
+        let found = request.uri().path() == "/frame";
+        tauri::http::Response::builder()
+            .status(if found { 200 } else { 404 })
+            .header("Content-Type", "text/html; charset=utf-8")
+            .header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'")
+            .body(if found { include_bytes!("visuals_frame.html").to_vec() } else { Vec::new() })
+            .expect("fixed visual frame response")
+    });
     let builder = if check_updates {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     } else {

@@ -46,6 +46,8 @@ import {
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
+import { canDrawVisuals, VisualsContext } from "@/components/conversation/visuals";
+import { openLink as openVisualLink } from "@/state/links";
 import { putBack, restoreDraft } from "@/app/conversation/composerDraft";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { workerName } from "@/app/conversation/rowWords";
@@ -1076,6 +1078,11 @@ export function ConversationView({
     },
     [checkout, conversationId],
   );
+  const visuals = useMemo(() => canDrawVisuals(conversation, embedded) && conversationId ? {
+    running,
+    prefill: (text: string) => putBack(conversationId, text),
+    openLink: (url: string) => { void openVisualLink(url, { agent: true }).catch(fail); },
+  } : null, [conversation, embedded, conversationId, running, fail]);
   return (
     <ViewContext.Provider value={view}>
       <ThreadHistoryContext.Provider value={earlier}>
@@ -1128,12 +1135,14 @@ export function ConversationView({
                             >
                               <SummaryPane summary={summary}>
                                 {summary && <SessionSummary conversation={conversation} />}
+                                <VisualsContext.Provider value={visuals}>
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
                                   scrollKey={conversation?.id}
                                 />
+                                </VisualsContext.Provider>
                               </SummaryPane>
                             </div>
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}

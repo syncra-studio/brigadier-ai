@@ -703,6 +703,11 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
         "app" => {
             match action.as_str() {
                 "state" => {}
+                "visuals" => {
+                    if let Some(extra) = words.first() {
+                        return Err(error(&format!("unexpected argument {extra:?}")));
+                    }
+                }
                 "read-terminal" => put("terminal", one("terminal", true)?),
                 "show-session" => put("id", one("id", true)?),
                 "close-tab" => put("tab", one("tab", true)?),
@@ -1033,6 +1038,15 @@ mod tests {
         );
         assert!(fails(&["fusion", "offer", " "]).contains("missing <question>"));
         assert!(fails(&["fusion", "start", "Q"]).contains("not one of"));
+    }
+
+    #[test]
+    fn app_visuals_reads_the_guide_without_arguments() {
+        let (kind, action, args) = tool(&["app", "visuals"]);
+        assert_eq!(kind, Tool::App);
+        assert_eq!(action, "visuals");
+        assert_eq!(args, json!({}));
+        assert!(fails(&["app", "visuals", "extra"]).contains("unexpected"));
     }
 
     #[test]

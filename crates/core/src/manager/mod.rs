@@ -114,6 +114,7 @@ pub(super) mod upgrade;
 mod usage;
 mod usage_view;
 mod user_rebase;
+mod visuals;
 mod waiting;
 pub mod warm;
 mod watchdog;

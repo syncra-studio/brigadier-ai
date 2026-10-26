@@ -42,6 +42,7 @@ impl SessionManager {
     /// An app tool's call from the thread or a Chat of `id`.
     pub(crate) async fn app_tool(&self, id: ConversationId, call: AppToolCall) -> ToolReply {
         let replied = match call {
+            AppToolCall::Visuals => self.visuals_guide(&id),
             AppToolCall::State => Ok(self.app_state_text(&id).await),
             AppToolCall::ReadTerminal(args) => self.read_terminal_text(&id, &args.terminal).await,
             AppToolCall::Open(args) => self.open_in_app(&id, args).await,

@@ -597,6 +597,8 @@ pub struct CloseTab {
 /// An app tool call (Q90), from the thread or a Chat.
 #[derive(Debug, Clone)]
 pub enum AppToolCall {
+    /// Read the drawing guide for a top-level Chat.
+    Visuals,
     /// `app_state`: what the session has open in the app now.
     State,
     ReadTerminal(ReadTerminal),
@@ -610,6 +612,7 @@ impl AppToolCall {
     /// The tool's name.
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Visuals => "app_visuals",
             Self::State => "app_state",
             Self::ReadTerminal(_) => "read_terminal",
             Self::Open(_) => "open_in_app",

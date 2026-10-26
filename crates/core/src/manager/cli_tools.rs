@@ -126,6 +126,7 @@ fn tool_call(
         (Tool::Browser, "screenshot") => ToolCall::Browser(B::Screenshot(args(given)?)),
         (Tool::Browser, "close") => ToolCall::Browser(B::Close(args(given)?)),
         (Tool::Browser, "show") => ToolCall::Browser(B::Show(args(given)?)),
+        (Tool::App, "visuals") => ToolCall::App(A::Visuals),
         (Tool::App, "state") => ToolCall::App(A::State),
         (Tool::App, "read-terminal") => ToolCall::App(A::ReadTerminal(args(given)?)),
         (Tool::App, "open") => ToolCall::App(A::Open(args(given)?)),
