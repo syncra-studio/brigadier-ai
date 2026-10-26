@@ -7,49 +7,42 @@ type HoveredRow = {
   idle: { background: string; titleWidth: number; statusVisible: boolean; rowHeight: number; fontSize: number; actionWidth: number; iconWidth: number };
   hovered: { background: string; titleRight: number; titleWidth: number; actionsLeft: number; statusVisible: boolean; statusDisplay: string; overflowing: boolean };
   actions: { background: string; underPointer: boolean; tooltip: string; titleRight: number }[];
+  navHoverBackground: string;
   after: { background: string; titleWidth: number };
 };
 
-test("hovering a session with a state word gives its title all the room before the two actions", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "sessions.html?hover=1", "sessions-result", 20000)) as HoveredRow;
-  assert.equal(seen.idle.statusVisible, true);
-  assert.equal(seen.hovered.statusVisible, false);
-  assert.equal(seen.hovered.overflowing, true, "a long title still truncates");
-  const gap = seen.hovered.actionsLeft - seen.hovered.titleRight;
-  assert.ok(gap >= 0 && gap <= 3, `only the existing clearance before the icons is reserved (${gap}px)`);
-  assert.ok(seen.hovered.titleWidth > seen.idle.titleWidth, "the hidden Working word and spinner give their space back to the title");
-  assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the state word regains its usual space after leaving");
-});
+for (const place of ["project sessions", "chats", "pinned sessions", "pinned chats"]) {
+  const pinned = place.startsWith("pinned");
+  const chat = place.endsWith("chats");
+  const page = `sessions.html?hover=1${pinned ? "&pinned=1" : ""}${chat ? "&chats=1" : ""}`;
 
-test("pin and archive keep the session row's hover background while their tooltips show", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "sessions.html?hover=1", "sessions-result", 20000)) as HoveredRow;
-  assert.notEqual(seen.hovered.background, seen.idle.background, "the pointer gives an inactive row its hover fill");
-  for (const action of seen.actions) {
-    assert.equal(action.underPointer, true, "the real pointer is on the action button");
-    assert.equal(action.background, seen.hovered.background, `${action.tooltip}: the whole row stays hovered`);
-    assert.equal(action.titleRight, seen.hovered.titleRight, "moving onto actions does not shorten the title");
-  }
-  assert.deepEqual(seen.actions.map((action) => action.tooltip), ["Pin session", "Archive session"]);
-  assert.equal(seen.after.background, seen.idle.background, "leaving the row clears the hover fill");
-});
-
-for (const place of ["chats", "pinned sessions", "pinned chats"]) {
-  test(`${place} keep their existing row appearance`, { timeout: 60000 }, async (t) => {
-    const pinned = place.startsWith("pinned");
-    const chat = place.endsWith("chats");
-    const seen = JSON.parse(await renderFixtureLive(t, `sessions.html?hover=1${pinned ? "&pinned=1" : ""}${chat ? "&chats=1" : ""}`, "sessions-result", 20000)) as HoveredRow;
+  test(`${place}: hovering with a state word gives the title all the room before the two actions`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
     assert.equal(seen.idle.rowHeight, 30);
     assert.equal(seen.idle.fontSize, 14);
     assert.equal(seen.idle.actionWidth, 20);
     assert.equal(seen.idle.iconWidth, 16);
     assert.equal(seen.idle.statusVisible, true);
     assert.equal(seen.hovered.statusVisible, false);
-    assert.equal(seen.hovered.statusDisplay, "flex", "other rows retain the status slot while hovered");
-    assert.equal(seen.idle.titleWidth - seen.hovered.titleWidth, 50, "only the existing action padding changes the title width");
-    assert.notEqual(seen.hovered.background, seen.idle.background);
-    for (const action of seen.actions) assert.equal(action.background, seen.idle.background, "other rows keep their existing action hover appearance");
+    assert.equal(seen.hovered.statusDisplay, "none", "the replaced state no longer takes title space");
+    assert.equal(seen.hovered.overflowing, true, "a long title still truncates");
+    const gap = seen.hovered.actionsLeft - seen.hovered.titleRight;
+    assert.ok(gap >= 0 && gap <= 3, `only the existing clearance before the icons is reserved (${gap}px)`);
+    assert.ok(seen.hovered.titleWidth > seen.idle.titleWidth, "the hidden Working word and spinner give their space back to the title");
+    assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the state word regains its usual space after leaving");
+  });
+
+  test(`${place}: pin and archive keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
+    assert.notEqual(seen.hovered.background, seen.idle.background, "the pointer gives an inactive row its hover fill");
+    assert.equal(seen.hovered.background, seen.navHoverBackground, "the row uses NavRow's exact hover colour");
+    for (const action of seen.actions) {
+      assert.equal(action.underPointer, true, "the real pointer is on the action button");
+      assert.equal(action.background, seen.navHoverBackground, `${action.tooltip}: the whole row keeps NavRow's hover colour`);
+      assert.equal(action.titleRight, seen.hovered.titleRight, "moving onto actions does not shorten the title");
+    }
     assert.deepEqual(seen.actions.map((action) => action.tooltip), [`${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`, `Archive ${chat ? "chat" : "session"}`]);
-    assert.deepEqual(seen.after, { background: seen.idle.background, titleWidth: seen.idle.titleWidth });
+    assert.equal(seen.after.background, seen.idle.background, "leaving the row clears the hover fill");
   });
 }
 

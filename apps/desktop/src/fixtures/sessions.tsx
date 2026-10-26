@@ -13,6 +13,7 @@ import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
 import { SessionTabBar } from "@/app/shell/SessionTabBar";
+import { NavRow } from "@/components/controls/nav-row";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
@@ -227,6 +228,9 @@ async function hoverRow() {
     rowHeight: button.getBoundingClientRect().height, fontSize: parseFloat(getComputedStyle(button).fontSize),
     actionWidth: pin.getBoundingClientRect().width, iconWidth: pin.querySelector("svg")!.getBoundingClientRect().width,
   };
+  const reference = document.getElementById("hover-reference")!;
+  await move(reference);
+  const navHoverBackground = getComputedStyle(reference).backgroundColor;
   await move(text);
   const hovered = {
     background: background(),
@@ -250,7 +254,7 @@ async function hoverRow() {
   }
   await fixtureInput({ type: "pointer", x: 1200, y: 900 });
   await wait(150);
-  return { idle, hovered, actions, after: { background: background(), titleWidth: text.getBoundingClientRect().width } };
+  return { idle, hovered, actions, navHoverBackground, after: { background: background(), titleWidth: text.getBoundingClientRect().width } };
 }
 
 /** The toasts on screen, by their text. */
@@ -482,7 +486,10 @@ function Fixture() {
             <SidebarPanel strip={<AppStrip />}>
               <AppSidebar />
             </SidebarPanel>
-            <main className="bg-background flex-1">{(params.has("close") || params.has("manual") || params.has("states")) && <OpenBar />}</main>
+            <main className="bg-background flex-1">
+              {params.has("hover") && <NavRow id="hover-reference">Hover colour reference</NavRow>}
+              {(params.has("close") || params.has("manual") || params.has("states")) && <OpenBar />}
+            </main>
           </div>
         </SidebarProvider>
       </div>
