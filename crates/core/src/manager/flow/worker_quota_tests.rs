@@ -97,16 +97,18 @@ async fn worker(flow: &Flow) -> Task {
 async fn an_error_only_limit_updates_the_account_and_moves_the_same_worker() {
     let (flow, seen) = flow("worker-quota-account", false, 60_000, 1, true, None).await;
     flow.until("worker recovered", |board| {
-        board.orchestrator_steps.iter().any(|step| {
-            matches!(
-                &step.kind,
-                OrchestratorStepKind::ProviderTransition {
-                    task_id: Some(_),
-                    cause: ProviderTransitionCause::AutomaticFallback,
-                    ..
-                }
-            )
-        })
+        Flow::task(board, 1).quota_wait.is_none()
+            && Flow::task(board, 1).state == TaskState::Reported
+            && board.orchestrator_steps.iter().any(|step| {
+                matches!(
+                    &step.kind,
+                    OrchestratorStepKind::ProviderTransition {
+                        task_id: Some(_),
+                        cause: ProviderTransitionCause::AutomaticFallback,
+                        ..
+                    }
+                )
+            })
     })
     .await;
     let task = worker(&flow).await;
@@ -136,7 +138,9 @@ async fn an_error_only_limit_updates_the_account_and_moves_the_same_worker() {
 #[tokio::test]
 async fn eligible_cross_provider_recovery_is_scoped_to_the_worker() {
     let (flow, seen) = flow("worker-quota-provider", false, 60_000, 1, false, None).await;
-    flow.until("worker on Codex", |board| board.orchestrator_steps.iter().any(|step| matches!(&step.kind,
+    flow.until("worker on Codex", |board| Flow::task(board, 1).quota_wait.is_none()
+        && Flow::task(board, 1).state == TaskState::Reported
+        && board.orchestrator_steps.iter().any(|step| matches!(&step.kind,
         OrchestratorStepKind::ProviderTransition { task_id: Some(_), to, account, account_label, .. }
         if to.provider == ProviderKind::Codex && account.provider == ProviderKind::Codex && !account_label.is_empty()))).await;
     let task = worker(&flow).await;
@@ -201,27 +205,38 @@ async fn a_hard_provider_pin_waits_durably_and_stop_cancels_recovery() {
 
 #[tokio::test]
 async fn a_worker_reset_resumes_native_history_and_confirms_once() {
-    let (flow, seen) = flow("worker-quota-reset", true, 300, 1, false, None).await;
+    let (flow, seen) = flow("worker-quota-reset", true, 60_000, 1, false, None).await;
     flow.until("worker quota wait", |board| {
         Flow::task(board, 1).quota_wait.is_some()
     })
     .await;
     let task = worker(&flow).await;
-    let reset = task.quota_wait.as_ref().unwrap().resets_at_ms.unwrap();
-    flow.until("worker reset", |_| crate::now_ms() > reset)
-        .await;
+    // Observe the durable wait before resetting its quota. A 300 ms reset could pass
+    // while the fixture was still starting, so there was no wait left to observe.
+    let account = task.quota_wait.as_ref().unwrap().account.as_ref().unwrap();
+    let now = crate::now_ms();
+    let monitor = flow.manager.runtime.monitor();
+    let mut quota = monitor.current_for(account, now).unwrap();
+    quota.limit.as_mut().unwrap().resets_at_ms = Some(now - 1);
+    for window in &mut quota.windows {
+        window.resets_at_ms = Some(now - 1);
+    }
+    quota.observed_at_ms = now;
+    monitor.note(account, &quota, now);
     flow.manager.retry_waiting_workers().await;
     flow.until("reset confirmed", |board| {
-        board.orchestrator_steps.iter().any(|step| {
-            matches!(
-                &step.kind,
-                OrchestratorStepKind::ProviderTransition {
-                    task_id: Some(_),
-                    cause: ProviderTransitionCause::QuotaReset,
-                    ..
-                }
-            )
-        })
+        Flow::task(board, 1).quota_wait.is_none()
+            && Flow::task(board, 1).state == TaskState::Reported
+            && board.orchestrator_steps.iter().any(|step| {
+                matches!(
+                    &step.kind,
+                    OrchestratorStepKind::ProviderTransition {
+                        task_id: Some(_),
+                        cause: ProviderTransitionCause::QuotaReset,
+                        ..
+                    }
+                )
+            })
     })
     .await;
     let turns = seen.lock().unwrap().clone();

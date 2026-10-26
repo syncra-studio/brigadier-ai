@@ -588,6 +588,14 @@ async fn a_crash_after_the_successor_took_its_handoff_resumes_it() {
         matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
     })
     .await;
+    // The third grow's report can still be starting a parent turn after the seam
+    // closes. Drain it before arming the flow-wide next-send gate, so that gate
+    // belongs to the successor's hand-off rather than the parent's notification.
+    until(&flow, "the third grow heard", || {
+        seen.heard("finished") == 4
+    })
+    .await;
+    flow.idle().await;
     // Its successor took its input, and Brigadier dies before it heard so.
     let reached = Arc::new(tokio::sync::Notify::new());
     *flow.behavior.hold_send.lock().unwrap() =
