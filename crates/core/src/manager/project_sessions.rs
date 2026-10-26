@@ -2,12 +2,16 @@
 //! same project see each other on a read-only board (title, state, repository, branch and
 //! changed files). A new session starts from another one here (⌘⏎, "Start as session").
 
+use std::collections::HashSet;
+
+use crate::board::Board;
 use crate::model::{
-    Conversation, ConversationId, EnvironmentRequest, Lifecycle, Mention, Setup, SetupRequest,
+    Conversation, ConversationId, DomainEvent, EnvironmentRequest, Lifecycle, Mention, MessageRole,
+    Setup, SetupRequest,
 };
 use crate::work::AttachmentRef;
-use crate::work::{SettledTab, TabState};
-use crate::{Error, Result};
+use crate::work::{OrchestratorStep, OrchestratorStepKind, SettledTab, TabState};
+use crate::{Error, Result, now_ms};
 
 use super::SessionManager;
 use super::conversation::SendOutcome;
@@ -41,6 +45,163 @@ impl SessionManager {
                 Err(err)
             }
         }
+    }
+
+    /// `offer_session` (`brigadier session propose`): a card in the thread with one "Start as
+    /// session" button for work that should run apart (the thread judges what; this only
+    /// plumbs). Nothing starts until the user clicks it ([`Self::start_offered_session`]). The
+    /// same task once a request.
+    pub(crate) async fn offer_session(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::OfferSession,
+    ) -> Result<String> {
+        let task = args.task.trim();
+        if task.is_empty() {
+            return Err(Error::Invalid(
+                "`task` must say what the session is to do".into(),
+            ));
+        }
+        let title = args
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map_or_else(|| offer_title(task), str::to_owned);
+        let conv = self.conv(id)?;
+        let _offer = conv.session_offer.lock().await;
+        offering_from(&self.core.conversation(id)?)?;
+        let request = self.request_for(id).await;
+        let board = self.core.board(id).await?;
+        if board.orchestrator_steps.iter().any(|step| {
+            step.request_id == request
+                && matches!(&step.kind, OrchestratorStepKind::SessionOffered { task: offered, .. } if offered == task)
+        }) {
+            return Err(Error::Invalid(
+                "This task was already offered for this request: don't offer it again.".into(),
+            ));
+        }
+        self.store_step(
+            id,
+            request,
+            OrchestratorStepKind::SessionOffered {
+                id: uuid::Uuid::now_v7().to_string(),
+                title,
+                task: task.to_owned(),
+            },
+        )
+        .await?;
+        Ok("The user sees it as a card with a Start as session button: one click starts it as a session of its own, on its own branch. Don't start it yourself or do it here; carry on with the request.".into())
+    }
+
+    /// The user's Start as session on the offer `offer_id` in `from` (`offer_session`): its
+    /// task starts as a new session of the project, as ⌘⏎ starts one, and the offer is spent.
+    /// Once only: the checks, the new session and its record hold `from`'s offer lock, so a
+    /// second click waits and is refused. An offer out of view (from an attempt the user ran again, or
+    /// a message they edited away) or from a session archived or being deleted starts nothing.
+    pub async fn start_offered_session(
+        &self,
+        from: &ConversationId,
+        offer_id: &str,
+    ) -> Result<(Conversation, SendOutcome)> {
+        let conv = self.conv(from)?;
+        let _offer = conv.session_offer.lock().await;
+        offering_from(&self.core.conversation(from)?)?;
+        let board = self.core.board(from).await?;
+        let Some(offer) = board.orchestrator_steps.iter().find(|step| {
+            matches!(&step.kind, OrchestratorStepKind::SessionOffered { id, .. } if id == offer_id)
+        }) else {
+            return Err(Error::NotFound(format!("session offer {offer_id}")));
+        };
+        let OrchestratorStepKind::SessionOffered { task, .. } = &offer.kind else {
+            unreachable!("found as an offer");
+        };
+        if board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::SessionOfferTaken { id, .. } if id == offer_id)
+        }) {
+            return Err(Error::Invalid("This session was already started.".into()));
+        }
+        if !self.in_view(from, &board).await?(offer) {
+            return Err(Error::Invalid(
+                "This offer is from an earlier answer: ask again for it.".into(),
+            ));
+        }
+        let (request, task) = (offer.request_id.clone(), task.clone());
+        // Taken is on record before its task goes: the offer can't start a second session, and
+        // nothing runs in one whose record failed.
+        let session = self.create_session_from(from, None).await?;
+        let taken = OrchestratorStepKind::SessionOfferTaken {
+            id: offer_id.to_owned(),
+            session: session.id.clone(),
+        };
+        if let Err(err) = self.store_step(from, request, taken).await {
+            // Nothing works in it yet: the empty session goes, and the offer stays open.
+            if let Err(err) = self.delete(session.id.clone()).await {
+                tracing::warn!(conversation = %session.id, error = %err, "could not remove a session whose offer could not be marked taken");
+            }
+            return Err(err);
+        }
+        // The session is the offer's now: one whose task couldn't go stays, for the user to
+        // send it there.
+        let outcome = self
+            .send_message(session.id.clone(), task, Vec::new(), Vec::new(), false, None)
+            .await
+            .map_err(|err| {
+                Error::Invalid(format!(
+                    "The session started, but its task couldn't be sent ({err}): open it and send the task there."
+                ))
+            })?;
+        // As any session: its first message titled it.
+        Ok((self.core.conversation(&session.id)?, outcome))
+    }
+
+    /// Records the thread's step `kind` in `id`'s request `request`, failing if it can't.
+    async fn store_step(
+        &self,
+        id: &ConversationId,
+        request: Option<String>,
+        kind: OrchestratorStepKind,
+    ) -> Result<()> {
+        let step = OrchestratorStep {
+            request_id: request,
+            kind,
+            at_ms: now_ms(),
+            position: 0,
+        };
+        self.core
+            .record_conversation(id, vec![DomainEvent::OrchestratorStepped { step }])
+            .await
+            .map(drop)
+    }
+
+    /// Whether a step of `id`'s `board` is in view, as the thread shows it: not from a request's
+    /// earlier attempt (before a Try again), nor from a message the user edited away.
+    async fn in_view<'a>(
+        &self,
+        id: &ConversationId,
+        board: &'a Board,
+    ) -> Result<impl Fn(&crate::work::OrchestratorStep) -> bool + 'a> {
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
+        };
+        let shown: HashSet<String> = messages
+            .into_iter()
+            .filter(|message| message.role == MessageRole::User)
+            .map(|message| message.request_id.unwrap_or(message.id))
+            .collect();
+        Ok(
+            move |step: &crate::work::OrchestratorStep| match &step.request_id {
+                Some(request) => {
+                    shown.contains(request)
+                        && board
+                            .requests
+                            .get(request)
+                            .is_none_or(|request| step.at_ms >= request.started_at_ms)
+                }
+                None => true,
+            },
+        )
     }
 
     /// A new, empty session of `from`'s project, as [`Self::start_session`] makes it.
@@ -383,5 +544,35 @@ impl SessionManager {
         .await
         .ok()
         .flatten()
+    }
+}
+
+/// Refuses a session offer from anything but an open session of a project: a Chat, a side
+/// chat or a tab's chat has no project to open one in, and an archived session or one being
+/// deleted offers nothing more.
+fn offering_from(conversation: &Conversation) -> Result<()> {
+    if !conversation.is_tab() || conversation.project_id.is_none() {
+        return Err(Error::Invalid(
+            "Only a session of a project offers a new session.".into(),
+        ));
+    }
+    if conversation.deleting || conversation.lifecycle == Lifecycle::Archived {
+        return Err(Error::Invalid(
+            "This session is archived: it offers no new session.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A session offer's name when the thread gave none: the task's first sentence, cut to a few
+/// words.
+fn offer_title(task: &str) -> String {
+    let first = task.split(['.', ':', '\n']).next().unwrap_or(task).trim();
+    let words: Vec<&str> = first.split_whitespace().take(8).collect();
+    let title = words.join(" ");
+    if first.split_whitespace().count() > words.len() {
+        format!("{title}…")
+    } else {
+        title
     }
 }

@@ -206,6 +206,7 @@ fn text_from_stdin(command: &str, action: Option<&str>) -> Option<(&'static str,
         ("checkpoint", "set") => Some(("args", 0)),
         ("library", "add") => Some(("args", 0)),
         ("feedback", "offer") => Some(("body", 0)),
+        ("session", "propose") => Some(("task", 0)),
         _ => None,
     }
 }

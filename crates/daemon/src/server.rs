@@ -1246,8 +1246,8 @@ fn lifecycle_outcomes(
         .collect()
 }
 
-/// A new session started on a message, the notice of a message sent on to another session, and
-/// "Run here" on one offered as a new session (in its own boxed future: the dispatch stays
+/// A new session started on a message or on the thread's offer, the notice of a message sent on
+/// to another session, and "Run here" on one offered as a new session (in its own boxed future: the dispatch stays
 /// under its size).
 async fn open_session(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
     Ok(match request {
@@ -1268,6 +1268,18 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 )
                 .await?;
             Response::StartSession {
+                conversation: Box::new(conversation),
+                outcome: send_outcome(outcome),
+            }
+        }
+        Request::StartOfferedSession {
+            conversation_id,
+            offer_id,
+        } => {
+            let (conversation, outcome) = sessions
+                .start_offered_session(&conversation_id, &offer_id)
+                .await?;
+            Response::StartOfferedSession {
                 conversation: Box::new(conversation),
                 outcome: send_outcome(outcome),
             }
@@ -1410,6 +1422,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             ),
         },
         request @ (Request::StartSession { .. }
+        | Request::StartOfferedSession { .. }
         | Request::GetSettledTabs
         | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {
