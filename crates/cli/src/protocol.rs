@@ -1489,3 +1489,20 @@ pub struct WhyMove {
     pub session: String,
     pub turn: u32,
 }
+
+#[cfg(test)]
+mod context_schema_tests {
+    use super::*;
+    #[test]
+    fn every_context_part_is_accepted_by_its_output_schema() {
+        let schema = crate::commands::find("context").unwrap().schema;
+        for part in ContextPart::ALL {
+            let value = serde_json::json!({"part":part.word(),"text":""});
+            assert!(
+                crate::schema::violations(schema, &value).is_empty(),
+                "{}",
+                part.word()
+            );
+        }
+    }
+}
