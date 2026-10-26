@@ -10,7 +10,7 @@ use std::time::Duration;
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The user's `gh`, run with exactly the user's environment.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Gh {
     pub program: PathBuf,
     pub vars: Vec<(OsString, OsString)>,
@@ -40,7 +40,47 @@ pub(crate) enum RunError {
     Timeout,
 }
 
+impl std::fmt::Debug for Gh {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gh")
+            .field("program", &self.program)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Gh {
+    /// Resolve a named identity privately. Credentials never enter args or diagnostics.
+    pub(crate) async fn for_account(&self, host: &str, account: &str) -> Option<Self> {
+        let mut named = self.clone();
+        named.vars.retain(|(k, _)| {
+            !matches!(
+                k.to_str(),
+                Some(
+                    "GH_TOKEN"
+                        | "GITHUB_TOKEN"
+                        | "GH_ENTERPRISE_TOKEN"
+                        | "GITHUB_ENTERPRISE_TOKEN"
+                        | "GH_HOST"
+                        | "GH_REPO" | "GH_DEBUG"
+                )
+            )
+        });
+        let output = named
+            .output(&["auth", "token", "--hostname", host, "--user", account])
+            .await
+            .ok()?;
+        if !output.success() || output.stdout.trim().is_empty() {
+            return None;
+        }
+        let key = if host == "github.com" {
+            "GH_TOKEN"
+        } else {
+            "GH_ENTERPRISE_TOKEN"
+        };
+        named.vars.push((key.into(), output.stdout.trim().into()));
+        Some(named)
+    }
+
     /// Runs `gh` with `args`. An error means `gh` could not be started (or never finished);
     /// a non-zero exit is an `Ok` with its code.
     pub(crate) async fn output(&self, args: &[&str]) -> std::result::Result<GhOutput, RunError> {

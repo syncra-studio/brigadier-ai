@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 
-import { resumesAt } from "@/app/conversation/cards/resumesAt";
+import { quotaRecoveryWords, resumesAt } from "@/app/conversation/cards/resumesAt";
 import { useAction } from "@/app/conversation/useAction";
 import { ScheduleCard } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { Clock } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { cn } from "@/lib/utils";
-import { formatDateTime } from "@/lib/format";
 import { continueWaiting, dontResume } from "@/state/actions";
 import { useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
@@ -18,21 +17,15 @@ export function QuotaWaitStrip({ conversationId }: { conversationId: string }) {
   const go = useAction();
   const stay = useAction();
   if (!wait) return null;
-  const manual = wait.limitKind === "credits" || wait.limitKind === "spendControl";
-  // Until the daemon supplies its recovery mode, a reset time describes the usage window,
-  // not a promise that an automatic retry is armed.
-  const words = wait.limitKind === "credits" ? "Out of credits"
-    : wait.limitKind === "spendControl" ? "Spend limit reached"
-    : wait.resetsAtMs === null ? "Usage limit reached · Reset time unavailable"
-    : `Usage limit reached · Resets ${formatDateTime(wait.resetsAtMs)}`;
+  const words = quotaRecoveryWords(wait);
   return (
-    <section data-slot="quota-wait-strip" role="status" aria-label="Usage limit"
+    <section data-slot="quota-wait-strip" role="status" aria-label="Usage limit" title={wait.reason}
       className="bg-rail/70 border-foreground/10 rounded-rail flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2 text-sm">
       <div className="flex min-w-0 flex-1 items-start gap-2">
         <Clock aria-hidden className="text-muted-foreground size-icon-sm mt-0.5 shrink-0" />
         <div className="min-w-0 wrap-break-word">
-          <p>{words}</p>
-          <p className="text-muted-foreground text-xs">{wait.reason}</p>
+          <p>{words.title}</p>
+          <p className="text-muted-foreground text-xs">{words.detail ?? wait.reason}</p>
         </div>
       </div>
       <div className="flex flex-wrap gap-0.5">
@@ -40,9 +33,9 @@ export function QuotaWaitStrip({ conversationId }: { conversationId: string }) {
           disabled={go.busy || stay.busy} onClick={() => go.run(() => continueWaiting(conversationId))}>
           Continue now
         </Button>
-        {!manual && <Button size="xs" variant="ghost" className="text-muted-foreground font-normal" data-slot="dont-resume"
+        {words.cancelLabel && <Button size="xs" variant="ghost" className="text-muted-foreground font-normal" data-slot="dont-resume"
           disabled={go.busy || stay.busy} onClick={() => stay.run(() => dontResume(conversationId))}>
-          Don't resume
+          {words.cancelLabel}
         </Button>}
       </div>
       {(go.error ?? stay.error) && <p role="alert" className="text-destructive basis-full text-xs">{go.error ?? stay.error}</p>}

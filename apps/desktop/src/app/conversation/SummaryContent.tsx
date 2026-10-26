@@ -16,6 +16,7 @@ import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
 import { PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
+import { activePullRequests, activeWaits, completeWait, useTrackedWork, waitingDue } from "@/app/conversation/trackedWork";
 import type { PullRequestStatus } from "@/app/conversation/usePullRequest";
 import { SourceRow } from "@/app/conversation/SourceRow";
 import { hostOf, linksIn, openLink } from "@/app/conversation/summaryLinks";
@@ -46,6 +47,7 @@ import type {
   McpServerState,
   PullRequest,
   PullRequestState,
+  TrackedWork,
   WorkerRow,
   WorkerWait,
 } from "@/ipc/generated";
@@ -316,6 +318,45 @@ const PULL_REQUEST_ICONS: Record<PullRequestState, ReactNode> = {
   closed: <PullRequestClosed />,
 };
 
+/** Watched PRs and named waits use the same compact rows as the rest of the card. */
+function TrackedWorkSummary({ sessionId, fallback, authRequired }: { sessionId: string; fallback: PullRequest | null; authRequired?: boolean | undefined }) {
+  const { work, error } = useTrackedWork(sessionId);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(timer); }, []);
+  return <TrackedWorkSections sessionId={sessionId} work={work} error={error} now={now} fallback={fallback} authRequired={authRequired} />;
+}
+
+export function TrackedWorkSections({ sessionId, work, error, now = 0, fallback, authRequired }: { sessionId: string; work: TrackedWork; error: string | null; now?: number; fallback: PullRequest | null; authRequired?: boolean | undefined }) {
+  const prs = activePullRequests(work);
+  const waits = activeWaits(work);
+  const [completing, setCompleting] = useState<string | null>(null);
+  const branch = fallback && fallback.state !== "merged" && fallback.state !== "closed" && !work.pullRequests.some((pr) => pr.identity.number === fallback.number && `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`.toLowerCase() === fallback.url.toLowerCase()) ? fallback : null;
+  return <>
+    {(prs.length > 0 || branch || authRequired || work.prHistory.length > 0 || error) && <SummarySection foldKey="pull-requests" title="Pull requests" count={prs.length + (branch ? 1 : 0)}>
+      {branch && <PullRequestRow pullRequest={branch} />}
+      {prs.map((pr) => {
+        const state = pr.pullRequest?.state ?? "open";
+        const look = pr.pullRequest ? pullRequestLook(pr.pullRequest) : null;
+        const tone = look ? PULL_REQUEST_TONES[look.tone] : "text-muted-foreground";
+        const url = `https://${pr.identity.host}/${pr.identity.owner}/${pr.identity.repo}/pull/${pr.identity.number}`;
+        return <SummaryRowButton key={url} data-slot="tracked-pr-row" title={`${pr.pullRequest?.title ?? url}\n${pr.actor} · ${pr.action}\n${pr.account ? `Account: ${pr.account}` : "Account needed"}`} icon={<span className={cn("flex", tone)}>{PULL_REQUEST_ICONS[state]}</span>} meta={<span className={cn("max-w-48 truncate", tone)}>{pr.status}</span>} onClick={() => openLink(url)}>{pr.identity.repo} #{pr.identity.number}</SummaryRowButton>;
+      })}
+      {authRequired && prs.length === 0 && <SummaryRow muted icon={<PullRequestOpen />}>gh auth login for PR status</SummaryRow>}
+      {error && <SummaryRow muted>Pull request status unavailable</SummaryRow>}
+      {work.prHistory.length > 0 && <SummaryRowButton muted icon={<PullRequestClosed />} onClick={() => openPanelTab(sessionId, { type: "pr-history" }, "Pull request history")}>View history</SummaryRowButton>}
+    </SummarySection>}
+    {waits.length > 0 && <SummarySection foldKey="waiting-on" title="Waiting on" count={waits.length}>
+      {waits.map((wait) => <div key={wait.id} className="flex min-w-0 items-center">
+        {wait.link ? <SummaryRowButton className="min-w-0 flex-1" title={`${wait.then ?? wait.text}\n${wait.timezone}`} icon={<HandRaised />} meta={<span className={wait.dueAtMs !== null && wait.dueAtMs <= now ? "text-destructive" : undefined}>{waitingDue(wait, now)}</span>} onClick={() => openLink(wait.link!)}>{wait.text}</SummaryRowButton> : <SummaryRow className="min-w-0 flex-1" title={`${wait.then ?? wait.text}\n${wait.timezone}`} icon={<HandRaised />} meta={<span className={wait.dueAtMs !== null && wait.dueAtMs <= now ? "text-destructive" : undefined}>{waitingDue(wait, now)}</span>}>{wait.text}</SummaryRow>}
+        <button className="text-muted-foreground hover:text-foreground focus-visible:text-foreground mr-3 shrink-0 px-1 py-1 text-xs disabled:opacity-50" disabled={completing === wait.id} aria-label={`Mark done: ${wait.text}`} onClick={() => {
+          setCompleting(wait.id);
+          void completeWait(sessionId, wait.id).catch((cause: unknown) => toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" })).finally(() => setCompleting(null));
+        }}>Done</button>
+      </div>)}
+    </SummarySection>}
+  </>;
+}
+
 /** The pull request row: `#N`, its state in a word and a colour (failed checks red); a click opens it. */
 function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
   const look = pullRequestLook(pullRequest);
@@ -457,14 +498,11 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={setup.environment.branch} diff={diff} />
-            {authRequired ? (
-              <SummaryRow data-slot="pull-request-auth" muted icon={<PullRequestOpen />}>
-                gh auth login for PR status
-              </SummaryRow>
-            ) : pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
           <WorkersSummary conversationId={conversation.id} />
+          <TrackedWorkSummary sessionId={conversation.id} fallback={pullRequest} authRequired={authRequired} />
           <ActivitiesSummary conversationId={conversation.id} />
           <SessionSources conversationId={conversation.id} />
         </div>

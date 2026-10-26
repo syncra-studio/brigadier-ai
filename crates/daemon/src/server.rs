@@ -2029,6 +2029,38 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,
         },
+        Request::GetTrackedWork { conversation_id } => Response::GetTrackedWork {
+            work: heap(|| sessions.tracked_work_status(&conversation_id)).await?,
+        },
+        Request::WatchPullRequest {
+            conversation_id,
+            url,
+            account,
+        } => Response::WatchPullRequest {
+            pull_request: heap(|| {
+                sessions.watch_pull_request(&conversation_id, &url, account, "you")
+            })
+            .await?,
+        },
+        Request::ForgetPullRequest {
+            conversation_id,
+            key,
+        } => {
+            heap(|| sessions.forget_pull_request(&conversation_id, &key)).await?;
+            Response::ForgetPullRequest
+        }
+        Request::AddWaitingOn {
+            conversation_id,
+            wait,
+        } => Response::AddWaitingOn {
+            wait: heap(|| sessions.add_waiting_on(&conversation_id, "you", wait)).await?,
+        },
+        Request::CompleteWaitingOn {
+            conversation_id,
+            id,
+        } => Response::CompleteWaitingOn {
+            wait: heap(|| sessions.complete_waiting_on(&conversation_id, &id)).await?,
+        },
         Request::GetPullRequest { conversation_id } => {
             let status = heap(|| sessions.pull_request(&conversation_id)).await?;
             Response::GetPullRequest {

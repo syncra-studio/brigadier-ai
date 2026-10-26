@@ -113,6 +113,53 @@ const fn choice(
 /// Every subcommand, in the order help lists them.
 pub const COMMANDS: &[Command] = &[
     Command {
+        name: "pr",
+        summary: "Watch, forget or list this session's pull requests and their history.",
+        details: "Workers act on their parent session. Watch requires a canonical HTTPS PR URL. \
+                  --account selects the named gh login for this host/repository; credentials are never recorded. \
+                  Forget suppresses automatic rediscovery until explicitly watched again. Merged/closed PRs stay in history.",
+        args: &[
+            action(&["watch", "forget", "list"], "The action."),
+            rest(
+                "args",
+                "watch: PR URL; forget: canonical key or URL; list: no arguments.",
+                false,
+            ),
+            flag(
+                "account",
+                "LOGIN",
+                "watch: named gh account, required to fetch status.",
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/pr.schema.json"),
+    },
+    Command {
+        name: "waiting",
+        summary: "Add, complete or list explicit non-PR waits for this session.",
+        details: "Workers create waits in their parent session. Durable IDs belong to that session; Done is idempotent. \
+                  --by YYYY-MM-DD means midnight after that day in the stored IANA timezone (system timezone by default). \
+                  RFC3339 instants are also accepted. Use pr watch for GitHub pull request links.",
+        args: &[
+            action(&["add", "done", "list"], "The action."),
+            rest(
+                "args",
+                "add: plain words; done: durable wait ID; list: no arguments.",
+                false,
+            ),
+            flag("by", "DATE", "YYYY-MM-DD or RFC3339 instant."),
+            flag(
+                "timezone",
+                "IANA",
+                "Timezone for interpreting a civil date.",
+            ),
+            flag("then", "TEXT", "What to do after the wait."),
+            flag("link", "URL", "Related non-PR HTTP(S) link."),
+        ],
+        available: true,
+        schema: include_str!("../schemas/waiting.schema.json"),
+    },
+    Command {
         name: "context",
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
@@ -136,6 +183,7 @@ pub const COMMANDS: &[Command] = &[
                 required: false,
                 rest: false,
                 choices: &[
+                    "waiting",
                     "brief",
                     "decisions",
                     "open",

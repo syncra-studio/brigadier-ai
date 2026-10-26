@@ -62,6 +62,7 @@ test("a notice repeating the failed turn's error is dropped, others stay", () =>
 
 test("a usage limit is said as such, for the thread's divider", () => {
   assert.equal(describeTurnError("You've hit your usage limit", "Claude").limit, true);
+  assert.equal(describeTurnError("You've hit your session limit · resets 3:10pm", "Claude").limit, true);
   assert.equal(describeTurnError("ECONNRESET", "Claude").limit, undefined);
 });
 

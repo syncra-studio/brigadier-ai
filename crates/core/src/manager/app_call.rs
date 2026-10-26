@@ -53,6 +53,10 @@ impl AppHub {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    pub(crate) fn is_open(&self) -> bool {
+        self.calls.receiver_count() > 0
+    }
+
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<AppCall> {
         self.calls.subscribe()
     }

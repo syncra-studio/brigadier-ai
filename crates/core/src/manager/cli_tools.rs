@@ -195,6 +195,9 @@ impl SessionManager {
         given: Value,
     ) -> CliReply {
         let role = self.grants.resolve(&caller.grant);
+        if matches!(tool, Tool::Pr | Tool::Waiting) {
+            return self.cli_tracked_work(caller, tool, action, given).await;
+        }
         if tool == Tool::Ledger {
             return match self.cli_ledger(caller, action, given).await {
                 Ok((text, check)) => CliReply::ok(&LedgerOutput {
