@@ -1,4 +1,4 @@
-import { useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
+import { type OpenPastedText, PastedTextOpenerContext, useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import {
   type ReactNode,
   useContext,
@@ -144,6 +144,24 @@ export function useUsedSources(conversationId: string): UsedSource[] {
       }),
     ];
   }, [conversationId, messages, pagesSeen, serversUsed, servers]);
+}
+
+/** How a Chat's attachment row opens it: a pasted text over the thread, as its chip or card does; another file not at all. */
+export function pastedOpener(open: OpenPastedText | null, file: AttachmentRef): (() => void) | undefined {
+  return open && file.pasted ? () => open(file.inline ?? null, file) : undefined;
+}
+
+/** A Chat's "Attachments": the files attached to the user's messages; a pasted text opens over the thread. */
+export function ChatAttachments({ attachments }: { attachments: readonly AttachmentRef[] }) {
+  const openPasted = useContext(PastedTextOpenerContext);
+  return <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
+    {attachments.map((attachment) => {
+      const open = pastedOpener(openPasted, attachment);
+      return open
+        ? <SummaryRowButton key={attachment.id} onClick={open}>{attachment.name}</SummaryRowButton>
+        : <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>;
+    })}
+  </SummarySection>;
 }
 
 /** A file attached to the user's messages, as Sources lists it: a pasted text opens in its tab, as its chip or card does. */
@@ -393,9 +411,7 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
       {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
       <WorkersSummary conversationId={conversation.id} />
       <Sources conversationId={conversation.id} />
-      {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
-        {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}
-      </SummarySection>}
+      {attachments.length > 0 && <ChatAttachments attachments={attachments} />}
       {context && <SummarySection foldKey="usage" title="Context usage">
         <SummaryRow>{context.usedTokens.toLocaleString()} tokens used</SummaryRow>
       </SummarySection>}
