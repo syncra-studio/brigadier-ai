@@ -4,7 +4,7 @@ import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { GroupStepList } from "@/app/conversation/activity/GroupStepList";
-import { InFold, InGroup, OpensWork } from "@/app/conversation/activity/groupContext";
+import { InFold, InGroup, LeadPaused, OpensWork } from "@/app/conversation/activity/groupContext";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
@@ -86,10 +86,11 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   // still says which file once the card has scrolled away or several are open (#175).
   const opened = open && words.kind === "edit" && status === "completed" && words.object;
   const stoppedBy = useContext(StoppedBy);
+  const paused = useContext(LeadPaused) && status === "inProgress";
   // Still running when the user's Stop ended its thread, or failing as it did: it was stopped,
   // not running or failed.
   const stopped = (status === "inProgress" && stoppedBy !== null) || stoppedCall;
-  const running = status === "inProgress" && !stopped;
+  const running = status === "inProgress" && !stopped && !paused;
   const inGroup = useContext(InGroup);
   // Inside an opened group, a running command says how long it has run; the group's own row names it.
   const ticking = running && inGroup && words.kind === "run";
@@ -98,7 +99,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
     <ThreadActivity
       data-slot={slot}
       data-kind={words.kind}
-      data-step-state={stopped ? "stopped" : running ? "running" : status === "declined" ? "declined" : undefined}
+      data-step-state={stopped ? "stopped" : paused ? "paused" : running ? "running" : status === "declined" ? "declined" : undefined}
       detail={detail}
       onOpenChange={setOpen}
       // In a group its detail doesn't scroll on its own: the group's list scrolls it, a diff's header kept in view.
@@ -108,6 +109,8 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
         {stopped ? (
           <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedCall ? (endedAtMs ?? null) : (stoppedBy?.atMs ?? null))} />
+        ) : paused ? (
+          <Words words={words} label={`Paused · ${words.doing}`} />
         ) : ticking ? (
           <RunningFor startedAtMs={startedAtMs} />
         ) : running ? (
@@ -179,12 +182,13 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
     setRevealed(holds);
     if (holds) setKept(true);
   }
+  const paused = useContext(LeadPaused);
   const described = items.map((item) => describe(item.step));
   // A follow-up that joined is read once the command ends (#437): a step still running keeps its words (#445).
   const summary = steeredAfter && described.every((step) => step.status !== "inProgress");
   const current = described.at(-1);
   const first = described[0];
-  const stepNames = useStepNames(current, !summary && live);
+  const stepNames = useStepNames(current, !paused && !summary && live);
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
   const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
   const oneStep = !summary && (live || described.length === 1);
