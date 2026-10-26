@@ -100,7 +100,7 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
         label: "background job cut off".into(),
         task_id: None,
         text: format!(
-            "[Brigadier background jobs stopped]\n[{what} stopped when your CLI ended, before it finished: no result came. If you \
+            "[{what} stopped when your CLI ended, before it finished: no result came. If you \
              still need it, run it again.]"
         ),
     }
@@ -1668,15 +1668,17 @@ impl SessionManager {
                     && !state.seam.held
                     && state.holding.is_empty()
             });
-            if let Some(cli) = cli
-                && cli
-                    .session
-                    .steer(TurnInput::text(envelope.text.clone()))
-                    .await
-                    .is_ok()
-            {
-                drop(state);
-                return Some(true);
+            if let Some(cli) = cli {
+                let mut input = TurnInput::text(envelope.text.clone());
+                // Register only typed daemon input; the helper rejects user/peer/seam kinds.
+                // A disk failure must not swallow the notification's model context.
+                if let Err(err) = self.register_internal_input(id, &[envelope.kind], &mut input) {
+                    tracing::warn!(conversation = %id, error = %err, "could not record internal input provenance");
+                }
+                if cli.session.steer(input).await.is_ok() {
+                    drop(state);
+                    return Some(true);
+                }
             }
         }
         if conv.inbox_count(&envelope, None).await > 0 {
@@ -2521,6 +2523,7 @@ impl SessionManager {
             .filter(|message| !landed.contains(&message.id))
             .cloned()
             .collect();
+        let only_typed_notes = user_notes.is_empty();
         let mut input = self
             .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
             .await;
@@ -2563,6 +2566,14 @@ impl SessionManager {
             && let Err(err) = cli.session.set_plan_mode(self.plan_mode(&conv.id)).await
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not set the CLI's plan mode"; conversation = %conv.id, error = %err);
+        }
+        if only_typed_notes && unsent.is_empty() && users.is_empty() && !unread.is_empty() {
+            let kinds: Vec<_> = unread.iter().map(|(envelope, _)| envelope.kind).collect();
+            // All prepends are complete. Bind the exact input that is actually sent, never
+            // a genuine user's message mixed with daemon notes.
+            if let Err(err) = self.register_internal_input(&conv.id, &kinds, &mut input) {
+                tracing::warn!(conversation = %conv.id, error = %err, "could not record internal input provenance");
+            }
         }
         {
             let mut state = conv.state.lock().await;

@@ -2520,6 +2520,8 @@ mod tests;
 mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
+mod internal_envelope_tests;
+#[cfg(unix)]
 mod project_sessions_tests;
 #[cfg(unix)]
 mod session_dir_tests;

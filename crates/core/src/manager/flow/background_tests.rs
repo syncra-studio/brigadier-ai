@@ -372,7 +372,14 @@ async fn a_codex_terminal_ends_once(end: TerminalEnd) {
         }
     };
     assert_eq!(told.len(), 1, "{end:?}: {told:#?}");
-    assert!(told[0].starts_with(expected), "{end:?}: {told:#?}");
+    let (provenance, payload) = told[0].split_once('\n').expect("registered input prefix");
+    let nonce = provenance
+        .strip_prefix("[Brigadier internal input ")
+        .and_then(|prefix| prefix.strip_suffix(']'))
+        .expect("typed internal input provenance");
+    assert!(uuid::Uuid::parse_str(nonce).is_ok(), "{provenance}");
+    assert_eq!(payload.trim_end(), expected, "{end:?}: {told:#?}");
+    assert_eq!(payload.matches("finished after your turn").count(), 1);
     let answers = answers_with_requests(&flow).await;
     assert!(
         answers.contains(&("It printed xyz.".into(), Some(root))),
