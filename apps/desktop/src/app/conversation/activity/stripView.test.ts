@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { stripWords, subagentsStrip, subagentWords, workersStrip } from "@/app/conversation/activity/stripView";
 import type { WorkerRow } from "@/ipc/generated";
 
 const NOW = 1_000_000;
@@ -41,4 +41,37 @@ test("the collapsed strip counts in one line, naming workers once", () => {
   assert.equal(stripWords({ working: 2, waiting: 0 }), "2 workers working");
   assert.equal(stripWords({ working: 1, waiting: 1 }), "1 worker working · 1 waiting");
   assert.equal(stripWords({ working: 0, waiting: 3 }), "3 workers waiting");
+});
+
+/** One of the session CLI's own agents, as `workersOf` makes its row. */
+const native = (patch: Partial<WorkerRow> = {}, backgroundId: string | null = "bg") => {
+  const base = row(patch);
+  return { ...base, native: { conversationId: "c", callId: base.id, backgroundId, prompt: "" } };
+};
+
+test("the session's own subagents leave the Workers strip for the Subagents strip", () => {
+  const worker = row();
+  const agent = native();
+  assert.deepEqual(workersStrip([worker, agent], NOW)?.rows, [worker.id]);
+  assert.equal(workersStrip([agent], NOW), null);
+  assert.deepEqual(subagentsStrip([worker, agent], NOW)?.rows, [agent.id]);
+});
+
+test("the Subagents strip keeps a finished subagent half a minute while another works, and hides a moment after the last ends", () => {
+  const working = native();
+  const done = native({ working: false, lastEnd: "done", gone: true, lastEventAtMs: NOW - 20_000 });
+  const failed = native({ working: false, lastEnd: "failed", gone: true, lastEventAtMs: NOW - 3_000 });
+  const old = native({ working: false, lastEnd: "done", gone: true, lastEventAtMs: NOW - 40_000 });
+  const view = subagentsStrip([working, done, failed, old], NOW);
+  assert.deepEqual(view?.rows, [working.id, done.id, failed.id]);
+  assert.equal(subagentWords(view!), "1 subagent working · 1 done · 1 failed");
+  assert.deepEqual(view?.stops, ["bg"]);
+  // Nothing at work: still there just after the last end, then gone.
+  assert.deepEqual(subagentsStrip([done, failed], NOW)?.rows, [done.id, failed.id]);
+  assert.equal(subagentsStrip([done, old], NOW), null);
+  assert.equal(subagentsStrip([], NOW), null);
+});
+
+test("Stop all stops only the subagents the CLI can stop", () => {
+  assert.deepEqual(subagentsStrip([native({}, null)], NOW)?.stops, []);
 });
