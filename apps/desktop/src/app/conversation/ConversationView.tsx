@@ -34,6 +34,7 @@ import {
   type BoardDigest,
   type PeerOf,
   peerOf,
+  sentMessageIds,
   type ThreadNode,
 } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
@@ -455,7 +456,7 @@ function rowHolding(nodes: readonly ThreadNode[], messageId: string): string | n
     if (
       block.texts.some((text) => text.anchors?.includes(messageId)) ||
       block.steers.some((steer) => steer.message.id === messageId) ||
-      block.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(messageId))
+      block.orchestratorSteps.some((step) => sentMessageIds(step.kind).includes(messageId))
     ) {
       return node.id;
     }

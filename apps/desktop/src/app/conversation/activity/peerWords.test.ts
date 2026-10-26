@@ -10,6 +10,9 @@ import {
   peerNameOf,
   plainWords,
   receiverHasIt,
+  sessionSendState,
+  sessionSendWords,
+  sessionSentDescribed,
   refusedDescribed,
   replyOf,
   sentByCaption,
@@ -131,4 +134,19 @@ test("another session is named by its title, with its project only when it's ano
   // A session the app no longer has.
   assert.equal(peerNameOf(conversations, projects, "gone", "website"), null);
   assert.equal(peerNameOf(conversations, projects, undefined, "website"), null);
+});
+
+test("the thread's own `brigadier send` row: Messaging, then Messaged, the user's Deny or a failure in their words", () => {
+  const named = { title: "Docs", project: null };
+  assert.equal(sessionSendState("inProgress", null), "sending");
+  assert.equal(sessionSendState("completed", null), "sent");
+  assert.equal(sessionSendState("declined", null), "declined");
+  assert.equal(sessionSendState("failed", null), "refused");
+  assert.deepEqual(["sending", "sent", "declined", "refused"].map((state) => sessionSendWords(state as never)), [
+    "Messaging ", "Messaged ", "Didn’t send message to ", "Couldn’t send message to ",
+  ]);
+  assert.deepEqual(sessionSentDescribed(named, "sending"), { words: { kind: "message", doing: "Messaging Docs", done: "Messaged Docs", object: "Docs" }, status: "inProgress" });
+  assert.equal(sessionSentDescribed(named, "sent").status, "completed");
+  assert.equal(sessionSentDescribed(named, "refused").words.done, "Couldn’t send message to Docs");
+  assert.equal(sessionSentDescribed(named, "refused").words.phrase, "Couldn’t message a session");
 });

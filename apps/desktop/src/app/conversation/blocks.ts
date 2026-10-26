@@ -104,6 +104,29 @@ export type PeerWaitCall = { itemId: string; status: ItemStatus; requestId: stri
  */
 export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[]; waits: readonly PeerWaitCall[] };
 
+/**
+ * A message the thread's own `brigadier send` gave another session (S30), as one row of the work:
+ * "Messaged Docs: Can you check the schema?". `to` is the id as the call named it (a session's,
+ * or the start of its last 8); `messageId` once the call said it sent it; `refused` what the call
+ * printed when it failed.
+ */
+export type SessionSentStep = {
+  type: "sessionSent";
+  itemId: string;
+  to: string;
+  text: string | null;
+  status: ItemStatus;
+  messageId: string | null;
+  refused: string | null;
+};
+
+/** The messages to other sessions a step's row sent: a jump to one opens the work holding it. */
+export function sentMessageIds(kind: BlockOrchestratorStep["kind"]): readonly string[] {
+  if (kind.type === "peerSent") return kind.messageIds;
+  if (kind.type === "sessionSent" && kind.messageId !== null) return [kind.messageId];
+  return [];
+}
+
 /** A row about the machine: work waiting for it to cool down, a build paused or resumed. */
 export type MachineWords = {
   type: "machine";
@@ -118,7 +141,7 @@ export type MachineWords = {
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep;
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;
