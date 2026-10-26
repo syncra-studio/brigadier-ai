@@ -657,10 +657,12 @@ export async function send(
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const target = useApp.getState().conversations[conversationId];
   const session = target?.kind === "session";
-  // A session's message waits in the queue while its CLI's turn is open, or while its work
-  // still holds with no turn running (its workers, its CLI's background commands).
+  // A session's message waits in the queue while its CLI's turn is open; a session's or a
+  // Chat's (not a side chat's) while its work still holds with no turn running (its workers,
+  // its CLI's background commands).
   const activity = realActivity(conversationId);
-  const working = session && board !== null && (!!activity?.turnOpen || starting || workHolds(activity));
+  const brigade = session || (target?.kind === "chat" && !target.sideOf);
+  const working = board !== null && ((session && (!!activity?.turnOpen || starting)) || (brigade && workHolds(activity)));
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.
@@ -1203,22 +1205,17 @@ export async function dontResume(conversationId: string): Promise<void> {
 }
 
 /**
- * Stop all: stops every running or waiting worker of the conversation; the ids stopped. They
- * show stopped at once.
+ * The Workers strip's Stop all: stops every running or waiting worker of the conversation; the
+ * ids stopped. They show stopped at once. The CLI's own background agents are the Subagents
+ * strip's, with a Stop all of its own: they go on.
  */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
   const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
-  // The CLI's own background agents stop with them; one that won't is no failure of the rest.
-  const native = useCliThread.getState().views[conversationId]?.background?.filter((task) => task.kind === "agent" && task.status === "running") ?? [];
-  const [stopped] = await Promise.all([
-    showStopped(
-      { conversationId, turn: false, tasks: ids },
-      async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
-      (taskIds) => taskIds,
-    ),
-    Promise.allSettled(native.map((task) => stopBackgroundTask(conversationId, task.id))),
-  ]);
-  return stopped;
+  return showStopped(
+    { conversationId, turn: false, tasks: ids },
+    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
+    (taskIds) => taskIds,
+  );
 }
 
 /** The user's notes on a mockup, with the marked screenshots, to the mockup's worker. */

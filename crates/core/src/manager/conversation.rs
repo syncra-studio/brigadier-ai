@@ -1242,6 +1242,18 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
+        // No turn runs, but the Chat's work still holds (its workers, its CLI's background
+        // commands): as a session's, the message joins that work, Deciding, on a turn that wakes
+        // the Chat to judge it now. A Steer still goes straight in.
+        if !steer && !paused && queue_judging::judges_queue(&conversation) {
+            drop(state);
+            if self.work_holds(&conv).await {
+                return self
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, true)
+                    .await;
+            }
+            state = conv.state.lock().await;
+        }
         if paused {
             // Back into the paused queue it came from; nothing sends until the user resumes.
             let item = self
@@ -1382,12 +1394,18 @@ impl SessionManager {
 
     /// Sends `message` into the running turn, which the thread shows it inside; else (the
     /// turn just ended, or is still starting) the next turn carries it.
-    /// Whether a session's work still holds while no turn of its CLI runs: one of its workers
-    /// still works (its own background commands count), or a background command of its CLI
-    /// still runs or owes the turn its end starts. Its block stays open meanwhile, and what the
-    /// user sends goes on in it.
+    /// Whether a session's or a Chat's work still holds while no turn of its CLI runs: one of
+    /// its workers still works (its own background commands count), or a background command of
+    /// its CLI still runs or owes the turn its end starts. Its block stays open meanwhile, and
+    /// what the user sends goes on in it. A side chat's or a tab chat's never holds: it keeps
+    /// the plain queue.
     pub(super) async fn work_holds(&self, conv: &ConvLive) -> bool {
-        if conv.kind != ConversationKind::Session {
+        let brigade = conv.kind == ConversationKind::Session
+            || self
+                .core
+                .conversation(&conv.id)
+                .is_ok_and(|conversation| queue_judging::judges_queue(&conversation));
+        if !brigade {
             return false;
         }
         if conv.has_cli_jobs().await || self.has_running_workers(&conv.id).await {
@@ -2277,9 +2295,9 @@ impl SessionManager {
         if session {
             self.look_at_user_rebase(&conv.id).await;
         }
-        // The session's work still holds with no turn running (its workers, its CLI's background
-        // commands): a message of the user's starting this turn goes on with that work.
-        let holds = session && self.work_holds(&conv).await;
+        // The work still holds with no turn running (its workers, its CLI's background commands):
+        // a message of the user's starting this turn goes on with that work.
+        let holds = self.work_holds(&conv).await;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;

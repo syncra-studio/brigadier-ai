@@ -12,6 +12,7 @@ import { applyEvents, emptyThread, useApp } from "@/state/store";
 const id = "flow-session";
 const text = "Follow-up awaiting admission";
 const whileHeld = "Also make it fast";
+const chatWhileHeld = "And note the edge cases";
 const item: QueuedMessage = { id: "follow-up", text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null };
 const message: Message = { id: "admitted", conversationId: id, seq: 4, role: "user", text, attachments: [], mentions: [], createdAtMs: Date.now() + 100, blob: null, model: null, requestId: "admitted", parentId: null };
 let respond: (outcome: SendOutcome) => void;
@@ -112,9 +113,23 @@ async function drive() {
   };
   respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld, deciding: true } });
   await holding;
+  apply([queued([])]);
+  await pause();
+  // A Chat is a brigade too: one whose worker still works holds its work the same way.
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, kind: "chat", sideOf: null } } }));
+  const chatHolding = send({ text: chatWhileHeld, attachments: [], mentions: [] });
+  await pause();
+  const chatRows = [...document.querySelectorAll('[data-slot="message-queue-item"]')].filter((node) => node.textContent?.includes(chatWhileHeld));
+  const chatWhileWorkersWork = {
+    rail: chatRows.length,
+    chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(chatWhileHeld)).length,
+    deciding: chatRows[0]?.getAttribute("data-deciding") === "true",
+  };
+  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld, deciding: true } });
+  await chatHolding;
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork });
   document.body.append(result);
 }
 void drive();
