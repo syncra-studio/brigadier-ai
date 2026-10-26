@@ -21,8 +21,8 @@ use tokio::sync::broadcast;
 
 use super::SessionManager;
 use crate::{
-    ComputerPermission, ComputerSession, ComputerSetup, ComputerUseStatus, ConversationId,
-    PermissionState, TaskId,
+    ComputerPermission, ComputerPlatform, ComputerSession, ComputerSetup, ComputerUseStatus,
+    ConversationId, PermissionState, TaskId,
 };
 
 /// How often the watchdog looks.
@@ -115,6 +115,26 @@ struct RawPermissions {
     screen_recording: bool,
 }
 
+/// Windows and Linux: what the helper says about the desktop session, beside its
+/// permissions (`permissions.platform` of `host status`).
+#[derive(Debug, Default, Deserialize)]
+struct RawPlatformStatus {
+    #[serde(default)]
+    permissions: Option<RawPlatformPermissions>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawPlatformPermissions {
+    #[serde(default)]
+    platform: Option<RawPlatform>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawPlatform {
+    #[serde(default)]
+    notes: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawSession {
     session: String,
@@ -174,7 +194,29 @@ fn alive(pid: i32) -> bool {
     pid > 1 && nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn alive(pid: i32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: the handle is checked and closed; a zero timeout only polls it.
+    unsafe {
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let running = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+        CloseHandle(process);
+        running
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn alive(_: i32) -> bool {
     false
 }
@@ -204,21 +246,36 @@ impl SessionManager {
         )
     }
 
+    /// Windows and Linux: the placed program, else the one beside brigadierd.
     #[cfg(not(target_os = "macos"))]
     fn computer_binary(&self) -> Option<PathBuf> {
-        None
+        let placed = self
+            .computer_home()
+            .join("bin")
+            .join(super::computer_use::HELPER_APP);
+        if placed.exists() {
+            return Some(placed);
+        }
+        super::computer_use::bundled_helper(&self.config.daemon_exe)
+    }
+
+    /// The placed helper: its bundle on macOS, its program elsewhere.
+    fn computer_placed(&self) -> PathBuf {
+        let home = self.computer_home();
+        if cfg!(target_os = "macos") {
+            home.join(super::computer_use::HELPER_APP)
+        } else {
+            home.join("bin").join(super::computer_use::HELPER_APP)
+        }
     }
 
     /// Runs `brigadier-cu host <args>` and returns its JSON line.
     async fn computer_host(&self, args: &[&str]) -> Result<serde_json::Value, String> {
-        if !cfg!(target_os = "macos") {
-            return Err("computer use needs macOS".into());
-        }
         let binary = self
             .computer_binary()
             .ok_or_else(|| "the computer-use helper is missing from this install".to_owned())?;
         let home = self.computer_home();
-        let placed = home.join(super::computer_use::HELPER_APP);
+        let placed = self.computer_placed();
         let mut command = tokio::process::Command::new(binary);
         command
             .arg("host")
@@ -295,18 +352,23 @@ impl SessionManager {
 
     /// Computer use as Settings shows it. Starts nothing.
     pub async fn computer_use_status(&self) -> ComputerUseStatus {
-        let raw = if cfg!(target_os = "macos") && self.computer_helper_recorded() {
-            self.computer_host(&["status"])
-                .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<Raw>(value).ok())
+        let raw = if self.computer_helper_recorded() {
+            self.computer_host(&["status"]).await.ok()
         } else {
             None
         };
         self.computer_status_from(raw).await
     }
 
-    async fn computer_status_from(&self, raw: Option<Raw>) -> ComputerUseStatus {
+    /// The status from `host status`'s answer, if any.
+    async fn computer_status_from(&self, answer: Option<serde_json::Value>) -> ComputerUseStatus {
+        let notes = answer
+            .clone()
+            .and_then(|value| serde_json::from_value::<RawPlatformStatus>(value).ok())
+            .and_then(|status| status.permissions?.platform)
+            .map(|platform| platform.notes)
+            .unwrap_or_default();
+        let raw = answer.and_then(|value| serde_json::from_value::<Raw>(value).ok());
         let enabled = self.core.settings().computer_use;
         let live = raw
             .as_ref()
@@ -333,7 +395,8 @@ impl SessionManager {
             }
         }
         ComputerUseStatus {
-            available: cfg!(target_os = "macos"),
+            available: true,
+            platform: ComputerPlatform::current(),
             accessibility: state_of(permissions.map(|p| p.accessibility)),
             screen_recording: state_of(permissions.map(|p| p.screen_recording)),
             current,
@@ -341,9 +404,11 @@ impl SessionManager {
                 enabled,
                 trouble.as_ref(),
                 permissions,
-                self.computer_capture_confirmed(),
+                // Windows and Linux have no capture check to pass.
+                !cfg!(target_os = "macos") || self.computer_capture_confirmed(),
             ),
             sessions,
+            notes,
         }
     }
 
@@ -516,7 +581,7 @@ impl SessionManager {
     /// Starts the watchdog. It lives as long as the manager.
     pub fn start_computer_watchdog(self: &std::sync::Arc<Self>) {
         // Tests look themselves, with a fake helper ([`Self::watch_computer_helper`]).
-        if !cfg!(target_os = "macos") || cfg!(test) {
+        if cfg!(test) {
             return;
         }
         let weak = std::sync::Arc::downgrade(self);
@@ -562,10 +627,11 @@ impl SessionManager {
             self.publish_computer_status(&status);
             return;
         }
-        let raw = match self.computer_host(&["status"]).await {
-            Ok(value) => serde_json::from_value::<Raw>(value).unwrap_or_default(),
-            Err(_) => Raw::default(),
-        };
+        let answer = self.computer_host(&["status"]).await.ok();
+        let raw = answer
+            .clone()
+            .and_then(|value| serde_json::from_value::<Raw>(value).ok())
+            .unwrap_or_default();
         // A recorded helper that answers nothing (no socket, a stopped process, a wedged
         // main loop) counts as hung.
         let hung = raw.state != "healthy";
@@ -584,7 +650,7 @@ impl SessionManager {
         if restart {
             self.restart_computer_helper().await;
         } else {
-            let status = self.computer_status_from(Some(raw)).await;
+            let status = self.computer_status_from(answer).await;
             self.publish_computer_status(&status);
         }
     }

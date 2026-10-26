@@ -121,15 +121,23 @@ export function permissionName(permission: ComputerPermission): string {
   return permission === "accessibility" ? "Accessibility" : "Screen Recording";
 }
 
+/** What computer use calls this computer: "this Mac" on macOS. */
+export function thisComputer(platform: ComputerUseStatus["platform"] | undefined): string {
+  return platform === "macos" || platform === undefined ? "this Mac" : "this computer";
+}
+
 /** One line on where setup stands. */
 export function setupLine(status: ComputerUseStatus): string {
   const setup = status.setup;
+  const here = thisComputer(status.platform);
   switch (setup.state) {
     case "off":
-      return "Off. Agents can't use apps on this Mac.";
+      return `Off. Agents can't use apps on ${here}.`;
     case "notSetUp":
       return "Not set up yet. It starts the first time an agent needs it.";
     case "missing": {
+      // Windows and Linux grant nothing: what's missing is the desktop session's.
+      if (status.platform !== "macos") return status.notes[0] ?? `Agents can't use apps on ${here} right now.`;
       const missing = PERMISSIONS.filter((permission) => permissionState(status, permission) !== "granted").map(permissionName);
       return missing.length === 2
         ? "Almost done: Accessibility and Screen Recording aren't allowed yet."
@@ -138,7 +146,7 @@ export function setupLine(status: ComputerUseStatus): string {
     case "confirmCapture":
       return "Almost done: Brigadier still needs to check that it can see app windows.";
     case "ready":
-      return status.current ? "Ready. Agents can use apps on this Mac." : "Set up. It starts when an agent needs it.";
+      return status.current ? `Ready. Agents can use apps on ${here}.` : "Set up. It starts when an agent needs it.";
     case "restarting":
       return "The helper isn't responding. Brigadier is restarting it.";
     case "failed":
@@ -146,9 +154,9 @@ export function setupLine(status: ComputerUseStatus): string {
   }
 }
 
-/** Whether setup has something left for the user to do. */
+/** Whether setup has something left for the user to do in the setup window (macOS only). */
 export function setupUnfinished(status: ComputerUseStatus): boolean {
-  return ["notSetUp", "missing", "confirmCapture", "failed"].includes(status.setup.state);
+  return status.platform === "macos" && ["notSetUp", "missing", "confirmCapture", "failed"].includes(status.setup.state);
 }
 
 export function permissionState(status: ComputerUseStatus, permission: ComputerPermission) {

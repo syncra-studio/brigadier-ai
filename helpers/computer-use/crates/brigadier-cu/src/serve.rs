@@ -1511,10 +1511,13 @@ fn daemon_permission_status(
 /// helper can reach depends on the desktop session instead (an X11 or
 /// Wayland display and the accessibility bus on Linux), which `platform`
 /// reports with plain notes for the user.
+///
+/// Brigadier has no setup to finish on these platforms, so the daemon is
+/// always ready: an agent's call never waits for a setup window.
 #[cfg(not(target_os = "macos"))]
 fn daemon_permission_status(
     profile: DaemonProfile,
-    external_permission_ready: bool,
+    _external_permission_ready: bool,
 ) -> serde_json::Value {
     let platform = cu_layer::platform::facts();
     let accessibility = platform.accessibility;
@@ -1524,7 +1527,7 @@ fn daemon_permission_status(
         "accessibility": accessibility,
         "screen_recording": screen_recording,
         "all_granted": accessibility && screen_recording,
-        "external_permission_ready": external_permission_ready,
+        "external_permission_ready": true,
         "profile": profile,
         "panel": { "visible": false, "completion": 0, "last_outcome": null },
         "recovery": { "generation": 0, "state": "idle" },

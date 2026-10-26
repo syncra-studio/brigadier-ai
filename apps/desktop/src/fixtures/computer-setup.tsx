@@ -20,7 +20,7 @@ if (params.has("drive")) {
 
 let current: ComputerUseStatus = status({ state: "notSetUp" });
 function status(setup: ComputerSetup, accessibility: PermissionState = "unknown", screenRecording: PermissionState = "unknown"): ComputerUseStatus {
-  return { available: true, accessibility, screenRecording, current: true, setup, sessions: [] };
+  return { available: true, platform: "macos", accessibility, screenRecording, current: true, setup, sessions: [], notes: [] };
 }
 let problem: string | null = "the window couldn't be captured";
 

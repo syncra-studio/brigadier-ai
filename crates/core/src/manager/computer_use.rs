@@ -11,9 +11,11 @@
 //! starts the helper's daemon through LaunchServices on the first tool call and replaces a dead
 //! or hung one, under a lock all shims share, so Brigadier itself starts nothing here.
 //!
-//! Computer use is macOS only: elsewhere [`SessionManager::computer_use_kit`] is always `None`
-//! and the placing code isn't built.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+//! Windows and Linux: the helper is the `brigadier-cu` program beside brigadierd (a Tauri
+//! sidecar). It runs from a copy at `<data dir>/computer/bin/`, so an update can replace the
+//! installed program while a helper still runs, and that copy is replaced (after its daemon is
+//! stopped) when the installed one changes. There is no bundle, signature check or permission
+//! to grant.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -25,7 +27,15 @@ use super::SessionManager;
 /// The MCP server's name: tools reach the model as `mcp__computer__<tool>`.
 pub(crate) const SERVER_NAME: &str = "computer";
 /// The helper app's bundle name, in Brigadier.app and in the data folder.
+#[cfg(target_os = "macos")]
 pub(super) const HELPER_APP: &str = "Brigadier Computer Use.app";
+/// Windows and Linux: the helper program, beside brigadierd and in `<home>/bin`.
+#[cfg(not(target_os = "macos"))]
+pub(super) const HELPER_APP: &str = if cfg!(windows) {
+    "brigadier-cu.exe"
+} else {
+    "brigadier-cu"
+};
 /// The helper's executable inside its bundle.
 pub(super) const HELPER_BIN: &str = "brigadier-cu";
 /// The permissions the helper last read, which it keeps in its home.
@@ -33,7 +43,8 @@ pub(super) const PERMISSIONS_FILE: &str = "permissions.json";
 /// Tells the helper that setup runs in Brigadier's window: it shows no panel, and agents'
 /// calls wait until that window confirmed screen capture.
 pub(super) const EXTERNAL_SETUP_ENV: &str = "BRIGADIER_CU_EXTERNAL_PERMISSION_FLOW";
-/// Overrides where the helper app is found (a development checkout's staged bundle).
+/// Overrides where the helper app is found (a development checkout's staged bundle; on
+/// Windows and Linux, the program).
 const HELPER_APP_ENV: &str = "BRIGADIER_CU_APP";
 /// The skill every agent gets, Brigadier's own workflow for the tools.
 const SKILL: &str = include_str!("computer_use_skill.md");
@@ -52,6 +63,7 @@ pub(super) struct Placed {
     /// different one (an update) is placed again.
     source: PathBuf,
     stamp: Option<SystemTime>,
+    /// The placed helper: its app bundle on macOS, its program elsewhere.
     app: PathBuf,
     home: PathBuf,
     plugin: PathBuf,
@@ -80,7 +92,7 @@ impl SessionManager {
         owner: &str,
         always_load: bool,
     ) -> Option<ComputerUseKit> {
-        if !cfg!(target_os = "macos") || !self.core.settings().computer_use {
+        if !self.core.settings().computer_use {
             return None;
         }
         let placed = match self
@@ -98,7 +110,7 @@ impl SessionManager {
             server: McpServer {
                 name: SERVER_NAME.into(),
                 transport: McpTransport::Stdio {
-                    command: placed.app.join("Contents/MacOS").join(HELPER_BIN),
+                    command: helper_program(&placed.app),
                     args: vec!["mcp".into()],
                     cwd: None,
                 },
@@ -160,11 +172,50 @@ impl ComputerUse {
         Ok(fresh)
     }
 
-    /// Computer use is macOS only.
+    /// Windows and Linux: the placed copy of the helper program, placed first when this is
+    /// the first use or the installed program changed.
     #[cfg(not(target_os = "macos"))]
-    pub(super) async fn ready(&self, _: &Path, _: &Path) -> Result<Placed, String> {
-        Err("computer use needs macOS".to_owned())
+    pub(super) async fn ready(&self, daemon_exe: &Path, data_dir: &Path) -> Result<Placed, String> {
+        let source = bundled_helper(daemon_exe)
+            .ok_or_else(|| "the computer-use helper is missing from this install".to_owned())?;
+        let stamp = std::fs::metadata(&source)
+            .and_then(|meta| meta.modified())
+            .ok();
+        let mut placed = self.placed.lock().await;
+        if let Some(current) = placed.as_ref()
+            && current.source == source
+            && current.stamp == stamp
+            && current.app.exists()
+        {
+            return Ok(current.clone());
+        }
+        let home = data_dir.join("computer");
+        let fresh = tokio::task::spawn_blocking(move || place(&source, stamp, &home))
+            .await
+            .map_err(|e| e.to_string())??;
+        *placed = Some(fresh.clone());
+        Ok(fresh)
     }
+}
+
+/// The program agents' MCP server runs: inside the app bundle on macOS, the placed program
+/// itself elsewhere.
+pub(super) fn helper_program(app: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        app.join("Contents/MacOS").join(HELPER_BIN)
+    } else {
+        app.to_path_buf()
+    }
+}
+
+/// Windows and Linux: the helper program beside the daemon (Tauri puts its sidecars next to
+/// the app's own program, in a release and in `tauri dev`), or where [`HELPER_APP_ENV`] says.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
+    if let Some(program) = std::env::var_os(HELPER_APP_ENV).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(program)).filter(|program| program.is_file());
+    }
+    Some(daemon_exe.parent()?.join(HELPER_APP)).filter(|program| program.is_file())
 }
 
 /// The helper bundled with this install: beside the daemon in Brigadier.app
@@ -199,7 +250,6 @@ fn executable_stamp(app: &Path) -> Option<SystemTime> {
 }
 
 /// Places the helper, its token and the skill plugin under `home`.
-#[cfg(target_os = "macos")]
 fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed, String> {
     private_dir(home).map_err(|e| format!("couldn't make {}: {e}", home.display()))?;
     let app = place_helper(source, home).map_err(|e| e.to_string())?;
@@ -216,19 +266,26 @@ fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn private_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
+/// Windows: the data folder lies in the user's profile, whose ACL already keeps other users
+/// out.
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
 /// The token every request on the helper's socket carries: `<home>/auth`, made once (0600).
 /// The daemon reads the file (LaunchServices starts it without our environment); each shim
 /// gets the token in its environment.
-#[cfg(target_os = "macos")]
 fn socket_token(home: &Path) -> std::io::Result<String> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
 
     let path = home.join("auth");
@@ -244,12 +301,11 @@ fn socket_token(home: &Path) -> std::io::Result<String> {
         uuid::Uuid::new_v4().simple()
     );
     let partial = home.join(format!(".auth-{}", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(&partial)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&partial)?;
     file.write_all(token.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&partial, &path)?;
@@ -259,7 +315,6 @@ fn socket_token(home: &Path) -> std::io::Result<String> {
 /// Writes the skill plugin: `<home>/agent-plugin/.claude-plugin/plugin.json` and
 /// `skills/computer-use/SKILL.md`. Claude loads the folder as a plugin; Codex reads its
 /// `skills` folder as an extra skills root.
-#[cfg(target_os = "macos")]
 fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     let plugin = home.join("agent-plugin");
     let skill = plugin.join("skills/computer-use");
@@ -278,7 +333,6 @@ fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     Ok(plugin)
 }
 
-#[cfg(target_os = "macos")]
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read_to_string(path).is_ok_and(|current| current == contents) {
         return Ok(());
@@ -326,6 +380,71 @@ fn running_daemon(home: &Path, placed: &Path) -> Option<i32> {
         .ok()?;
     let placed = std::fs::canonicalize(placed).ok()?;
     (pid > 1 && place::executable(pid)?.starts_with(&placed)).then_some(pid)
+}
+
+/// Windows and Linux: the helper program's copy in `home/bin`, copied again whenever it
+/// differs from `program` (an update). A daemon still running from the old copy holds it (on
+/// Windows it can't be replaced while it runs), so it is stopped first, through the old copy's
+/// own `host stop`; the next tool call starts the new one.
+#[cfg(not(target_os = "macos"))]
+fn place_helper(program: &Path, home: &Path) -> std::io::Result<PathBuf> {
+    let bin = home.join("bin");
+    let placed = bin.join(HELPER_APP);
+    if same_file(program, &placed) {
+        return Ok(placed);
+    }
+    if placed.exists() {
+        stop_helper(&placed, home);
+    }
+    std::fs::create_dir_all(&bin)?;
+    let fresh = bin.join(format!(".{HELPER_APP}.new-{}", std::process::id()));
+    let made = std::fs::copy(program, &fresh).and_then(|_| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fresh, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&fresh, &placed)
+    });
+    if made.is_err() {
+        let _ = std::fs::remove_file(&fresh);
+    }
+    made?;
+    Ok(placed)
+}
+
+/// Whether two files hold the same bytes.
+#[cfg(not(target_os = "macos"))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) if ma.len() == mb.len() => {
+            matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
+        }
+        _ => false,
+    }
+}
+
+/// Stops the daemon a placed helper runs, waiting at most a few seconds.
+#[cfg(not(target_os = "macos"))]
+fn stop_helper(placed: &Path, home: &Path) {
+    let Ok(mut child) = std::process::Command::new(placed)
+        .args(["host", "stop"])
+        .env("BRIGADIER_CU_HOME", home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < until {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
 }
 
 /// Copies an app bundle with ditto(1), which keeps it as signed. `--noqtn`: no quarantine on

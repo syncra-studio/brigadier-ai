@@ -12,7 +12,8 @@ type Look = {
   menuBarDisabled: boolean | null;
 };
 type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
-type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[] };
+type Linux = { sections: string[]; rows: string[]; notes: string; setup: string; setupButtons: string[] };
+type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux };
 
 // The real page in Chromium over a faked daemon.
 test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
@@ -75,4 +76,11 @@ test("computer use settings: enable, menu bar, permissions and setup, in every s
     "open_privacy_settings accessibility",
     "open_computer_setup",
   ]);
+
+  // Linux (Windows alike): no permissions, menu bar or setup window; what the session allows.
+  assert.deepEqual(seen.linux.sections, ["Enable", "This computer", "Setup"]);
+  assert.deepEqual(seen.linux.rows, ["Let sessions use apps on this computer", "This computer", "Setup"]);
+  assert.equal(seen.linux.notes, "Wayland session: apps running under XWayland work in the background.");
+  assert.equal(seen.linux.setup, "Ready. Agents can use apps on this computer.");
+  assert.deepEqual(seen.linux.setupButtons, []);
 });
