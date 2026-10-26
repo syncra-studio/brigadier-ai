@@ -99,7 +99,7 @@ import {
   sendToWorker,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
-import { armFusionSend, takeFusionSend } from "@/state/fusionSend";
+import { armFusionSend, isFusionChat, takeFusionSend } from "@/state/fusionSend";
 import { takeBackgroundSend } from "@/state/backgroundSend";
 import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
 import { holdDirect } from "@/state/heldDirect";
@@ -839,11 +839,11 @@ export function ConversationView({
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
       const slot = pulled.take(conversationId);
       if (!text && refs.length === 0) return;
-      const fusion = takeFusionSend(conversationId ?? NEW_CHAT_SCOPE);
+      const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
+      const fusion = (source ? isFusionChat(source) : draftTarget?.kind === "chat") && takeFusionSend(conversationId ?? NEW_CHAT_SCOPE);
       setError(null);
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
-      const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
       // What wasn't sent goes back into the composer: a refusal never takes the typed message. A
       // draft's goes to the conversation made for it, which shows by then.
       let target = conversationId;

@@ -38,6 +38,10 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "getRepoInfo":
+      return { method: req.method, repo: { path: req.path, name: "menus", currentBranch: "main", dirty: false, branches: [{ name: "main", commit: "a1", checkedOutAt: req.path }] } };
+    case "createConversation":
+      return { method: req.method, conversation: conversation(`draft-${sequence++}`, "Draft", req.kind, 0) };
     case "getConversation":
       return {
         method: req.method,
@@ -129,6 +133,7 @@ const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusi
 const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
 
 async function exercise(mode: "rich" | "plain") {
+  useApp.setState({ conversations: { [id]: session, [other.id]: other } });
   const seen: Record<string, unknown> = {};
   setRichComposer(mode === "rich");
   show({ type: "conversation", id }, mode);
@@ -196,6 +201,12 @@ async function exercise(mode: "rich" | "plain") {
   await key("Escape");
   await clear();
 
+  // An armed Chat draft must not turn a subsequent session draft's send into Fusion.
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
+  await openPlus();
+  fusionRow()!.click();
+  await until("the draft's Fusion chip", () => document.querySelector('[data-slot="fusion-chip"]') !== null);
+
   // A new session: its project's files.
   const beforeSession = field();
   show({ type: "draft", kind: "session", projectId: "p1" }, mode);
@@ -211,6 +222,12 @@ async function exercise(mode: "rich" | "plain") {
   await openPlus();
   seen.sessionFusion = !!fusionRow();
   await key("Escape");
+  const beforeDraftSend = sends.length;
+  field()!.focus();
+  await type("Keep this a session.");
+  await key("Enter");
+  await until("the session draft's send", () => sends.length > beforeDraftSend);
+  seen.sessionDraftFusion = fusionSends.at(-1)?.text === "Keep this a session.";
   const old = field();
   show({ type: "conversation", id: other.id }, mode);
   await until("the Chat field", () => field() !== null && field() !== old);

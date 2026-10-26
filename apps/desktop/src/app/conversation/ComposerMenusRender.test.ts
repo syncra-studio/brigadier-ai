@@ -21,6 +21,7 @@ test("the @ menu has a heading per kind before a query and one ranked list with 
     assert.deepEqual(run.newChat, ["# Chats", "Menus", "Release notes"], mode);
     assert.equal(run.newSession, true, mode);
     assert.equal(run.sessionFusion, false, mode);
+    assert.equal(run.sessionDraftFusion, false, mode);
     assert.equal(run.fusionDisabled, true, mode);
     assert.equal(run.fusionHint, true, mode);
     assert.equal(run.fusionOff, true, mode);
