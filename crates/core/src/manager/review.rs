@@ -119,7 +119,10 @@ impl SessionManager {
                 ReviewScope::Branch => {
                     let tip = repo.branch_tip(&branch).map_err(git_error)?;
                     let left = match &base {
-                        Some(base) => repo.branch_tip(base).map_err(git_error)?,
+                        Some(base) => match repo.branch_tip(base).map_err(git_error)? {
+                            Some(_) => Some(repo.newer_tip(base).map_err(git_error)?.0),
+                            None => None,
+                        },
                         None => None,
                     };
                     match (left, tip) {

@@ -257,11 +257,17 @@ impl Repo {
         Ok(parse::text(&self.cmd(&args, true)?)?.to_owned())
     }
 
+    /// Where this worker and the parent's branch meet, using the parent's upstream as last
+    /// fetched when it contains the local branch. Never fetches or moves either branch.
+    pub fn worker_base(&self, parent_branch: &str) -> Result<Oid> {
+        let (tip, _) = self.newer_tip(parent_branch)?;
+        self.merge_base(&self.resolve("HEAD")?, &tip)
+    }
+
     /// A worker's current files, untracked work included, against where it and the parent's
     /// branch meet: what the parent gained since then isn't the worker's.
     pub fn worker_diff(&self, parent_branch: &str) -> Result<DiffStat> {
-        let tip = self.branch_commit(parent_branch)?;
-        let parent = self.merge_base(&self.resolve("HEAD")?, &tip)?;
+        let parent = self.worker_base(parent_branch)?;
         self.diff_stat(&parent, &self.snapshot_tree()?)
     }
 
@@ -543,6 +549,102 @@ mod tests {
         assert!(!diff.patch.contains("+worker"), "{}", diff.patch);
         assert_eq!(diff.merged.len(), 1);
         assert!(diff.merged[0].patch.contains("+worker"));
+    }
+
+    #[test]
+    fn worker_diff_uses_the_upstream_containing_a_stale_local_parent() {
+        let (_dir, repo) = fixture("worker-stale-parent");
+        let local = repo.branch_commit("main").unwrap();
+        repo.cmd(&["checkout", "-b", "remote-work"], false).unwrap();
+        fs::write(repo.root.join("upstream"), "upstream\nchanges\n").unwrap();
+        repo.commit_changes("Upstream changes", true).unwrap();
+        let upstream = repo.resolve("HEAD").unwrap();
+        repo.cmd(
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/repo.git",
+            ],
+            false,
+        )
+        .unwrap();
+        repo.cmd(
+            &["update-ref", "refs/remotes/origin/main", &upstream.0],
+            false,
+        )
+        .unwrap();
+        repo.cmd(&["branch", "--set-upstream-to=origin/main", "main"], false)
+            .unwrap();
+        repo.cmd(&["checkout", "-b", "worker"], false).unwrap();
+        fs::write(repo.root.join("worker"), "one\ntwo\n").unwrap();
+        repo.commit_changes("Worker changes", true).unwrap();
+        // Upstream advances again after the worker starts: use their merge base, not its tip.
+        repo.cmd(&["checkout", "remote-work"], false).unwrap();
+        fs::write(repo.root.join("later-upstream"), "later\n").unwrap();
+        repo.commit_changes("Later upstream changes", true).unwrap();
+        repo.cmd(&["update-ref", "refs/remotes/origin/main", "HEAD"], false)
+            .unwrap();
+        repo.cmd(&["checkout", "worker"], false).unwrap();
+        fs::write(repo.root.join("dirty"), "three\n").unwrap();
+        fs::remove_file(repo.root.join("delete")).unwrap();
+        let index_path = repo.git_dir().unwrap().join("index");
+        let index = fs::read(&index_path).unwrap();
+
+        assert_eq!(repo.worker_base("main").unwrap(), upstream);
+        let stat = repo.worker_diff("main").unwrap();
+        assert_eq!((stat.insertions, stat.deletions), (3, 1));
+        assert_eq!(
+            stat.files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["delete", "dirty", "worker"]
+        );
+        assert_eq!(repo.branch_commit("main").unwrap(), local);
+        assert_eq!(fs::read(index_path).unwrap(), index);
+    }
+
+    #[test]
+    fn worker_diff_keeps_local_when_upstream_does_not_contain_it() {
+        let (_dir, repo) = fixture("worker-diverged-parent");
+        repo.cmd(&["checkout", "-b", "remote-work"], false).unwrap();
+        fs::write(repo.root.join("upstream"), "upstream\n").unwrap();
+        repo.commit_changes("Upstream changes", true).unwrap();
+        repo.cmd(
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/repo.git",
+            ],
+            false,
+        )
+        .unwrap();
+        repo.cmd(&["update-ref", "refs/remotes/origin/main", "HEAD"], false)
+            .unwrap();
+        repo.cmd(&["branch", "--set-upstream-to=origin/main", "main"], false)
+            .unwrap();
+        repo.cmd(&["checkout", "main"], false).unwrap();
+        fs::write(repo.root.join("local"), "local\n").unwrap();
+        repo.commit_changes("Local changes", true).unwrap();
+        let local = repo.resolve("HEAD").unwrap();
+        repo.cmd(&["checkout", "-b", "worker"], false).unwrap();
+        repo.cmd(&["merge", "--no-edit", "origin/main"], false)
+            .unwrap();
+        fs::write(repo.root.join("worker"), "one\ntwo\n").unwrap();
+        fs::remove_file(repo.root.join("delete")).unwrap();
+
+        assert_eq!(repo.worker_base("main").unwrap(), local);
+        let stat = repo.worker_diff("main").unwrap();
+        assert_eq!((stat.insertions, stat.deletions), (3, 1));
+        assert_eq!(
+            stat.files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["delete", "upstream", "worker"]
+        );
     }
 
     #[test]

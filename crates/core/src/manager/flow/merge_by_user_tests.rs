@@ -293,6 +293,44 @@ async fn the_session_diff_counts_from_the_upstream_it_merged() {
         .expect("a worktree session");
     let files: Vec<&str> = stat.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(files, ["NOTES.md"], "{stat:?}");
+    let review = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            crate::work::ReviewScope::Branch,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((review.insertions, review.deletions), (1, 0));
+    assert_eq!(review.files.len(), 1);
+    assert_eq!(review.files[0].path, "NOTES.md");
+
+    // Once local main diverges, its commits take precedence over the upstream.
+    std::fs::write(flow.repo.join("local.txt"), "local work\n").unwrap();
+    git(&flow.repo, &["add", "local.txt"]);
+    git(&flow.repo, &["commit", "-q", "-m", "Local work"]);
+    git(&path, &["merge", "-q", "--no-edit", "main"]);
+    let review = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            crate::work::ReviewScope::Branch,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!((review.insertions, review.deletions), (4, 0));
+    assert_eq!(
+        review
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["NOTES.md", "base-1.txt", "base-2.txt", "base-3.txt"]
+    );
     flow.stop().await;
 }
 

@@ -769,7 +769,7 @@ impl SessionManager {
                         .as_deref()
                         .and_then(|branch| {
                             let tip = repo.branch_tip(branch).ok()??;
-                            let into = repo.branch_tip(&parent).ok()??;
+                            let (into, _) = repo.newer_tip(&parent).ok()?;
                             let ahead = repo.count_commits(&into, &tip).unwrap_or(0);
                             let moved = start.as_deref().is_none_or(|start| start != tip.0);
                             let merged = moved && repo.ancestor(&tip, &into).unwrap_or(false);

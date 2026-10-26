@@ -435,6 +435,7 @@ async fn a_chats_repo_worker_shows_committed_changes_against_its_chosen_base() {
             let answers = answers.clone();
             Box::pin(async move {
                 if turn.worker().is_some() {
+                    turn.git(&["merge", "--ff-only", "origin/worker-base"]);
                     turn.write("worker.txt", "one\ntwo\n");
                     turn.git(&["add", "worker.txt"]);
                     turn.git(&["commit", "-m", "Add worker file"]);
@@ -461,6 +462,28 @@ async fn a_chats_repo_worker_shows_committed_changes_against_its_chosen_base() {
     std::fs::write(flow.repo.join("unrelated.txt"), "elsewhere\n").unwrap();
     super::git(&flow.repo, &["add", "unrelated.txt"]);
     super::git(&flow.repo, &["commit", "-m", "Advance checkout"]);
+    // The worker starts from the newer upstream of its stale local base.
+    super::git(
+        &flow.repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    super::git(
+        &flow.repo,
+        &["update-ref", "refs/remotes/origin/worker-base", "HEAD"],
+    );
+    super::git(
+        &flow.repo,
+        &[
+            "branch",
+            "--set-upstream-to=origin/worker-base",
+            "worker-base",
+        ],
+    );
     let chat = new_chat(&flow).await;
     flow.say_to(&chat, &format!("Work in {}", flow.repo.display()))
         .await;
@@ -479,5 +502,31 @@ async fn a_chats_repo_worker_shows_committed_changes_against_its_chosen_base() {
         "{listed:#}"
     );
     assert_eq!(listed["workers"][0]["changes"]["deletions"], 0);
+    let worker = flow.core.tasks(&chat).await.unwrap().remove(0);
+    let branch = worker
+        .workspace
+        .as_ref()
+        .unwrap()
+        .branch
+        .as_deref()
+        .unwrap();
+    super::git(
+        &flow.repo,
+        &["update-ref", "refs/remotes/origin/worker-base", branch],
+    );
+    let rows = flow.manager.worker_rows_of(&chat, true).await.unwrap();
+    assert_eq!(rows[0].ahead, 0);
+    assert!(rows[0].merged);
+    // A diverged local target wins even though the upstream contains the worker.
+    std::fs::write(flow.repo.join("local.txt"), "local\n").unwrap();
+    super::git(&flow.repo, &["add", "local.txt"]);
+    super::git(&flow.repo, &["commit", "-m", "Advance local base"]);
+    super::git(
+        &flow.repo,
+        &["update-ref", "refs/heads/worker-base", "HEAD"],
+    );
+    let rows = flow.manager.worker_rows_of(&chat, true).await.unwrap();
+    assert_eq!(rows[0].ahead, 1);
+    assert!(!rows[0].merged);
     flow.stop().await;
 }
