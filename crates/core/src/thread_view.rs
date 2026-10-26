@@ -83,14 +83,8 @@ impl CliJobs {
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
 /// Exact daemon provenance marker; the raw native transcript remains untouched.
 pub(crate) const CUT_JOBS_MARK: &str = "[Brigadier background jobs stopped]";
-/// Marker alone is insufficient: caller must prove this native message was daemon-injected.
-pub(crate) fn daemon_candidate<'a>(
-    text: &str,
-    mut authored: impl Iterator<Item = &'a str>,
-) -> bool {
-    text.starts_with(CUT_JOBS_MARK) && !authored.any(|text| text.starts_with(CUT_JOBS_MARK))
-}
-
+pub(crate) const BACKGROUND_RESULT_MARK: &str = "[Brigadier background job finished]";
+/// Only a native id previously bound to registered typed input can hide a user-shaped event.
 pub(crate) fn daemon_context(
     event: &ProviderEvent,
     known: &std::collections::HashSet<String>,
@@ -862,17 +856,39 @@ mod tests {
     #[test]
     fn daemon_provenance_requires_known_native_id_and_respects_authored_markers() {
         let text = format!("{CUT_JOBS_MARK} a watcher ended");
-        assert!(daemon_candidate(&text, std::iter::empty()));
-        assert!(!daemon_candidate(&text, std::iter::once(text.as_str())));
-        assert!(!daemon_candidate(
-            &format!("Quoted {text}"),
-            std::iter::empty()
-        ));
+        assert!(text.starts_with(CUT_JOBS_MARK));
         let entry = message("native", Role::User);
         assert!(!daemon_context(&entry.event, &Default::default()));
         assert!(daemon_context(
             &entry.event,
             &std::collections::HashSet::from(["native".into()])
+        ));
+    }
+
+    #[test]
+    fn reconstructed_projection_keeps_assistant_followup_without_an_internal_workblock() {
+        let raw = vec![
+            message("real-user", Role::User),
+            message("answer-before", Role::Assistant),
+            message("daemon-input", Role::User),
+            message("answer-after", Role::Assistant),
+        ];
+        let known = std::collections::HashSet::from(["daemon-input".to_owned()]);
+        let projected: Vec<_> = raw
+            .iter()
+            .filter(|entry| !daemon_context(&entry.event, &known))
+            .cloned()
+            .collect();
+        let reconstructed = view(vec![Arc::new(projected)], None, &[]);
+        assert_eq!(reconstructed.turns.len(), 1);
+        assert_eq!(
+            ids(&reconstructed),
+            ["real-user", "answer-before", "answer-after"]
+        );
+        assert_eq!(raw.len(), 4, "native diagnostics/history remain untouched");
+        assert!(!daemon_context(
+            &message("authored-identical", Role::User).event,
+            &known
         ));
     }
 
