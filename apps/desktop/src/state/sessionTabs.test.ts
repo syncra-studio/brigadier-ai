@@ -430,3 +430,15 @@ test("a pasted-text chip opens its text in a tab after the one in front, once pe
   const restored = restoreSessionTabs({ [session]: sessionTabs(session) })[session]!;
   assert.deepEqual(restored.tabs.map((tab) => tab.id), [fromMessage, "file:src/a.ts"]);
 });
+
+test("a sent \"Pasted text\" card, which has no number, opens its text in a tab of its own titled \"Pasted text\"", () => {
+  const session = "pasted-card-session";
+  const card = { id: "blob-2", name: "Pasted text.txt", mime: "text/plain", bytes: 4096, pasted: true, inline: null };
+  const id = openPastedTab(session, null, card);
+  selectTab(session, CHAT_TAB);
+  assert.equal(openPastedTab(session, null, card), id, "a second click brings the same tab to the front");
+  const { tabs, active } = sessionTabs(session);
+  assert.deepEqual(tabs.map((tab) => tab.id), ["pasted:blob-2"]);
+  assert.equal(active, id);
+  assert.equal(tabTitle(tabs[0]!, tabs), "Pasted text");
+});

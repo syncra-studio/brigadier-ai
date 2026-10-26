@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils";
  * keeps them.
  */
 
-/** Opens pasted text `n`: the composer's (`paste` null), or a sent message's. */
-export type OpenPastedText = (n: number, paste: AttachmentRef | null) => void;
+/** Opens pasted text `n`: the composer's (`paste` null), or a sent message's (`n` null: a "Pasted text" card). */
+export type OpenPastedText = (n: number | null, paste: AttachmentRef | null) => void;
 
 /** How the conversation view opens a pasted text: a session's tab, else over the thread. */
 export const PastedTextOpenerContext = createContext<OpenPastedText | null>(null);
@@ -139,7 +139,7 @@ function PastedTextEditor({
  * Pasted text `n` full size, in the Pages editor: the composer's (`paste` null), whose edits
  * go into the message as they are made, under the same number, or a sent message's, read only.
  */
-export function PastedTextView({ n, paste }: { n: number; paste: AttachmentRef | null }) {
+export function PastedTextView({ n, paste }: { n: number | null; paste: AttachmentRef | null }) {
   const { attachment, source, swap } = useComposerPaste(n);
   // Read once: an edit swaps the composer's attachment, which the editor already shows. Another
   // text under the number (this one was sent or removed) is read afresh.
@@ -197,11 +197,12 @@ export function PastedTextView({ n, paste }: { n: number; paste: AttachmentRef |
  * The composer's pasted text `n`: its attachment, what it reads from, and `swap`, which puts an
  * edit in its place under the same number.
  */
-function useComposerPaste(n: number) {
+function useComposerPaste(n: number | null) {
   const aui = useAui();
   const reader = useContext(AttachmentReaderContext);
+  // A card's text (`n` null) is never the composer's: a composer attachment out of the text has no number either.
   const attachment = useAuiState((s) =>
-    s.composer.attachments.find((entry) => composerInlineNumber(entry, reader, "paste") === n),
+    n === null ? undefined : s.composer.attachments.find((entry) => composerInlineNumber(entry, reader, "paste") === n),
   );
   const source: AttachmentSource | null = attachment
     ? { file: attachment.file, ref: attachment.file ? undefined : reader?.composerRef(attachment.id) }

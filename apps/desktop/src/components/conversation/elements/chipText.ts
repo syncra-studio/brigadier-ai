@@ -49,9 +49,9 @@ export function imageChip(n: number): Unstable_TriggerItem {
   return { id: `${IMAGE_CHIP}:${n}`, type: IMAGE_CHIP, label: inlineImageLabel(n) };
 }
 
-/** What a text pasted as a chip is called where it sits in the text. */
-export function pastedTextLabel(n: number): string {
-  return `Pasted text #${n}`;
+/** What a text pasted as a chip is called where it sits in the text; a "Pasted text" card (`n` null), "Pasted text". */
+export function pastedTextLabel(n: number | null): string {
+  return n === null ? "Pasted text" : `Pasted text #${n}`;
 }
 
 /** The chip for text `n` pasted into the text, which stands for `[Pasted text #n]`. */

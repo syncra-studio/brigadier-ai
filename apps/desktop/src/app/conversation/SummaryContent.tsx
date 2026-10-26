@@ -31,7 +31,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
 } from "@/components/icons";
-import { openPanelTab } from "@/state/sessionTabs";
+import { openPanelTab, openPastedTab } from "@/state/sessionTabs";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
@@ -39,6 +39,7 @@ import { TooltipIconButton } from "@/components/controls";
 import { Popover, PopoverTrigger } from "@/components/overlays";
 import { openLink as openWebLink } from "@/state/links";
 import type {
+  AttachmentRef,
   Conversation,
   DiffStat,
   FileEntry,
@@ -134,7 +135,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
     const pages = pagesSeen === "" ? [] : pagesSeen.split("\n");
     const used = serversUsed === "" ? [] : serversUsed.split("\n");
     return [
-      ...files.map((file): UsedSource => ({ key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name })),
+      ...files.map((file) => fileSource(conversationId, file)),
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
         const state = statusOf(servers, name);
@@ -142,7 +143,13 @@ export function useUsedSources(conversationId: string): UsedSource[] {
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
-  }, [messages, pagesSeen, serversUsed, servers]);
+  }, [conversationId, messages, pagesSeen, serversUsed, servers]);
+}
+
+/** A file attached to the user's messages, as Sources lists it: a pasted text opens in its tab, as its chip or card does. */
+export function fileSource(conversationId: string, file: AttachmentRef): UsedSource {
+  const open = file.pasted ? () => void openPastedTab(conversationId, file.inline ?? null, file) : undefined;
+  return { key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name, ...(open ? { open } : {}) };
 }
 
 /** Sources shown before "View all". */
