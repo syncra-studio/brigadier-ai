@@ -104,7 +104,7 @@ test("closing a working session's tab stops nothing and says so in a note; it st
 for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
   test(`${kind} rows preserve activity, error and unread marks with plain state words (${unread ? "unread" : "read"}); the tab shows the row's own marks without words`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
-      title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
+      title: string; rowWords: string; state: string; openState: string | null; words: string; tip: string; rowTip: string | null; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
     assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Done", "Failed", "Stopped"].toSorted());
     // A draft PR does not supply the tab's state word.
@@ -112,7 +112,9 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     for (const row of seen) {
       const busy = row.state === "working";
       assert.equal(row.beforeMark, busy ? "spinner" : row.state === "needsYou" || (row.state === "done" && unread) ? "unread" : null, `${row.title}: closed row mark`);
-      assert.equal(row.rowMark, busy ? "spinner" : row.state === "needsYou" ? "unread" : null, `${row.title}: an open row keeps only a Needs you dot`);
+      // In front of the user, a row shows no Needs you, nor any dot: its spinner if it works.
+      assert.notEqual(row.openState, "needsYou", `${row.title}: no Needs you while open`);
+      assert.equal(row.rowMark, row.openState === "working" ? "spinner" : null, `${row.title}: an open row has no dot`);
       assert.equal(row.error, row.state === "failed", `${row.title}: errors have a separate leading icon`);
       assert.equal(row.plain, true, `${row.title}: no chip`);
       if (row.beforeMark === "unread") { assert.equal(row.unreadSize, 8); assert.equal(row.unreadSlot, 20); }
@@ -123,7 +125,7 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
       assert.equal(row.dot, false, `${row.title}: no dot of the tab's own`);
       assert.equal(row.tabError, row.error, `${row.title}: the row's error glyph in the tab`);
       assert.equal(row.words, "", `${row.title}: no state word in the tab`);
-      assert.equal(row.tip, `${row.title} · ${row.rowTip}`, `${row.title}: the whole tab has the state tooltip`);
+      assert.equal(row.tip, row.rowTip ? `${row.title} · ${row.rowTip}` : row.title, `${row.title}: the whole tab has the state tooltip`);
       assert.ok(row.width <= 20, `${row.title}: only a mark beside the title`);
       assert.equal(row.titleFlex, "1", `${row.title}: the title takes the available width`);
     }
@@ -139,14 +141,16 @@ test("an idle session whose turn ended shows Done with its unread dot", { timeou
 });
 
 
-test("waiting questions show Needs you and the blue dot, even when open or an approval also waits; answers and skips clear it", { timeout: 60000 }, async (t) => {
+test("waiting questions show Needs you and the blue dot, also when an approval waits, but not while open; answers and skips clear it", { timeout: 60000 }, async (t) => {
   type Row = { status: string; tip: string; mark: string | null; active: boolean };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?questions=1", "sessions-result", 20000)) as { before: Row[]; opened: Row; after: Row[] };
-  for (const row of [...seen.before, seen.opened]) {
+  for (const row of seen.before) {
     assert.equal(row.status, "needsYou:Needs you");
     assert.ok(["Needs you · question", "Needs you · approval"].includes(row.tip));
     assert.equal(row.mark, "unread");
   }
+  // The question is in front of the user: its row says what its turn does instead.
+  assert.deepEqual({ status: seen.opened.status, tip: seen.opened.tip, mark: seen.opened.mark }, { status: "working:Working", tip: "Working", mark: "spinner" });
   assert.equal(seen.opened.active, true);
   assert.deepEqual(seen.after.map(({ status, tip, mark }) => ({ status, tip, mark })), [
     { status: "working:Working", tip: "Working", mark: "spinner" },

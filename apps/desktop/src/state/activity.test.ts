@@ -110,7 +110,8 @@ test("the reconnect snapshot restores live worker activity without a thread view
   assert.equal(tabState(row("snapshot"), false, false, true), "working");
   assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, false, true), { state: "needsYou", reason: "question" });
   assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, false, true), { state: "needsYou", reason: "approval" });
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "needsYou", reason: "sign-in" });
+  // A sign-in doesn't hold the turn: while it works, it reads Working.
+  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "working", reason: null });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
 });
 
