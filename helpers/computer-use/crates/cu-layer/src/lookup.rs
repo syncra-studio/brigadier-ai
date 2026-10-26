@@ -101,20 +101,15 @@ impl Lookups for System {
 /// Windows and Linux have no bundle ids. An app is named by its executable:
 /// the id is the executable's lower-cased name without `.exe`
 /// (`windowsterminal`, `gnome-terminal-server`), which the target policy and
-/// the allow list compare. A program run from a Cargo build folder
-/// (`target/debug`, `target/release`) is a development build and has no id,
-/// like a bare binary on macOS (#510).
+/// the allow list compare. Brigadier run from a Cargo build folder
+/// (`target/debug`, `target/release`) has no installed-app id, like a bare
+/// binary on macOS (#510). Other programs retain their executable ids.
 #[cfg(not(target_os = "macos"))]
 impl Lookups for System {
     fn app_for_pid(&self, pid: i64) -> Option<TargetIdentity> {
         let pid = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
         let executable = executable_of(pid)?;
-        let name = executable_name(&executable)?;
-        Some(TargetIdentity {
-            bundle_id: (!is_development_build(&executable)).then(|| name.to_ascii_lowercase()),
-            name,
-            pid: Some(i64::from(pid)),
-        })
+        executable_identity(&executable, pid)
     }
 
     fn pid_for_window(&self, window_id: u64) -> Option<i64> {
@@ -132,6 +127,21 @@ impl Lookups for System {
     fn name_for_bundle(&self, _bundle_id: &str) -> Option<String> {
         None
     }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn executable_identity(executable: &std::path::Path, pid: u32) -> Option<TargetIdentity> {
+    let name = executable_name(executable)?;
+    let id = name.to_ascii_lowercase();
+    // Only Brigadier's development build needs the installed-app exception.
+    // Moving a shell or credential agent into target/debug must not hide it.
+    let development_brigadier = is_development_build(executable)
+        && matches!(id.as_str(), "brigadier" | "brigadier-app" | "brigadierd");
+    Some(TargetIdentity {
+        bundle_id: (!development_brigadier).then_some(id),
+        name,
+        pid: Some(i64::from(pid)),
+    })
 }
 
 /// The executable's name without its directory or `.exe`.
@@ -373,6 +383,28 @@ mod build_folder_tests {
             super::executable_name(Path::new("/apps/程序.EXE")),
             Some("程序".into())
         );
+    }
+
+    #[test]
+    fn cargo_build_folders_do_not_hide_terminals_or_credential_agents() {
+        for name in [
+            "cmd.exe",
+            "gnome-terminal-server",
+            "polkit-gnome-authentication-agent-1",
+        ] {
+            let identity =
+                super::executable_identity(Path::new(&format!("/home/me/target/debug/{name}")), 42)
+                    .unwrap();
+            assert!(identity.bundle_id.is_some(), "{name}");
+            assert!(
+                crate::target_policy::check("click", &identity, &[]).is_err(),
+                "{name}"
+            );
+        }
+        let dev = super::executable_identity(Path::new("/home/me/target/debug/brigadier-app"), 42)
+            .unwrap();
+        assert_eq!(dev.bundle_id, None);
+        assert!(crate::target_policy::check("click", &dev, &[]).is_ok());
     }
 
     #[test]
