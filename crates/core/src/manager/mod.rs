@@ -456,7 +456,6 @@ impl SessionManager {
             trust_home: std::sync::OnceLock::new(),
             activity: Arc::default(),
         });
-        manager.start_tracked_polling();
         manager.install_worktree_remover();
         manager.install_titles();
         // Each step's future is polled from the heap: made in this frame, they took half a
@@ -469,6 +468,7 @@ impl SessionManager {
         // Sessions open at the strip-down's first start are archived, not carried over.
         crate::heap(|| manager.archive_open_at_upgrade()).await;
         crate::heap(|| manager.recover()).await;
+        manager.start_tracked_polling();
         crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
         manager.start_computer_watchdog();

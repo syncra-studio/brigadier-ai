@@ -7,7 +7,7 @@ import type { TrackedPullRequest, TrackedWork, WaitingOn } from "@/ipc/generated
 
 const pr: TrackedPullRequest = { identity: { host: "github.com", owner: "org", repo: "repo", number: 7 }, account: "alice", viewer: "alice", pullRequest: { number: 7, title: "Changes", url: "https://github.com/org/repo/pull/7", state: "open" }, touchedAtMs: 1, observedAtMs: 2, actor: "worker 1", action: "opened", status: "Waiting on review", complete: true, forgotten: false };
 // oxlint-disable-next-line unicorn/no-thenable -- This persisted wait field is text, never a callable then.
-const wait: WaitingOn = { id: "w-123", text: "Michael checks ticket 2552", actor: "worker 1", createdAtMs: 1, dueAtMs: 2, timezone: "Europe/Chisinau", by: "2026-10-28", then: "Close the ticket", link: null, doneAtMs: null, wakeDeliveredAtMs: null };
+const wait: WaitingOn = { id: "w-123", text: "Michael checks ticket 2552", actor: "worker 1", createdAtMs: 1, dueAtMs: 2, timezone: "Europe/Chisinau", by: "2026-10-28", then: "Close the ticket", link: null, doneAtMs: null, doneNote: null, doneNoticeDeliveredAtMs: null, wakeDeliveredAtMs: null };
 
 test("terminal and forgotten PRs leave live rows while their timeline remains", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });

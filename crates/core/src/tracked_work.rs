@@ -71,6 +71,9 @@ pub struct PrHistoryEvent {
     pub id: String,
     pub at_ms: i64,
     pub identity: PrIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<String>,
     pub actor: String,
     pub action: String,
     pub detail: String,
@@ -89,6 +92,10 @@ pub struct WaitingOn {
     pub then: Option<String>,
     pub link: Option<String>,
     pub done_at_ms: Option<i64>,
+    #[serde(default)]
+    pub done_note: Option<String>,
+    #[serde(default)]
+    pub done_notice_delivered_at_ms: Option<i64>,
     pub wake_delivered_at_ms: Option<i64>,
 }
 
