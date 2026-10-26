@@ -3,7 +3,7 @@ import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "rea
 
 import { ActivityItems } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
-import { BlockError } from "@/app/conversation/BlockError";
+import { BlockError, useBlockQuotaWait } from "@/app/conversation/BlockError";
 import { CompactionBlock } from "@/app/conversation/CompactionBlock";
 import { SeamDivider } from "@/app/conversation/SeamRows";
 import { ContinuedFrom } from "@/app/conversation/ContinuedFrom";
@@ -150,7 +150,7 @@ export const RequestBlock: FC = () => {
   useEffect(() => {
     if (holds) show();
   }, [holds, show]);
-  const quotaWait = useViewConversation()?.quotaWait ?? null;
+  const quotaWait = useBlockQuotaWait(meta);
   const requestIds = meta?.requestIds;
   const changed = useTurnChanged(requestIds ?? []);
   const workersActive = useBoard((s) =>
@@ -178,10 +178,10 @@ export const RequestBlock: FC = () => {
   if (!meta) return null;
 
   const held = holding > 0 || commands > 0;
-  const live = isLive(meta.state) || held;
+  const live = isLive(meta.state) || held || quotaWait !== null;
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  const finished = blockFinished(meta.state) && !held;
+  const finished = blockFinished(meta.state) && !held && quotaWait === null;
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
   // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
   // Until then a reply streams in place.
@@ -247,10 +247,10 @@ export const RequestBlock: FC = () => {
         )}
         {header && (
           <WorkHeader
-            meta={meta}
+            meta={quotaWait && meta.state === "failed" ? { ...meta, state: "waiting" } : meta}
             open={open}
             foldable={foldable}
-            quota={quotaWait !== null && isLive(meta.state)}
+            quota={quotaWait !== null}
             answering={answering !== null}
             answerAtMs={answerAtMs}
             workers={holding}
@@ -343,7 +343,7 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <TurnEnd meta={meta} />}
-      <BlockError meta={meta} live={live} />
+      <BlockError meta={meta} live={live} quotaCovered={quotaWait !== null} />
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}

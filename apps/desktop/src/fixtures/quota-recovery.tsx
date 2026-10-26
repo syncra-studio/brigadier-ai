@@ -9,6 +9,7 @@ import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { Conversation, ConversationView as View, ModelInfo, ProviderOverview, QuotaWait, Request, Task, ThreadView } from "@/ipc/generated";
 import { openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 
@@ -39,8 +40,11 @@ const view = {
 } as unknown as View;
 const thread: ThreadView = { entries: [{ atMs: now, event: { type: "message", itemId: "u1", role: "user", text: "Continue the work." } },
   { atMs: now + 1, event: { type: "toolCall", itemId: "read", name: "Read", input: '{"file_path":"src/main.ts"}', status: "inProgress", output: null } }],
-  turns: [{ userMessage: "u1", startedAtMs: now, endedAtMs: null, end: null, error: null, requests: ["r1"],
-    limit: { kind: "usageWindow", resetsAtMs: RESET - 3_600_000, window: "five_hour" } }] };
+  turns: [{ userMessage: "u1", startedAtMs: now, endedAtMs: params.has("failed") ? now + 2 : null,
+    end: params.has("failed") ? "failed" : null, error: params.has("unrelated") ? "The network connection failed" : params.has("failed") ? "You've hit your session limit" : null, requests: ["r1"],
+    ...(!params.has("unrelated") && { limit: { kind: "usageWindow" as const, resetsAtMs: RESET - 3_600_000, window: "five_hour" } }) }],
+  background: [{ id: "native", itemId: null, kind: "agent", label: "Independent native subagent checking the project", status: "running",
+    startedAtMs: now, endedAtMs: null, outputFile: null, summary: null, lastLine: null }] };
 const asked: Request[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
@@ -85,8 +89,12 @@ try {
     const seen: Record<string, unknown> = { initial: text(strip()), strips: document.querySelectorAll("[data-slot=quota-wait-strip]").length,
       oldCards: document.querySelectorAll("[data-slot=schedule-card]").length, pills: document.querySelectorAll("[data-slot=quota-wait-pill]").length,
       initialLive: liveText(), header: text(document.querySelector("[data-slot=request-work-label]")),
+      native: text(document.querySelector("[data-slot=subagents-strip]")),
+      rawEnd: useCliThread.getState().views[ID]?.turns.at(-1)?.end,
+      quotaErrors: document.querySelectorAll("[data-slot=error-state], [data-slot=usage-limit]").length,
       staleToolShimmers: document.querySelectorAll("[data-slot=orchestrator-step] .shimmer").length,
       pausedTools: document.querySelectorAll("[data-slot=orchestrator-step][data-step-state=paused]").length };
+    if (!params.has("snapshot")) {
     // Current null reset must override the old turn's known reset.
     patchWait({ ...wait, resetsAtMs: null }); await sleep(); seen.unknown = text(strip());
     for (const kind of ["credits", "spendControl"] as const) {
@@ -120,6 +128,7 @@ try {
     strip()!.querySelector<HTMLButtonElement>("[data-slot=dont-resume]")!.click();
     await until("wait cancellation", () => !strip());
     seen.cancelled = !strip();
+    }
     const result = document.createElement("pre"); result.id = "quota-recovery-result"; result.textContent = JSON.stringify(seen); document.body.append(result);
   }
 } catch (error) {
