@@ -27,6 +27,7 @@ pub mod storage;
 pub mod thread_view;
 pub mod tools;
 mod traces;
+pub mod tracked_work;
 pub mod work;
 
 pub use app_call::*;
@@ -36,6 +37,7 @@ pub use feedback::*;
 pub use knowledge::*;
 pub use model::*;
 pub use sessions::{Core, MAX_ATTACHMENT_BYTES, ProbeBurst};
+pub use tracked_work::*;
 pub use work::*;
 
 /// Errors surfaced to clients.

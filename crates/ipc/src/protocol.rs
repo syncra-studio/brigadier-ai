@@ -14,20 +14,20 @@ use brigadier_core::storage::{
     UnlandedBranch,
 };
 use brigadier_core::{
-    AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile, ConnectView,
-    ContinueWhen, ConventionsExport, Conversation, ConversationActivity, ConversationId,
-    ConversationKind, ConversationStatus, ConversationView, DiffStat, FeedbackFiled,
-    FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport, ForkPlace,
-    GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches, MessagePage,
-    MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst, Project,
-    ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating,
-    RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    AccountEntry, AccountsView, AddWaitingOn, AppAnswer, AppCall, AttachmentRef, BrainOverview,
+    CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
+    ConflictFile, ConnectView, ContinueWhen, ConventionsExport, Conversation, ConversationActivity,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
+    FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
+    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches,
+    MessagePage, MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst,
+    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
+    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
-    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
-    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkerSource,
-    WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
+    TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn,
+    WorkerDiff, WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -758,6 +758,26 @@ pub enum Request {
     /// A session checkout's branch, changes and remote, for its Git actions.
     GetGitState {
         conversation_id: ConversationId,
+    },
+    GetTrackedWork {
+        conversation_id: ConversationId,
+    },
+    WatchPullRequest {
+        conversation_id: ConversationId,
+        url: String,
+        account: Option<String>,
+    },
+    ForgetPullRequest {
+        conversation_id: ConversationId,
+        key: String,
+    },
+    AddWaitingOn {
+        conversation_id: ConversationId,
+        wait: AddWaitingOn,
+    },
+    CompleteWaitingOn {
+        conversation_id: ConversationId,
+        id: String,
     },
     /// The GitHub pull request of a session checkout's branch, looked up with `gh` (read only).
     GetPullRequest {
@@ -1707,6 +1727,19 @@ pub enum Response {
     },
     GetGitState {
         state: GitState,
+    },
+    GetTrackedWork {
+        work: TrackedWork,
+    },
+    WatchPullRequest {
+        pull_request: TrackedPullRequest,
+    },
+    ForgetPullRequest,
+    AddWaitingOn {
+        wait: WaitingOn,
+    },
+    CompleteWaitingOn {
+        wait: WaitingOn,
     },
     GetPullRequest {
         pull_request: Option<PullRequest>,

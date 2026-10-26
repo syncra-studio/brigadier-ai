@@ -262,6 +262,25 @@ impl SessionManager {
             models: None,
         };
         match part {
+            ContextPart::Waiting => {
+                let work = self.tracked_work(&whose.conversation).await?;
+                output.text = work
+                    .waiting_on
+                    .iter()
+                    .filter(|w| w.done_at_ms.is_none())
+                    .map(|w| {
+                        format!(
+                            "{} · {}{}",
+                            w.id,
+                            w.text,
+                            w.by.as_ref()
+                                .map(|d| format!(" · by {d} ({})", w.timezone))
+                                .unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
             ContextPart::Brief => output.text = self.context_brief(whose).await?,
             ContextPart::Decisions | ContextPart::Open | ContextPart::Ledger => {
                 let (session, own) = self.context_ledgers(whose).await?;
@@ -923,6 +942,7 @@ fn status_word(status: McpStatus) -> &'static str {
 
 fn summary(part: ContextPart, worker: bool) -> &'static str {
     match (part, worker) {
+        (ContextPart::Waiting, _) => "Explicit non-PR waits and durable IDs",
         (ContextPart::Brief, true) => "Your task as `brigadier start` gave it",
         (ContextPart::Brief, false) => "The session's first request",
         (ContextPart::Decisions, true) => "Your session's rules and decisions, quoted",
