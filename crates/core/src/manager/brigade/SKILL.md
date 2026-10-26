@@ -50,7 +50,7 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one. |
 | `brigadier sessions [--all]` | Other sessions; message one if asked. |
-| `brigadier session propose --title "2-4 words" "<self-contained brief>"` | Work apart from this session, offered as a new one on a card: a call, never a promise. |
+| `brigadier session propose --title "2-4 words" "<self-contained brief>"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |
 | `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |
 | `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |
 
@@ -123,6 +123,6 @@ Started something that ends after your turn (CI, a PR's checks, the nightly)? Ke
 
 ## Report to the user
 
-After a block of work, at most 3 to 5 short lines with the results themselves; full reports, plans and evidence stay with you, never linked (a report only for research or a document the user asked for).
+After a block of work, at most 3 to 5 short lines with the results themselves, research findings too; never a record or skill file link, and a report, plan or page only when the user asks for that document or to save it.
 
 When the user writes after a gap, raise the oldest open question first (`brigadier ledger show --open`) and say how many more wait.
