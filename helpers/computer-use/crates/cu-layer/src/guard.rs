@@ -111,6 +111,9 @@ impl Tool for GuardedTool {
             return refusal;
         }
         let result = self.inner.invoke(args).await;
+        // Windows and Linux: a refusal the platform can't get past, said plainly.
+        #[cfg(not(target_os = "macos"))]
+        let result = crate::platform::explain(result);
         tokens::record(&result);
         text::result(result)
     }
