@@ -182,6 +182,8 @@ impl SessionManager {
         #[serde(deny_unknown_fields)]
         struct Done {
             id: String,
+            #[serde(default)]
+            note: Option<String>,
         }
         let result: crate::Result<(String, serde_json::Value)> = async {
             match (tool, action) {
@@ -237,7 +239,9 @@ impl SessionManager {
                 (Tool::Waiting, "done") => {
                     let a: Done = serde_json::from_value(given)
                         .map_err(|_| crate::Error::Invalid("done needs one wait ID".into()))?;
-                    let w = self.complete_waiting_on(id, &a.id).await?;
+                    let w = self
+                        .complete_waiting_on_with_note(id, &a.id, a.note)
+                        .await?;
                     Ok((
                         format!("Done · {}", w.text),
                         serde_json::to_value(w).unwrap(),

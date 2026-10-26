@@ -613,7 +613,15 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("then", flag("then"));
                     put("link", flag("link"));
                 }
-                "done" => put("id", one("wait ID", true)?),
+                "done" => {
+                    let Some(id) = words.first() else {
+                        return Err(error("missing <wait ID>"));
+                    };
+                    put("id", Some(json!(id)));
+                    if words.len() > 1 {
+                        put("note", Some(json!(words[1..].join(" "))));
+                    }
+                }
                 "list" if words.is_empty() => {}
                 _ => return Err(error("waiting list takes no arguments")),
             }

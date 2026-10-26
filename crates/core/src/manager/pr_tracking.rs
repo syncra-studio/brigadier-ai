@@ -58,7 +58,7 @@ impl SessionManager {
         account: Option<String>,
         actor: &str,
         action: &str,
-        source: Option<String>,
+        source: Option<(String, Option<i64>)>,
         manual: bool,
     ) -> Result<TrackedPullRequest> {
         let _guard = self.tracked_writes.lock().await;
@@ -72,11 +72,15 @@ impl SessionManager {
             && (old.forgotten && !manual
                 || source
                     .as_ref()
-                    .is_some_and(|s| work.pr_history.iter().any(|e| &e.id == s)))
+                    .is_some_and(|s| work.pr_history.iter().any(|e| e.id == s.0)))
         {
             return Ok(old.clone());
         }
-        let now = crate::now_ms();
+        let now = source
+            .as_ref()
+            .and_then(|(_, at)| *at)
+            .unwrap_or_else(crate::now_ms);
+        let action_account = account.clone();
         let mut pr = existing.unwrap_or(TrackedPullRequest {
             identity: identity.clone(),
             account: None,
@@ -91,6 +95,7 @@ impl SessionManager {
             forgotten: false,
         });
         if let Some(account) = account
+            && now >= pr.touched_at_ms
             && pr.account.as_ref() != Some(&account)
         {
             pr.account = Some(account);
@@ -101,16 +106,21 @@ impl SessionManager {
             pr.status = "Checking status for selected account".into();
         }
         pr.forgotten = false;
-        pr.touched_at_ms = now;
-        pr.actor = actor.into();
-        pr.action = action.into();
+        if now >= pr.touched_at_ms {
+            pr.touched_at_ms = now;
+            pr.actor = actor.into();
+            pr.action = action.into();
+        }
         let event = PrHistoryEvent {
-            id: source.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: source
+                .map(|(id, _)| id)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             at_ms: now,
             identity,
+            account: action_account,
             actor: actor.into(),
             action: action.into(),
-            detail: pr.status.clone(),
+            detail: "Successful action".into(),
         };
         self.keep_tracked(
             id,
@@ -137,6 +147,7 @@ impl SessionManager {
                 id: uuid::Uuid::new_v4().to_string(),
                 at_ms: crate::now_ms(),
                 identity: pr.identity.clone(),
+                account: pr.account.clone(),
                 actor: "session".into(),
                 action: "forgotten".into(),
                 detail: "Removed from watched pull requests".into(),
@@ -182,7 +193,14 @@ impl SessionManager {
                                 )
                                 .to_hex()
                             );
-                            found.push((actor.clone(), identity, account, action, source));
+                            found.push((
+                                actor.clone(),
+                                identity,
+                                account,
+                                action,
+                                source,
+                                entry.updated_at_ms.or(entry.at_ms),
+                            ));
                         }
                     }
                 }
@@ -190,9 +208,17 @@ impl SessionManager {
             Ok(found)
         })
         .await?;
-        for (actor, identity, account, action, source) in candidates {
-            self.touch_pr(id, identity, account, &actor, &action, Some(source), false)
-                .await?;
+        for (actor, identity, account, action, source, at) in candidates {
+            self.touch_pr(
+                id,
+                identity,
+                account,
+                &actor,
+                &action,
+                Some((source, at)),
+                false,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -205,7 +231,6 @@ impl SessionManager {
         let weak = self.me.clone();
         self.spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
                 let Some(manager) = weak.upgrade() else {
                     return;
                 };
@@ -227,6 +252,8 @@ impl SessionManager {
                 if let Some(conversation) = manager.core.catalog().conversations.first() {
                     let _ = manager.refresh_tracked_prs(&conversation.id).await;
                 }
+                drop(manager);
+                tokio::time::sleep(Duration::from_secs(30)).await;
             }
         });
     }
@@ -444,6 +471,7 @@ impl SessionManager {
             id: uuid::Uuid::new_v4().to_string(),
             at_ms: now,
             identity: pr.identity.clone(),
+            account: pr.account.clone(),
             actor: "GitHub".into(),
             action: "status changed".into(),
             detail: pr.status.clone(),
@@ -870,9 +898,15 @@ async fn observe_pages(
         )
     });
     let pending = checks.iter().any(|c| {
-        c["status"].as_str().is_some_and(|s| s != "COMPLETED")
-            || c["state"] == "PENDING"
-            || c["conclusion"].is_null() && c["state"].is_null()
+        if let Some(state) = c["state"].as_str() {
+            state != "SUCCESS"
+        } else {
+            c["status"] != "COMPLETED"
+                || !matches!(
+                    c["conclusion"].as_str(),
+                    Some("SUCCESS" | "NEUTRAL" | "SKIPPED")
+                )
+        }
     });
     let ci = if failing {
         Some(PullRequestCi::Failing)
@@ -994,12 +1028,14 @@ fn retry_after(headers: &str, now: i64) -> Option<i64> {
         if !key.eq_ignore_ascii_case("retry-after") {
             return None;
         }
-        value
-            .trim()
-            .parse::<i64>()
+        let value = value.trim();
+        if let Ok(seconds) = value.parse::<i64>() {
+            return (seconds >= 0).then(|| now.saturating_add(seconds.saturating_mul(1000)));
+        }
+        jiff::civil::DateTime::strptime("%a, %d %b %Y %H:%M:%S GMT", value)
             .ok()
-            .filter(|s| *s >= 0)
-            .map(|s| now + s.saturating_mul(1000))
+            .and_then(|date| date.to_zoned(jiff::tz::TimeZone::UTC).ok())
+            .map(|date| date.timestamp().as_millisecond().max(now))
     })
 }
 
@@ -1066,6 +1102,19 @@ mod tests {
         let (h, b) = split_headers("HTTP/2.0 429\r\nRetry-After: 90\r\n\r\n{}");
         assert_eq!(b, "{}");
         assert_eq!(retry_after(h, 1000), Some(91000));
+        assert_eq!(
+            retry_after("Retry-After: Mon, 26 Oct 2026 12:00:00 GMT", 0),
+            Some(
+                "2026-10-26T12:00:00Z"
+                    .parse::<jiff::Timestamp>()
+                    .unwrap()
+                    .as_millisecond()
+            )
+        );
+        assert_eq!(
+            retry_after("Retry-After: 9223372036854775807", 1),
+            Some(i64::MAX)
+        );
     }
 }
 
@@ -1168,6 +1217,25 @@ print('HTTP/2.0 200\r\n\r\n'+(root/('page-'+str(i)+'.json')).read_text())
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[tokio::test]
+    async fn an_alias_error_does_not_poison_another_pr_or_claim_readiness() {
+        let mut first = page(
+            vec![json!({"name":"CI","status":"COMPLETED","conclusion":"SUCCESS"})],
+            false,
+        );
+        first["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+            ["contexts"]["totalCount"] = json!(1);
+        let batch = json!({"data":{"viewer":{"login":"alice"},"rateLimit":{"cost":9,"limit":5000,"remaining":4000,"resetAt":"2099-01-01T00:00:00Z"},"p0":first["data"]["repository"],"p1":null},"errors":[{"path":["p1","pullRequest"],"message":"not readable"}]});
+        let (dir, gh) = stub(vec![batch]);
+        let a = tracked();
+        let mut b = tracked();
+        b.identity.number = 8;
+        let results = observe_batch(&gh, &[a, b], 0, || true).await;
+        assert_eq!(results[0].as_ref().unwrap().status, "Ready to merge");
+        assert!(!results[1].as_ref().unwrap().complete);
+        assert_eq!(std::fs::read_to_string(dir.join("count")).unwrap(), "1");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[tokio::test]
     async fn incomplete_connections_and_wrong_viewer_never_claim_ready() {
         let mut missing = page(vec![], false);
         missing["data"]["repository"]["pullRequest"]["reviewThreads"] = json!({"nodes":[]});
@@ -1203,7 +1271,7 @@ impl SessionManager {
             None,
             "session",
             "branch pull request",
-            Some(source),
+            Some((source, None)),
             false,
         )
         .await?;
@@ -1247,6 +1315,7 @@ impl SessionManager {
             id: uuid::Uuid::new_v4().to_string(),
             at_ms: crate::now_ms(),
             identity,
+            account: pr.account.clone(),
             actor: "GitHub".into(),
             action: "status changed".into(),
             detail: pr.status.clone(),
@@ -1353,6 +1422,23 @@ mod replay_tests {
         let first = flow.manager.tracked_work(&id).await.unwrap();
         assert_eq!(first.pull_requests.len(), 2);
         assert_eq!(first.pr_history.len(), 2);
+        assert!(first.pr_history.iter().all(|event| {
+            event.at_ms
+                == "2026-10-26T10:00:00Z"
+                    .parse::<jiff::Timestamp>()
+                    .unwrap()
+                    .as_millisecond()
+        }));
+        assert_eq!(
+            first
+                .pr_history
+                .iter()
+                .find(|event| event.identity.repo == "other")
+                .unwrap()
+                .account
+                .as_deref(),
+            Some("org-user")
+        );
         let worker = first
             .pull_requests
             .iter()

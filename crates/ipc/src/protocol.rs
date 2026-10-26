@@ -7,6 +7,7 @@
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
 use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, NodeFilter};
+use brigadier_core::manager::{BackgroundHistoryOutput, BackgroundHistoryPage};
 use brigadier_core::pages::{Page, PageContent, PageError, PageSummary, PageWriteOutcome};
 use brigadier_core::storage::{
     BranchChoice, CleanProgress, CleanReport, FreeUpProjectsReport, ProjectRemoval,
@@ -758,6 +759,18 @@ pub enum Request {
     /// A session checkout's branch, changes and remote, for its Git actions.
     GetGitState {
         conversation_id: ConversationId,
+    },
+    GetBackgroundHistory {
+        conversation_id: ConversationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        before: Option<String>,
+        #[serde(default = "background_history_limit")]
+        limit: u32,
+    },
+    ReadBackgroundHistoryOutput {
+        conversation_id: ConversationId,
+        record_id: String,
     },
     GetTrackedWork {
         conversation_id: ConversationId,
@@ -1728,6 +1741,12 @@ pub enum Response {
     GetGitState {
         state: GitState,
     },
+    GetBackgroundHistory {
+        history: BackgroundHistoryPage,
+    },
+    ReadBackgroundHistoryOutput {
+        output: BackgroundHistoryOutput,
+    },
     GetTrackedWork {
         work: TrackedWork,
     },
@@ -2643,4 +2662,8 @@ mod plugin_import_tests {
             serde_json::json!({"method":"importPlugin", "job":"plugin-job-test"})
         );
     }
+}
+
+fn background_history_limit() -> u32 {
+    50
 }

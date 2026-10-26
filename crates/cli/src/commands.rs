@@ -144,7 +144,7 @@ pub const COMMANDS: &[Command] = &[
             action(&["add", "done", "list"], "The action."),
             rest(
                 "args",
-                "add: plain words; done: durable wait ID; list: no arguments.",
+                "add: plain words; done: durable wait ID and optional completion note; list: no arguments.",
                 false,
             ),
             flag("by", "DATE", "YYYY-MM-DD or RFC3339 instant."),
