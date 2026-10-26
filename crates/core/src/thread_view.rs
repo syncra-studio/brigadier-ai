@@ -81,9 +81,6 @@ impl CliJobs {
 }
 
 /// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
-/// Exact daemon provenance marker; the raw native transcript remains untouched.
-pub(crate) const CUT_JOBS_MARK: &str = "[Brigadier background jobs stopped]";
-pub(crate) const BACKGROUND_RESULT_MARK: &str = "[Brigadier background job finished]";
 /// Only a native id previously bound to registered typed input can hide a user-shaped event.
 pub(crate) fn daemon_context(
     event: &ProviderEvent,
@@ -874,12 +871,8 @@ mod tests {
         }
     }
 
-    /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
-    #[cfg(unix)]
     #[test]
     fn daemon_provenance_requires_known_native_id_and_respects_authored_markers() {
-        let text = format!("{CUT_JOBS_MARK} a watcher ended");
-        assert!(text.starts_with(CUT_JOBS_MARK));
         let entry = message("native", Role::User);
         assert!(!daemon_context(&entry.event, &Default::default()));
         assert!(daemon_context(
@@ -890,7 +883,7 @@ mod tests {
 
     #[test]
     fn reconstructed_projection_keeps_assistant_followup_without_an_internal_workblock() {
-        let raw = vec![
+        let raw = [
             message("real-user", Role::User),
             message("answer-before", Role::Assistant),
             message("daemon-input", Role::User),
@@ -915,6 +908,8 @@ mod tests {
         ));
     }
 
+    /// A Claude session's thread still reads when one of its subagents' files can't be (#619 C4).
+    #[cfg(unix)]
     #[test]
     fn a_subagent_file_that_cannot_be_read_leaves_the_thread_whole() {
         let dir = std::env::temp_dir().join(format!("bg-thread-stamp-{}", std::process::id()));

@@ -333,11 +333,10 @@ impl SessionManager {
             if let Some(conv) = self
                 .queue_envelope_kept(id, envelope, Some(request.clone()), false)
                 .await
+                && !completed
             {
-                if !completed {
-                    self.settle_requests(id).await;
-                    self.kick(&conv);
-                }
+                self.settle_requests(id).await;
+                self.kick(&conv);
             }
         }
         Ok(())
@@ -456,7 +455,7 @@ mod durable_wake_tests {
         flow.idle().await;
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         flow.manager.deliver_waiting_wakes(&id).await.unwrap();
-        assert_eq!(
+        assert!(
             flow.manager
                 .tracked_work(&id)
                 .await
@@ -466,8 +465,7 @@ mod durable_wake_tests {
                 .find(|w| w.id == wait.id)
                 .unwrap()
                 .wake_delivered_at_ms
-                .is_some(),
-            true
+                .is_some()
         );
         flow.restart().await;
         flow.manager.deliver_waiting_wakes(&id).await.unwrap();

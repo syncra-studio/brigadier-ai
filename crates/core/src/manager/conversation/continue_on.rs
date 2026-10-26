@@ -160,11 +160,10 @@ impl SessionManager {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not record the move"; conversation = %conv.id, error = %err);
                 return;
             }
-            if conv.state.lock().await.waiting {
-                if let Err(err) = self.stop_waiting(conv).await {
-                    tracing::error!(error = %err, "could not end quota wait for manual move");
-                    return;
-                }
+            let waiting = conv.state.lock().await.waiting;
+            if waiting && let Err(err) = self.stop_waiting(conv).await {
+                tracing::error!(error = %err, "could not end quota wait for manual move");
+                return;
             }
             self.seam_to_agent(conv, from.provider, to, Vec::new(), false)
                 .await;

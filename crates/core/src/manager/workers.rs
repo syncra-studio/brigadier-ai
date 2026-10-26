@@ -2723,6 +2723,7 @@ async fn latest_session_start(store: &brigadier_store::Store, id: &TaskId) -> Op
 }
 
 /// Names remain short and unique even for automatically created reviewers and old callers.
+#[cfg(test)]
 fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String]) -> String {
     let contains_id = title
         .split_whitespace()

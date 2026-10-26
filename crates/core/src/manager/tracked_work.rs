@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum Change {
     Pr {
-        pr: TrackedPullRequest,
+        pr: Box<TrackedPullRequest>,
         event: Option<PrHistoryEvent>,
     },
     Wait {
@@ -24,9 +24,9 @@ impl TrackedWork {
                     .iter_mut()
                     .find(|p| p.identity == pr.identity)
                 {
-                    *old = pr;
+                    *old = *pr;
                 } else {
-                    self.pull_requests.push(pr);
+                    self.pull_requests.push(*pr);
                 }
                 if let Some(event) = event
                     && !self.pr_history.iter().any(|e| e.id == event.id)
@@ -78,7 +78,8 @@ impl SessionManager {
             })?;
             work.apply(change);
         }
-        work.pr_history.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
+        work.pr_history
+            .sort_by_key(|entry| std::cmp::Reverse(entry.at_ms));
         Ok(work)
     }
     pub(super) async fn keep_tracked(&self, id: &ConversationId, change: &Change) -> Result<()> {
@@ -117,15 +118,18 @@ mod tests {
         let mut work = TrackedWork::default();
         let mut p = pr();
         work.apply(Change::Pr {
-            pr: p.clone(),
+            pr: Box::new(p.clone()),
             event: None,
         });
         work.apply(Change::Pr {
-            pr: p.clone(),
+            pr: Box::new(p.clone()),
             event: None,
         });
         p.forgotten = true;
-        work.apply(Change::Pr { pr: p, event: None });
+        work.apply(Change::Pr {
+            pr: Box::new(p),
+            event: None,
+        });
         assert_eq!(work.pull_requests.len(), 1);
         assert!(work.pull_requests[0].forgotten);
     }

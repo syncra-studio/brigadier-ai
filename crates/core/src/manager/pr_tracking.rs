@@ -17,6 +17,16 @@ pub(super) struct Poller {
     state: Mutex<HashMap<String, PollSlot>>,
     round: tokio::sync::Mutex<()>,
 }
+/// A PR to poll with its host-resolved key and every session that tracks it.
+type PollTarget = (String, TrackedPullRequest, Vec<ConversationId>);
+/// How one PR touch is recorded: who did what, and the evidence it came from.
+struct PrTouch<'a> {
+    account: Option<String>,
+    actor: &'a str,
+    action: &'a str,
+    source: Option<(String, Option<i64>)>,
+    manual: bool,
+}
 #[derive(Default)]
 struct PollSlot {
     next: i64,
@@ -51,19 +61,28 @@ impl SessionManager {
         {
             return Err(Error::Invalid("invalid GitHub account login".into()));
         }
-        self.touch_pr(id, identity, account, actor, "watching", None, true)
-            .await
+        let touch = PrTouch {
+            account,
+            actor,
+            action: "watching",
+            source: None,
+            manual: true,
+        };
+        self.touch_pr(id, identity, touch).await
     }
     async fn touch_pr(
         &self,
         id: &ConversationId,
         identity: PrIdentity,
-        account: Option<String>,
-        actor: &str,
-        action: &str,
-        source: Option<(String, Option<i64>)>,
-        manual: bool,
+        touch: PrTouch<'_>,
     ) -> Result<TrackedPullRequest> {
+        let PrTouch {
+            account,
+            actor,
+            action,
+            source,
+            manual,
+        } = touch;
         let _guard = self.tracked_writes.lock().await;
         let work = self.tracked_work(id).await?;
         let existing = work
@@ -128,7 +147,7 @@ impl SessionManager {
         self.keep_tracked(
             id,
             &Change::Pr {
-                pr: pr.clone(),
+                pr: Box::new(pr.clone()),
                 event: Some(event),
             },
         )
@@ -158,7 +177,7 @@ impl SessionManager {
             self.keep_tracked(
                 id,
                 &Change::Pr {
-                    pr,
+                    pr: Box::new(pr),
                     event: Some(event),
                 },
             )
@@ -355,16 +374,14 @@ impl SessionManager {
                 resolved.identity
             };
             if let Some(identity) = identity {
-                self.touch_pr(
-                    id,
-                    identity,
-                    action.account,
-                    &actor,
-                    &action.action,
-                    Some((source, action.at)),
-                    false,
-                )
-                .await?;
+                let touch = PrTouch {
+                    account: action.account,
+                    actor: &actor,
+                    action: &action.action,
+                    source: Some((source, action.at)),
+                    manual: false,
+                };
+                self.touch_pr(id, identity, touch).await?;
             }
         }
         Ok(())
@@ -490,10 +507,7 @@ impl SessionManager {
                 target.1.push(conversation.id.clone());
             }
         }
-        let mut groups: HashMap<
-            (String, String),
-            Vec<(String, TrackedPullRequest, Vec<ConversationId>)>,
-        > = HashMap::new();
+        let mut groups: HashMap<(String, String), Vec<PollTarget>> = HashMap::new();
         for (key, (mut pr, owners)) in targets {
             let cached = self
                 .pr_poll
@@ -694,7 +708,14 @@ impl SessionManager {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             self.kick(&conv);
         }
-        self.keep_tracked(id, &Change::Pr { pr, event }).await
+        self.keep_tracked(
+            id,
+            &Change::Pr {
+                pr: Box::new(pr),
+                event,
+            },
+        )
+        .await
     }
 }
 
@@ -1083,13 +1104,12 @@ fn unknown_pr(identity: &PrIdentity) -> PullRequest {
     }
 }
 fn split_headers(output: &str) -> (&str, &str) {
-    if output.starts_with("HTTP/") {
-        if let Some((headers, body)) = output
+    if output.starts_with("HTTP/")
+        && let Some((headers, body)) = output
             .split_once("\r\n\r\n")
             .or_else(|| output.split_once("\n\n"))
-        {
-            return (headers, body);
-        }
+    {
+        return (headers, body);
     }
     ("", output)
 }
@@ -1345,16 +1365,14 @@ impl SessionManager {
             return Ok(());
         };
         let source = format!("branch:{}", identity.key());
-        self.touch_pr(
-            id,
-            identity.clone(),
-            None,
-            "session",
-            "branch pull request",
-            Some((source, None)),
-            false,
-        )
-        .await?;
+        let touch = PrTouch {
+            account: None,
+            actor: "session",
+            action: "branch pull request",
+            source: Some((source, None)),
+            manual: false,
+        };
+        self.touch_pr(id, identity.clone(), touch).await?;
         let _guard = self.tracked_writes.lock().await;
         let Some(mut pr) = self
             .tracked_work(id)
@@ -1403,7 +1421,7 @@ impl SessionManager {
         self.keep_tracked(
             id,
             &Change::Pr {
-                pr,
+                pr: Box::new(pr),
                 event: Some(event),
             },
         )

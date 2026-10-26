@@ -95,13 +95,12 @@ async fn stopped_completed_and_reminder_envelopes_reach_the_model_without_user_b
         })
         .await;
         flow.settled().await;
-        let inputs = seen.lock().unwrap();
-        assert!(
-            inputs.iter().any(
+        {
+            let inputs = seen.lock().unwrap();
+            assert!(inputs.iter().any(
                 |input| input.contains(body) && input.starts_with("[Brigadier internal input ")
-            )
-        );
-        drop(inputs);
+            ));
+        }
         assert_eq!(authored_native_inputs(&flow), ["A real authored anchor."]);
         assert_eq!(
             flow.board().await.requests.len(),

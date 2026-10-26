@@ -340,12 +340,11 @@ fn response(output: &str, repo: Option<&Repo>, host: &str) -> Option<PrIdentity>
     let mut found = Vec::new();
     if let Ok(value) = serde_json::from_str::<Value>(output) {
         for key in ["html_url", "pull_request_url"] {
-            if let Some(url) = value[key].as_str() {
-                if let Some(pr) =
+            if let Some(url) = value[key].as_str()
+                && let Some(pr) =
                     canonical(url).or_else(|| api_identity(url, host).map(|(r, n)| r.pr(n)))
-                {
-                    found.push(pr);
-                }
+            {
+                found.push(pr);
             }
         }
         if let Some(url) = value
@@ -362,16 +361,13 @@ fn response(output: &str, repo: Option<&Repo>, host: &str) -> Option<PrIdentity>
             continue;
         }
         // gh's mutation receipts, not arbitrary text or a title/body URL.
-        if line.starts_with("✓ ") || line.starts_with("✔ ") {
-            if let Some((_, tail)) = line.split_once("pull request ") {
-                if let Some(id) = tail.split_whitespace().next() {
-                    if let Some((r, n)) = id.split_once('#') {
-                        if let (Some(r), Ok(n)) = (Repo::parse(r, host), n.parse::<u32>()) {
-                            found.push(r.pr(n));
-                        }
-                    }
-                }
-            }
+        if (line.starts_with("✓ ") || line.starts_with("✔ "))
+            && let Some((_, tail)) = line.split_once("pull request ")
+            && let Some(id) = tail.split_whitespace().next()
+            && let Some((r, n)) = id.split_once('#')
+            && let (Some(r), Ok(n)) = (Repo::parse(r, host), n.parse::<u32>())
+        {
+            found.push(r.pr(n));
         }
     }
     found.retain(|pr| repo.is_none_or(|r| Repo::from_pr(pr) == *r));
@@ -386,7 +382,6 @@ fn api_identity(value: &str, host: &str) -> Option<(Repo, u32)> {
             value
                 .strip_prefix("https://")
                 .and_then(|v| v.split_once("/api/v3/"))
-                .map(|(h, p)| (h, p))
         })
         .unwrap_or((host, value.trim_start_matches('/')));
     let parts = endpoint.1.split('/').collect::<Vec<_>>();
@@ -882,10 +877,10 @@ fn gh_action(
             .or(explicit_repo.as_ref()),
         host,
     );
-    if let (Some(selected), Some(receipt)) = (&selected, &receipt) {
-        if selected != receipt {
-            return None;
-        }
+    if let (Some(selected), Some(receipt)) = (&selected, &receipt)
+        && selected != receipt
+    {
+        return None;
     }
     if let Some(selected) = selected {
         if explicit_repo
@@ -999,9 +994,7 @@ fn api_action(
             word.as_str(),
             "--silent" | "--paginate" | "--slurp" | "--include" | "-i"
         ) {
-        } else if word.starts_with('-') {
-            return None;
-        } else if endpoint.replace(word.as_str()).is_some() {
+        } else if word.starts_with('-') || endpoint.replace(word.as_str()).is_some() {
             return None;
         }
         i += 1;
@@ -1153,18 +1146,19 @@ fn git_action(
         for line in output.lines() {
             let columns = line.split('\t').collect::<Vec<_>>();
             if columns.len() == 3 && !matches!(columns[0].trim(), "=" | "-" | "!") {
-                if let Some((source, dest)) = columns[1].split_once(':') {
-                    if branch(source) && branch(dest) {
-                        let head = columns[2]
-                            .split_whitespace()
-                            .find_map(|word| {
-                                word.split_once("..")
-                                    .map(|(_, new)| new.trim_start_matches('.'))
-                                    .filter(|s| oid(s))
-                            })
-                            .map(str::to_owned);
-                        updates.push((source.to_owned(), dest.to_owned(), head));
-                    }
+                if let Some((source, dest)) = columns[1].split_once(':')
+                    && branch(source)
+                    && branch(dest)
+                {
+                    let head = columns[2]
+                        .split_whitespace()
+                        .find_map(|word| {
+                            word.split_once("..")
+                                .map(|(_, new)| new.trim_start_matches('.'))
+                                .filter(|s| oid(s))
+                        })
+                        .map(str::to_owned);
+                    updates.push((source.to_owned(), dest.to_owned(), head));
                 }
                 continue;
             }

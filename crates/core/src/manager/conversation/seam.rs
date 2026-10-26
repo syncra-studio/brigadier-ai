@@ -534,15 +534,14 @@ impl SessionManager {
             .hand_over
             .as_ref()
             .is_some_and(|over| over.stopped);
-        if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
-            if !self
+        if matches!(file.phase, Phase::Live | Phase::Nudged { .. })
+            && !self
                 .close_seam(conv, file, nudged, Some(death), stopped)
                 .await
-            {
-                self.fail_quota_handover(conv, "Could not record the provider handoff.")
-                    .await;
-                return;
-            }
+        {
+            self.fail_quota_handover(conv, "Could not record the provider handoff.")
+                .await;
+            return;
         }
         // The messages the old CLI had taken are in the thread already: the successor is given
         // them again, and its first message doesn't show them twice (#562). Those of a turn
