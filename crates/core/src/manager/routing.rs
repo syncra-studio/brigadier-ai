@@ -76,10 +76,26 @@ impl SessionManager {
     /// doesn't list is judged by its provider. Whether the user switched it off is not asked:
     /// this is about a conversation already running on it.
     pub(crate) async fn choice_available(&self, choice: &ModelChoice) -> bool {
-        if !self.provider_ready(choice.provider) {
-            return false;
-        }
-        self.model_free(choice, None).await
+        let candidates: Vec<_> = self
+            .runtime
+            .account_candidates(choice.provider)
+            .into_iter()
+            .filter(|candidate| {
+                choice
+                    .account
+                    .as_ref()
+                    .is_none_or(|account| account == &candidate.account.choice_id())
+            })
+            .collect();
+        crate::accounts::ready(
+            &self.core.settings(),
+            choice.provider,
+            choice.model.as_deref(),
+            &candidates,
+            &[],
+            crate::now_ms(),
+        )
+        .is_some()
     }
 
     /// Whether `account` itself could run `choice` now by its own quota, whichever account

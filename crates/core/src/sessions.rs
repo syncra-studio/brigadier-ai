@@ -38,6 +38,23 @@ const REQUEST_PREVIEW_CHARS: usize = 80;
 const NEW_SESSION_TITLE: &str = "New session";
 const NEW_CHAT_TITLE: &str = "New chat";
 
+/// A first-message title request. Its nonce is consumed by a successful write and invalidated
+/// by every manual rename, even one that writes the same text.
+#[derive(Clone, Debug)]
+pub(crate) struct TitleRequest {
+    pub id: ConversationId,
+    pub nonce: String,
+    pub input: String,
+}
+
+#[derive(Default)]
+struct Titles {
+    claimed: HashSet<ConversationId>,
+    pending: HashMap<ConversationId, String>,
+}
+
+type TitleHook = Box<dyn Fn(TitleRequest) + Send + Sync>;
+
 /// Where a new conversation comes from: a fork's source, or the conversation a side chat
 /// sits beside. Neither for a new session or Chat.
 #[derive(Debug, Clone, Default)]
@@ -94,6 +111,9 @@ pub struct Core {
     /// Held across a settings change the core makes itself (read, change, write), so a
     /// change from a client isn't lost in between.
     settings_writes: tokio::sync::Mutex<()>,
+    /// Serializes first-message claims, manual renames and generated-title CAS writes.
+    titles: tokio::sync::Mutex<Titles>,
+    title_hook: std::sync::OnceLock<TitleHook>,
 }
 
 impl Core {
@@ -108,8 +128,14 @@ impl Core {
             events.extend(read_whole_stream(&store, head.stream).await?);
         }
         events.sort_by_key(|event| event.seq);
+        let mut titles = Titles::default();
         for event in &events {
-            projection.apply(&decode(event)?, event.seq, event.at_ms);
+            let decoded = decode(event)?;
+            if let DomainEvent::ConversationRenamed { id, .. } = &decoded {
+                // Old or completed titles are never revisited, including after restart.
+                titles.claimed.insert(id.clone());
+            }
+            projection.apply(&decoded, event.seq, event.at_ms);
         }
 
         let latest_settings = store
@@ -147,6 +173,8 @@ impl Core {
             projection: Mutex::new(projection),
             boards: tokio::sync::Mutex::new(HashMap::new()),
             settings_writes: tokio::sync::Mutex::new(()),
+            titles: tokio::sync::Mutex::new(titles),
+            title_hook: std::sync::OnceLock::new(),
         });
         if let Some(settings) = crate::routing::availability::migrate(&core.settings()) {
             core.update_settings(settings).await?;
@@ -632,6 +660,7 @@ impl Core {
         id: ConversationId,
         title: String,
     ) -> Result<Conversation> {
+        let mut titles = self.titles.lock().await;
         self.conversation(&id)?;
         let title = clean_name(&title, "title")?;
         let events = vec![(
@@ -642,7 +671,32 @@ impl Core {
             },
         )];
         self.record(events).await?;
+        titles.claimed.insert(id.clone());
+        titles.pending.remove(&id);
         self.conversation(&id)
+    }
+
+    pub(crate) fn set_title_hook(&self, hook: TitleHook) {
+        let _ = self.title_hook.set(hook);
+    }
+
+    /// A nonce, rather than title text equality, protects same-text and away-and-back renames.
+    pub(crate) async fn finish_title(&self, request: &TitleRequest, title: String) -> Result<bool> {
+        let mut titles = self.titles.lock().await;
+        if titles.pending.get(&request.id) != Some(&request.nonce) {
+            return Ok(false);
+        }
+        self.conversation(&request.id)?;
+        self.record(vec![(
+            streams::CATALOG.into(),
+            DomainEvent::ConversationRenamed {
+                id: request.id.clone(),
+                title,
+            },
+        )])
+        .await?;
+        titles.pending.remove(&request.id);
+        Ok(true)
     }
 
     pub async fn set_pinned(&self, id: ConversationId, pinned: bool) -> Result<Conversation> {
@@ -739,6 +793,7 @@ impl Core {
         parent: Option<String>,
         message_id: Option<String>,
     ) -> Result<Message> {
+        let mut titles = self.titles.lock().await;
         let conversation = self.conversation(&id)?;
         let trimmed = text.trim().to_owned();
         if trimmed.is_empty() && attachments.is_empty() {
@@ -805,21 +860,42 @@ impl Core {
                 },
             ),
         ];
-        let untitled = matches!(
-            conversation.title.as_str(),
-            NEW_SESSION_TITLE | NEW_CHAT_TITLE
-        );
+        let mut untitled = !titles.claimed.contains(&id)
+            && matches!(
+                conversation.title.as_str(),
+                NEW_SESSION_TITLE | NEW_CHAT_TITLE
+            );
         if untitled {
-            let title = if words.is_empty() {
-                message
-                    .attachments
+            // Also cover legacy/default-named conversations loaded without a rename event.
+            // Assistant/system preparation alone never consumes the first user message.
+            let mut before = None;
+            loop {
+                let page = self.list_messages(id.clone(), before, 100).await?;
+                if page
+                    .messages
                     .iter()
-                    .find(|attachment| !attachment.pasted)
-                    .map(|attachment| title_from(&attachment.name))
-                    .unwrap_or_else(|| conversation.title.clone())
-            } else {
-                title_from(&words)
-            };
+                    .any(|message| message.role == MessageRole::User)
+                {
+                    untitled = false;
+                    break;
+                }
+                if page.messages.is_empty() {
+                    break;
+                }
+                before = page.messages.first().map(|message| message.seq);
+            }
+        }
+        let mut title_request = None;
+        if untitled {
+            let input = self.title_input(&trimmed, &message.attachments).await;
+            let title = provisional_title(&input, &message.attachments);
+            if !input.trim().is_empty() {
+                title_request = Some(TitleRequest {
+                    id: id.clone(),
+                    nonce: uuid::Uuid::now_v7().to_string(),
+                    input,
+                });
+            }
             events.push((
                 streams::CATALOG.into(),
                 DomainEvent::ConversationRenamed {
@@ -829,6 +905,14 @@ impl Core {
             ));
         }
         let stored = self.record_with_board(&id, events).await?;
+        titles.claimed.insert(id.clone());
+        if let Some(request) = &title_request {
+            titles.pending.insert(id.clone(), request.nonce.clone());
+        }
+        drop(titles);
+        if let (Some(hook), Some(request)) = (self.title_hook.get(), title_request) {
+            hook(request);
+        }
         Ok(Message {
             seq: stored[0],
             ..message
@@ -1004,6 +1088,25 @@ impl Core {
             }
         }
         texts
+    }
+
+    /// At most 4,000 characters total: 2,000 typed characters and the remaining budget from
+    /// pasted excerpts. Attachment markers and image bytes never reach the model.
+    async fn title_input(&self, text: &str, attachments: &[AttachmentRef]) -> String {
+        let mut input: String = title_text(text, attachments).chars().take(2_000).collect();
+        for attachment in attachments.iter().filter(|a| a.pasted) {
+            let left = 4_000usize.saturating_sub(input.chars().count() + 2);
+            if left == 0 {
+                break;
+            }
+            if let Ok(text) = self.read_blob_text(attachment.id.clone()).await {
+                let excerpt: String = shown_text(&text).chars().take(left.min(2_000)).collect();
+                if !excerpt.trim().is_empty() {
+                    push_block(&mut input, &excerpt);
+                }
+            }
+        }
+        input
     }
 
     /// A user message's words for a transcript or a note: its text, then the start of each
@@ -2798,6 +2901,41 @@ fn title_from(text: &str) -> String {
     }
 }
 
+/// First-message text without actual attachment chips; literal, unmatched markers stay text.
+pub(crate) fn title_text(text: &str, attachments: &[AttachmentRef]) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (range, _) in inline_image_tokens(text, attachments) {
+        plain.push_str(&text[cursor..range.start]);
+        cursor = range.end;
+    }
+    plain.push_str(&text[cursor..]);
+    for n in attachments.iter().filter_map(inline_paste) {
+        plain = plain.replace(&paste_marker(n), "");
+    }
+    shown_text(&plain)
+}
+
+fn provisional_title(input: &str, attachments: &[AttachmentRef]) -> String {
+    if !input.trim().is_empty() {
+        return title_from(input);
+    }
+    let images = attachments
+        .iter()
+        .filter(|a| a.mime.starts_with("image/"))
+        .count();
+    match images {
+        1 => "Image".into(),
+        n if n > 1 => format!("{n} images"),
+        _ => attachments
+            .iter()
+            .find(|a| !a.pasted)
+            .map(|a| title_from(&a.name))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Attachment".into()),
+    }
+}
+
 /// Words a request opens with that name nothing: "Please start the build" is titled
 /// "Start the build".
 const OPENERS: &[&str] = &[
@@ -3605,17 +3743,17 @@ mod tests {
                 format!("Paste test. Here is an icon: [image:{}]", attachment.id),
                 "Paste test".to_owned(),
             ),
-            (format!("[image:{}]", attachment.id), "[image]".to_owned()),
+            (format!("[image:{}]", attachment.id), "Image".to_owned()),
             (
                 format!(
                     "See [image:{}] twice [image:{}]",
                     attachment.id, attachment.id
                 ),
-                "See [image] twice [image]".to_owned(),
+                "See twice".to_owned(),
             ),
             (
                 format!("\n Иконка [image:{}] after\nsecond line", attachment.id),
-                "Иконка [image] after".to_owned(),
+                "Иконка after".to_owned(),
             ),
             (
                 format!("{}[image:{}] after", "界".repeat(54), attachment.id),

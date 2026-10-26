@@ -181,6 +181,10 @@ pub struct Attempt {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaWait {
+    /// The scheduler's promise, rather than an inference from the provider's reset time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recovery: Option<QuotaRecovery>,
     /// What it waits for ("Claude's 5-hour window resets at 21:10").
     pub reason: String,
     /// The earliest reset that could let it continue, when known.
@@ -232,6 +236,29 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub landed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaRecovery {
+    pub mode: QuotaRecoveryMode,
+    pub next_check_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum QuotaRecoveryMode {
+    AutomaticAt,
+    AutomaticProbe,
+    ManualOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderTransitionCause {
+    AutomaticFallback,
+    ManualSwitch,
+    QuotaReset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -1961,6 +1988,19 @@ pub enum OrchestratorStepKind {
     /// The usage limit a turn waited for reset and the turn went on (#128): a divider across
     /// the thread where its work went on, "Claude usage limit reset · 9:39 PM".
     QuotaResumed { provider: ProviderKind },
+    /// A recovery or explicit selection confirmed by the destination CLI starting a turn.
+    ProviderTransition {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task_id: Option<TaskId>,
+        id: String,
+        cause: ProviderTransitionCause,
+        from: ModelChoice,
+        to: ModelChoice,
+        account: crate::accounts::AccountRef,
+        account_label: String,
+        started_at_ms: i64,
+    },
     /// A moment of the conversation that is no work of its own (#506): a usage limit, a move
     /// to another model, provider or account, the chosen model back. The thread says it across
     /// the column as a divider where it happened.

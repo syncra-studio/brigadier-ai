@@ -556,12 +556,37 @@ impl SessionManager {
         system: &str,
         prompt: &str,
     ) -> Result<Option<String>> {
+        self.run_writer_until(
+            choice,
+            fast,
+            account,
+            system,
+            prompt,
+            tokio::time::Instant::now() + WRITE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Shared tool-less transport. The caller's deadline covers startup and the reply; cleanup
+    /// continues independently if closing a CLI takes longer than the remaining budget.
+    pub(super) async fn run_writer_until(
+        &self,
+        choice: &ModelChoice,
+        fast: bool,
+        account: &AccountRef,
+        system: &str,
+        prompt: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<String>> {
         let run = uuid::Uuid::now_v7().to_string();
         let owner = format!("gen:{run}");
         let dir = self.owned_dir("scratch", &run);
-        tokio::fs::create_dir_all(&dir).await.map_err(|err| {
-            Error::Invalid(format!("could not prepare the message writer: {err}"))
-        })?;
+        tokio::time::timeout_at(deadline, tokio::fs::create_dir_all(&dir))
+            .await
+            .map_err(|_| Error::Provider("the message writer took too long".into()))?
+            .map_err(|err| {
+                Error::Invalid(format!("could not prepare the message writer: {err}"))
+            })?;
         let spec = SessionSpec {
             cwd: dir.clone(),
             model: choice.model.clone(),
@@ -595,11 +620,13 @@ impl SessionManager {
             native_compaction: None,
             temp_tag: None,
         };
-        let written = async {
+        let mut running = None;
+        let written = tokio::time::timeout_at(deadline, async {
             let Started {
                 session,
                 mut events,
             } = self.runtime.start_hosted(&owner, account, spec).await?;
+            running = Some(session.clone());
             let reply = async {
                 session
                     .send(TurnInput::text(prompt.to_owned()))
@@ -633,17 +660,21 @@ impl SessionManager {
                 text.map(Some)
                     .ok_or_else(|| Error::Provider("the message writer replied nothing".into()))
             };
-            let reply = tokio::time::timeout(WRITE_TIMEOUT, reply)
-                .await
-                .unwrap_or_else(|_| {
-                    Err(Error::Provider("the message writer took too long".into()))
-                });
-            session.close().await;
-            reply
-        }
-        .await;
-        let _ = self.runtime.ledger().dispose(&owner).await;
-        let _ = tokio::fs::remove_dir_all(&dir).await;
+            reply.await
+        })
+        .await
+        .unwrap_or_else(|_| Err(Error::Provider("the message writer took too long".into())));
+        let runtime = self.runtime.clone();
+        let (done, cleaned) = tokio::sync::oneshot::channel();
+        self.spawn(async move {
+            if let Some(session) = running {
+                session.close().await;
+            }
+            let _ = runtime.ledger().dispose(&owner).await;
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            let _ = done.send(());
+        });
+        let _ = tokio::time::timeout_at(deadline, cleaned).await;
         written
     }
 

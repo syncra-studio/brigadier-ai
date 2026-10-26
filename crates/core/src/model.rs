@@ -214,7 +214,7 @@ impl PermissionLevel {
 }
 
 /// A provider, model and reasoning effort, as picked in the composer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelChoice {
     pub provider: ProviderKind,

@@ -897,7 +897,9 @@ impl SessionManager {
         let conv = self.convs_lock().remove(id);
         if let Some(conv) = conv {
             // Messages waiting for quota never go.
-            self.drop_waiting(&conv).await;
+            if let Err(err) = self.drop_waiting(&conv).await {
+                tracing::error!(conversation = %id, error = %err, "could not cancel quota recovery while closing");
+            }
             conv.close_cli().await;
         }
         // The workers' CLI sessions end side by side; then their worktrees go, one cleanup's
