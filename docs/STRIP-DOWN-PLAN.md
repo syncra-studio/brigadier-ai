@@ -1796,7 +1796,7 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
 - **As built:** the rows are per CLI, since a rules row holds one Agent/Model/Effort and is keyed by its Work:
   the shipped guidance has `fusion-claude` (claude · opus · high) and `fusion-codex` (codex · default · high); the
   user's rows of the same Work replace them, and another CLI gets `fusion-<agent>`. The skill starts each consult
-  with `brigadier start --lean --work fusion-<agent> --title "Fusion · <model>"`, overriding `--model` only when
+  with `brigadier start --work fusion-<agent> --title "Fusion · <model>"`, overriding `--model` only when
   that model is out of quota or refused. `fusion/SKILL.md` ships in the brigade plugin folder beside `brigade`
   (`skills/fusion/SKILL.md`): Claude loads both from the plugin, Codex adds the plugin's skills folder as a per-app-server skills root. It
   has no user copy of its own. `brigade/SKILL.md` sends an uncertain user to it. Live dev runs (10-23, an Opus parent): `/fusion` on a two-way question started a lean Claude consult (opus) and a

@@ -1,8 +1,9 @@
 # registry
 
 The curated model registry. It is published from this repository so installed apps can update
-it without a new release. Brigadier's router (`crates/router`) reads it to decide which model
-takes each task; see [docs/PLAN.md](../docs/PLAN.md) §6 Phase 5.
+it without a new release. Brigadier's router (`crates/router`) reads it for the models it knows
+and their quota; it routes no work by them. Which model takes a worker's task is the user's
+routing rows (`brigadier models`).
 
 Don't confuse it with `crates/registry`, which is the MCP, plugin and skill registry.
 

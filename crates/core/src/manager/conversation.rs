@@ -3015,7 +3015,8 @@ impl SessionManager {
             owned_cwd,
             sweep_dir: Some(dir.clone()),
             keeps_detached,
-            // A session's thread goes on at seams, never compacted.
+            // A session's thread compacts in place through `native_compaction` below
+            // (long_sessions.rs); a Chat keeps its CLI's own auto-compaction.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: self.rules_models(choice.provider)?,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
