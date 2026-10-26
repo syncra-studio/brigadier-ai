@@ -15,27 +15,49 @@ import {
   PERMISSIONS,
   setupLine,
   setupUnfinished,
+  thisComputer,
   useCheckingUnread,
   useComputerUse,
 } from "@/state/computerUse";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
+/** Whether this computer is a Mac, from the app's own info. */
+function onMac(): boolean {
+  return useApp.getState().info?.platform === "macos";
+}
+
 /** The Computer use page's rows, for the page and for Settings search. */
 export const COMPUTER_USE_ROWS = {
   enable: {
-    label: "Let sessions use apps on this Mac",
-    description: "Sessions, Chats and their workers can see and control apps in the background. The first time one needs this, setup starts by itself.",
+    get label() {
+      return onMac() ? "Let sessions use apps on this Mac" : "Let sessions use apps on this computer";
+    },
+    get description() {
+      return onMac()
+        ? "Sessions, Chats and their workers can see and control apps in the background. The first time one needs this, setup starts by itself."
+        : "Sessions, Chats and their workers can see and control apps in the background.";
+    },
   },
   menuBar: { label: "Show in menu bar", description: "See which sessions are using apps, and stop them" },
   accessibility: { label: "Accessibility", description: "Read what's in app windows and use their controls" },
   screenRecording: { label: "Screen Recording", description: "See app windows, to check what happened" },
   setup: { label: "Setup", description: "Where setting up computer use stands" },
+  desktop: { label: "This computer", description: "What agents can and can't do in this desktop session" },
 } as const;
 
-/** Whether this system lists the page: macOS only, from the app's own info. */
+/** The rows this computer's page shows: macOS asks for permissions and has a menu-bar item. */
+export function computerUseRows() {
+  const rows = COMPUTER_USE_ROWS;
+  return onMac()
+    ? [rows.enable, rows.menuBar, rows.accessibility, rows.screenRecording, rows.setup]
+    : [rows.enable, rows.desktop, rows.setup];
+}
+
+/** Whether this system lists the page: macOS, Windows and Linux, from the app's own info. */
 export function computerUseAvailable(): boolean {
-  return useApp.getState().info?.platform === "macos";
+  const platform = useApp.getState().info?.platform;
+  return platform === "macos" || platform === "windows" || platform === "linux";
 }
 
 /**
@@ -46,6 +68,28 @@ export function computerUseAvailable(): boolean {
 export function ComputerUsePage() {
   const status = useComputerUse();
   const checking = useFirstCheck(status);
+  const mac = useApp((s) => s.info?.platform === "macos");
+  if (!mac) {
+    return (
+      <SettingsPage title="Computer use">
+        <SettingsSection title="Enable">
+          <SettingsCard>
+            <EnableRow />
+          </SettingsCard>
+        </SettingsSection>
+        <SettingsSection title="This computer">
+          <SettingsCard>
+            <DesktopRow status={status} />
+          </SettingsCard>
+        </SettingsSection>
+        <SettingsSection title="Setup">
+          <SettingsCard>
+            <SetupRow status={status} checking={false} />
+          </SettingsCard>
+        </SettingsSection>
+      </SettingsPage>
+    );
+  }
   return (
     <SettingsPage title="Computer use">
       <SettingsSection title="Enable">
@@ -157,10 +201,23 @@ function PermissionRow({ permission, status, checking }: { permission: ComputerP
   );
 }
 
+/**
+ * Windows and Linux: what the desktop session lets agents do, as the helper last said (on Linux,
+ * whether it is X11 or Wayland). Nothing to grant.
+ */
+function DesktopRow({ status }: { status: ComputerUseStatus | null }) {
+  const row = COMPUTER_USE_ROWS.desktop;
+  const notes = status?.notes ?? [];
+  const description = notes.length > 0 ? notes.join(" ") : "Shown once an agent has used apps here.";
+  return <SettingsRow label={row.label} description={<span data-slot="desktop-notes">{description}</span>} />;
+}
+
 function SetupRow({ status, checking }: { status: ComputerUseStatus | null; checking: boolean }) {
   const enabled = useApp((s) => s.settings.computerUse);
+  const platform = useApp((s) => s.info?.platform);
   const open = useAction();
-  const line = status && !checking ? setupLine(status) : enabled ? "Checking…" : "Off. Agents can't use apps on this Mac.";
+  const here = thisComputer(platform === "macos" || platform === "windows" || platform === "linux" ? platform : undefined);
+  const line = status && !checking ? setupLine(status) : enabled ? "Checking…" : `Off. Agents can't use apps on ${here}.`;
   return (
     <SettingsRow label={COMPUTER_USE_ROWS.setup.label} setting="Setup" description={<span data-slot="setup-line">{line}</span>} error={open.error}>
       {status && enabled && !checking && setupUnfinished(status) && (

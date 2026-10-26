@@ -7,7 +7,7 @@ import { createServer } from "vite";
 import type { AppInfo } from "@/ipc/generated";
 
 // Settings lists the Computer use page on macOS only, from the app's own info.
-test("Settings lists computer use on macOS from the app's info", async () => {
+test("Settings lists computer use on macOS, Windows and Linux from the app's info", async () => {
   const globals = globalThis as Record<string, unknown>;
   const saved = { document: globals.document, getComputedStyle: globals.getComputedStyle };
   globals.document = { documentElement: {} };
@@ -24,8 +24,11 @@ test("Settings lists computer use on macOS from the app's info", async () => {
 
     assert.equal(on("macos"), true);
     assert.match(ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav)), />Computer use</);
-    assert.equal(on("linux"), false);
-    assert.equal(on("windows"), false);
+    assert.equal(on("linux"), true);
+    assert.equal(on("windows"), true);
+    assert.match(ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav)), />Computer use</);
+    // An unknown system lists nothing it couldn't run.
+    assert.equal(on("freebsd"), false);
     assert.doesNotMatch(ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav)), />Computer use</);
   } finally {
     await server.close();

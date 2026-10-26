@@ -4,7 +4,7 @@ The helper that lets Brigadier's agents see and drive apps on this Mac in the
 background: Accessibility-tree first, input posted to the target process (no
 focus change, no pointer movement), window-scoped screenshots and a browser
 `page` tool. Brigadier's agents show no cursor on screen; the per-session agent
-cursor is only drawn for a helper started by hand. macOS only.
+cursor is only drawn for a helper started by hand. macOS, Windows and Linux.
 
 It is a separate Cargo workspace (the root workspace excludes it) and ships
 inside Brigadier.app as `Helpers/Brigadier Computer Use.app`, signed with
@@ -15,8 +15,8 @@ Screen Recording to the outermost app bundle.
 ## Origin
 
 The driving itself (Accessibility, input, capture, the agent cursor, the
-tool set) is an MIT-licensed driver's macOS backend, vendored unmodified in
-`upstream/` at one pinned release. `upstream/UPSTREAM.md` names the release,
+tool set) comes from an MIT-licensed driver's macOS, Windows and Linux
+backends, vendored unmodified in `upstream/` at one pinned release. `upstream/UPSTREAM.md` names the release,
 the few hooks in `patches/`, and how to move to a newer one
 (`scripts/sync-upstream.sh`). Brigadier's own behaviour sits on top of it in
 `crates/cu-layer`.
@@ -31,7 +31,8 @@ What Brigadier changed and added:
 - Removed self-update and update checks, the ffmpeg installer, the skill
   installer, autostart, all telemetry, the unauthenticated HTTP transport,
   and a compatibility profile for another desktop client.
-- Removed the Windows and Linux backends.
+- Removed the Windows and Linux backends (brought back with driver v0.36.0, see
+  `upstream/UPSTREAM.md`).
 - One home directory (`--home <dir>` or `BRIGADIER_CU_HOME`) holds the
   socket, PID file, config, journal and activity store.
 - Socket peers must carry the daemon's own code signature when it runs from
@@ -75,6 +76,29 @@ What Brigadier changed and added:
 | `cu-testkit` | Test helpers |
 | `upstream/crates/*` | The vendored driver (see `upstream/UPSTREAM.md`) |
 
+## Platforms
+
+macOS is the reference: the helper app bundle, its own Accessibility and
+Screen Recording grants, and Brigadier's setup window. On Windows and Linux
+the helper is one more sidecar, `brigadier-cu`, beside brigadierd; Brigadier
+runs it from `<data dir>/computer/bin/`, and it asks for no permissions.
+
+| | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Driver | `platform-macos` (AX) | `platform-windows` (UI Automation) | `platform-linux` (AT-SPI, X11/XWayland) |
+| Daemon transport | Unix socket in the home | named pipe for the home, same-user SID only (`transport.rs`) | Unix socket in the home |
+| Daemon start | LaunchServices (`open -g`) | detached process | detached process (own group) |
+| Permissions | two grants and a capture check | none | none; what the session allows is reported (`cu-layer/src/platform.rs`) |
+| Apps named by | bundle id | executable name | executable name |
+
+What Windows and Linux can't do in the background is said plainly in the
+tool's answer: apps running as administrator and Store (UWP) apps on Windows
+(the driver's uiAccess worker, `cua-driver-uia`, is vendored but not built or
+shipped), and input in a pure Wayland session without XWayland on Linux (the
+driver's experimental Wayland backend stays off). `cu-testkit`, and so
+`brigadier-cu`'s own tests, run on macOS only; CI runs clippy for both
+crates and `cu-layer`'s tests on Windows and Linux.
+
 ## Build and check
 
 ```bash
@@ -87,4 +111,7 @@ target/release/brigadier-cu list-tools
 ```
 
 The desktop build (`pnpm stage-sidecar` in `apps/desktop`) builds the release
-binary, assembles the bundle from `scripts/BrigadierCuBundle`, and signs it.
+binary, assembles the bundle from `scripts/BrigadierCuBundle`, and signs it; on
+Windows and Linux it stages the binary as the `brigadier-cu` sidecar. Linux
+builds need `pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev
+libwayland-dev libxkbcommon-dev`.

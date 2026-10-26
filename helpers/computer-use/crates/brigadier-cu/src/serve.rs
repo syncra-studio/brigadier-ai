@@ -164,6 +164,24 @@ fn unmapped_owner_uid() -> Option<libc::uid_t> {
     None
 }
 
+/// Inside a non-initial user namespace (a container, a sandbox), files owned
+/// by users the namespace doesn't map show the kernel's overflow uid. In the
+/// initial namespace, whose map covers every uid, nothing is unmapped.
+#[cfg(target_os = "linux")]
+fn unmapped_owner_uid() -> Option<libc::uid_t> {
+    let map = std::fs::read_to_string("/proc/self/uid_map").ok()?;
+    let identity = map.lines().count() == 1
+        && map.split_whitespace().collect::<Vec<_>>() == ["0", "0", "4294967295"];
+    if identity {
+        return None;
+    }
+    std::fs::read_to_string("/proc/sys/kernel/overflowuid")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Open the private runtime directory without following any symlink, and
 /// return a descriptor that later socket operations use. Each component is
 /// opened relative to the descriptor of its parent, starting at `/`, with
@@ -276,6 +294,24 @@ fn set_thread_working_directory(directory: std::os::fd::BorrowedFd<'_>) -> std::
         fn pthread_fchdir_np(fd: libc::c_int) -> libc::c_int;
     }
     if unsafe { pthread_fchdir_np(directory.as_raw_fd()) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Linux: the calling thread stops sharing the process's working directory
+/// (`unshare(CLONE_FS)`), then moves to `directory`.
+#[cfg(target_os = "linux")]
+fn set_thread_working_directory(directory: std::os::fd::BorrowedFd<'_>) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: CLONE_FS only detaches this thread's file-system attributes.
+    if unsafe { libc::unshare(libc::CLONE_FS) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor is a directory the caller keeps open.
+    if unsafe { libc::fchdir(directory.as_raw_fd()) } == 0 {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
@@ -659,9 +695,12 @@ pub const SOCKET_HOST_AUTH_TOKEN_ENV: &str = "BRIGADIER_CU_SOCKET_HOST_AUTH_TOKE
 /// a separate host capability use this identity as a lifecycle owner instead:
 /// ordinary authenticated agents may outlive and reconnect across host
 /// generations, while the daemon still exits when its current owner exits.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_PID_ENV: &str = "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_START_SECONDS_ENV: &str =
     "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_SECONDS";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS_ENV: &str =
     "BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS";
 
@@ -917,10 +956,12 @@ pub fn default_pid_file_path() -> String {
         .into_owned()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn is_managed_socket_path(path: &str) -> bool {
     path == default_socket_path()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn is_managed_pid_file_path(path: &str) -> bool {
     path == default_pid_file_path()
 }
@@ -1061,6 +1102,7 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn is_same_generation_as(self, other: Self) -> bool {
         self.process_id == other.process_id
             && self.start_seconds == other.start_seconds
@@ -1296,6 +1338,17 @@ fn validate_system_permission_request(permission: Option<&str>) -> DaemonRespons
             "requested": true,
         }))
     }
+    // Windows and Linux ask for no permissions: nothing to request.
+    #[cfg(not(target_os = "macos"))]
+    {
+        DaemonResponse::err(
+            format!(
+                "{} needs no permission request on this platform",
+                permission.unwrap_or("this permission")
+            ),
+            64,
+        )
+    }
 }
 
 /// `Err` carries a `capture_timeout` payload: the probe got no answer, so
@@ -1354,7 +1407,6 @@ impl DaemonResponse {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn daemon_instance_id() -> &'static str {
     static INSTANCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     INSTANCE.get_or_init(|| {
@@ -1419,6 +1471,7 @@ fn tcc_free_test_refusal(req: &DaemonRequest) -> Option<DaemonResponse> {
         })
 }
 
+#[cfg(target_os = "macos")]
 fn daemon_permission_status(
     profile: DaemonProfile,
     external_permission_ready: bool,
@@ -1460,6 +1513,39 @@ fn daemon_permission_status(
     })
 }
 
+/// Windows and Linux: there are no permission grants to ask for. What the
+/// helper can reach depends on the desktop session instead (an X11 or
+/// Wayland display and the accessibility bus on Linux), which `platform`
+/// reports with plain notes for the user.
+///
+/// Brigadier has no setup to finish on these platforms, so the daemon is
+/// always ready: an agent's call never waits for a setup window.
+#[cfg(not(target_os = "macos"))]
+fn daemon_permission_status(
+    profile: DaemonProfile,
+    _external_permission_ready: bool,
+) -> serde_json::Value {
+    let platform = cu_layer::platform::facts();
+    let accessibility = platform.accessibility;
+    let screen_recording = platform.screen_capture;
+    crate::lifecycle::record_permissions(accessibility, screen_recording);
+    serde_json::json!({
+        "accessibility": accessibility,
+        "screen_recording": screen_recording,
+        "all_granted": accessibility && screen_recording,
+        "external_permission_ready": true,
+        "profile": profile,
+        "panel": { "visible": false, "completion": 0, "last_outcome": null },
+        "recovery": { "generation": 0, "state": "idle" },
+        "source": {
+            "attribution": "driver-daemon",
+            "pid": std::process::id(),
+            "instance": daemon_instance_id(),
+        },
+        "platform": platform.to_json(),
+    })
+}
+
 // ── Client ────────────────────────────────────────────────────────────────────
 
 /// Probe whether a daemon is listening on `socket_path`.
@@ -1479,19 +1565,16 @@ fn daemon_permission_status(
 ///   - Returns FALSE if not available within 1 ms.
 ///   - Does NOT consume the instance — that's reserved for the actual call.
 pub fn is_daemon_listening(socket_path: &str) -> bool {
-    #[cfg(not(target_os = "windows"))]
-    {
-        let req = DaemonRequest {
-            method: "list".into(),
-            name: None,
-            args: None,
-            session_id: None,
-        };
-        send_request(socket_path, &req)
-            .ok()
-            .map(|r| r.ok)
-            .unwrap_or(false)
-    }
+    let req = DaemonRequest {
+        method: "list".into(),
+        name: None,
+        args: None,
+        session_id: None,
+    };
+    send_request(socket_path, &req)
+        .ok()
+        .map(|r| r.ok)
+        .unwrap_or(false)
 }
 
 /// Read the PID stored in `pid_file_path`, if any.
@@ -1530,6 +1613,12 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
 
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|e| anyhow::Error::new(NotDelivered(format!("connect to {socket_path}: {e}"))))?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        crate::transport::validate_unix_server(stream.as_raw_fd())
+            .map_err(|e| anyhow::Error::new(NotDelivered(e.to_string())))?;
+    }
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     // Per-read timeout acts as a liveness poll, NOT a hard cap on the whole
     // response: an AX-heavy `get_window_state` (slow tree walk) or a multi-MB
@@ -1595,6 +1684,23 @@ pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<Da
     Ok(resp)
 }
 
+/// Windows: the same exchange over the home's named pipe. A pipe opened as
+/// a file has no read timeout, so the answer is awaited on a thread for the
+/// same 120 s budget.
+#[cfg(windows)]
+pub fn send_request(socket_path: &str, req: &DaemonRequest) -> anyhow::Result<DaemonResponse> {
+    let line = serialize_request(req)?;
+    match crate::transport::exchange_within(socket_path, &line, std::time::Duration::from_secs(120))
+    {
+        None => Err(anyhow::Error::new(NotDelivered(format!(
+            "connect to {}: no daemon is listening",
+            crate::transport::pipe_name(socket_path)
+        )))),
+        Some(Err(error)) => Err(anyhow::anyhow!("daemon transport error: {error}")),
+        Some(Ok(answer)) => Ok(serde_json::from_slice(&answer)?),
+    }
+}
+
 // ── Server ────────────────────────────────────────────────────────────────────
 
 /// Run the daemon server. Binds `socket_path`, writes `pid_file_path`,
@@ -1616,7 +1722,6 @@ pub async fn run_serve(
 
 /// Wait for the owner watch to report an exit. Pends forever when there is
 /// no owner, or when the watch thread ended without seeing an exit.
-#[cfg(unix)]
 async fn owner_exited(watch: &mut Option<tokio::sync::oneshot::Receiver<()>>) {
     let result = match watch.as_mut() {
         Some(receiver) => receiver.await,
@@ -1632,7 +1737,6 @@ async fn owner_exited(watch: &mut Option<tokio::sync::oneshot::Receiver<()>>) {
 /// `run_serve` plus `--owner-pid`: when `owner_pid` is set, the daemon
 /// shuts down (and removes its socket and pid file) as soon as that process
 /// exits. If the owner is already dead, it returns at once without binding.
-#[cfg(unix)]
 pub async fn run_serve_with_owner(
     registry: std::sync::Arc<cua_driver_core::tool::ToolRegistry>,
     socket_path: &str,
@@ -1641,6 +1745,7 @@ pub async fn run_serve_with_owner(
     owner_pid: Option<i32>,
 ) -> anyhow::Result<ServeExit> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    #[cfg(unix)]
     use tokio::net::UnixListener;
 
     // Start the owner watch before binding, so a daemon whose owner is
@@ -1665,13 +1770,19 @@ pub async fn run_serve_with_owner(
 
     #[cfg(target_os = "macos")]
     let authorized_root_identity = configured_authorized_root_identity()?;
+    // Only a macOS host names an authorized root process.
+    #[cfg(not(target_os = "macos"))]
+    let authorized_root_identity: Option<ProcessIdentity> = None;
     let host_authority_configured = configured_socket_host_auth_token().is_some();
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let enforce_authorized_root = socket_peer_requires_authorized_root(
         authorized_root_identity.is_some(),
         host_authority_configured,
     );
 
+    #[cfg(unix)]
     let socket = std::path::Path::new(socket_path);
+    #[cfg(unix)]
     let daemon_uid = unsafe { libc::geteuid() };
     #[cfg(target_os = "macos")]
     let enforce_peer_code = crate::bundle::is_executable_inside_brigadier_helper_app();
@@ -1684,29 +1795,46 @@ pub async fn run_serve_with_owner(
     // Every ancestor is checked too, and the bind goes through a descriptor
     // of the checked directory, so a rename of any path component between the
     // check and the bind cannot move the socket into another directory.
-    let socket_name = socket
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("socket path has no file name: {socket_path}"))?;
-    let socket_dir = socket.parent().unwrap_or_else(|| std::path::Path::new(""));
-    let socket_directory =
-        open_private_runtime_directory(socket_dir, is_managed_socket_path(socket_path))?;
+    #[cfg(unix)]
+    let listener = {
+        let socket_name = socket
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("socket path has no file name: {socket_path}"))?;
+        let socket_dir = socket.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let socket_directory =
+            open_private_runtime_directory(socket_dir, is_managed_socket_path(socket_path))?;
 
-    // Remove a stale socket file (from a crashed previous daemon), then bind.
-    let listener = bind_socket_in_directory(&socket_directory, socket_name, socket)?;
-    drop(socket_directory);
-    listener.set_nonblocking(true)?;
-    let listener = UnixListener::from_std(listener)
-        .map_err(|e| anyhow::anyhow!("register {socket_path} with the runtime: {e}"))?;
+        // Remove a stale socket file (from a crashed previous daemon), then bind.
+        let listener = bind_socket_in_directory(&socket_directory, socket_name, socket)?;
+        drop(socket_directory);
+        listener.set_nonblocking(true)?;
+        UnixListener::from_std(listener)
+            .map_err(|e| anyhow::anyhow!("register {socket_path} with the runtime: {e}"))?
+    };
+    // Windows: the home's named pipe, open only to the user's own processes;
+    // creating its first instance fails while another daemon owns it.
+    #[cfg(windows)]
+    let mut listener =
+        crate::transport::PipeListener::bind(&crate::transport::pipe_name(socket_path))?;
 
     eprintln!("Brigadier Computer Use daemon listening on {socket_path}");
 
     // Write PID file.
+    #[cfg(unix)]
     if let Some(pid_path) = pid_file_path {
         let pid = std::path::Path::new(pid_path);
         if let Some(dir) = pid.parent() {
             secure_runtime_directory(dir, is_managed_pid_file_path(pid_path))?;
         }
         write_private_pid_file(pid)?;
+    }
+    #[cfg(windows)]
+    if let Some(pid_path) = pid_file_path {
+        let pid = std::path::Path::new(pid_path);
+        if let Some(dir) = pid.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(pid, std::process::id().to_string())?;
     }
 
     // Shutdown channel.
@@ -1740,6 +1868,7 @@ pub async fn run_serve_with_owner(
         tokio::select! {
             result = listener.accept() => {
                 let (stream, _) = result?;
+                #[cfg(unix)]
                 if let Err(refusal) = check_peer_uid(&stream, daemon_uid) {
                     eprintln!("brigadier-cu: refused daemon socket peer: {refusal}");
                     continue;
@@ -1786,15 +1915,31 @@ pub async fn run_serve_with_owner(
                     (_, None) => true,
                     _ => false,
                 };
+                #[cfg(not(target_os = "macos"))]
+                let peer_is_authorized_root = authorized_root_identity.is_none();
                 let reg = registry.clone();
                 let shutdown_tx2 = shutdown_tx.clone();
                 let last_activity = last_activity.clone();
                 let activity = activity.clone();
+                #[cfg(unix)]
                 let activity_peer_pid = stream
                     .peer_cred()
                     .ok()
                     .and_then(|credentials| credentials.pid())
                     .and_then(|pid| u32::try_from(pid).ok());
+                #[cfg(windows)]
+                let activity_peer_pid = stream.client_pid();
+                #[cfg(not(target_os = "macos"))]
+                if let Err(refusal) = crate::peer_auth::validate(activity_peer_pid) {
+                    eprintln!("brigadier-cu: refused daemon peer: {refusal}");
+                    let (_, mut writer) = stream.into_split();
+                    tokio::spawn(async move {
+                        let line = serde_json::json!({"ok":false,"refused":true,"error":refusal.to_string()});
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(1),
+                            writer.write_all(format!("{line}\n").as_bytes())).await;
+                    });
+                    continue;
+                }
                 let external_permission_ready = external_permission_ready.clone();
 
                 tokio::spawn(async move {
@@ -1868,7 +2013,6 @@ pub async fn run_serve_with_owner(
                                 return;
                             }
                             "permissions_status" => {
-                                #[cfg(target_os = "macos")]
                                 let resp = DaemonResponse::ok(daemon_permission_status(
                                     profile,
                                     external_permission_ready.load(
@@ -1910,6 +2054,17 @@ pub async fn run_serve_with_owner(
                                 ).await;
                             }
                             "permissions_present" => {
+                                // Windows and Linux have no permission panel.
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    let resp = DaemonResponse::err(
+                                        "This platform has no permission panel".to_owned(),
+                                        64,
+                                    );
+                                    let _ = writer.write_all(
+                                        (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                    ).await;
+                                }
                                 #[cfg(target_os = "macos")]
                                 {
                                     let prepared =
@@ -1939,6 +2094,17 @@ pub async fn run_serve_with_owner(
                                 }
                             }
                             "permissions_refresh" => {
+                                // Windows and Linux have no permission panel.
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    let resp = DaemonResponse::err(
+                                        "This platform has no permission panel".to_owned(),
+                                        64,
+                                    );
+                                    let _ = writer.write_all(
+                                        (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                    ).await;
+                                }
                                 #[cfg(target_os = "macos")]
                                 {
                                     let available =
@@ -1977,6 +2143,7 @@ pub async fn run_serve_with_owner(
                                     continue;
                                 }
                                 let resp = validate_system_permission_request(req.name.as_deref());
+                                #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
                                 let response_sent = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                 ).await.is_ok();
@@ -2008,6 +2175,10 @@ pub async fn run_serve_with_owner(
                                     .map_err(|timeout| timeout.to_json());
                                     screen_capture_verification_response(probe)
                                 };
+                                #[cfg(not(target_os = "macos"))]
+                                let resp = screen_capture_verification_response(Ok(
+                                    cu_layer::platform::facts().screen_capture,
+                                ));
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                 ).await;
@@ -2021,7 +2192,7 @@ pub async fn run_serve_with_owner(
                                         .map(|app| i64::from(app.pid))
                                 };
                                 #[cfg(not(target_os = "macos"))]
-                                let running_pid = |_: &str| None;
+                                let running_pid = |app_id: &str| cu_layer::platform::running_pid(app_id);
                                 let resp = DaemonResponse::ok(crate::agent_apps::list(&running_pid));
                                 let _ = writer.write_all(
                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
@@ -2546,7 +2717,6 @@ pub fn run_serve_cmd(
         .build()
         .expect("tokio runtime");
 
-    #[cfg(unix)]
     let result = rt.block_on(run_serve_with_owner(
         registry.clone(),
         &socket_path,

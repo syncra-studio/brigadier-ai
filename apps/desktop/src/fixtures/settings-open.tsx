@@ -116,7 +116,7 @@ const USAGE: UsageView = {
 };
 
 const COMPUTER_USE: ComputerUseStatus = {
-  available: true, accessibility: "granted", screenRecording: "notGranted", current: true, setup: { state: "missing" }, sessions: [],
+  available: true, platform: "macos", accessibility: "granted", screenRecording: "notGranted", current: true, setup: { state: "missing" }, sessions: [], notes: [],
 };
 
 const SOURCES: ImportSource[] = ["Safari", "Google Chrome", "Arc", "Firefox"].map((name) => ({

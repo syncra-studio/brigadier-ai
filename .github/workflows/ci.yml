@@ -139,7 +139,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/apt-cache
-          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev
+          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-pkg-config-libx11-dev-libxi-dev-libxtst-dev-libxext-dev-libwayland-dev-libxkbcommon-dev
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         if: runner.os == 'Linux'
@@ -149,7 +149,7 @@ jobs:
           archives="$RUNNER_TEMP/apt-cache"
           mkdir -p "$archives"
           apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
-          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev)
+          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev)
           # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
           # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do
@@ -193,6 +193,18 @@ jobs:
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Computer-use helper (clippy, tests)
+        # The helper's own workspace, on this platform: the nightly checks it on macOS. Its
+        # test kit (cu-testkit), and so brigadier-cu's own tests, are macOS-only; cu-layer's run.
+        # Beside the main build's output, where stage-sidecar built it above.
+        working-directory: helpers/computer-use
+        run: |
+          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}/computer-use"
+          cargo clippy --locked -p brigadier-cu -p cu-layer -- -D warnings
+          cargo clippy --locked -p cu-layer --all-targets -- -D warnings
+          cargo test --locked -p cu-layer --lib
+          cargo clippy --locked -p brigadier-cu --lib -- -D warnings
+          cargo test --locked -p brigadier-cu --lib
       - name: Windows Connect and project setup tests
         if: runner.os == 'Windows'
         # Connect's fakes use the real PowerShell runner and the daemon staged above as the
@@ -216,7 +228,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/apt-cache
-          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xfsprogs
+          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xfsprogs-pkg-config-libx11-dev-libxi-dev-libxtst-dev-libxext-dev-libwayland-dev-libxkbcommon-dev
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         timeout-minutes: 12
@@ -225,7 +237,7 @@ jobs:
           archives="$RUNNER_TEMP/apt-cache"
           mkdir -p "$archives"
           apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
-          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xfsprogs)
+          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xfsprogs pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev)
           # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
           # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do
@@ -309,7 +321,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/apt-cache
-          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus
+          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus-pkg-config-libx11-dev-libxi-dev-libxtst-dev-libxext-dev-libwayland-dev-libxkbcommon-dev
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         timeout-minutes: 12
@@ -318,7 +330,7 @@ jobs:
           archives="$RUNNER_TEMP/apt-cache"
           mkdir -p "$archives"
           apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
-          packages=(libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus)
+          packages=(libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev)
           # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
           # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do

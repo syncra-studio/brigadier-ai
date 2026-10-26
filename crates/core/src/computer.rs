@@ -66,12 +66,36 @@ pub struct ComputerSession {
     pub pid: i32,
 }
 
+/// The operating system computer use runs on. Setup differs: macOS asks for two permissions
+/// and a capture check; Windows asks for nothing; Linux depends on the desktop session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerPlatform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+impl ComputerPlatform {
+    /// The platform this build runs on.
+    pub const fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Macos
+        }
+    }
+}
+
 /// Computer use, as `getComputerUse` returns it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputerUseStatus {
-    /// macOS: the page is listed at all.
+    /// The page is listed at all: on macOS, Windows and Linux.
     pub available: bool,
+    pub platform: ComputerPlatform,
     pub accessibility: PermissionState,
     pub screen_recording: PermissionState,
     /// The permissions were read from the running helper just now, not from what it last
@@ -79,4 +103,7 @@ pub struct ComputerUseStatus {
     pub current: bool,
     pub setup: ComputerSetup,
     pub sessions: Vec<ComputerSession>,
+    /// Windows and Linux: what this desktop session lets agents do, in plain sentences, as
+    /// the running helper last said (Linux: X11 or Wayland). Empty on macOS.
+    pub notes: Vec<String>,
 }

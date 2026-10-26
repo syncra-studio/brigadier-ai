@@ -12,14 +12,17 @@
 //!    after checking that the recorded PID still names our helper binary and
 //!    that the process started before the PID file was written, so a reused
 //!    PID is never signalled.
-//! 4. Launch a fresh daemon through LaunchServices and wait for it to answer.
+//! 4. Launch a fresh daemon (through LaunchServices on macOS, as a detached
+//!    process on Windows and Linux) and wait for it to answer.
 //!
 //! A healthy daemon from another build (the app was updated while it ran)
 //! is replaced the same way. Brigadier's watchdog uses [`probe`] and
 //! [`restart`]; turning computer use off goes through [`set_off`], under the
 //! same lock, so no shim starts a daemon while it is off.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -30,6 +33,30 @@ use crate::serve::{serialize_request, DaemonRequest};
 pub const REFUSED_MESSAGE: &str = "Brigadier Computer Use refused this agent's connection: the \
      program the agent reached it through isn't signed as part of Brigadier. Start the agent \
      again from Brigadier";
+
+/// Windows and Linux: what an agent is told when Brigadier replaced this helper's build while
+/// the agent ran. Its program lies in a retired build folder; the new build's daemon only
+/// serves its own program, so this server can't reach it.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub const RETIRED_MESSAGE: &str = "Brigadier updated its computer-use helper while this \
+     session was running. Start a new session (or restart this one) to keep using apps";
+
+/// The mark Brigadier leaves in a build folder an update replaced.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const RETIRED_MARKER: &str = "retired";
+
+/// Whether this program's build folder was retired by an update (Windows and Linux).
+#[cfg(not(target_os = "macos"))]
+pub fn retired() -> bool {
+    std::env::current_exe().is_ok_and(|exe| retired_at(&exe))
+}
+
+/// Whether the build folder of the program at `exe` holds the retired mark.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn retired_at(exe: &Path) -> bool {
+    exe.parent()
+        .is_some_and(|folder| folder.join(RETIRED_MARKER).exists())
+}
 
 /// How long a probe may wait for the daemon to answer a `list` request.
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
@@ -61,10 +88,18 @@ impl Health {
 }
 
 /// Probe the daemon socket once, never waiting longer than [`PROBE_DEADLINE`].
+#[cfg(unix)]
 pub fn probe(socket_path: &str) -> Health {
     let Ok(mut stream) = UnixStream::connect(socket_path) else {
         return Health::Absent;
     };
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        if crate::transport::validate_unix_server(stream.as_raw_fd()).is_err() {
+            return Health::Refused;
+        }
+    }
     let request = DaemonRequest {
         method: "health".into(),
         name: None,
@@ -98,6 +133,25 @@ pub fn probe(socket_path: &str) -> Health {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => return Health::Hung,
         }
+    }
+}
+
+/// Probe the daemon's pipe once, never waiting longer than [`PROBE_DEADLINE`].
+#[cfg(windows)]
+pub fn probe(socket_path: &str) -> Health {
+    let request = DaemonRequest {
+        method: "health".into(),
+        name: None,
+        args: None,
+        session_id: None,
+    };
+    let Ok(line) = serialize_request(&request) else {
+        return Health::Hung;
+    };
+    match crate::transport::exchange_within(socket_path, &line, PROBE_DEADLINE) {
+        None => Health::Absent,
+        Some(Ok(answer)) => health_from_answer(&answer),
+        Some(Err(_)) => Health::Hung,
     }
 }
 
@@ -145,6 +199,11 @@ pub fn ensure(socket_path: &str, claude_code_compat: bool) -> anyhow::Result<()>
     let off = || crate::lifecycle::is_off(&crate::lifecycle::home());
     if off() {
         anyhow::bail!(crate::lifecycle::OFF_MESSAGE);
+    }
+    // A replaced build neither probes nor starts a daemon: the new build's owns the socket.
+    #[cfg(not(target_os = "macos"))]
+    if retired() {
+        anyhow::bail!(RETIRED_MESSAGE);
     }
     if is_current(socket_path) {
         return Ok(());
@@ -257,6 +316,7 @@ fn lock_path(socket_path: &str) -> PathBuf {
 struct LifecycleLock(std::fs::File);
 
 impl LifecycleLock {
+    #[cfg(unix)]
     fn acquire(path: &Path) -> anyhow::Result<Self> {
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
@@ -285,12 +345,45 @@ impl LifecycleLock {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    /// Windows: the same exclusive lock through the file system's own
+    /// locking, released when the file closes.
+    #[cfg(windows)]
+    fn acquire(path: &Path) -> anyhow::Result<Self> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("open {}: {e}", path.display()))?;
+        let until = Instant::now() + LAUNCH_DEADLINE + Duration::from_secs(10);
+        loop {
+            if file.try_lock().is_ok() {
+                return Ok(Self(file));
+            }
+            if Instant::now() >= until {
+                anyhow::bail!("timed out waiting for another Computer Use start to finish");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
+#[cfg(unix)]
 impl Drop for LifecycleLock {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
         unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for LifecycleLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
     }
 }
 
@@ -321,6 +414,7 @@ fn recorded_daemon(pid_file: &str) -> Option<u32> {
 /// (`<bundle>/Contents/MacOS/brigadier-cu`), whatever the bundle is called now:
 /// Brigadier swaps an update in by exchanging the two folders, so the old
 /// daemon's bundle ends up under a temporary name.
+#[cfg(target_os = "macos")]
 fn is_helper_executable(path: &std::path::Path) -> bool {
     let mut parts = path.components().rev().map(|part| part.as_os_str());
     parts.next() == Some("brigadier-cu".as_ref())
@@ -329,8 +423,17 @@ fn is_helper_executable(path: &std::path::Path) -> bool {
         && parts.next().is_some()
 }
 
+/// Windows and Linux: whether `path` is this very program. Each build is placed in a folder
+/// of its own, so a daemon from another build (an older one an agent still runs, or a newer
+/// one) is never stopped by this one.
+#[cfg(not(target_os = "macos"))]
+fn is_helper_executable(path: &std::path::Path) -> bool {
+    std::env::current_exe().is_ok_and(|own| crate::peer_auth::same_path(&own, path))
+}
+
 /// Stop the daemon recorded in `pid_file`, if it is still ours. Sends
 /// SIGTERM, then SIGKILL after a short grace period, and waits for exit.
+#[cfg(target_os = "macos")]
 pub fn stop_recorded_daemon(pid_file: &str) {
     let Some(pid) = recorded_daemon(pid_file) else {
         return;
@@ -355,6 +458,41 @@ pub fn stop_recorded_daemon(pid_file: &str) {
     }
 }
 
+/// Windows and Linux: stop the daemon recorded in `pid_file`, if it is still
+/// ours: politely first where the platform has a way, then for good.
+#[cfg(not(target_os = "macos"))]
+pub fn stop_recorded_daemon(pid_file: &str) {
+    let Some(pid) = recorded_daemon(pid_file) else {
+        return;
+    };
+    crate::process::terminate(pid, false);
+    let gone = |deadline: Duration| {
+        let until = Instant::now() + deadline;
+        while Instant::now() < until {
+            if !crate::process::is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+    if !gone(Duration::from_secs(1)) {
+        crate::process::terminate(pid, true);
+        let _ = gone(Duration::from_secs(2));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    crate::process::executable(pid)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_start_time(pid: u32) -> Option<SystemTime> {
+    crate::process::start_time(pid)
+}
+
+#[cfg(target_os = "macos")]
 fn process_executable(pid: u32) -> Option<PathBuf> {
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let written = unsafe {
@@ -371,6 +509,7 @@ fn process_executable(pid: u32) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8(buffer).ok()?))
 }
 
+#[cfg(target_os = "macos")]
 fn process_start_time(pid: u32) -> Option<SystemTime> {
     let identity = crate::serve::macos_process_identity(pid)?;
     let seconds = u64::try_from(identity.start_seconds).ok()?;
@@ -382,6 +521,32 @@ fn process_start_time(pid: u32) -> Option<SystemTime> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_retired_build_folder_is_known_by_its_mark() {
+        let folder = std::env::temp_dir().join(format!("cu-retired-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = folder.join("brigadier-cu");
+        assert!(!retired_at(&exe));
+        std::fs::write(folder.join(RETIRED_MARKER), "abc").unwrap();
+        assert!(retired_at(&exe));
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// Windows and Linux: only this very program's daemon is ours to stop.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn only_this_program_is_the_helper() {
+        let own = std::env::current_exe().unwrap();
+        assert!(is_helper_executable(&own));
+        let other_build = own
+            .parent()
+            .unwrap()
+            .join("0123456789abcdef")
+            .join(own.file_name().unwrap());
+        assert!(!is_helper_executable(&other_build));
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_old_daemon_is_known_by_its_executable_wherever_its_bundle_moved() {
         let helper = |path: &str| is_helper_executable(std::path::Path::new(path));

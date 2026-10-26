@@ -3,7 +3,7 @@ import type { ComponentType, SVGProps } from "react";
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
 import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
-import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/settings/ComputerUsePage";
+import { ComputerUsePage, computerUseAvailable, computerUseRows } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { REPORTS_ROWS, ReportsPage } from "@/app/settings/ReportsPage";
 import { GeneralPage } from "@/app/settings/GeneralPage";
@@ -180,8 +180,11 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     icon: Cursor,
     group: "Agents",
     component: ComputerUsePage,
-    rows: Object.values(COMPUTER_USE_ROWS),
-    // Only on macOS.
+    // This computer's rows: macOS has permissions and a menu-bar item.
+    get rows() {
+      return computerUseRows();
+    },
+    // On macOS, Windows and Linux.
     shown: computerUseAvailable,
   },
   {

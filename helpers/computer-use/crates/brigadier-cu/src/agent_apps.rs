@@ -72,8 +72,14 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(unix)]
 fn alive(pid: u32) -> bool {
     libc::pid_t::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0)
+}
+
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    crate::process::is_alive(pid)
 }
 
 /// The host session of a minted proxy session id (`<host>-mcp-<pid>-<n>`),

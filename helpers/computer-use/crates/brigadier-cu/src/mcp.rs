@@ -10,6 +10,9 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, warn};
 
+#[path = "lean.rs"]
+pub(crate) mod lean;
+
 // ── Initialize result ─────────────────────────────────────────────────────────
 
 pub fn initialize_result() -> Value {
@@ -22,7 +25,7 @@ pub fn initialize_result() -> Value {
 }
 
 /// Whether the host is Brigadier, starting the server for one of its agents.
-fn brigadier_audience() -> bool {
+pub(crate) fn brigadier_audience() -> bool {
     std::env::var(crate::env::AUDIENCE_ENV).is_ok_and(|value| value.trim() == "brigadier")
 }
 
@@ -37,7 +40,10 @@ fn instructions_for(brigadier: bool, host_manages_session: bool) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 const BRIGADIER_INSTRUCTIONS: &str = "Tools for seeing and operating the interfaces of apps on this Mac. Load the `computer-use` skill before your first call and follow it.";
+#[cfg(not(target_os = "macos"))]
+const BRIGADIER_INSTRUCTIONS: &str = "Tools for seeing and operating the interfaces of apps on this computer. Load the `computer-use` skill before your first call and follow it.";
 
 /// Whether the host that started this process already gives each connection its own session
 /// (and with it the agent cursor): every call then carries that session, and the connection
@@ -56,7 +62,7 @@ fn agent_instructions(host_manages_session: bool) -> String {
     } else {
         "0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids."
     };
-    r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element targets (element_token from the Accessibility tree) over pixel coordinates; they work on hidden, covered and background windows.
+    let instructions = r#"Computer Use: see and drive apps on this Mac in the background, without taking keyboard focus or moving the user's pointer. Prefer element targets (element_token from the Accessibility tree) over pixel coordinates; they work on hidden, covered and background windows.
 
 Each turn:
 SESSION_STEP
@@ -68,7 +74,15 @@ SESSION_STEP
 If the `computer-use` skill is available, follow it for the full workflow.
 
 Calls that target the user's Brigadier, terminal apps, or macOS security surfaces return target_not_allowed; do not retry them."#
-        .replace("SESSION_STEP", session_step)
+        .replace("SESSION_STEP", session_step);
+    if cfg!(target_os = "macos") {
+        instructions
+    } else {
+        instructions.replace("this Mac", "this computer").replace(
+            "macOS security surfaces",
+            "system authentication and security surfaces",
+        )
+    }
 }
 
 // ── Tool list ─────────────────────────────────────────────────────────────────
@@ -97,6 +111,7 @@ pub async fn run(registry: Arc<ToolRegistry>) -> anyhow::Result<()> {
     let mut reader = BufReader::new(tokio::io::stdin());
     let mut writer = tokio::io::BufWriter::new(tokio::io::stdout());
     let mut line = String::new();
+    let mut view = lean::View::default();
     loop {
         line.clear();
         if reader.read_line(&mut line).await? == 0 {
@@ -116,7 +131,7 @@ pub async fn run(registry: Arc<ToolRegistry>) -> anyhow::Result<()> {
             Ok(req) if req.is_notification() => continue,
             Ok(req) => {
                 let id = req.id.clone().unwrap_or(Value::Null);
-                handle_request(req, id, &registry).await
+                handle_request(req, id, &registry, &mut view).await
             }
         };
         let serialized = serde_json::to_string(&response)
@@ -129,30 +144,40 @@ pub async fn run(registry: Arc<ToolRegistry>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -> Response {
+async fn handle_request(
+    req: Request,
+    id: Value,
+    registry: &Arc<ToolRegistry>,
+    view: &mut lean::View,
+) -> Response {
     match req.method.as_str() {
         "initialize" => Response::ok(id, initialize_result()),
-        "tools/list" => Response::ok(id, agent_tools_list(registry)),
+        "tools/list" => Response::ok(
+            id,
+            lean::tools_list(agent_tools_list(registry), brigadier_audience()),
+        ),
         "tools/call" => match req.tool_call() {
             Err(e) => Response::error(id, -32602, format!("Invalid params: {e}")),
             Ok(call) => {
-                // The model never sets the target scope; this process's env does.
-                let scope = cu_layer::scope::DispatchScope {
-                    allowed_bundles: cu_layer::target_policy::allowed_from_env(),
-                    on_target: None,
-                    session: None,
-                };
-                let result = cu_layer::typing_turn::in_turn(
-                    &call.name,
-                    &call.args,
-                    cu_layer::scope::with_scope(
-                        scope,
-                        registry.invoke(&call.name, call.args.clone()),
-                    ),
-                )
-                .await;
+                let args = lean::arguments(&call.name, call.args.clone(), brigadier_audience());
+                let result = invoke_for_mcp(registry, &call.name, args).await;
                 match serde_json::to_value(result) {
-                    Ok(v) => Response::ok(id, v),
+                    Ok(mut value) => {
+                        if let Some(fallback) = view.fallback_arguments(
+                            &call.name,
+                            &call.args,
+                            &mut value,
+                            brigadier_audience(),
+                        ) {
+                            let image =
+                                invoke_for_mcp(registry, "get_window_state", fallback).await;
+                            lean::merge_screenshot(
+                                &mut value,
+                                serde_json::to_value(image).unwrap_or_default(),
+                            );
+                        }
+                        Response::ok(id, lean::result(&call.name, value, brigadier_audience()))
+                    }
                     Err(e) => Response::error(id, -32603, format!("Serialize error: {e}")),
                 }
             }
@@ -162,6 +187,21 @@ async fn handle_request(req: Request, id: Value, registry: &Arc<ToolRegistry>) -
             Response::method_not_found(id, other)
         }
     }
+}
+
+async fn invoke_for_mcp(registry: &ToolRegistry, name: &str, args: Value) -> ToolResult {
+    // The model never sets the target scope; this process's env does.
+    let scope = cu_layer::scope::DispatchScope {
+        allowed_bundles: cu_layer::target_policy::allowed_from_env(),
+        on_target: None,
+        session: None,
+    };
+    cu_layer::typing_turn::in_turn(
+        name,
+        &args,
+        cu_layer::scope::with_scope(scope, registry.invoke(name, args.clone())),
+    )
+    .await
 }
 
 // ── Dispatch argument check ───────────────────────────────────────────────────
@@ -323,6 +363,27 @@ fn dispatch_validation_error(tool_name: &str, detail: &str) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn real_tool_list_per_audience_and_lean_budget() {
+        let registry = crate::one_shot_registry(false);
+        let full = agent_tools_list(&registry);
+        assert_eq!(lean::tools_list(full.clone(), false), full);
+        let small = lean::tools_list(full, true);
+        assert_eq!(small["tools"].as_array().unwrap().len(), 20);
+        let bytes = serde_json::to_vec(&small).unwrap().len();
+        assert!(
+            bytes <= 28_000,
+            "lean list is {bytes} bytes (~{} tokens)",
+            bytes / 4
+        );
+        for tool in small["tools"].as_array().unwrap() {
+            assert!(tool.pointer("/inputSchema/properties/session").is_none());
+        }
+        // The catalog still dispatches the tools the lean roster merely hides.
+        assert!(agent_tool_entry(&registry, "get_screen_size").is_some());
+    }
 
     #[test]
     fn a_session_the_host_manages_takes_no_session_calls() {

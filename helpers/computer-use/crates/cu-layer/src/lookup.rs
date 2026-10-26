@@ -16,7 +16,7 @@ pub trait Lookups: Send + Sync {
     fn name_for_bundle(&self, bundle_id: &str) -> Option<String>;
 }
 
-/// The real lookups on this Mac.
+/// The real lookups on this computer.
 pub struct System;
 
 #[cfg(target_os = "macos")]
@@ -98,20 +98,134 @@ impl Lookups for System {
     }
 }
 
+/// Windows and Linux have no bundle ids. An app is named by its executable:
+/// the id is the executable's lower-cased name without `.exe`
+/// (`windowsterminal`, `gnome-terminal-server`), which the target policy and
+/// the allow list compare. Brigadier run from a Cargo build folder
+/// (`target/debug`, `target/release`) has no installed-app id, like a bare
+/// binary on macOS (#510). Other programs retain their executable ids.
 #[cfg(not(target_os = "macos"))]
 impl Lookups for System {
-    fn app_for_pid(&self, _pid: i64) -> Option<TargetIdentity> {
-        None
+    fn app_for_pid(&self, pid: i64) -> Option<TargetIdentity> {
+        let pid = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+        let executable = executable_of(pid)?;
+        executable_identity(&executable, pid)
     }
-    fn pid_for_window(&self, _window_id: u64) -> Option<i64> {
-        None
+
+    fn pid_for_window(&self, window_id: u64) -> Option<i64> {
+        window_owner(window_id).map(i64::from)
     }
-    fn identify(&self, _reference: &str) -> Option<(Option<String>, String)> {
-        None
+
+    fn identify(&self, reference: &str) -> Option<(Option<String>, String)> {
+        let path = std::path::Path::new(reference.trim());
+        let name = executable_name(path)?;
+        // A path names the executable; a bare name is only a display name.
+        let is_path = reference.contains('/') || reference.contains('\\');
+        Some((is_path.then(|| name.to_ascii_lowercase()), name))
     }
+
     fn name_for_bundle(&self, _bundle_id: &str) -> Option<String> {
         None
     }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn executable_identity(executable: &std::path::Path, pid: u32) -> Option<TargetIdentity> {
+    let name = executable_name(executable)?;
+    let id = name.to_ascii_lowercase();
+    // Only Brigadier's development build needs the installed-app exception.
+    // Moving a shell or credential agent into target/debug must not hide it.
+    let development_brigadier = is_development_build(executable)
+        && matches!(id.as_str(), "brigadier" | "brigadier-app" | "brigadierd");
+    Some(TargetIdentity {
+        bundle_id: (!development_brigadier).then_some(id),
+        name,
+        pid: Some(i64::from(pid)),
+    })
+}
+
+/// The executable's name without its directory or `.exe`.
+#[cfg(any(not(target_os = "macos"), test))]
+fn executable_name(path: &std::path::Path) -> Option<String> {
+    let file = path.file_name()?.to_string_lossy().into_owned();
+    let stem = match file.len().checked_sub(4) {
+        Some(cut)
+            if file
+                .get(cut..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe")) =>
+        {
+            file[..cut].to_owned()
+        }
+        _ => file,
+    };
+    (!stem.is_empty()).then_some(stem)
+}
+
+/// Whether `executable` runs from a Cargo build folder.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(crate) fn is_development_build(executable: &std::path::Path) -> bool {
+    let parts: Vec<String> = executable
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    parts
+        .windows(2)
+        .any(|pair| pair[0] == "target" && matches!(pair[1].as_str(), "debug" | "release"))
+        || parts.windows(3).any(|triple| {
+            triple[0] == "target" && matches!(triple[2].as_str(), "debug" | "release")
+        })
+}
+
+/// The executable `pid` runs.
+#[cfg(target_os = "linux")]
+fn executable_of(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn executable_of(pid: u32) -> Option<std::path::PathBuf> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked and closed; the buffer outlives the call
+    // and its length is passed in and read back.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = vec![0u16; 32_768];
+        let mut length = u32::try_from(buffer.len()).ok()?;
+        let read = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        );
+        let _ = CloseHandle(process);
+        read.ok()?;
+        buffer.truncate(usize::try_from(length).ok()?);
+        Some(std::path::PathBuf::from(String::from_utf16(&buffer).ok()?))
+    }
+}
+
+/// The process that owns a window: an X11 window's `_NET_WM_PID` on Linux.
+#[cfg(target_os = "linux")]
+fn window_owner(window_id: u64) -> Option<u32> {
+    platform_linux::x11::window_pid(window_id)
+}
+
+/// The process that owns a top-level window (`HWND`).
+#[cfg(target_os = "windows")]
+fn window_owner(window_id: u64) -> Option<u32> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let mut pid = 0u32;
+    // SAFETY: a stale or foreign handle makes the call return 0, which is
+    // checked; `pid` is a valid out pointer.
+    let thread =
+        unsafe { GetWindowThreadProcessId(HWND(window_id as usize as *mut _), Some(&mut pid)) };
+    (thread != 0 && pid != 0).then_some(pid)
 }
 
 /// The executable `pid` runs, read from the kernel.
@@ -251,5 +365,59 @@ mod tests {
         assert_eq!(stem(&app).as_deref(), Some("Finder"));
         assert_eq!(bundle_id_at(&app).as_deref(), Some("com.apple.finder"));
         assert_eq!(executable_of(-1), None);
+    }
+}
+
+#[cfg(test)]
+mod build_folder_tests {
+    use super::is_development_build;
+    use std::path::Path;
+
+    #[test]
+    fn executable_names_need_not_have_ascii_character_boundaries() {
+        assert_eq!(
+            super::executable_name(Path::new("/usr/bin/程序")),
+            Some("程序".into())
+        );
+        assert_eq!(
+            super::executable_name(Path::new("/apps/程序.EXE")),
+            Some("程序".into())
+        );
+    }
+
+    #[test]
+    fn cargo_build_folders_do_not_hide_terminals_or_credential_agents() {
+        for name in [
+            "cmd.exe",
+            "gnome-terminal-server",
+            "polkit-gnome-authentication-agent-1",
+        ] {
+            let identity =
+                super::executable_identity(Path::new(&format!("/home/me/target/debug/{name}")), 42)
+                    .unwrap();
+            assert!(identity.bundle_id.is_some(), "{name}");
+            assert!(
+                crate::target_policy::check("click", &identity, &[]).is_err(),
+                "{name}"
+            );
+        }
+        let dev = super::executable_identity(Path::new("/home/me/target/debug/brigadier-app"), 42)
+            .unwrap();
+        assert_eq!(dev.bundle_id, None);
+        assert!(crate::target_policy::check("click", &dev, &[]).is_ok());
+    }
+
+    #[test]
+    fn a_program_in_a_cargo_build_folder_is_a_development_build() {
+        assert!(is_development_build(Path::new(
+            "/home/me/brigadier-ai/target/debug/brigadier-app"
+        )));
+        assert!(is_development_build(Path::new(
+            "/home/me/brigadier-ai/target/x86_64-unknown-linux-gnu/release/brigadier-app"
+        )));
+        assert!(!is_development_build(Path::new("/usr/bin/brigadier")));
+        assert!(!is_development_build(Path::new(
+            "/opt/target/Brigadier/brigadier"
+        )));
     }
 }

@@ -23,6 +23,15 @@ const MAX_DEPTH: usize = 4;
 const SKIPPED: &[&str] = &["node_modules", "target", "dist", "build", "vendor"];
 /// Tauri's JSON config, the one that names the sidecars.
 const CONFIG: &str = "tauri.conf.json";
+/// This platform's config, which Tauri merges over [`CONFIG`] (its `externalBin` replaces the
+/// main one's; Windows and Linux list the computer-use helper there).
+const PLATFORM_CONFIG: &str = if cfg!(windows) {
+    "tauri.windows.conf.json"
+} else if cfg!(target_os = "linux") {
+    "tauri.linux.conf.json"
+} else {
+    "tauri.macos.conf.json"
+};
 
 /// [`stand_in`] for the worktree just made at `path`, logged.
 pub(crate) fn stand_in_at(git: &Git, path: &Path) {
@@ -76,7 +85,8 @@ pub(crate) fn stand_in(worktree: &Repo) -> Vec<String> {
     made
 }
 
-/// Every Tauri config under `dir`, at most [`MAX_DEPTH`] folders down.
+/// Every Tauri config under `dir` (the main one and this platform's), at most [`MAX_DEPTH`]
+/// folders down.
 fn find_configs(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -87,7 +97,7 @@ fn find_configs(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if kind.is_file() && name == CONFIG {
+        if kind.is_file() && (name == CONFIG || name == PLATFORM_CONFIG) {
             found.push(entry.path());
         } else if kind.is_dir()
             && depth < MAX_DEPTH
@@ -195,6 +205,12 @@ mod tests {
             r#"{"bundle": {"externalBin": ["binaries/brigadierd", "tracked/tool", "../outside"]}}"#,
         )
         .unwrap();
+        // This platform's config adds one, and repeats one the main config names.
+        std::fs::write(
+            app.join(PLATFORM_CONFIG),
+            r#"{"bundle": {"externalBin": ["binaries/brigadierd", "binaries/brigadier-cu"]}}"#,
+        )
+        .unwrap();
         // A sidecar git doesn't ignore is left alone: a stand-in could be committed.
         std::fs::create_dir_all(app.join("tracked")).unwrap();
         std::fs::write(app.join("tracked/keep"), "").unwrap();
@@ -209,7 +225,14 @@ mod tests {
             host_triple(),
             exe_suffix()
         );
-        assert_eq!(stand_in(&worktree), std::slice::from_ref(&sidecar));
+        let helper = format!(
+            "apps/desktop/src-tauri/binaries/brigadier-cu-{}{}",
+            host_triple(),
+            exe_suffix()
+        );
+        let mut made_now = stand_in(&worktree);
+        made_now.sort();
+        assert_eq!(made_now, [helper, sidecar.clone()]);
         let made = path.join(&sidecar);
         assert_eq!(std::fs::metadata(&made).unwrap().len(), 0);
         // Nothing to commit, and a second call leaves the existing file alone.

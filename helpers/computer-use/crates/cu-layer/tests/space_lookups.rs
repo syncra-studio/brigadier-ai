@@ -1,6 +1,8 @@
 //! The one-window Space check (patches/0009) asks the window server about
 //! that window only and answers what the whole window list says about it.
 //! Reads the live window list; needs no permission.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use platform_macos::windows::{all_windows, window_on_current_space_by_id};
 

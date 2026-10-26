@@ -101,6 +101,7 @@ export type { CommitOutcome } from "./CommitOutcome";
 export type { Compaction } from "./Compaction";
 export type { CompactionState } from "./CompactionState";
 export type { ComputerPermission } from "./ComputerPermission";
+export type { ComputerPlatform } from "./ComputerPlatform";
 export type { ComputerSession } from "./ComputerSession";
 export type { ComputerSetup } from "./ComputerSetup";
 export type { ComputerUseStatus } from "./ComputerUseStatus";

@@ -251,6 +251,36 @@ fn append_platform_probes(report: &mut Report) {
     ));
 }
 
+/// Windows and Linux: what this desktop session lets the helper do.
+#[cfg(not(target_os = "macos"))]
+fn append_platform_probes(report: &mut Report) {
+    let facts = cu_layer::platform::facts();
+    let message = format!(
+        "{} session: accessibility {}, capture {}",
+        facts.display_server,
+        if facts.accessibility {
+            "available"
+        } else {
+            "unavailable"
+        },
+        if facts.screen_capture {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
+    let probe = if facts.accessibility && facts.screen_capture {
+        Probe::ok("desktop session", &message)
+    } else {
+        Probe::warn("desktop session", &message)
+    };
+    report.push(if facts.notes.is_empty() {
+        probe
+    } else {
+        probe.with_detail(&facts.notes.join("\n"))
+    });
+}
+
 // ── Public entry point ────────────────────────────────────────────────────
 
 /// Run every probe and return the aggregated report.

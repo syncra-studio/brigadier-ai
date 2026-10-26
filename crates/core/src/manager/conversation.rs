@@ -597,6 +597,8 @@ pub(crate) struct ConvLive {
     pub id: ConversationId,
     pub kind: ConversationKind,
     state: tokio::sync::Mutex<ConvState>,
+    /// Owns CLI shutdown until its event pump ends; overlapping closes join that shutdown.
+    cli_closing: tokio::sync::Mutex<()>,
     /// Held while waiting messages are routed again, so a timer and a routing change never
     /// both start a model for them.
     retry: tokio::sync::Mutex<()>,
@@ -685,6 +687,7 @@ impl ConvLive {
             feedback_offer: tokio::sync::Mutex::new(()),
             session_offer: tokio::sync::Mutex::new(()),
             fusion_offer: tokio::sync::Mutex::new(()),
+            cli_closing: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             pr_merge: tokio::sync::Mutex::new(()),
             pr_watch: std::sync::atomic::AtomicBool::new(false),
@@ -808,17 +811,20 @@ impl ConvLive {
 
     /// The same, recording `cause` as why the next CLI starts when this one closes.
     pub(crate) async fn retire_cli_for(&self, cli: &Arc<Cli>, cause: Option<WriteCause>) {
-        let taken = {
+        let (taken, _closing) = {
             let mut state = self.state.lock().await;
             let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
             if !current || state.busy || state.closing || state.has_cli_jobs() {
                 return;
             }
+            let Ok(closing) = self.cli_closing.try_lock() else {
+                return;
+            };
             state.closing = true;
             if cause.is_some() {
                 state.restart_cause = cause;
             }
-            state.cli.take()
+            (state.cli.take(), closing)
         };
         if let Some(cli) = taken {
             cli.session.close().await;
@@ -839,6 +845,15 @@ impl ConvLive {
 
     /// Ends the CLI session, if any. Its files stay (it can be resumed).
     pub async fn close_cli(&self) {
+        let _closing = match self.cli_closing.try_lock() {
+            Ok(closing) => closing,
+            Err(_) => {
+                // Join the close already under way. It owns the state reset, and a CLI
+                // started after it finishes belongs to a later turn.
+                let _closing = self.cli_closing.lock().await;
+                return;
+            }
+        };
         let cli = {
             let mut state = self.state.lock().await;
             state.closing = true;

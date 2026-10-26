@@ -1,5 +1,7 @@
 //! Typing into a desktop web app's page in the background, with a fake driver
 //! `type_text` and fake page fields: no permission grant, no real app.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use std::sync::{Arc, Mutex};
 

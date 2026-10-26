@@ -11,8 +11,9 @@ set -euo pipefail
 
 repo_url=https://github.com/trycua/cua
 src_root=libs/cua-driver/rust
-# The macOS backend and what it needs. Nothing else of the upstream workspace is vendored.
-crates=(cua-driver-core cua-driver-contract platform-macos cursor-overlay cua-cursor-motion pip-preview)
+# The macOS, Windows and Linux backends and what they need (cua-driver-uia is the Windows
+# uiAccess worker). Nothing else of the upstream workspace is vendored.
+crates=(cua-driver-core cua-driver-contract platform-macos platform-windows platform-linux cua-driver-uia cursor-overlay cua-cursor-motion pip-preview)
 # cua-driver-core embeds these with include_str!.
 extra_dirs=(Skills/cua-driver)
 # Copied from the upstream workspace root.

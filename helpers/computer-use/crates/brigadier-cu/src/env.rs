@@ -1,6 +1,7 @@
 //! Environment names and reserved arguments the helper shares with the host
 //! app and with its own child processes.
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const RESPONSIBILITY_DISCLAIMED_ENV: &str = "BRIGADIER_CU_RESPONSIBILITY_DISCLAIMED";
 
 /// Embedded mode (`BRIGADIER_CU_EMBEDDED=1` / `--embedded`): the driver runs
@@ -10,6 +11,7 @@ pub const RESPONSIBILITY_DISCLAIMED_ENV: &str = "BRIGADIER_CU_RESPONSIBILITY_DIS
 /// Caller-controlled, which is safe only because embedded mode strictly
 /// REMOVES capability claims; it must never feed into the `driver-daemon`
 /// attribution decision.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const EMBEDDED_ENV: &str = "BRIGADIER_CU_EMBEDDED";
 
 /// Stable cursor/session identity for an embedded stdio driver process.
@@ -33,6 +35,7 @@ pub const HOST_SESSION_ARG: &str = "_host_session";
 pub const HOST_BUNDLE_ID_ENV: &str = cu_layer::HOST_BUNDLE_ID_ENV;
 
 /// Only the exact value `1` counts — fail-safe for anything else.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn embedded_mode() -> bool {
     std::env::var_os(EMBEDDED_ENV).is_some_and(|v| v == "1")
 }

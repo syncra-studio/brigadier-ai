@@ -10,7 +10,7 @@
 //! - Linux: `pidfd_open(2)` plus `poll(2)` (kernel 5.3+). If `pidfd_open` is
 //!   not available, fall back to a 250 ms `kill(pid, 0)` liveness poll.
 //! - Other Unix targets: the same 250 ms liveness poll.
-//! - Windows: not supported; serve logs that it ignores the flag.
+//! - Windows: a thread waits on the owner's process handle.
 //!
 //! The kqueue and pidfd paths bind to the process at registration time, so a
 //! later pid reuse cannot hide the exit. The fallback poll can miss an exit
@@ -20,13 +20,11 @@
 #[derive(Debug)]
 pub enum OwnerWatch {
     /// The owner is alive. The receiver completes when it exits.
-    #[cfg_attr(not(unix), allow(dead_code))]
     Watching(tokio::sync::oneshot::Receiver<()>),
     /// The owner was already dead when the watch started.
-    #[cfg_attr(not(unix), allow(dead_code))]
     AlreadyExited,
     /// This platform cannot watch a pid. The reason is safe to log.
-    #[cfg_attr(unix, allow(dead_code))]
+    #[allow(dead_code)]
     Unsupported(&'static str),
 }
 
@@ -146,4 +144,90 @@ mod platform {
         });
         Started::Watching
     }
+
+    /// Linux: a pidfd for the owner, polled until it is readable (the
+    /// process exited). Kernels without `pidfd_open` fall back to the poll.
+    #[cfg(target_os = "linux")]
+    pub fn start(pid: i32, tx: tokio::sync::oneshot::Sender<()>) -> Started {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        // SAFETY: pidfd_open takes a pid and flags and returns a descriptor
+        // or -1; the descriptor is owned from here on.
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if raw < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return Started::AlreadyExited;
+            }
+            super::spawn_waiter("cu-owner-poll", move || super::poll_until_exit(pid, tx));
+            return Started::Watching;
+        }
+        let Ok(raw) = i32::try_from(raw) else {
+            super::spawn_waiter("cu-owner-poll", move || super::poll_until_exit(pid, tx));
+            return Started::Watching;
+        };
+        // SAFETY: `raw` is a fresh descriptor nobody else owns.
+        let pidfd = unsafe { OwnedFd::from_raw_fd(raw) };
+        super::spawn_waiter("cu-owner-pidfd", move || loop {
+            let mut poll = libc::pollfd {
+                fd: pidfd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd; no timeout.
+            let n = unsafe { libc::poll(&mut poll, 1, -1) };
+            if n > 0 {
+                let _ = tx.send(());
+                return;
+            }
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            super::poll_until_exit(pid, tx);
+            return;
+        });
+        Started::Watching
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    pub fn start(pid: i32, tx: tokio::sync::oneshot::Sender<()>) -> Started {
+        super::spawn_waiter("cu-owner-poll", move || super::poll_until_exit(pid, tx));
+        Started::Watching
+    }
+}
+
+/// Windows: open the owner's process and wait on its handle on a thread.
+#[cfg(windows)]
+pub fn watch(pid: i32) -> OwnerWatch {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return OwnerWatch::AlreadyExited;
+    };
+    // SAFETY: the handle is checked, moved to the waiting thread and closed there.
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
+        return OwnerWatch::AlreadyExited;
+    };
+    // SAFETY: a zero timeout only polls the valid handle.
+    if unsafe { WaitForSingleObject(process, 0) } != WAIT_TIMEOUT {
+        let _ = unsafe { CloseHandle(process) };
+        return OwnerWatch::AlreadyExited;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // A HANDLE is a pointer; carry it to the thread as an integer.
+    let raw = process.0 as usize;
+    std::thread::Builder::new()
+        .name("cu-owner-wait".to_owned())
+        .spawn(move || {
+            let process = HANDLE(raw as *mut _);
+            // SAFETY: the handle stays open until this thread closes it.
+            unsafe {
+                WaitForSingleObject(process, INFINITE);
+                let _ = CloseHandle(process);
+            }
+            let _ = tx.send(());
+        })
+        .expect("spawn owner watch thread");
+    OwnerWatch::Watching(rx)
 }

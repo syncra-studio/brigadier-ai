@@ -1,6 +1,6 @@
-# Vendored upstream: the macOS computer-use driver
+# Vendored upstream: the computer-use driver
 
-This folder is a copy of the macOS backend of the MIT-licensed driver at
+This folder is a copy of the macOS, Windows and Linux backends of the MIT-licensed driver at
 https://github.com/trycua/cua (`libs/cua-driver/rust`), pinned to one release
 tag. Brigadier's own code sits on top of it in `../crates/` and never edits
 these files. The only differences from the release are the files in
@@ -14,7 +14,9 @@ Brigadier's names.
 ## What is here
 
 - `crates/`: the backend crates, byte-identical to the release apart from
-  `../patches/`.
+  `../patches/`: `platform-macos`, `platform-windows` and `platform-linux`, what
+  they share, and `cua-driver-uia`, the Windows uiAccess worker (vendored but not
+  built or shipped by Brigadier yet).
 - `Skills/cua-driver/`: documents `cua-driver-core` compiles in with
   `include_str!`. Brigadier never serves them to agents.
 - `Cargo.toml`: upstream's workspace manifest with `members` cut to the
@@ -27,8 +29,8 @@ Brigadier's names.
 - `PRISTINE.sha256`: the sha256 of every file as fetched, before patches.
 
 Not copied: the upstream binary (with its telemetry, updater, skill installer,
-autostart and HTTP transport), the SDK and bindings, the Windows and Linux
-backends, the optional perception add-on and the test and tooling crates.
+autostart and HTTP transport), the SDK and bindings, the optional perception
+add-on and the test and tooling crates.
 
 ## Release
 
@@ -39,9 +41,9 @@ backends, the optional perception add-on and the test and tooling crates.
 | Tag | `cua-driver-rs-v0.36.0` |
 | Commit | `6d6c734c127025fb39ad5d585a10382808b39dc1` (2026-10-16) |
 | Path in the repository | `libs/cua-driver/rust` |
-| Crates | `cua-driver-core` `cua-driver-contract` `platform-macos` `cursor-overlay` `cua-cursor-motion` `pip-preview` |
+| Crates | `cua-driver-core` `cua-driver-contract` `platform-macos` `platform-windows` `platform-linux` `cua-driver-uia` `cursor-overlay` `cua-cursor-motion` `pip-preview` |
 | Also copied | `Skills/cua-driver/` `LICENSE.md` `THIRD_PARTY_NOTICES.md` |
-| Files | 297 (sha256 of PRISTINE.sha256: `bdb691adb13d1725aa8b3b2160031dc52a6e90c3a614ba912a9ba8129832762a`) |
+| Files | 493 (sha256 of PRISTINE.sha256: `81b9371a20caaacd253d99df34da50feffb141146ff2217a696eb8a3d8bb3979`) |
 
 Patches applied, in order:
 

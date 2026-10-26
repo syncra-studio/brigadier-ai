@@ -1,6 +1,8 @@
 //! Finder gestures that open a file open it through `launch_app` instead,
 //! behind the user's work, with fake driver tools, a fake Finder and fake
 //! nested calls: no permission grant, no real app.
+// What it tests exists on macOS only.
+#![cfg(target_os = "macos")]
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

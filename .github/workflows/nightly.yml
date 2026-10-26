@@ -1,8 +1,9 @@
 name: Nightly
 
 # Every night, and by hand (Actions › Nightly › Run workflow): main's full macOS, Windows and Linux
-# builds with their launch smoke checks, macOS clippy and the computer-use helper's checks, which
-# the per-push run (ci.yml) leaves out. The macOS app is built as released (full optimization),
+# builds with their launch smoke checks (each bundles the computer-use helper for its platform),
+# macOS clippy and the computer-use helper's macOS checks, which the per-push run (ci.yml) leaves
+# out. The macOS app is built as released (full optimization),
 # signed with the Developer ID, notarized and published as the `nightly` prerelease, which
 # installed nightly builds update themselves from. Without the signing secrets (the signing step
 # below names them) it is built unsigned and nothing is published.
@@ -389,7 +390,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/apt-cache
-          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus
+          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus-pkg-config-libx11-dev-libxi-dev-libxtst-dev-libxext-dev-libwayland-dev-libxkbcommon-dev
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         if: runner.os == 'Linux'
@@ -399,7 +400,7 @@ jobs:
           archives="$RUNNER_TEMP/apt-cache"
           mkdir -p "$archives"
           apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
-          packages=(libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus)
+          packages=(libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus pkg-config libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev)
           # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
           # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do

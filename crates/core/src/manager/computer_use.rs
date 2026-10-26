@@ -11,9 +11,14 @@
 //! starts the helper's daemon through LaunchServices on the first tool call and replaces a dead
 //! or hung one, under a lock all shims share, so Brigadier itself starts nothing here.
 //!
-//! Computer use is macOS only: elsewhere [`SessionManager::computer_use_kit`] is always `None`
-//! and the placing code isn't built.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+//! Windows and Linux: the helper is the `brigadier-cu` program beside brigadierd (a Tauri
+//! sidecar). It runs from a copy in a folder of its own build, `<data dir>/computer/bin/<build
+//! id>/` ([`versions`]): Windows can't replace a program while any process runs it, and every
+//! running agent's MCP server does. An update places the new build beside the old one, so new
+//! agents use it at once; the old build is marked retired, its daemon stopped, and its agents'
+//! servers say plainly to start a new session. Folders no process runs from any more are
+//! removed the next time the helper is placed. There is no bundle, signature check or
+//! permission to grant.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -25,7 +30,15 @@ use super::SessionManager;
 /// The MCP server's name: tools reach the model as `mcp__computer__<tool>`.
 pub(crate) const SERVER_NAME: &str = "computer";
 /// The helper app's bundle name, in Brigadier.app and in the data folder.
+#[cfg(target_os = "macos")]
 pub(super) const HELPER_APP: &str = "Brigadier Computer Use.app";
+/// Windows and Linux: the helper program, beside brigadierd and in `<home>/bin`.
+#[cfg(not(target_os = "macos"))]
+pub(super) const HELPER_APP: &str = if cfg!(windows) {
+    "brigadier-cu.exe"
+} else {
+    "brigadier-cu"
+};
 /// The helper's executable inside its bundle.
 pub(super) const HELPER_BIN: &str = "brigadier-cu";
 /// The permissions the helper last read, which it keeps in its home.
@@ -33,7 +46,8 @@ pub(super) const PERMISSIONS_FILE: &str = "permissions.json";
 /// Tells the helper that setup runs in Brigadier's window: it shows no panel, and agents'
 /// calls wait until that window confirmed screen capture.
 pub(super) const EXTERNAL_SETUP_ENV: &str = "BRIGADIER_CU_EXTERNAL_PERMISSION_FLOW";
-/// Overrides where the helper app is found (a development checkout's staged bundle).
+/// Overrides where the helper app is found (a development checkout's staged bundle; on
+/// Windows and Linux, the program).
 const HELPER_APP_ENV: &str = "BRIGADIER_CU_APP";
 /// The skill every agent gets, Brigadier's own workflow for the tools.
 const SKILL: &str = include_str!("computer_use_skill.md");
@@ -52,6 +66,7 @@ pub(super) struct Placed {
     /// different one (an update) is placed again.
     source: PathBuf,
     stamp: Option<SystemTime>,
+    /// The placed helper: its app bundle on macOS, its program elsewhere.
     app: PathBuf,
     home: PathBuf,
     plugin: PathBuf,
@@ -80,7 +95,7 @@ impl SessionManager {
         owner: &str,
         always_load: bool,
     ) -> Option<ComputerUseKit> {
-        if !cfg!(target_os = "macos") || !self.core.settings().computer_use {
+        if !self.core.settings().computer_use {
             return None;
         }
         let placed = match self
@@ -98,7 +113,7 @@ impl SessionManager {
             server: McpServer {
                 name: SERVER_NAME.into(),
                 transport: McpTransport::Stdio {
-                    command: placed.app.join("Contents/MacOS").join(HELPER_BIN),
+                    command: helper_program(&placed.app),
                     args: vec!["mcp".into()],
                     cwd: None,
                 },
@@ -160,11 +175,50 @@ impl ComputerUse {
         Ok(fresh)
     }
 
-    /// Computer use is macOS only.
+    /// Windows and Linux: the placed copy of the helper program, placed first when this is
+    /// the first use or the installed program changed.
     #[cfg(not(target_os = "macos"))]
-    pub(super) async fn ready(&self, _: &Path, _: &Path) -> Result<Placed, String> {
-        Err("computer use needs macOS".to_owned())
+    pub(super) async fn ready(&self, daemon_exe: &Path, data_dir: &Path) -> Result<Placed, String> {
+        let source = bundled_helper(daemon_exe)
+            .ok_or_else(|| "the computer-use helper is missing from this install".to_owned())?;
+        let stamp = std::fs::metadata(&source)
+            .and_then(|meta| meta.modified())
+            .ok();
+        let mut placed = self.placed.lock().await;
+        if let Some(current) = placed.as_ref()
+            && current.source == source
+            && current.stamp == stamp
+            && current.app.exists()
+        {
+            return Ok(current.clone());
+        }
+        let home = data_dir.join("computer");
+        let fresh = tokio::task::spawn_blocking(move || place(&source, stamp, &home))
+            .await
+            .map_err(|e| e.to_string())??;
+        *placed = Some(fresh.clone());
+        Ok(fresh)
     }
+}
+
+/// The program agents' MCP server runs: inside the app bundle on macOS, the placed program
+/// itself elsewhere.
+pub(super) fn helper_program(app: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        app.join("Contents/MacOS").join(HELPER_BIN)
+    } else {
+        app.to_path_buf()
+    }
+}
+
+/// Windows and Linux: the helper program beside the daemon (Tauri puts its sidecars next to
+/// the app's own program, in a release and in `tauri dev`), or where [`HELPER_APP_ENV`] says.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn bundled_helper(daemon_exe: &Path) -> Option<PathBuf> {
+    if let Some(program) = std::env::var_os(HELPER_APP_ENV).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(program)).filter(|program| program.is_file());
+    }
+    Some(daemon_exe.parent()?.join(HELPER_APP)).filter(|program| program.is_file())
 }
 
 /// The helper bundled with this install: beside the daemon in Brigadier.app
@@ -199,7 +253,6 @@ fn executable_stamp(app: &Path) -> Option<SystemTime> {
 }
 
 /// Places the helper, its token and the skill plugin under `home`.
-#[cfg(target_os = "macos")]
 fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed, String> {
     private_dir(home).map_err(|e| format!("couldn't make {}: {e}", home.display()))?;
     let app = place_helper(source, home).map_err(|e| e.to_string())?;
@@ -216,19 +269,26 @@ fn place(source: &Path, stamp: Option<SystemTime>, home: &Path) -> Result<Placed
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn private_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
+/// Windows: the data folder lies in the user's profile, whose ACL already keeps other users
+/// out.
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
 /// The token every request on the helper's socket carries: `<home>/auth`, made once (0600).
 /// The daemon reads the file (LaunchServices starts it without our environment); each shim
 /// gets the token in its environment.
-#[cfg(target_os = "macos")]
 fn socket_token(home: &Path) -> std::io::Result<String> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
 
     let path = home.join("auth");
@@ -244,12 +304,11 @@ fn socket_token(home: &Path) -> std::io::Result<String> {
         uuid::Uuid::new_v4().simple()
     );
     let partial = home.join(format!(".auth-{}", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(&partial)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&partial)?;
     file.write_all(token.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&partial, &path)?;
@@ -259,7 +318,6 @@ fn socket_token(home: &Path) -> std::io::Result<String> {
 /// Writes the skill plugin: `<home>/agent-plugin/.claude-plugin/plugin.json` and
 /// `skills/computer-use/SKILL.md`. Claude loads the folder as a plugin; Codex reads its
 /// `skills` folder as an extra skills root.
-#[cfg(target_os = "macos")]
 fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     let plugin = home.join("agent-plugin");
     let skill = plugin.join("skills/computer-use");
@@ -278,7 +336,6 @@ fn write_plugin(home: &Path) -> std::io::Result<PathBuf> {
     Ok(plugin)
 }
 
-#[cfg(target_os = "macos")]
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<()> {
     if std::fs::read_to_string(path).is_ok_and(|current| current == contents) {
         return Ok(());
@@ -326,6 +383,212 @@ fn running_daemon(home: &Path, placed: &Path) -> Option<i32> {
         .ok()?;
     let placed = std::fs::canonicalize(placed).ok()?;
     (pid > 1 && place::executable(pid)?.starts_with(&placed)).then_some(pid)
+}
+
+/// Windows and Linux: the helper program placed in its build's folder under `home/bin`
+/// ([`versions::place`]); older builds are retired, their daemons stopped through their own
+/// `host stop`, and their folders removed once nothing runs from them.
+#[cfg(not(target_os = "macos"))]
+fn place_helper(program: &Path, home: &Path) -> std::io::Result<PathBuf> {
+    versions::place(program, &home.join("bin"), &versions::runs_from, &|old| {
+        stop_helper(old, home)
+    })
+}
+
+/// The current build's placed program under `home`, as the last placing recorded it.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn placed_program(home: &Path) -> Option<PathBuf> {
+    versions::current(&home.join("bin"))
+}
+
+/// Windows and Linux: one folder per helper build under `<home>/bin`, named by the build's id
+/// (the program's BLAKE3, 16 hex digits), and `<home>/bin/current` naming the one new agents
+/// use. A folder holding `retired` belongs to a build an update replaced: its MCP servers
+/// refuse new calls with a plain "start a new session" (brigadier-cu's supervisor), and it is
+/// removed once no process runs from it. Written for every platform so its tests run anywhere;
+/// only Windows and Linux use it.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(super) mod versions {
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    /// The program's file name in each folder.
+    pub(crate) const PROGRAM: &str = if cfg!(windows) {
+        "brigadier-cu.exe"
+    } else {
+        "brigadier-cu"
+    };
+    /// The file naming the current build's folder.
+    pub(crate) const CURRENT: &str = "current";
+    /// The mark of a replaced build's folder (brigadier-cu checks for it beside itself).
+    pub(crate) const RETIRED: &str = "retired";
+
+    /// A build's id: the first 16 hex digits of the program's BLAKE3.
+    pub(crate) fn build_id(program: &Path) -> io::Result<String> {
+        let bytes = std::fs::read(program)?;
+        Ok(blake3::hash(&bytes).to_hex()[..16].to_owned())
+    }
+
+    /// The current build's program, if the last placing recorded one that still exists.
+    pub(crate) fn current(bin: &Path) -> Option<PathBuf> {
+        let id = std::fs::read_to_string(bin.join(CURRENT)).ok()?;
+        let id = id.trim();
+        let valid = !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit());
+        let program = bin.join(id).join(PROGRAM);
+        (valid && program.is_file()).then_some(program)
+    }
+
+    /// Places `program` in its build's folder under `bin` and makes it current, then retires
+    /// every other build: marks its folder, `stop`s its daemon (given that build's program),
+    /// and removes the folder unless `in_use` says a process still runs from it or its program
+    /// can't be deleted (Windows keeps a running program's file). A program from the layout
+    /// before folders (`bin/brigadier-cu`) is stopped and removed the same way.
+    pub(crate) fn place(
+        program: &Path,
+        bin: &Path,
+        in_use: &dyn Fn(&Path) -> bool,
+        stop: &dyn Fn(&Path),
+    ) -> io::Result<PathBuf> {
+        let id = build_id(program)?;
+        let folder = bin.join(&id);
+        let placed = folder.join(PROGRAM);
+        if !super::same_file(program, &placed) {
+            std::fs::create_dir_all(&folder)?;
+            // A folder named for these bytes runs nothing else: an earlier, broken copy in it
+            // can go.
+            let _ = std::fs::remove_file(&placed);
+            let fresh = folder.join(format!(".{PROGRAM}.new-{}", std::process::id()));
+            let made = std::fs::copy(program, &fresh).and_then(|_| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&fresh, std::fs::Permissions::from_mode(0o755))?;
+                }
+                std::fs::rename(&fresh, &placed)
+            });
+            if made.is_err() {
+                let _ = std::fs::remove_file(&fresh);
+            }
+            made?;
+        }
+        // A folder an earlier update retired and this placing brings back is current again.
+        let _ = std::fs::remove_file(folder.join(RETIRED));
+        let pointer = bin.join(format!(".{CURRENT}.new-{}", std::process::id()));
+        std::fs::write(&pointer, &id)?;
+        std::fs::rename(&pointer, bin.join(CURRENT))?;
+        retire_others(bin, &id, in_use, stop);
+        Ok(placed)
+    }
+
+    /// Retires and, where nothing runs from them any more, removes every build but `keep`.
+    fn retire_others(bin: &Path, keep: &str, in_use: &dyn Fn(&Path) -> bool, stop: &dyn Fn(&Path)) {
+        let legacy = bin.join(PROGRAM);
+        if legacy.is_file() {
+            stop(&legacy);
+            if !in_use(&legacy) {
+                let _ = std::fs::remove_file(&legacy);
+            }
+        }
+        let Ok(entries) = std::fs::read_dir(bin) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let folder = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !folder.is_dir() || name == keep || name.starts_with('.') {
+                continue;
+            }
+            let program = folder.join(PROGRAM);
+            if !folder.join(RETIRED).exists() {
+                // Marked first, so none of its servers starts its daemon again meanwhile.
+                if std::fs::write(folder.join(RETIRED), keep).is_err() {
+                    continue;
+                }
+                if program.is_file() {
+                    stop(&program);
+                }
+            }
+            prune(&folder, &program, in_use);
+        }
+    }
+
+    /// Removes a retired build's folder, unless something still runs from it.
+    fn prune(folder: &Path, program: &Path, in_use: &dyn Fn(&Path) -> bool) {
+        if in_use(folder) {
+            return;
+        }
+        // Windows refuses to delete a program any process is running: that keeps the folder.
+        if program.exists() && std::fs::remove_file(program).is_err() {
+            return;
+        }
+        if let Err(error) = std::fs::remove_dir_all(folder) {
+            tracing::debug!(folder = %folder.display(), %error, "couldn't remove a retired helper");
+        }
+    }
+
+    /// Whether a running process's program lies at or under `path`: Linux reads each
+    /// process's `/proc/<pid>/exe`. Windows answers through the program's file instead (it
+    /// can't be deleted while it runs, see [`prune`]); elsewhere nothing runs it.
+    pub(crate) fn runs_from(path: &Path) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            let Ok(path) = std::fs::canonicalize(path) else {
+                return false;
+            };
+            std::fs::read_dir("/proc")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()))
+                })
+                .filter_map(|entry| std::fs::read_link(entry.path().join("exe")).ok())
+                .any(|exe| exe.starts_with(&path))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = path;
+            false
+        }
+    }
+}
+
+/// Whether two files hold the same bytes.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) if ma.len() == mb.len() => {
+            matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
+        }
+        _ => false,
+    }
+}
+
+/// Stops the daemon a placed helper runs, waiting at most a few seconds.
+#[cfg(not(target_os = "macos"))]
+fn stop_helper(placed: &Path, home: &Path) {
+    let Ok(mut child) = std::process::Command::new(placed)
+        .args(["host", "stop"])
+        .env("BRIGADIER_CU_HOME", home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < until {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
 }
 
 /// Copies an app bundle with ditto(1), which keeps it as signed. `--noqtn`: no quarantine on
@@ -540,5 +803,160 @@ mod tests {
             .join(HELPER_APP);
         std::fs::create_dir_all(&staged).unwrap();
         assert_eq!(bundled_helper(&exe), Some(staged));
+    }
+}
+
+/// Windows and Linux placement ([`versions`]), on any platform.
+#[cfg(test)]
+mod version_tests {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    use super::versions::{self, CURRENT, PROGRAM, RETIRED};
+
+    /// A fresh folder with a `bin` and two helper "builds", removed when dropped.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("brigadier-cu-versions-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir_all(dir.join("bin")).unwrap();
+            std::fs::write(dir.join("build-a"), b"helper build A").unwrap();
+            std::fs::write(dir.join("build-b"), b"helper build B").unwrap();
+            Self(dir)
+        }
+        fn bin(&self) -> PathBuf {
+            self.0.join("bin")
+        }
+        fn build(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+        fn folder(&self, build: &str) -> PathBuf {
+            self.bin()
+                .join(versions::build_id(&self.build(build)).unwrap())
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            for build in ["build-a", "build-b"] {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    self.folder(build),
+                    std::fs::Permissions::from_mode(0o755),
+                );
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Places `build`, with `held` folders still running and the daemons stopped recorded.
+    fn place(
+        scratch: &Scratch,
+        build: &str,
+        held: &[PathBuf],
+        stopped: &RefCell<Vec<PathBuf>>,
+    ) -> PathBuf {
+        versions::place(
+            &scratch.build(build),
+            &scratch.bin(),
+            &|path: &Path| held.iter().any(|h| path.starts_with(h)),
+            &|program: &Path| stopped.borrow_mut().push(program.to_path_buf()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_build_is_placed_in_a_folder_of_its_own_and_made_current() {
+        let scratch = Scratch::new();
+        let stopped = RefCell::new(Vec::new());
+        let placed = place(&scratch, "build-a", &[], &stopped);
+        assert_eq!(placed, scratch.folder("build-a").join(PROGRAM));
+        assert_eq!(std::fs::read(&placed).unwrap(), b"helper build A");
+        assert_eq!(versions::current(&scratch.bin()), Some(placed.clone()));
+        // Placing the same build again changes nothing and stops nothing.
+        assert_eq!(place(&scratch, "build-a", &[], &stopped), placed);
+        assert!(stopped.borrow().is_empty());
+        assert!(!scratch.folder("build-a").join(RETIRED).exists());
+    }
+
+    #[test]
+    fn an_update_goes_beside_a_running_build_which_is_retired_then_pruned() {
+        let scratch = Scratch::new();
+        let stopped = RefCell::new(Vec::new());
+        let old = place(&scratch, "build-a", &[], &stopped);
+        // An agent's MCP server still runs build A: the update can't replace its program.
+        let held = [scratch.folder("build-a")];
+        let new = place(&scratch, "build-b", &held, &stopped);
+        assert_eq!(versions::current(&scratch.bin()), Some(new.clone()));
+        assert_eq!(std::fs::read(&new).unwrap(), b"helper build B");
+        assert!(old.exists(), "a build in use stays");
+        assert!(scratch.folder("build-a").join(RETIRED).exists());
+        assert_eq!(
+            *stopped.borrow(),
+            std::slice::from_ref(&old),
+            "the old build's daemon was stopped"
+        );
+        // The next start, once that server has exited: the retired build goes, and its
+        // daemon isn't stopped twice.
+        place(&scratch, "build-b", &[], &stopped);
+        assert!(!scratch.folder("build-a").exists());
+        assert_eq!(stopped.borrow().len(), 1);
+        assert!(new.exists());
+    }
+
+    /// Windows keeps a running program's file: it can't be deleted, so its folder stays.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_cannot_be_deleted_keeps_its_folder_until_it_can() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new();
+        let stopped = RefCell::new(Vec::new());
+        let old = place(&scratch, "build-a", &[], &stopped);
+        place(&scratch, "build-b", &[scratch.folder("build-a")], &stopped);
+        // Held: a read-only folder refuses the delete, as Windows refuses it for a running image.
+        std::fs::set_permissions(
+            scratch.folder("build-a"),
+            std::fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
+        let new = place(&scratch, "build-b", &[], &stopped);
+        assert!(old.exists() && new.exists());
+        assert_eq!(versions::current(&scratch.bin()), Some(new));
+        std::fs::set_permissions(
+            scratch.folder("build-a"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        place(&scratch, "build-b", &[], &stopped);
+        assert!(!scratch.folder("build-a").exists());
+    }
+
+    #[test]
+    fn the_program_from_before_build_folders_is_stopped_and_removed() {
+        let scratch = Scratch::new();
+        let legacy = scratch.bin().join(PROGRAM);
+        std::fs::write(&legacy, b"helper placed before folders").unwrap();
+        let stopped = RefCell::new(Vec::new());
+        // Still running: stopped, kept.
+        place(&scratch, "build-a", std::slice::from_ref(&legacy), &stopped);
+        assert!(legacy.exists());
+        assert_eq!(*stopped.borrow(), std::slice::from_ref(&legacy));
+        place(&scratch, "build-a", &[], &stopped);
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn current_names_only_a_placed_build() {
+        let scratch = Scratch::new();
+        assert_eq!(versions::current(&scratch.bin()), None);
+        std::fs::write(scratch.bin().join(CURRENT), "../../etc").unwrap();
+        assert_eq!(versions::current(&scratch.bin()), None);
+        std::fs::write(scratch.bin().join(CURRENT), "0123456789abcdef").unwrap();
+        assert_eq!(
+            versions::current(&scratch.bin()),
+            None,
+            "no program in that folder"
+        );
     }
 }
