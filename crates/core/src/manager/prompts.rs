@@ -419,15 +419,15 @@ mod tests {
     /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
     /// Disposable output in $TMPDIR, results inline instead of links to the session's files, and
     /// the feedback and new-session cards took 800 more and a line: 3,300 (the 10-26 artifact
-    /// rule; proposed).
+    /// rule; proposed). Chat-only, user-started Fusion adds 253 bytes and one line (L7, L9).
     #[test]
-    fn the_standing_instructions_stay_under_3300_bytes_and_seventeen_lines() {
+    fn the_standing_instructions_stay_under_3600_bytes_and_eighteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 3_300,
+            STANDING_INSTRUCTIONS.len() < 3_600,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
-        assert!(STANDING_INSTRUCTIONS.lines().count() < 17);
+        assert!(STANDING_INSTRUCTIONS.lines().count() < 18);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
             "$BRIGADIER_SESSION_DIR",
