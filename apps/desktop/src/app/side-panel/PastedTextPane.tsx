@@ -11,7 +11,7 @@ export function PastedTextPane({
   paste,
   onClose,
 }: {
-  n: number;
+  n: number | null;
   paste: AttachmentRef | null;
   onClose: () => void;
 }) {

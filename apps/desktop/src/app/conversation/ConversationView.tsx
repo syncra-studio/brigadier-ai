@@ -1047,7 +1047,7 @@ export function ConversationView({
   const tabbed = standalone && (conversation?.kind === "session" || openTabs.length > 0);
   // A pasted text a chip opened in a Chat or a draft, which have no tabs: over the thread (#427).
   const place = conversationId ?? "draft";
-  const [pastedOver, setPastedOver] = useState<{ place: string; n: number; paste: AttachmentRef | null } | null>(null);
+  const [pastedOver, setPastedOver] = useState<{ place: string; n: number | null; paste: AttachmentRef | null } | null>(null);
   const pasted = !tabbed && pastedOver?.place === place ? pastedOver : null;
   const openPasted = useCallback<OpenPastedText>(
     (n, paste) => {

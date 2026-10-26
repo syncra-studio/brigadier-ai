@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { type ComponentProps, useContext } from "react";
 
 import {
   FileTile,
@@ -8,19 +8,23 @@ import {
   pasteTooLong,
 } from "@/components/conversation/elements/attachment-tile";
 import type { ViewerImage } from "@/components/conversation/elements/image-viewer";
+import { PastedTextOpenerContext } from "@/components/conversation/elements/pasted-text";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
  * The Message attachment element (assistant-ui): a sent message's files show as
- * images as thumbnails that open a preview, other files as cards with their kind and size.
+ * images as thumbnails that open a preview, other files as cards with their kind and size. A
+ * "Pasted text" card opens its text read only, as a chip does (a session's tab, elsewhere over
+ * the thread).
  */
 export function MessageAttachments({
   attachments,
   className,
   ...props
 }: Omit<ComponentProps<"ul">, "children"> & { attachments: readonly AttachmentRef[] }) {
+  const openPasted = useContext(PastedTextOpenerContext);
   attachments = attachments.filter((ref) => ref.inline == null);
   if (attachments.length === 0) return null;
   // The message's images, stepped between in the viewer.
@@ -46,7 +50,22 @@ export function MessageAttachments({
             <FileTile
               name={attachment.name}
               mime={attachment.mime}
-              title={attachment.pasted ? "Pasted text" : undefined}
+              title={
+                attachment.pasted ? (
+                  openPasted ? (
+                    <button
+                      type="button"
+                      aria-label="Open Pasted text"
+                      onClick={() => openPasted(null, attachment)}
+                      className="hover:text-foreground max-w-full truncate text-start"
+                    >
+                      Pasted text
+                    </button>
+                  ) : (
+                    "Pasted text"
+                  )
+                ) : undefined
+              }
               detail={
                 attachment.pasted && pasteTooLong(attachment.bytes) ? (
                   <PasteShortened />

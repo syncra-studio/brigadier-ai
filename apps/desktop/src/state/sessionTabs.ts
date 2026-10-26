@@ -143,8 +143,9 @@ export type PanelTabState = { kind: "panel"; id: string; opener: string | null; 
 /**
  * Text pasted as a chip, `[Pasted text #n]`, read in a tab (#427): the composer's own, which
  * edits (`paste` null: found in the composer by its number), or a sent message's, read only.
+ * A sent "Pasted text" card has no number (`n` null).
  */
-export type PastedTabState = { kind: "pasted"; id: string; opener: string | null; n: number; paste: AttachmentRef | null };
+export type PastedTabState = { kind: "pasted"; id: string; opener: string | null; n: number | null; paste: AttachmentRef | null };
 
 /**
  * Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the
@@ -482,11 +483,12 @@ export function openPageTab(conversationId: string, pageId: string, title: strin
 }
 
 /**
- * Shows pasted text `n` in a tab: the composer's (`paste` null) or a sent message's. The tab
- * already showing it, else a new one after the tab in front. Returns the tab's ID.
+ * Shows pasted text `n` in a tab: the composer's (`paste` null) or a sent message's, `n` null
+ * for a sent "Pasted text" card. The tab already showing it, else a new one after the tab in
+ * front. Returns the tab's ID.
  */
-export function openPastedTab(conversationId: string, n: number, paste: AttachmentRef | null): string {
-  const id = paste ? `pasted:${paste.id}:${n}` : `pasted:composer:${n}`;
+export function openPastedTab(conversationId: string, n: number | null, paste: AttachmentRef | null): string {
+  const id = paste ? (n === null ? `pasted:${paste.id}` : `pasted:${paste.id}:${n}`) : `pasted:composer:${n}`;
   update(conversationId, (current) => {
     if (current.tabs.some((tab) => tab.id === id)) return { ...current, active: id };
     const tab: PastedTabState = { kind: "pasted", id, opener: current.active, n, paste };
