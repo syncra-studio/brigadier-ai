@@ -722,3 +722,69 @@ async fn a_crash_after_the_successor_took_its_handoff_sends_nothing_again() {
     assert_eq!(seam_file(&flow).seams.len(), 1);
     flow.stop().await;
 }
+
+/// A second close joins the predecessor's shutdown: it cannot release the next turn before
+/// the predecessor's exit is pumped, whether the first close was explicit or an idle retirement.
+#[tokio::test]
+async fn overlapping_closes_keep_the_next_turn_behind_the_predecessors_exit() {
+    async fn poll_once(future: std::pin::Pin<&mut impl std::future::Future>) -> bool {
+        let mut future = future;
+        std::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx).is_pending()))
+            .await
+    }
+
+    for retire in [false, true] {
+        let inputs: Inputs = Arc::default();
+        let flow = Flow::start(
+            "seam-close-overlap",
+            options(),
+            thread(inputs.clone(), Arc::default()),
+        )
+        .await;
+        flow.say("First.").await;
+        flow.settled().await;
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.cli().await.unwrap();
+        let native_id = cli.session.native_id();
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        *flow.behavior.hold_close.lock().unwrap() = Some((reached.clone(), release.clone()));
+        let mut first = Box::pin(async {
+            if retire {
+                conv.retire_cli_for(&cli, None).await;
+            } else {
+                conv.close_cli().await;
+            }
+        });
+        assert!(poll_once(first.as_mut()).await);
+        reached.notified().await;
+        let mut second = Box::pin(conv.close_cli());
+        assert!(
+            poll_once(second.as_mut()).await,
+            "overlapping close returned before the predecessor exited (retire={retire})"
+        );
+        // A next-turn driver can already be running while the predecessor is closing.
+        flow.say("Next.").await;
+        flow.manager.next_turn_now(&conv).await;
+        assert!(given(&inputs, "Next.").is_empty());
+        release.notify_one();
+        first.await;
+        // The waiter resumes only after a replacement CLI starts. It joined the old
+        // shutdown, so it must leave this new generation and its running turn alone.
+        flow.manager.next_turn_now(&conv).await;
+        let resumed = conv.cli().await.unwrap();
+        assert!(!Arc::ptr_eq(&cli, &resumed));
+        second.await;
+        assert!(
+            conv.cli()
+                .await
+                .is_some_and(|current| Arc::ptr_eq(&current, &resumed))
+        );
+        assert!(resumed.session.is_running());
+        flow.settled().await;
+        let next = given(&inputs, "Next.");
+        assert_eq!(next.len(), 1, "{next:?}");
+        assert_eq!(next[0].0, native_id);
+        flow.stop().await;
+    }
+}

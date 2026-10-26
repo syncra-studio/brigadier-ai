@@ -638,6 +638,8 @@ pub(crate) struct FakeBehavior {
     /// The next turn's send signals the first once the CLI took its input, and waits for the
     /// second before its turn starts.
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next CLI close signals the first and waits for the second before it exits.
+    pub hold_close: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next login check of an extra account signals the first and waits for the second.
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
@@ -1562,6 +1564,11 @@ impl ProviderSession for FakeSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            let held = self.behavior.hold_close.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             // Its running turn ends with it, as a real CLI's does with its process: a script
             // waiting for its stop sees it.
             if *self.running.lock().unwrap() {
