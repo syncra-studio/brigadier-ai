@@ -3722,6 +3722,11 @@ impl Tool for ClickTool {
                 .as_ref()
                 .map(|element| (element.kind, element.msaa_role))
             {
+                if delivery == DeliveryMode::Background {
+                    return ToolResult::error(
+                        "Background click refused: this MSAA control requires real mouse input, which would move your pointer and raise its window. Use an app menu or keyboard shortcut, or ask the user to click this control. No click was sent."
+                    ).with_structured(json!({"code":"background_unavailable", "effect":"refused", "delivery_attempted":false}));
+                }
                 const ROLE_BUTTONDROPDOWN: i32 = 0x38;
                 const ROLE_BUTTONMENU: i32 = 0x39;
                 const ROLE_BUTTONDROPDOWNGRID: i32 = 0x3A;
@@ -6672,20 +6677,15 @@ async fn chromium_click_short_circuit(
     if !is_chromium {
         return None;
     }
-    // Capture the pre-click foreground so the poller can restore it even if
-    // Chromium re-activates itself from a renderer-side handler (same pattern
-    // and rationale as the ClickTool Chromium branch).
-    let prev_fg_addr =
-        unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize };
+    // Even a detector race must never fall back to the system mouse.
     let button_owned = button.to_string();
     let send_result = tokio::task::spawn_blocking(move || {
-        crate::input::send_click_synthesized(hwnd, sx, sy, count, &button_owned)
+        crate::input::inject_click_screen(hwnd, sx, sy, count, &button_owned)
     })
     .await;
-    tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
     Some(match send_result {
         Ok(Ok(())) => ToolResult::text(format!(
-            "✅ Sent {gesture} via SendInput to pid {pid} at screen ({sx},{sy}) (Chromium target)."
+            "Dispatched (not confirmed) {gesture} to pid {pid} at screen ({sx},{sy}) (Chromium target)."
         )),
         Ok(Err(e)) => ToolResult::error(e.to_string()),
         Err(e) => ToolResult::error(format!("Task error: {e}")),
