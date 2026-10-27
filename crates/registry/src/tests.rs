@@ -1694,7 +1694,7 @@ fn the_watcher_looks_at_each_projects_own_configs_and_skills() {
 }
 
 #[test]
-fn rows_include_codex_runtime_servers_and_bundled_skills_with_provenance() {
+fn rows_include_user_servers_and_marketplace_skills_with_provenance() {
     let home = fixture("row-provenance");
     let roots = roots(&home, &[]);
     write(
@@ -1702,13 +1702,13 @@ fn rows_include_codex_runtime_servers_and_bundled_skills_with_provenance() {
         r#"
 [mcp_servers.node_repl]
 command = "node_repl"
-[plugins."browser@openai-bundled"]
+[plugins."browser@user-market"]
 enabled = true
 "#,
     );
     let plugin = roots
         .codex_home
-        .join("plugins/cache/openai-bundled/browser/1.0.0");
+        .join("plugins/cache/user-market/browser/1.0.0");
     write(
         &plugin.join(".codex-plugin/plugin.json"),
         r#"{"name":"browser","skills":"./skills/"}"#,
@@ -1725,7 +1725,7 @@ enabled = true
     );
     let browser = rows.iter().find(|row| row.name == "browser").unwrap();
     let origin = &browser.definitions[0].provenance;
-    assert_eq!(origin.plugin.as_deref(), Some("browser@openai-bundled"));
+    assert_eq!(origin.plugin.as_deref(), Some("browser@user-market"));
     assert_eq!(origin.native, "browser:browser");
     assert_eq!(origin.fingerprint.len(), 64);
     assert_eq!(origin.file, plugin.join("skills/browser/SKILL.md"));
@@ -1810,4 +1810,74 @@ fn equivalent_remote_definitions_share_a_row_regardless_of_header_order() {
     let rows = Catalog::read_rows(&roots, &[]);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].definitions.len(), 2);
+}
+
+#[test]
+fn rows_exclude_all_openai_marketplaces_and_system_skills() {
+    let home = fixture("provider-rows");
+    let codex = home.join("custom-codex-home");
+    let roots = roots(&home, &[("CODEX_HOME", codex.to_str().unwrap())]);
+    let project = home.join("project");
+    let mut config = String::new();
+    for (index, market) in [
+        "openai-curated-remote",
+        "openai-bundled",
+        "openai-primary-runtime",
+        "user-market",
+    ]
+    .iter()
+    .enumerate()
+    {
+        for enabled in [true, false] {
+            let name = format!("plugin-{index}-{enabled}");
+            let plugin = codex.join(format!("plugins/cache/{market}/{name}/1.0.0"));
+            write(
+                &plugin.join(".codex-plugin/plugin.json"),
+                &format!(r#"{{"name":"{name}"}}"#),
+            );
+            skill(&plugin.join("skills").join(&name), &name, &name);
+            write(
+                &plugin.join(".mcp.json"),
+                &format!(r#"{{"mcpServers":{{"{name}":{{"command":"{name}"}}}}}}"#),
+            );
+            config.push_str(&format!(
+                "[plugins.\"{name}@{market}\"]\nenabled = {enabled}\n"
+            ));
+        }
+    }
+    write(&codex.join("config.toml"), &config);
+    // The row builder also reads project-only switches regardless of trust.
+    write(&project.join(".codex/config.toml"), &config);
+    skill(
+        &codex.join("skills/.system/builtin"),
+        "builtin",
+        "Codex's own",
+    );
+    let data = home.join("data");
+    for rows in [
+        Catalog::read_rows(&roots, std::slice::from_ref(&project)),
+        Catalog::read_rows_with_library(&roots, &[project], &data),
+    ] {
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert!(rows.iter().all(|row| row.name.starts_with("plugin-3-")));
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.definitions)
+                .all(|definition| definition
+                    .provenance
+                    .plugin
+                    .as_deref()
+                    .is_some_and(|id| id.ends_with("@user-market")))
+        );
+    }
+    // Native discovery is still available to callers; only Brigadier rows omit it.
+    let native = Catalog::read(&roots, None);
+    assert_eq!(
+        native
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.provider_supplied())
+            .count(),
+        3
+    );
 }

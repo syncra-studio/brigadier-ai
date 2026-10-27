@@ -70,6 +70,7 @@ fn checkout(cwd: &Path) -> &Path {
 
 fn relevant(definition: &Definition, ctx: &Context<'_>) -> bool {
     definition.provenance.agent.is_some()
+        && !definition.provenance.provider_supplied()
         && (definition.provenance.project.is_none() || ctx.trusted)
 }
 

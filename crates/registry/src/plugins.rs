@@ -46,12 +46,9 @@ pub struct Plugin {
 
 impl Plugin {
     /// Supplied by Codex itself, rather than installed from a user-chosen marketplace.
-    /// This is provenance for display; it does not change whether an agent loads it.
+    /// Brigadier leaves these out of its catalog and lets Codex load them itself.
     pub fn provider_supplied(&self) -> bool {
-        self.agent == Agent::Codex
-            && self.id.rsplit_once('@').is_some_and(|(_, marketplace)| {
-                matches!(marketplace, "openai-bundled" | "openai-primary-runtime")
-            })
+        provider_supplied(self.agent, &self.id)
     }
 
     /// Whether a session loading `project`'s setup loads it.
@@ -181,6 +178,16 @@ impl Plugin {
             }
         }
     }
+}
+
+pub(crate) fn provider_supplied(agent: Agent, id: &str) -> bool {
+    agent == Agent::Codex
+        && id.rsplit_once('@').is_some_and(|(_, marketplace)| {
+            matches!(
+                marketplace,
+                "openai-curated-remote" | "openai-bundled" | "openai-primary-runtime"
+            )
+        })
 }
 
 /// A file's servers: its `mcpServers`, or the file itself when it has none; `None` when it

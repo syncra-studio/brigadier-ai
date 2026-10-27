@@ -42,6 +42,15 @@ pub struct Provenance {
     pub fingerprint: String,
 }
 
+impl Provenance {
+    /// Provider plugins remain under their CLI's control, including old saved choices.
+    pub fn provider_supplied(&self) -> bool {
+        self.agent
+            .zip(self.plugin.as_deref())
+            .is_some_and(|(agent, id)| crate::plugins::provider_supplied(agent, id))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Content {
     Server(Box<Server>),
@@ -280,6 +289,13 @@ impl Catalog {
         };
         for catalog in catalogs {
             for server in catalog.servers.iter().chain(&catalog.off.servers) {
+                if server
+                    .plugin
+                    .as_ref()
+                    .is_some_and(|plugin| plugin.provider_supplied())
+                {
+                    continue;
+                }
                 let provenance = server.provenance();
                 let endpoint = Some(match &server.transport {
                     Transport::Http { url, .. } => url.clone(),
@@ -297,6 +313,9 @@ impl Catalog {
             }
             for skill in catalog.skills.iter().chain(&catalog.off.skills) {
                 for (root, path) in &skill.entries {
+                    if matches!(root, SkillRoot::Plugin(plugin) if plugin.provider_supplied()) {
+                        continue;
+                    }
                     let (agent, project, plugin, native) = match root {
                         SkillRoot::ClaudeUser => (Agent::Claude, None, None, skill.name.clone()),
                         SkillRoot::ClaudeSynced(_) => (

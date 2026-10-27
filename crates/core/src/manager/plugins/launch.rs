@@ -111,33 +111,41 @@ impl SessionManager {
                 .find(|path| path.join(".git").exists())
                 .unwrap_or(&cwd);
             let native = Catalog::read(&effective, trusted.then_some(checkout));
-            for server in native.servers.iter().filter(|server| {
-                server
-                    .plugin
-                    .as_ref()
-                    .is_some_and(|plugin| plugin.agent == agent)
-            }) {
-                let plugin = server.plugin.as_ref().expect("filtered plugin");
-                match agent {
-                    brigadier_registry::Agent::Claude => {
-                        for alias in server.provenance().aliases {
-                            if !resolved.off.servers.contains(&alias) {
-                                resolved.off.servers.push(alias);
-                            }
-                        }
-                    }
-                    brigadier_registry::Agent::Codex => {
-                        let entry = (plugin.id.clone(), server.name.clone());
-                        if !resolved.off.plugin_servers.contains(&entry) {
-                            resolved.off.plugin_servers.push(entry);
-                        }
-                    }
-                }
-            }
+            suppress_native_plugin_servers(&mut resolved, &native, agent);
             resolved.warnings = warnings;
             Ok(resolved)
         })
         .await
+    }
+}
+
+fn suppress_native_plugin_servers(
+    resolved: &mut Resolved,
+    native: &Catalog,
+    agent: brigadier_registry::Agent,
+) {
+    for server in native.servers.iter().filter(|server| {
+        server
+            .plugin
+            .as_ref()
+            .is_some_and(|plugin| plugin.agent == agent && !plugin.provider_supplied())
+    }) {
+        let plugin = server.plugin.as_ref().expect("filtered plugin");
+        match agent {
+            brigadier_registry::Agent::Claude => {
+                for alias in server.provenance().aliases {
+                    if !resolved.off.servers.contains(&alias) {
+                        resolved.off.servers.push(alias);
+                    }
+                }
+            }
+            brigadier_registry::Agent::Codex => {
+                let entry = (plugin.id.clone(), server.name.clone());
+                if !resolved.off.plugin_servers.contains(&entry) {
+                    resolved.off.plugin_servers.push(entry);
+                }
+            }
+        }
     }
 }
 
@@ -328,6 +336,118 @@ mod overlay_tests {
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+    #[test]
+    fn provider_plugins_are_neither_injected_nor_suppressed_even_with_saved_choices() {
+        use super::super::choices::{Choice, Global, Scope};
+        let dir = std::env::temp_dir().join(format!("launch-provider-{}", uuid::Uuid::new_v4()));
+        let roots = Roots::from_vars([
+            ("HOME".into(), dir.join("home").display().to_string()),
+            ("CODEX_HOME".into(), dir.join("codex").display().to_string()),
+        ])
+        .unwrap();
+        let mut config = String::new();
+        let mut stale = Vec::new();
+        for (index, market) in [
+            "openai-curated-remote",
+            "openai-bundled",
+            "openai-primary-runtime",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let name = format!("provider-{index}");
+            let id = format!("{name}@{market}");
+            let plugin = roots
+                .codex_home
+                .join(format!("plugins/cache/{market}/{name}/1.0.0"));
+            write(
+                &plugin.join(".codex-plugin/plugin.json"),
+                &format!(r#"{{"name":"{name}"}}"#),
+            );
+            write(
+                &plugin.join("skills").join(&name).join("SKILL.md"),
+                &format!("---\nname: {name}\n---\nProvider"),
+            );
+            write(
+                &plugin.join(".mcp.json"),
+                &format!(r#"{{"mcpServers":{{"{name}":{{"command":"{name}"}}}}}}"#),
+            );
+            config.push_str(&format!("[plugins.\"{id}\"]\nenabled = true\n"));
+        }
+        write(&roots.codex_home.join("config.toml"), &config);
+        write(
+            &roots.codex_home.join("skills/.system/builtin/SKILL.md"),
+            "Built in",
+        );
+        let native = Catalog::read(&roots, None);
+        assert_eq!(native.plugins.len(), 3);
+        assert!(Catalog::read_rows(&roots, &[]).is_empty());
+        // Recreate rows from an older catalog so stale on/off choices are exercised too.
+        let mut old = native.clone();
+        for server in &mut old.servers {
+            server.plugin.as_mut().unwrap().id = "old@user-market".into();
+        }
+        for skill in &mut old.skills {
+            for (root, _) in &mut skill.entries {
+                if let brigadier_registry::SkillRoot::Plugin(plugin) = root {
+                    plugin.id = "old@user-market".into();
+                }
+            }
+        }
+        stale.extend(Catalog::rows(&[old]));
+        for row in &mut stale {
+            for definition in &mut row.definitions {
+                definition.provenance.plugin = Some("old@openai-curated-remote".into());
+            }
+        }
+        assert_eq!(stale.len(), 6);
+        for on in [false, true] {
+            let choices = Choices(
+                stale
+                    .iter()
+                    .map(|row| {
+                        (
+                            row.id.clone(),
+                            Choice {
+                                on,
+                                scope: Scope::Global(Global::Global),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+            for (agent, provider) in [
+                (Agent::Codex, ProviderKind::Codex),
+                (Agent::Claude, ProviderKind::Claude),
+            ] {
+                let mut resolved = resolve::resolve(Context {
+                    agent,
+                    account_home: &roots,
+                    project_root: None,
+                    cwd: &dir,
+                    trusted: false,
+                    role: Role::Thread,
+                    rows: &stale,
+                    choices: &choices,
+                    gateway: None,
+                });
+                suppress_native_plugin_servers(&mut resolved, &native, agent);
+                let mut spec = test_spec(&dir);
+                apply_resolved(
+                    &mut spec,
+                    &resolved,
+                    &dir.join(format!("{provider:?}-{on}")),
+                    provider,
+                )
+                .unwrap();
+                assert!(spec.mcp_servers.is_empty());
+                assert!(spec.skill_plugins.is_empty());
+                assert!(spec.add_dirs.is_empty());
+                assert_eq!(spec.switched_off, Default::default());
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn broken_skills_do_not_block_either_agent_or_healthy_skills() {
