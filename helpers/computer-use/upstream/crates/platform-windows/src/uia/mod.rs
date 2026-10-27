@@ -1018,7 +1018,7 @@ pub(crate) fn format_node_line(node: &UiaNode) -> String {
             s.push_str(&format!(" = \"{}\"", v));
         }
     }
-    s
+    cua_driver_core::window_state_view::into_single_line_row(s)
 }
 
 fn render_lines(lines: &[(usize, String)]) -> String {
@@ -1034,43 +1034,44 @@ fn render_lines(lines: &[(usize, String)]) -> String {
 }
 
 fn filter_tree(markdown: &str, query: &str) -> String {
-    let needle = query.to_lowercase();
-    let lines: Vec<&str> = markdown.lines().collect();
-    let mut ancestors: Vec<&str> = Vec::new();
-    let mut last_emitted: Vec<Option<&str>> = Vec::new();
-    let mut output: Vec<&str> = Vec::new();
+    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
+}
 
-    for line in &lines {
-        let depth = line.chars().take_while(|c| *c == ' ').count() / 2;
-        while ancestors.len() <= depth {
-            ancestors.push("");
-            last_emitted.push(None);
-        }
-        for d in (depth + 1)..ancestors.len() {
-            last_emitted[d] = None;
-        }
-        ancestors[depth] = line;
+#[cfg(test)]
+mod multiline_query_tests {
+    use super::*;
 
-        if line.to_lowercase().contains(&needle) {
-            for d in 0..depth {
-                if ancestors[d].is_empty() {
-                    continue;
-                }
-                if last_emitted[d] == Some(ancestors[d]) {
-                    continue;
-                }
-                last_emitted[d] = Some(ancestors[d]);
-                output.push(ancestors[d]);
-            }
-            last_emitted[depth] = Some(line);
-            output.push(line);
+    #[test]
+    fn native_names_and_values_remain_intact_while_markdown_is_one_row() {
+        let mut node = UiaNode {
+            element_index: Some(7),
+            control_type: "Button".into(),
+            name: Some("First\nSecond".into()),
+            value: Some("value\r\nnext".into()),
+            automation_id: Some("id\nnext".into()),
+            help_text: Some("help\nnext".into()),
+            actions: vec!["invoke".into()],
+            enabled: None,
+            selected: None,
+            element_ptr: 0,
+            center_x: 0,
+            center_y: 0,
+            rect: None,
+            msaa_role: None,
+            depth: 1,
+            parent_element_index: Some(0),
+            in_web_content: false,
+        };
+        for index in [Some(7), None] {
+            node.element_index = index;
+            let line = format_node_line(&node);
+            assert_eq!(line.lines().count(), 1);
+            assert!(line.contains("First Second"));
+            assert!(line.contains("value next"));
+            let md = render_lines(&[(0, "- [0] Window".into()), (1, line)]);
+            assert_eq!(filter_tree(&md, "second").lines().count(), 2);
         }
+        assert_eq!(node.name.as_deref(), Some("First\nSecond"));
+        assert_eq!(node.value.as_deref(), Some("value\r\nnext"));
     }
-
-    if output.is_empty() {
-        return String::new();
-    }
-    let mut r = output.join("\n");
-    r.push('\n');
-    r
 }

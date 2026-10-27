@@ -688,7 +688,7 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
     };
     md.push_str(&format!(
         "- [0] window \"{}\" [actions=[activate]]\n",
-        title
+        cua_driver_core::window_state_view::single_line_row(&title)
     ));
     nodes.push(root_node);
 
@@ -763,41 +763,7 @@ fn get_x11_wm_class(conn: &x11rb::rust_connection::RustConnection, window: u32) 
 }
 
 fn filter_tree(markdown: &str, query: &str) -> String {
-    let needle = query.to_lowercase();
-    let lines: Vec<&str> = markdown.lines().collect();
-    let mut ancestors: Vec<&str> = Vec::new();
-    let mut last_emitted: Vec<Option<&str>> = Vec::new();
-    let mut output: Vec<&str> = Vec::new();
-
-    for line in &lines {
-        let depth = line.chars().take_while(|c| *c == ' ').count() / 2;
-        while ancestors.len() <= depth {
-            ancestors.push("");
-            last_emitted.push(None);
-        }
-        last_emitted[depth + 1..ancestors.len()].fill(None);
-        ancestors[depth] = line;
-        if line.to_lowercase().contains(&needle) {
-            for d in 0..depth {
-                if ancestors[d].is_empty() {
-                    continue;
-                }
-                if last_emitted[d] == Some(ancestors[d]) {
-                    continue;
-                }
-                last_emitted[d] = Some(ancestors[d]);
-                output.push(ancestors[d]);
-            }
-            last_emitted[depth] = Some(line);
-            output.push(line);
-        }
-    }
-    if output.is_empty() {
-        return String::new();
-    }
-    let mut r = output.join("\n");
-    r.push('\n');
-    r
+    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
 }
 
 #[cfg(test)]

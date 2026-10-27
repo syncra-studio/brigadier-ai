@@ -2141,12 +2141,13 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
                 .as_ref()
                 .map(|note| format!(" ({note})"))
                 .unwrap_or_default();
-            md.push_str(&format!(
-                "{indent}- [{idx}] {role} \"{name}\"{desc}{val_part} [actions=[{act_str}]]{collapsed_note}{unlabelled_shown}
-",
+            let row = format!(
+                "{indent}- [{idx}] {role} \"{name}\"{desc}{val_part} [actions=[{act_str}]]{collapsed_note}{unlabelled_shown}",
                 role = v.role,
                 desc = description_shown.as_deref().unwrap_or(""),
-            ));
+            );
+            md.push_str(cua_driver_core::window_state_view::single_line_row(&row).as_ref());
+            md.push('\n');
             let mut description_parts: Vec<String> = Vec::new();
             if !v.description.is_empty() {
                 description_parts.push(v.description.clone());
@@ -2185,13 +2186,14 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
             });
             idx += 1;
         } else if emit && !v.name.is_empty() && v.showing {
-            md.push_str(&format!(
-                "{indent}- {role} = \"{name}\"{marker}
-",
+            let row = format!(
+                "{indent}- {role} = \"{name}\"{marker}",
                 role = v.role,
                 name = v.name,
                 marker = passive_marker(&v.role, !v.actions.is_empty(), v.has_component, v.enabled),
-            ));
+            );
+            md.push_str(cua_driver_core::window_state_view::single_line_row(&row).as_ref());
+            md.push('\n');
         }
     }
 

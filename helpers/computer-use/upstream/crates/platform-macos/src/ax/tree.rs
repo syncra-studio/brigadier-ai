@@ -775,7 +775,7 @@ fn format_node_line(node: &AXNode) -> String {
         }
     }
 
-    parts
+    cua_driver_core::window_state_view::into_single_line_row(parts)
 }
 
 thread_local! {
@@ -863,60 +863,7 @@ fn render_lines(lines: &[(usize, String)]) -> String {
 
 /// Filter the tree markdown to lines matching `query` plus their ancestor chain.
 fn filter_tree(markdown: &str, query: &str) -> String {
-    let needle = query.to_lowercase();
-    let lines: Vec<&str> = markdown.lines().collect();
-
-    let mut current_ancestor: Vec<&str> = Vec::new();
-    let mut last_emitted_at: Vec<Option<&str>> = Vec::new();
-    let mut output: Vec<&str> = Vec::new();
-
-    for line in &lines {
-        let depth = leading_indent_depth(line);
-
-        while current_ancestor.len() <= depth {
-            current_ancestor.push("");
-            last_emitted_at.push(None);
-        }
-        for emitted_at in last_emitted_at.iter_mut().skip(depth + 1) {
-            *emitted_at = None;
-        }
-        current_ancestor[depth] = line;
-
-        if line.to_lowercase().contains(&needle) {
-            for ancestor_depth in 0..depth {
-                let ancestor = current_ancestor[ancestor_depth];
-                if ancestor.is_empty() {
-                    continue;
-                }
-                if last_emitted_at[ancestor_depth] == Some(ancestor) {
-                    continue;
-                }
-                last_emitted_at[ancestor_depth] = Some(ancestor);
-                output.push(ancestor);
-            }
-            last_emitted_at[depth] = Some(line);
-            output.push(line);
-        }
-    }
-
-    if output.is_empty() {
-        return String::new();
-    }
-    let mut result = output.join("\n");
-    result.push('\n');
-    result
-}
-
-fn leading_indent_depth(line: &str) -> usize {
-    let mut count = 0;
-    for ch in line.chars() {
-        if ch == ' ' {
-            count += 1;
-        } else {
-            break;
-        }
-    }
-    count / 2
+    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
 }
 
 #[cfg(test)]
@@ -1031,5 +978,46 @@ mod lean_row_tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(echo_text_of("- AXStaticText = \"x\""), Some("x"));
         assert_eq!(echo_text_of("- [2] AXStaticText = \"\""), None);
+    }
+}
+
+#[cfg(test)]
+mod multiline_query_tests {
+    use super::*;
+
+    #[test]
+    fn native_names_and_values_remain_intact_while_markdown_is_one_row() {
+        let mut node = AXNode {
+            element_index: Some(7),
+            role: "AXButton".into(),
+            title: Some("First\nSecond".into()),
+            value: Some("value\r\nnext".into()),
+            description: Some("desc\nnext".into()),
+            identifier: Some("id\nnext".into()),
+            help: Some("help\nnext".into()),
+            actions: vec!["AXPress".into()],
+            element_ptr: 0,
+            depth: 1,
+            parent_element_index: Some(0),
+            frame: None,
+            value_state: None,
+            value_description: None,
+            min_value: None,
+            max_value: None,
+            enabled: None,
+            selected: None,
+            in_web_content: false,
+        };
+        for index in [Some(7), None] {
+            node.element_index = index;
+            let line = format_node_line(&node);
+            assert_eq!(line.lines().count(), 1);
+            assert!(line.contains("First Second"));
+            assert!(line.contains("value next"));
+            let md = render_lines(&[(0, "- [0] AXWindow".into()), (1, line)]);
+            assert_eq!(filter_tree(&md, "second").lines().count(), 2);
+        }
+        assert_eq!(node.title.as_deref(), Some("First\nSecond"));
+        assert_eq!(node.value.as_deref(), Some("value\r\nnext"));
     }
 }

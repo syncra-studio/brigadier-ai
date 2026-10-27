@@ -1599,3 +1599,147 @@ mod windows_integrity_tests {
         assert!(!restricted.contains("administrator"));
     }
 }
+
+/// A tree node must occupy one Markdown line, even when a provider publishes
+/// multiline names, values or help. Keep the native node/cache unchanged.
+/// Ordinary rows borrow their text; only rows containing separators allocate.
+pub fn single_line_row(text: &str) -> std::borrow::Cow<'_, str> {
+    let separator = |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}');
+    if !text.chars().any(separator) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut flat = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+        }
+        flat.push(if separator(ch) { ' ' } else { ch });
+    }
+    std::borrow::Cow::Owned(flat)
+}
+
+/// Consume an already-built row without copying its allocation when it is
+/// single-line, the common case for native formatters.
+pub fn into_single_line_row(row: String) -> String {
+    match single_line_row(&row) {
+        std::borrow::Cow::Borrowed(_) => row,
+        std::borrow::Cow::Owned(flat) => flat,
+    }
+}
+
+/// Project one-line Markdown rows to query matches and their actual ancestors.
+/// Parent row positions, rather than labels or stale depth slots, keep sibling
+/// branches distinct and let omitted layout containers leave depth gaps safely.
+pub fn filter_tree_markdown(markdown: &str, query: &str) -> String {
+    let needle = single_line_row(query).to_lowercase();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut ancestors: Vec<(usize, usize)> = Vec::new();
+    let mut parents = Vec::with_capacity(lines.len());
+    let mut keep = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        while ancestors.last().is_some_and(|(depth, _)| *depth >= indent) {
+            ancestors.pop();
+        }
+        parents.push(ancestors.last().map(|(_, index)| *index));
+        keep.push(line.to_lowercase().contains(&needle));
+        ancestors.push((indent, index));
+    }
+    // Descendants occur after their parents. Marking in reverse propagates
+    // every match up its own branch, and each kept row is emitted only once.
+    for index in (0..lines.len()).rev() {
+        if keep[index] {
+            if let Some(parent) = parents[index] {
+                keep[parent] = true;
+            }
+        }
+    }
+    let mut result = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if keep[index] {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod query_row_tests {
+    use super::{filter_tree_markdown, into_single_line_row, single_line_row};
+    use serde_json::json;
+
+    #[test]
+    fn row_separators_are_flattened_and_ordinary_rows_do_not_allocate() {
+        assert!(matches!(
+            single_line_row("plain row"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            single_line_row("a\r\nb\nc\rd\te\u{0085}f\u{2028}g\u{2029}h"),
+            "a b c d e f g h"
+        );
+        assert_eq!(
+            single_line_row("literal \\n and  spaces"),
+            "literal \\n and  spaces"
+        );
+    }
+
+    #[test]
+    fn native_formatters_keep_the_ordinary_rows_allocation() {
+        let row = String::from("- [0] Button");
+        let allocation = row.as_ptr();
+        assert_eq!(into_single_line_row(row).as_ptr(), allocation);
+    }
+
+    #[test]
+    fn multiline_names_stay_in_their_original_rows_and_element_projection() {
+        for role in ["AXButton", "Button", "push button"] {
+            let row = single_line_row(&format!(
+                "- [2] {role} \"First\n- [999] Second\" [actions=[press]]"
+            ))
+            .into_owned();
+            let markdown = format!(
+                "- [0] Window\n  - [1] Group\n    {row}\n    - [3] {role} \"Second match\"\n"
+            );
+            let result = filter_tree_markdown(&markdown, "second");
+            assert_eq!(result.lines().count(), 4);
+            assert_eq!(result.matches("- [0]").count(), 1);
+            assert_eq!(result.matches("- [1]").count(), 1);
+            let elements = [0, 1, 2, 3, 999]
+                .into_iter()
+                .map(|i| json!({"element_index": i}))
+                .collect();
+            let projected =
+                crate::element_query::project_elements_for_query(elements, Some("second"), &result);
+            assert_eq!(
+                projected
+                    .iter()
+                    .map(|e| e["element_index"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                [0, 1, 2, 3]
+            );
+        }
+    }
+
+    #[test]
+    fn a_depth_gap_does_not_reuse_an_earlier_siblings_ancestors() {
+        let markdown = "- [0] Root\n  - [1] Old branch\n    - [2] Old parent\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n";
+        assert_eq!(
+            filter_tree_markdown(markdown, "needle"),
+            "- [0] Root\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n"
+        );
+        assert_eq!(filter_tree_markdown(markdown, "absent"), "");
+    }
+
+    #[test]
+    fn identical_parent_labels_in_different_branches_keep_both_ancestors() {
+        let markdown = "- [0] Root\n  - Group\n    - [1] Needle\n  - Group\n    - [2] Needle\n";
+        assert_eq!(filter_tree_markdown(markdown, "needle"), markdown);
+        assert_eq!(
+            filter_tree_markdown("- [0] Root\n  - Text \"First Second\"\n", "First\r\nSecond"),
+            "- [0] Root\n  - Text \"First Second\"\n"
+        );
+    }
+}
