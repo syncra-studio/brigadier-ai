@@ -186,7 +186,7 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
 
 /// Cancellation is checked after provider lookups and immediately before each
 /// mutation: a late provider return must not send input after the caller timed out.
-pub(super) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()> {
+pub(crate) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()> {
     if cancelled.load(Ordering::Acquire) {
         Err(windows::core::Error::from_hresult(windows::core::HRESULT(
             0x80004004_u32 as i32,
@@ -196,11 +196,11 @@ pub(super) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()>
     }
 }
 
-pub(super) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &'static str {
+pub(crate) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &'static str {
     use super::windows_enum::UiaDeadlineError;
     match error {
         UiaDeadlineError::Timeout => {
-            "the app's accessibility provider did not respond within 4 seconds"
+            "the app's accessibility provider did not respond before the deadline"
         }
         UiaDeadlineError::Busy => "an earlier accessibility provider call is still running",
         UiaDeadlineError::Unavailable => {
@@ -227,6 +227,11 @@ fn try_click(
     expand_only: bool,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<Option<ToolResult>> {
+    if crate::input::delivery::is_wpf_target_window(hwnd) {
+        // WPF peers may call Focus during semantic activation. Preserve the
+        // existing background coordinate route instead of entering that handler.
+        return Ok(None);
+    }
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
     let order = pattern_order(titlebar_close(&element), expand_only);

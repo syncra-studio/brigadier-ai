@@ -1,0 +1,126 @@
+Why: Bound click effect readback, suppress menu cleanup after cancellation, keep WPF peers off the new semantic activation paths, and preserve launch failure reasons through prose projection.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index b8c27b2bf..e98dda6b4 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4032,8 +4032,12 @@ impl Tool for ClickTool {
+             let sent = tokio::task::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
++                    crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++                        "click effect readback", std::time::Duration::from_secs(4), "no second input",
++                        move |cancelled| {
+                     let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
+                     let readback = crate::uia::click::Readback::new(hwnd, ptr);
++                    crate::uia::click::ensure_active(&cancelled)?;
+                     if inject {
+                         crate::input::inject_click_screen(hwnd, x, y, count, &btn)?;
+                     } else {
+@@ -4053,6 +4057,8 @@ impl Tool for ClickTool {
+                         },
+                         transport,
+                     ))
++                        },
++                    ).map_err(|error| anyhow::anyhow!("Click effect is not confirmed because {}; no second click was sent. Read fresh state before retrying.", crate::uia::click::deadline_reason(error)))?
+                 }
+             })
+             .await;
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+index 27ae36df2..52cc7d3b0 100644
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -140,16 +140,16 @@ impl LaunchForegroundGuard {
+         let state = self.0.lock().unwrap();
+         if state.failed {
+             (
+-                "Windows activated the app; handing the foreground back could not be confirmed.",
++                "Windows activated the app; handing focus back to your previous window could not be confirmed.",
+                 true,
+             )
+         } else if state.restored {
+             (
+-                "Windows activated the app; the previous foreground window was restored.",
++                "Windows activated the app; focus was restored to your previous window.",
+                 false,
+             )
+         } else {
+-            ("No launch activation was observed; foreground hand-back remains guarded for late windows.", false)
++            ("No launch activation was observed; focus hand-back remains guarded for late windows.", false)
+         }
+     }
+ }
+diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
+index e1c2d5a33..23de49e4d 100644
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -186,7 +186,7 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
+ 
+ /// Cancellation is checked after provider lookups and immediately before each
+ /// mutation: a late provider return must not send input after the caller timed out.
+-pub(super) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()> {
++pub(crate) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()> {
+     if cancelled.load(Ordering::Acquire) {
+         Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+             0x80004004_u32 as i32,
+@@ -196,11 +196,11 @@ pub(super) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()>
+     }
+ }
+ 
+-pub(super) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &'static str {
++pub(crate) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &'static str {
+     use super::windows_enum::UiaDeadlineError;
+     match error {
+         UiaDeadlineError::Timeout => {
+-            "the app's accessibility provider did not respond within 4 seconds"
++            "the app's accessibility provider did not respond before the deadline"
+         }
+         UiaDeadlineError::Busy => "an earlier accessibility provider call is still running",
+         UiaDeadlineError::Unavailable => {
+@@ -227,6 +227,11 @@ fn try_click(
+     expand_only: bool,
+     cancelled: &AtomicBool,
+ ) -> anyhow::Result<Option<ToolResult>> {
++    if crate::input::delivery::is_wpf_target_window(hwnd) {
++        // WPF peers may call Focus during semantic activation. Preserve the
++        // existing background coordinate route instead of entering that handler.
++        return Ok(None);
++    }
+     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
+     let readback = Readback::new(hwnd, Some(ptr));
+     let order = pattern_order(titlebar_close(&element), expand_only);
+diff --git a/crates/platform-windows/src/uia/menu.rs b/crates/platform-windows/src/uia/menu.rs
+index 979a8539f..b80cc3ddf 100644
+--- a/crates/platform-windows/src/uia/menu.rs
++++ b/crates/platform-windows/src/uia/menu.rs
+@@ -137,6 +137,9 @@ fn find(
+ }
+ 
+ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
++    if crate::input::delivery::is_wpf_target_window(hwnd) {
++        return Err("Menu invocation refused: this app's WPF automation handlers may activate its window. Use a background keyboard shortcut or ask the user to choose the menu item.".into());
++    }
+     let path = path.to_vec();
+     super::windows_enum::run_uia_with_deadline_cancelable(
+         "menu-path", std::time::Duration::from_secs(4), "no fallback input",
+@@ -251,6 +254,7 @@ fn invoke_inner(
+         let mut cleanup_failed = false;
+         for pattern in opened.iter().rev() {
+             let collapsed = super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
++                super::click::ensure_active(cancelled)?;
+                 pattern.Collapse()
+             });
+             cleanup_failed |= collapsed.is_err()
+diff --git a/crates/platform-windows/src/uia/windows_enum.rs b/crates/platform-windows/src/uia/windows_enum.rs
+index 840dd0d4c..2f671ebab 100644
+--- a/crates/platform-windows/src/uia/windows_enum.rs
++++ b/crates/platform-windows/src/uia/windows_enum.rs
+@@ -63,7 +63,7 @@ const SUBTREE_OP_TIMEOUT: Duration = Duration::from_secs(4);
+ const HEALTH_PROBE_TIMEOUT: Duration = SUBTREE_OP_TIMEOUT;
+ 
+ #[derive(Debug)]
+-pub(super) enum UiaDeadlineError {
++pub(crate) enum UiaDeadlineError {
+     Timeout,
+     Busy,
+     Unavailable,

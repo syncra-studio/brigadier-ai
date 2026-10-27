@@ -137,6 +137,9 @@ fn find(
 }
 
 pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
+    if crate::input::delivery::is_wpf_target_window(hwnd) {
+        return Err("Menu invocation refused: this app's WPF automation handlers may activate its window. Use a background keyboard shortcut or ask the user to choose the menu item.".into());
+    }
     let path = path.to_vec();
     super::windows_enum::run_uia_with_deadline_cancelable(
         "menu-path", std::time::Duration::from_secs(4), "no fallback input",
@@ -251,6 +254,7 @@ fn invoke_inner(
         let mut cleanup_failed = false;
         for pattern in opened.iter().rev() {
             let collapsed = super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
+                super::click::ensure_active(cancelled)?;
                 pattern.Collapse()
             });
             cleanup_failed |= collapsed.is_err()

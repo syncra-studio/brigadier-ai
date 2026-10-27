@@ -4032,8 +4032,12 @@ impl Tool for ClickTool {
             let sent = tokio::task::spawn_blocking({
                 let admitted = admitted.clone();
                 move || {
+                    crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                        "click effect readback", std::time::Duration::from_secs(4), "no second input",
+                        move |cancelled| {
                     let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
                     let readback = crate::uia::click::Readback::new(hwnd, ptr);
+                    crate::uia::click::ensure_active(&cancelled)?;
                     if inject {
                         crate::input::inject_click_screen(hwnd, x, y, count, &btn)?;
                     } else {
@@ -4053,6 +4057,8 @@ impl Tool for ClickTool {
                         },
                         transport,
                     ))
+                        },
+                    ).map_err(|error| anyhow::anyhow!("Click effect is not confirmed because {}; no second click was sent. Read fresh state before retrying.", crate::uia::click::deadline_reason(error)))?
                 }
             })
             .await;

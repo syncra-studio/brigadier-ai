@@ -83,6 +83,7 @@ Patches applied, in order:
 - `patches/0052-remote-open-save-panel.diff`: resolve unlisted Open/Save AX windows through client descendants and the AppKit panel service by exact CGWindowID on every Space; route panel key equivalents to their AX server without Chromium authentication and exclude client app menus.
 - `patches/0053-preserve-off-space-window-commands.diff`: limit the off-Space Window menu refusal to selecting a named application window; preserve background window commands such as Zoom and tab navigation.
 - `patches/0070-windows-browser-read-deadlines.diff`: bound browser verification and targeted page reads, share the UIA single-flight gate, and balance COM apartments.
+- `patches/0071-windows-input-timeout-and-focus.diff`: bound click readback, suppress late menu cleanup, preserve safe WPF routing and launch activation warnings.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

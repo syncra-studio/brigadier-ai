@@ -63,7 +63,7 @@ const SUBTREE_OP_TIMEOUT: Duration = Duration::from_secs(4);
 const HEALTH_PROBE_TIMEOUT: Duration = SUBTREE_OP_TIMEOUT;
 
 #[derive(Debug)]
-pub(super) enum UiaDeadlineError {
+pub(crate) enum UiaDeadlineError {
     Timeout,
     Busy,
     Unavailable,

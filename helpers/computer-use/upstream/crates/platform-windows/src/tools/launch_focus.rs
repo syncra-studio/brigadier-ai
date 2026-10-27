@@ -140,16 +140,16 @@ impl LaunchForegroundGuard {
         let state = self.0.lock().unwrap();
         if state.failed {
             (
-                "Windows activated the app; handing the foreground back could not be confirmed.",
+                "Windows activated the app; handing focus back to your previous window could not be confirmed.",
                 true,
             )
         } else if state.restored {
             (
-                "Windows activated the app; the previous foreground window was restored.",
+                "Windows activated the app; focus was restored to your previous window.",
                 false,
             )
         } else {
-            ("No launch activation was observed; foreground hand-back remains guarded for late windows.", false)
+            ("No launch activation was observed; focus hand-back remains guarded for late windows.", false)
         }
     }
 }
