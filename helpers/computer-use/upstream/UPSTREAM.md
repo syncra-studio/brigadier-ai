@@ -63,6 +63,7 @@ Patches applied, in order:
 - `patches/0014-popup-without-speculative-keys.diff`: v0.36.0 selected Chromium popup labels with speculative pid-routed typeahead, which can reach a sibling without confirmed key routing and commit intermediate or invalid prefix selections; use the existing exact-match semantic AX popup route instead.
 - `patches/0015-preserve-original-key-target.diff`: v0.36.0 key-window cleanup could pick a sibling after priming a target that was already AXFocusedWindow but lacked a focused element; when the original window is the target, restore nothing and leave that window focused.
 - `patches/0016-helper-windowserver-identity.diff`: the WindowServer diagnostic recognizes Brigadier's helper bundles (Brigadier Computer Use.app and BrigadierCu.app) and BRIGADIER_CU_EMBEDDED=1, and uses the helper's own launch setup instead of recommending the upstream app daemon.
+- `patches/0030-windows-semantic-click-readback.diff`: prefer UI Automation patterns and WindowPattern.Close for Windows clicks, with bounded window/control readback and honest unconfirmed outcomes.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

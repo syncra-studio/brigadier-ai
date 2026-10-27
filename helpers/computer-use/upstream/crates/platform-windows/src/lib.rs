@@ -48,6 +48,9 @@ mod keycodes;
 // pass that lives in this commit).
 pub mod lparam;
 
+// Input readback decisions are exercised on every host.
+pub mod input_outcome;
+
 /// UIA / `WM_NCHITTEST` / `IDC_*` -> cursor shape tables for presence (pure,
 /// every host).
 pub mod pointer_shape_map;
