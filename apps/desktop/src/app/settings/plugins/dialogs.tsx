@@ -77,7 +77,7 @@ export function useWatch(refresh: () => void, on: boolean) {
   }, [refresh, on]);
 }
 
-/** Removes a Brigadier library item; detected originals have no Remove action. */
+/** Removes a library item, or hides a detected item while preserving its native files. */
 export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
   item: PluginItemView;
   adapter: PluginsAdapter;
@@ -96,7 +96,9 @@ export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
       slot="remove"
       onClose={onClose}
       title={`Remove ${item.name}?`}
-      description="Removes it from Brigadier's library. Sessions already running keep it until they end."
+      description={item.removal === "everything"
+        ? "Removes it from Brigadier's library. Sessions already running keep it until they end."
+        : "Removes it from Brigadier and its sessions for all agents. Its files stay where Claude Code or Codex keep them."}
     >
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">

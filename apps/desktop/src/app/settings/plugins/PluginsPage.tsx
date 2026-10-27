@@ -175,8 +175,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
           adapter={adapter}
           onClose={close}
           onRemoved={() => {
-            // An item an agent has of its own stays listed: its details stay open.
-            if (target.removal === "everything" && liveDialog.current === open && useApp.getState().selection === selection) {
+            if (liveDialog.current === open && useApp.getState().selection === selection) {
               // The removed detail cannot be revisited; keep any existing Forward entries.
               select({ type: "settings", page: "plugins" }, "replace");
             }

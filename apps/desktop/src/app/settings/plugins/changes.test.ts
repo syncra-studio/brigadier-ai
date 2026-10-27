@@ -215,7 +215,7 @@ test("live catalog adapter saves project roots and reads persisted choices on a 
     assert.deepEqual(fresh.items[0]!.scope, { type: "someProjects", projectIds: paths, folders: [] });
     assert.deepEqual(fresh.items[0]!.signIn, { type: "signedIn" });
     assert.equal(fresh.items[0]!.locked, null);
-    assert.equal(fresh.items[0]!.removal, "none");
+    assert.equal(fresh.items[0]!.removal, "hide");
     assert.deepEqual(sent.map((request) => request.method), ["setPluginChoice", "setPluginChoiceScope", "getPluginCatalog", "getPluginSignInStatus"]);
     assert.deepEqual(sent[1], { method: "setPluginChoiceScope", rowId: "server:detected", scope: paths });
   } finally {
