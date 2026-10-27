@@ -276,12 +276,18 @@ pub fn result_for_tool(
     tool: &str,
     result: cua_driver_core::protocol::ToolResult,
 ) -> cua_driver_core::protocol::ToolResult {
+    // Page reads are app content, including strings that look like action
+    // acknowledgements. They must not be projected as driver success prose.
+    if tool == "page" && result.is_error != Some(true) {
+        return result;
+    }
     let unknown_action = cua_driver_core::action_record::is_action_tool(tool)
         && result.action_record.is_none()
-        && result
-            .structured_content
-            .as_ref()
-            .is_none_or(|state| state.get("effect").is_none());
+        && result.structured_content.as_ref().is_none_or(|state| {
+            state.get("effect").is_none()
+                && state.get("verified") != Some(&Value::Bool(true))
+                && state.get("confirmed") != Some(&Value::Bool(true))
+        });
     result_with_uncertainty(result, unknown_action)
 }
 
@@ -518,6 +524,29 @@ mod tests {
     use super::*;
     use cua_driver_core::protocol::{Content, ToolResult};
     use serde_json::json;
+
+    #[test]
+    fn page_content_is_not_an_action_acknowledgement() {
+        let text = "✅ Posted click to pid 42. Foreground experiments in Cua Driver.";
+        let out = result_for_tool("page", ToolResult::text(text));
+        let Content::Text { text: actual, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(actual, text);
+    }
+
+    #[test]
+    fn verified_readback_survives_before_registry_projection() {
+        let text = "✅ Value read back correctly.";
+        let out = result_for_tool(
+            "set_value",
+            ToolResult::text(text).with_structured(json!({"verified":true})),
+        );
+        let Content::Text { text: actual, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(actual, text);
+    }
 
     #[test]
     fn uncertain_actions_never_claim_success_on_any_platform() {
