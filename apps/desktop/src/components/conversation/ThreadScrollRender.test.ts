@@ -16,6 +16,7 @@ function near(actual: number | null, expected: number, label: string): void {
 test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 180000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 150000)) as {
     error?: string;
+    viewport: { width: number; height: number };
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
     button: { within: Button; past: Button };
     switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number; distance: number; restoredDistance: number };
@@ -36,7 +37,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     send: {
       topPadding: number;
       spring: { moved: number; at100: Around; at200: Around; settledMs: number; overshoot: boolean };
-      placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number };
+      placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number; footerHeight: number; scrollPadding: string; contentPadding: number };
       filled: { top: number; tops: number[]; distance: number; button: Button; room: number };
       unfollowed: { top: number; tops: number[]; distance: number; button: Button };
       followed: { distances: number[]; grew: number };
@@ -52,6 +53,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     sendBeforeItsTurnIsRead: { t: number; row: string | null; top: number | null; blank: boolean }[];
   };
   assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.viewport, { width: 1280, height: 976 }, "the fixture's content viewport");
 
   // A first open lands at the bottom: the last content 32px above the composer, no button.
   const { firstOpen } = seen;
@@ -146,10 +148,11 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(at100.before > 0.35 && at100.after < 0.75, `left around 100ms: ${at100.before} before, ${at100.after} from it on`);
   assert.ok(at200.before > 0.04 && at200.after < 0.25, `left around 200ms: ${at200.before} before, ${at200.after} from it on`);
   assert.ok(send.spring.settledMs >= 300 && send.spring.settledMs <= 700, `settled in ${send.spring.settledMs}ms`);
-  near(send.placed.turnEnd, send.placed.line + 1, "sent turn's end");
-  assert.ok(send.placed.line >= Math.max(240, send.placed.viewHeight / 4), `line at ${send.placed.line}`);
-  assert.equal(send.placed.distance, 1);
-  assert.ok(send.placed.room > 0, "room under the sent turn");
+  const geometry = `sent turn geometry: ${JSON.stringify({ viewport: seen.viewport, ...send.placed })}`;
+  near(send.placed.turnEnd, send.placed.line + 1, geometry);
+  assert.ok(send.placed.line >= Math.max(240, send.placed.viewHeight / 4), geometry);
+  assert.equal(send.placed.distance, 1, geometry);
+  assert.ok(send.placed.room > 0, geometry);
   assert.deepEqual(send.filled.tops, [send.filled.top], "the view moved while the answer filled the room");
   assert.equal(send.filled.room, 0);
   assert.ok(send.filled.distance > 24, `the answer ran on below: ${send.filled.distance}`);

@@ -14,6 +14,7 @@
  * holds the steps for a browser probe.
  */
 import { cliLag, cliSays, cliTurnsRead } from "@/fixtures/cliView";
+import { fixtureInput } from "@/fixtures/input";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -631,6 +632,9 @@ const steps = {
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
       userTop: round(user.getBoundingClientRect().top - viewTop()),
       viewHeight: viewport().clientHeight,
+      footerHeight: $("[data-thread-scroll-footer]")!.getBoundingClientRect().height,
+      scrollPadding: getComputedStyle(viewport()).scrollPaddingBottom,
+      contentPadding: $(".thread-bottom-pad")!.getBoundingClientRect().height,
     };
     const requestId = stored["other"]!.at(-1)!.requestId!;
     const top = Math.round(viewport().scrollTop);
@@ -813,6 +817,11 @@ const steps = {
 async function drive(): Promise<void> {
   const result: Record<string, unknown> = {};
   try {
+    // --window-size includes Chrome's window frame on Linux; the headless shell has none.
+    // Establish the same content viewport before opening or measuring any conversation.
+    await fixtureInput({ type: "viewport", width: 1280, height: 976 });
+    await settle(0);
+    result["viewport"] = { width: innerWidth, height: innerHeight };
     const only = new URLSearchParams(location.search).get("only");
     for (const [name, step] of Object.entries(steps)) {
       if (only !== null && name !== only) continue;
