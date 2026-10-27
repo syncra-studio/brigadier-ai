@@ -111,3 +111,18 @@ test("a CI watch reads as watching CI, never as a running check", () => {
   const both = checkLines([ci, task("p", "Run tests")], [watch, bash("p", "pnpm test")], NOW);
   assert.equal(checkWords(both), "1 check running · watching CI");
 });
+
+test("CI command names in arguments are not watchers", () => {
+  for (const command of [
+    'echo "gh run watch 42"; sleep 10',
+    "printf '%s' 'gh pr checks --watch'",
+  ]) {
+    assert.equal(checkWords(checkLines([task("ci", "Read command docs")], [bash("ci", command)], NOW)), "1 check running", command);
+  }
+});
+
+test("real checks are retained when a compound command also waits on workers", () => {
+  for (const command of ["cargo test && brigadier wait --any", "brigadier wait --any; pnpm build"]) {
+    assert.equal(checkLines([task("p", "Run checks and wait")], [bash("p", command)], NOW).lines.length, 1, command);
+  }
+});

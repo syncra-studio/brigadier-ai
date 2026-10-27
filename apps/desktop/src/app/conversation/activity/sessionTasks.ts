@@ -2,6 +2,7 @@ import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
 import { persistentApp } from "@/app/conversation/persistentApps";
 import { taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords } from "@/app/conversation/liveStatus";
+import { unwrapCommand } from "@/app/conversation/activity/words";
 import type { BackgroundTask, FileEntry } from "@/ipc/generated";
 
 /**
@@ -48,8 +49,38 @@ export type StripLines = { lines: StripLine[]; waitingOn: string | null; stops?:
 
 const NONE: StripLines = { lines: [], waitingOn: null };
 
-/** A command that watches CI until it ends. */
-const CI_WATCH = /\bgh\s+(?:run\s+watch\b|pr\s+checks\b[^;&|]*--watch\b)/;
+/** Shell invocations, keeping quoted arguments together and skipping leading assignments. */
+function shellCommands(command: string): string[][] {
+  const tokens = unwrapCommand(command).match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n]|[^\s;&|()'"\\])+|[;&|()\n]/g) ?? [];
+  const commands: string[][] = [];
+  let current: string[] | null = null;
+  for (const token of tokens) {
+    if (/^[;&|()\n]$/.test(token)) current = null;
+    else {
+      if (current === null) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+        current = [];
+        commands.push(current);
+      }
+      current.push(token);
+    }
+  }
+  return commands;
+}
+
+/** A command that watches CI until it ends, never command names merely printed as arguments. */
+function watchesCI(command: string): boolean {
+  return shellCommands(command).some(([name, group, action, ...args]) =>
+    /^(?:\S*\/)?gh$/.test(name ?? "") && ((group === "run" && action === "watch") || (group === "pr" && action === "checks" && args.includes("--watch"))));
+}
+
+const WAIT_SETUP = new Set(["cd", "echo", "printf", "sleep", "true", ":"]);
+
+/** Worker waits with incidental setup/output are hidden; a build or test in the same shell stays. */
+function onlyWorkerWait(command: string): boolean {
+  return runsBrigadier(command, "wait") && shellCommands(command).every(([name, sub]) =>
+    WAIT_SETUP.has(name ?? "") || (/^(?:\S*\/)?brigadier$/.test(name ?? "") && sub === "wait"));
+}
 
 /** A shell loop that waits for something, and what runs after it: `until grep -q … f; do sleep 10; done; cat f`. */
 const WAIT_LOOP = /^\s*(?:until|while)\s+([^]+?);\s*do\s+sleep\s+[\d.]+[smh]?\s*;?\s*done\s*(?:(?:;|&&)\s*([^]*))?$/;
@@ -149,7 +180,7 @@ const commandName = (task: BackgroundTask) => (task.kind === "terminal" ? comman
 export function checkLines(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): StripLines {
   const all = tasks.filter((task) => task.kind !== "agent" && task.status === "running").map((task) => ({ task, command: taskCommand(task, entries), cwd: commandCwd(task, entries) }));
   // A command that only waits on workers is the Workers strip's, never a row here.
-  const own = all.filter(({ command }) => !persistentApp(command ?? "") && !runsBrigadier(command ?? "", "wait"));
+  const own = all.filter(({ command }) => !persistentApp(command ?? "") && !onlyWorkerWait(command ?? ""));
   const waits = new Map(own.map(({ task, command, cwd }) => [task.id, waitOf(task, command, cwd, own)] as const));
   const shown = own;
   void now;
@@ -183,7 +214,7 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
       waitedOn: task.status === "running" && watchers.length > 0,
       command,
       wait: !queued && (WAIT_LOOP.test(command ?? "") || /^\s*sleep\s+[\d.]+[smh]?\s*$/.test(command ?? "")),
-      ci: CI_WATCH.test(command ?? ""),
+      ci: watchesCI(command ?? ""),
       output: (task.kind === "shell" || task.kind === "terminal") && task.outputFile !== null,
       stops: task.status === "running" ? [task.id] : [],
     };
