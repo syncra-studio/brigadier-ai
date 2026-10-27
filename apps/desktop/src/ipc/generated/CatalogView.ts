@@ -2,8 +2,7 @@
 import type { CatalogRow } from "./CatalogRow";
 
 /**
- * The new read-only page model. Legacy sharing rows above remain until their callers are
- * retired; the resolver and new protocol use only these provenance-preserving rows.
+ * The read-only page model shared with the resolver.
  */
 export type CatalogView = { rows: Array<CatalogRow>, 
 /**

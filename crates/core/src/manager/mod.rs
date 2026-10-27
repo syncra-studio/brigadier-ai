@@ -70,7 +70,6 @@ mod local_files;
 mod long_sessions;
 pub mod mcp_gateway;
 mod mcp_login;
-mod mcp_secrets;
 mod outputs;
 mod page_tools;
 mod past_projects;
@@ -484,9 +483,7 @@ impl SessionManager {
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_quiet_timer();
-        if crate::heap(|| manager.cleanup_plugins()).await.is_ok() {
-            manager.start_plugin_sharing();
-        }
+        let _ = crate::heap(|| manager.cleanup_plugins()).await;
         Ok(manager)
     }
 

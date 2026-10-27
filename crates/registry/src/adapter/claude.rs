@@ -1,15 +1,7 @@
-//! Claude Code: its own `plugin` and `mcp` commands, each with its own scope (`user`, `local`
-//! for one project and this user, `project` for the team). Any server, the user's own or a
-//! plugin's, is switched off in one project by that project's off flags in Claude Code's config
-//! file (`disabledMcpServers`, what `/mcp` writes), which Brigadier writes itself: Claude Code
-//! has no command for them.
-
+//! Claude Code MCP sign-in, listing, and one-time original restoration.
 use std::path::Path;
 
-use super::{
-    AgentAdapter, Capabilities, CliCall, Listed, Place, ProjectScope, Step, Unsupported,
-    plain_text, server_json,
-};
+use super::{AgentAdapter, CliCall, Listed, Place, Step, Unsupported, plain_text, server_json};
 use crate::item::ServerSpec;
 use crate::{Agent, Catalog, Roots, Source};
 
@@ -25,20 +17,12 @@ fn scope(place: &Place) -> (&'static str, Option<&Path>) {
     }
 }
 
-fn plugin_call(args: &[&str], id: &str, place: &Place) -> CliCall {
-    let (scope, dir) = scope(place);
-    let call = CliCall::new(PROGRAM, args)
-        .arg(id)
-        .arg("--scope")
-        .arg(scope)
-        .arg("--json");
-    match dir {
-        Some(dir) => call.in_dir(dir),
-        None => call,
-    }
-}
-
 impl AgentAdapter for Claude {
+    fn trusts(&self, _: &Catalog, _: &Path) -> bool {
+        // Its plugin scopes are its settings files, read in every folder.
+        true
+    }
+
     fn agent(&self) -> Agent {
         Agent::Claude
     }
@@ -49,14 +33,6 @@ impl AgentAdapter for Claude {
 
     fn program(&self) -> &'static str {
         PROGRAM
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            plugins: true,
-            project_scope: ProjectScope::Native,
-            login_needs_terminal: true,
-        }
     }
 
     fn owns(&self, source: Source) -> bool {
@@ -76,62 +52,6 @@ impl AgentAdapter for Claude {
                 roots.claude_dir.display().to_string(),
             )]
         }
-    }
-
-    fn trusts(&self, _: &Catalog, _: &Path) -> bool {
-        // Its plugin scopes are its settings files, read in every folder.
-        true
-    }
-
-    fn add_marketplace(&self, dir: &Path) -> CliCall {
-        CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
-    }
-
-    fn installed(&self, roots: &Roots, id: &str) -> bool {
-        crate::plugins::claude_installed(roots, id)
-    }
-
-    fn installed_in_projects(&self, roots: &Roots, id: &str) -> Vec<Place> {
-        crate::plugins::claude_installed_in_projects(roots, id)
-            .into_iter()
-            .map(|(path, shared)| Place::Project { path, shared })
-            .collect()
-    }
-
-    fn switched_on_in(&self, project: &Path, id: &str) -> bool {
-        crate::plugins::claude_project_switch(project, id) == Some(true)
-    }
-
-    fn refresh_marketplace(&self, name: &str) -> Option<CliCall> {
-        Some(CliCall::new(PROGRAM, &["plugin", "marketplace", "update"]).arg(name))
-    }
-
-    fn update_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        let (scope, dir) = scope(place);
-        let call = CliCall::new(PROGRAM, &["plugin", "update"])
-            .arg(id)
-            .arg("--scope")
-            .arg(scope);
-        Ok(vec![Step::Run(match dir {
-            Some(dir) => call.in_dir(dir),
-            None => call,
-        })])
-    }
-
-    fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        Ok(vec![Step::Run(plugin_call(
-            &["plugin", "install"],
-            id,
-            place,
-        ))])
-    }
-
-    fn remove_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        Ok(vec![Step::Run(plugin_call(
-            &["plugin", "uninstall"],
-            id,
-            place,
-        ))])
     }
 
     fn add_server(
@@ -154,45 +74,6 @@ impl AgentAdapter for Claude {
             Some(dir) => call.in_dir(dir),
             None => call,
         })])
-    }
-
-    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        let (scope, dir) = scope(place);
-        let call = CliCall::new(PROGRAM, &["mcp", "remove"])
-            .arg(name)
-            .arg("--scope")
-            .arg(scope);
-        Ok(vec![Step::Run(match dir {
-            Some(dir) => call.in_dir(dir),
-            None => call,
-        })])
-    }
-
-    fn set_plugin(&self, id: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {
-        let verb = if on { "enable" } else { "disable" };
-        Ok(vec![Step::Run(plugin_call(&["plugin", verb], id, place))])
-    }
-
-    fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {
-        match place {
-            Place::Project {
-                path,
-                shared: false,
-            } => Ok(vec![Step::ClaudeFlags {
-                files: Vec::new(),
-                flags: vec![crate::claude_config::OffFlag {
-                    folder: path.clone(),
-                    name: name.to_owned(),
-                    off: !on,
-                }],
-            }]),
-            Place::Project { shared: true, .. } => Err(Unsupported(
-                "Claude Code switches a server off for you alone, never for the team.".to_owned(),
-            )),
-            Place::Everywhere => Err(Unsupported(
-                "Claude Code switches a server off one project at a time.".to_owned(),
-            )),
-        }
     }
 
     fn login(&self, name: &str, project: Option<&Path>) -> CliCall {

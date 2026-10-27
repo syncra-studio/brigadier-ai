@@ -1,4 +1,4 @@
-//! Carries out an adapter's plan: runs the CLI's own commands, writes the user's config through
+//! One-time native-original restoration: runs the CLI's own commands, writes the user's config through
 //! the CLI's own writer, and edits a project's file the CLI reads (D8), keeping it out of the
 //! repository for "just me".
 //!
@@ -7,14 +7,13 @@
 //! once it runs leaves the steps before it done.
 
 use std::fmt;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
 
 use toml_edit::{DocumentMut, Item, Table};
 
-use super::{AgentAdapter, CliCall, Step, TomlEdit};
+use super::{AgentAdapter, CLI_TIMEOUT, CliCall, Step, TomlEdit, output_within};
+pub(super) mod codex_writer;
 use crate::{Catalog, Roots};
 
 /// Why a plan stopped, in plain words for the page ([`fmt::Display`]).
@@ -93,54 +92,15 @@ pub fn apply(
             }
             Step::UserConfig(edit) => adapter.write_user_config(roots, &env, program, edit)?,
             Step::ProjectFile { file, edit, shared } => project_file(file, edit, *shared, &env)?,
-            Step::ClaudeFlags { files, flags } => {
-                for file in claude_files(roots, files) {
-                    crate::claude_config::set_off_flags(&file, flags, FLAG_SETTLE)
-                        .map_err(ApplyError::Failed)?;
-                }
-            }
         }
     }
     Ok(applied)
 }
 
-/// How long after writing Claude Code's off flags they are read again (Claude Code may write its
-/// older copy over them just then).
-const FLAG_SETTLE: Duration = if cfg!(test) {
-    Duration::ZERO
-} else {
-    Duration::from_millis(300)
-};
-
-/// The config files a [`Step::ClaudeFlags`] goes to: those it names, else the user's own.
-fn claude_files(roots: &Roots, files: &[PathBuf]) -> Vec<PathBuf> {
-    if files.is_empty() {
-        vec![roots.claude_json.clone()]
-    } else {
-        files.to_vec()
-    }
-}
-
-/// Whether every step of `steps`, planned by `adapter`, can run: what [`apply`] checks before
-/// it runs any, without running them. `env` is the environment the CLIs would run with.
-pub fn check_steps(
-    adapter: &dyn AgentAdapter,
-    roots: &Roots,
-    catalog: &Catalog,
-    steps: &[Step],
-    env: &[(String, String)],
-) -> Result<(), ApplyError> {
-    let mut env = env.to_vec();
-    env.extend(adapter.home_env(roots));
-    steps
-        .iter()
-        .try_for_each(|step| check(adapter, roots, catalog, step, &env))
-}
-
 /// Whether `step` can run at all.
 fn check(
     adapter: &dyn AgentAdapter,
-    roots: &Roots,
+    _roots: &Roots,
     catalog: &Catalog,
     step: &Step,
     env: &[(String, String)],
@@ -148,13 +108,6 @@ fn check(
     match step {
         Step::Run(call) if call.needs_terminal => Err(ApplyError::NeedsTerminal(command(call))),
         Step::Run(_) | Step::UserConfig(_) => Ok(()),
-        // Each file must read cleanly: a flag is never written over a file Brigadier can't read.
-        Step::ClaudeFlags { files, flags } => {
-            for file in claude_files(roots, files) {
-                crate::claude_config::check_flags(&file, flags).map_err(ApplyError::Failed)?;
-            }
-            Ok(())
-        }
         Step::ProjectFile { file, edit, shared } => {
             let project = project_of(file)?;
             if !adapter.trusts(catalog, project) {
@@ -181,77 +134,6 @@ fn command(call: &CliCall) -> String {
         .join(" ")
 }
 
-/// How long one of a CLI's own commands may take before Brigadier stops it: a command that
-/// hangs never holds every later change back.
-pub const CLI_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// Waits for `child` (its stdout and stderr piped), at most `timeout`: its output, or, past
-/// it, a `TimedOut` error once it is stopped.
-pub fn wait_within(mut child: Child, timeout: Duration) -> std::io::Result<Output> {
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        let (send, receive) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
-            }
-            let _ = send.send(bytes);
-        });
-        receive
-    };
-    let stdout = drain(
-        child
-            .stdout
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-    );
-    let stderr = drain(
-        child
-            .stderr
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-    );
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("it didn't finish in {} s", timeout.as_secs().max(1)),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let read = |pipe: std::sync::mpsc::Receiver<Vec<u8>>| {
-        pipe.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "its output did not close in time",
-                )
-            })
-    };
-    Ok(Output {
-        status,
-        stdout: read(stdout)?,
-        stderr: read(stderr)?,
-    })
-}
-
-/// Runs `command` (stdout and stderr piped) for at most `timeout`: [`wait_within`].
-pub fn output_within(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
-    let child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    wait_within(child, timeout)
-}
-
-/// Runs the CLI's command with `binary`; its output, or its own words on why it failed.
 fn run(call: &CliCall, binary: &Path, env: &[(String, String)]) -> Result<String, ApplyError> {
     let mut cmd = Command::new(binary);
     cmd.args(&call.args)
@@ -675,7 +557,3 @@ fn remove_line(path: &Path, line: &str) -> std::io::Result<()> {
     }
     std::fs::write(path, kept)
 }
-
-#[cfg(test)]
-#[path = "apply_tests.rs"]
-mod tests;

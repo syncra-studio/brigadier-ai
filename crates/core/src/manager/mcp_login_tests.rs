@@ -249,7 +249,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
     let lists = std::fs::read_to_string(fake.dir.join("lists")).unwrap();
     assert_eq!(lists.lines().count(), 2, "{lists}");
     for agent in [Agent::Claude, Agent::Codex] {
-        let listed = logins.listed(&fake.clis, agent, None).unwrap();
+        let listed = lock(&logins.lists).get(&(agent, None)).unwrap().1.clone();
         assert!(
             listed.iter().all(|entry| !entry.needs_sign_in),
             "{listed:?}"
@@ -965,7 +965,11 @@ mod live {
             server.log.lock().unwrap()
         );
         for agent in [Agent::Claude, Agent::Codex] {
-            let listed = logins.listed(&clis, agent, Some(&project)).unwrap();
+            let listed = lock(&logins.lists)
+                .get(&(agent, Some(project.clone())))
+                .unwrap()
+                .1
+                .clone();
             assert!(
                 listed.iter().all(|entry| !entry.needs_sign_in),
                 "{listed:?}"
