@@ -56,14 +56,17 @@ fn process_name(pid: u32) -> Option<String> {
 
 pub(super) fn associated_executable(url: &str) -> Option<String> {
     use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_NONE, ASSOCSTR_EXECUTABLE};
+    use windows::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_IS_PROTOCOL, ASSOCSTR_EXECUTABLE};
+    // ASSOCF_IS_PROTOCOL resolves the current user's protocol choice; a plain
+    // class lookup can select a different browser from Windows Settings.
+    // https://learn.microsoft.com/en-us/windows/win32/shell/assocf-str
     let protocol = url.split_once(':')?.0;
     let wide: Vec<u16> = protocol.encode_utf16().chain(Some(0)).collect();
     let mut output = vec![0u16; 32768];
     let mut len = output.len() as u32;
     unsafe {
         AssocQueryStringW(
-            ASSOCF_NONE,
+            ASSOCF_IS_PROTOCOL,
             ASSOCSTR_EXECUTABLE,
             PCWSTR(wide.as_ptr()),
             PCWSTR::null(),
