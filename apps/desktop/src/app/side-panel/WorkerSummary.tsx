@@ -1,4 +1,4 @@
-import { type FC, useContext } from "react";
+import { type FC, useContext, useMemo } from "react";
 
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { Counts } from "@/components/shared";
@@ -10,9 +10,11 @@ import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conv
 import { useNow } from "@/hooks/use-now";
 import type { WorkerRow } from "@/ipc/generated";
 import { useWorkerRows } from "@/state/cliThread";
+import { isNativeWorker } from "@/state/nativeWorkers";
 
 /**
- * The session's worker summary: its own workers as their CLIs and git show them (S14).
+ * The session's worker summary: its own workers as their CLIs and git show them (S14). Its CLI's
+ * subagents are not workers: they show in their own strip on the composer and in History.
  */
 
 /** How many workers at work still get a line each; more read as one row. */
@@ -66,7 +68,8 @@ const WorkerLineRow: FC<{ conversationId: string; row: WorkerRow; now: number }>
  * worker's own; what a worker runs shows there, not here.
  */
 export function WorkersSummary({ conversationId }: { conversationId: string }) {
-  const rows = useWorkerRows(conversationId);
+  const all = useWorkerRows(conversationId);
+  const rows = useMemo(() => all.filter((row) => !isNativeWorker(row)), [all]);
   const now = useNow(rows.length > 0 ? TICK_MS : null);
   const { panel, setPanel } = useContext(AgentsPanelContext);
   if (!rows.length) return null;

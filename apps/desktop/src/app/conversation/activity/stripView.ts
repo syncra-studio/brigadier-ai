@@ -43,7 +43,7 @@ export function stripWords({ working, waiting }: Pick<StripView, "working" | "wa
     .join(" · ");
 }
 
-/** What the Subagents strip on the composer shows: the session CLI's own agents, as worker rows. */
+/** What the Subagents strip on the composer shows: the session CLI's own agents, as plain rows (not as workers). */
 export type SubagentsView = {
   stopStarts?: Record<string, number>;
   /** Its rows, by row id, oldest first: those at work, and those that ended a moment ago. */

@@ -1,4 +1,5 @@
 import type { ThreadTurn, WorkerRow } from "@/ipc/generated";
+import { isNativeWorker } from "@/state/nativeWorkers";
 
 /**
  * The workers a turn started that still work: its work group stays open and live until they
@@ -10,6 +11,9 @@ import type { ThreadTurn, WorkerRow } from "@/ipc/generated";
  * A worker still works while its CLI is on the run it was started for, or waits on the user. In
  * the newest turn, a worker the turn sent back to work counts again; an older turn's worker
  * that a later turn sent more work never opens the older turn again.
+ *
+ * Its CLI's own subagents are not workers: they never hold a turn or count as one it waits for
+ * (they have their own strip); a turn whose subagents run is still the lead's turn, working.
  */
 export function workingWorkers(
   workers: readonly WorkerRow[],
@@ -21,6 +25,7 @@ export function workingWorkers(
   const next = turns.find((turn) => turn.startedAtMs !== null && turn.startedAtMs > startedAtMs && !starts.includes(turn.startedAtMs))?.startedAtMs ?? null;
   const newest = next === null;
   return workers.filter((worker) => {
+    if (isNativeWorker(worker)) return false;
     if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || worker.gone) return false;
     if (worker.lastEnd === null) return true;
     return newest && (worker.working || worker.waiting.length > 0);
