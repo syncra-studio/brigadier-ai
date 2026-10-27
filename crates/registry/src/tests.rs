@@ -1881,3 +1881,56 @@ fn rows_exclude_all_openai_marketplaces_and_system_skills() {
         3
     );
 }
+
+#[test]
+fn rows_exclude_claude_synced_skills_but_keep_user_copies() {
+    let home = fixture("synced-rows");
+    let claude = home.join("custom-claude-home");
+    let roots = roots(&home, &[("CLAUDE_CONFIG_DIR", claude.to_str().unwrap())]);
+    let source = claude.join("skills/synced/team-a/only/SKILL.md");
+    for account in ["team-a", "team-b"] {
+        for name in ["only", "shared"] {
+            skill(
+                &claude.join("skills/synced").join(account).join(name),
+                name,
+                "Same bytes.",
+            );
+        }
+    }
+    skill(&claude.join("skills/shared"), "shared", "Same bytes.");
+    skill(
+        &roots.agents_skills.join("personal"),
+        "personal",
+        "User's own.",
+    );
+    let before = std::fs::read(&source).unwrap();
+    let native = Catalog::read(&roots, None);
+    assert!(native.skills.iter().any(|skill| {
+        skill
+            .entries
+            .iter()
+            .any(|(root, _)| matches!(root, SkillRoot::ClaudeSynced(_)))
+    }));
+    for rows in [
+        Catalog::rows(&[native]),
+        Catalog::read_rows(&roots, &[]),
+        Catalog::read_rows_with_library(&roots, &[], &home.join("data")),
+    ] {
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(
+            rows.iter()
+                .all(|row| ["shared", "personal"].contains(&row.name.as_str()))
+        );
+        for row in &rows {
+            assert_eq!(row.definitions.len(), 1);
+            assert!(!row.definitions[0].provenance.provider_supplied());
+            assert!(
+                !row.definitions[0]
+                    .provenance
+                    .file
+                    .starts_with(claude.join("skills/synced"))
+            );
+        }
+    }
+    assert_eq!(std::fs::read(source).unwrap(), before);
+}
