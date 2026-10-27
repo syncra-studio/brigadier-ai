@@ -400,8 +400,11 @@ webview's folders `%APPDATA%\ai.brigadier.app` and `%LOCALAPPDATA%\ai.brigadier.
 *Delete the application data* box is ticked (a silent `/S` run never ticks it). Updates run the
 same installer (`/UPDATE`) over the installed one; a reinstall keeps the data too. Over a build
 from before the app was `brigadier-app.exe`, Tauri's installer would delete the old main binary's
-name, `brigadier.exe`, after copying the new files, which is now the command;
-`src-tauri/installer-hooks.nsh` makes it forget that name first.
+name, `brigadier.exe`, after copying the new files, which is now the command.
+`src-tauri/installer-hooks.nsh` makes it forget any old name that is a file it writes; a test
+(`src/installer.rs`) keeps that list equal to the sidecars and the uninstaller, and the nightly's
+Windows job (`tools/ci/installer-upgrade.ps1`) installs, then updates over an install whose app
+had each of those names, and fails before uploading an installer that leaves any file out.
 
 The installer isn't Authenticode-signed yet: Windows SmartScreen warns before it runs, and
 `scripts/install.ps1` accepts it on its checksum alone. Signing needs a code-signing certificate

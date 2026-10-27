@@ -521,6 +521,17 @@ jobs:
           elif pgrep -fl brigadierd; then
             echo "brigadierd is still running"; exit 1
           fi
+      - name: Installer updates keep every file
+        if: runner.os == 'Windows'
+        # Before the installer can be uploaded or published: a fresh install, then an update over
+        # it for each name an earlier install's app could have had, must leave every file.
+        shell: pwsh
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          $setup = @(Get-ChildItem "$env:BUNDLE/nsis/*-setup.exe")
+          if ($setup.Count -ne 1) { throw "expected one installer, found $($setup.Count)" }
+          tools/ci/installer-upgrade.ps1 -Setup $setup[0].FullName
       - name: Windows installer files
         if: runner.os == 'Windows'
         # Named as a release names it, with its checksum, and with the updater's signature and
