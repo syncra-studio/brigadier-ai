@@ -461,6 +461,17 @@ impl Parser {
                     .iter()
                     .find_map(|key| params.get(key).and_then(Value::as_str))
                     .unwrap_or(method);
+                // Brigadier enables this question feature itself. Keep warnings about any
+                // other enabled features, including lists that also name this one.
+                if method == "warning"
+                    && message
+                        .strip_prefix("Under-development features enabled: ")
+                        .is_some_and(|features| {
+                            features.split('.').next() == Some("default_mode_request_user_input")
+                        })
+                {
+                    return;
+                }
                 // The auto-reviewer's verdict on each request it settles is
                 // routine, not a warning.
                 let level = if method == "guardianWarning" {
@@ -1629,6 +1640,112 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    const QUESTION_FEATURE_WARNING: &str =
+        "Under-development features enabled: default_mode_request_user_input";
+
+    #[test]
+    fn question_feature_startup_warning_is_hidden_live_and_on_replay() {
+        let recording = crate::record::Recording::parse(include_str!(
+            "../../fixtures/codex-plan-questions.jsonl"
+        ))
+        .unwrap();
+        let notification = recording
+            .lines
+            .iter()
+            .filter(|line| line.dir == crate::record::Direction::Out)
+            .map(|line| serde_json::from_str::<Value>(&line.line).unwrap())
+            .find(|message| message["method"] == "warning")
+            .unwrap();
+        for mut parser in [Parser::live(), Parser::replay()] {
+            assert!(parser.feed(&notification.to_string()).is_empty());
+            for message in [
+                QUESTION_FEATURE_WARNING.to_owned(),
+                format!("{QUESTION_FEATURE_WARNING}."),
+            ] {
+                assert!(
+                    parser
+                        .feed(
+                            &json!({"method": "warning", "params": {"message": message}})
+                                .to_string()
+                        )
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_and_unrelated_warnings_stay_visible() {
+        let mut parser = Parser::live();
+        for message in [
+            "Under-development features enabled: another_feature".to_owned(),
+            format!("{QUESTION_FEATURE_WARNING}, another_feature."),
+            "Under-development features enabled: another_feature, default_mode_request_user_input."
+                .to_owned(),
+            format!("{QUESTION_FEATURE_WARNING}\nanother_feature"),
+            format!("{QUESTION_FEATURE_WARNING}_other."),
+            "default_mode_request_user_input could not be enabled".to_owned(),
+            "An unrelated startup warning".to_owned(),
+        ] {
+            let output = parser
+                .feed(&json!({"method": "warning", "params": {"message": message}}).to_string());
+            assert!(
+                matches!(
+                    output.as_slice(),
+                    [Output::Event(ProviderEvent::Notice { level: NoticeLevel::Warning, message: shown })]
+                        if shown == &format!("Codex: {message}")
+                ),
+                "{output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_guardian_and_error_notifications_are_not_filtered() {
+        let mut parser = Parser::live();
+        for (method, level) in [
+            ("configWarning", NoticeLevel::Warning),
+            ("deprecationNotice", NoticeLevel::Warning),
+            ("guardianWarning", NoticeLevel::Info),
+        ] {
+            for message in [
+                QUESTION_FEATURE_WARNING,
+                "Invalid configuration or review failed",
+            ] {
+                let output = parser
+                    .feed(&json!({"method": method, "params": {"message": message}}).to_string());
+                assert!(
+                    matches!(
+                        output.as_slice(),
+                        [Output::Event(ProviderEvent::Notice { level: actual, message: shown })]
+                            if *actual == level && shown == &format!("Codex: {message}")
+                    ),
+                    "{output:?}"
+                );
+            }
+        }
+        for message in [
+            QUESTION_FEATURE_WARNING,
+            "Configuration error",
+            "Guardian review failed",
+        ] {
+            let output = parser.feed(
+                &json!({"method": "error", "params": {
+                    "threadId": "t1", "turnId": "u1",
+                    "error": {"message": message}, "willRetry": false
+                }})
+                .to_string(),
+            );
+            assert!(
+                matches!(
+                    output.as_slice(),
+                    [Output::Event(ProviderEvent::Error { error })] if error.message == message
+                ),
+                "{output:?}"
+            );
+        }
+    }
 
     /// The thread's background terminals, listing after listing: a new one is running, one
     /// gone ended; one still listed is not said again.
