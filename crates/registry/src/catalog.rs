@@ -43,11 +43,16 @@ pub struct Provenance {
 }
 
 impl Provenance {
-    /// Provider plugins remain under their CLI's control, including old saved choices.
+    /// Provider plugins and account-synced skills remain under their CLI's control,
+    /// including old saved choices.
     pub fn provider_supplied(&self) -> bool {
-        self.agent
-            .zip(self.plugin.as_deref())
-            .is_some_and(|(agent, id)| crate::plugins::provider_supplied(agent, id))
+        (self.agent == Some(Agent::Claude)
+            && self.plugin.is_none()
+            && self.native.starts_with("synced-skill:"))
+            || self
+                .agent
+                .zip(self.plugin.as_deref())
+                .is_some_and(|(agent, id)| crate::plugins::provider_supplied(agent, id))
     }
 }
 
@@ -318,12 +323,7 @@ impl Catalog {
                     }
                     let (agent, project, plugin, native) = match root {
                         SkillRoot::ClaudeUser => (Agent::Claude, None, None, skill.name.clone()),
-                        SkillRoot::ClaudeSynced(_) => (
-                            Agent::Claude,
-                            None,
-                            None,
-                            format!("synced-skill:{}", skill.name),
-                        ),
+                        SkillRoot::ClaudeSynced(_) => continue,
                         SkillRoot::AgentsUser | SkillRoot::CodexUser => {
                             (Agent::Codex, None, None, skill.name.clone())
                         }

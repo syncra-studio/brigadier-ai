@@ -338,6 +338,97 @@ mod overlay_tests {
         std::fs::write(path, text).unwrap();
     }
     #[test]
+    fn synced_skills_are_neither_injected_nor_suppressed_even_with_saved_choices() {
+        use super::super::choices::{Choice, Global, Scope};
+        use brigadier_registry::SkillRoot;
+        let dir = std::env::temp_dir().join(format!("launch-synced-{}", uuid::Uuid::new_v4()));
+        let roots = Roots::from_vars([
+            ("HOME".into(), dir.join("home").display().to_string()),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                dir.join("claude").display().to_string(),
+            ),
+        ])
+        .unwrap();
+        let mut sources = Vec::new();
+        for index in 0..2 {
+            let path = roots
+                .claude_dir
+                .join(format!("skills/synced/team-{index}/skill-{index}/SKILL.md"));
+            let text = format!("---\nname: skill-{index}\n---\nSynced content\n");
+            write(&path, &text);
+            sources.push((path, text));
+        }
+        let native = Catalog::read(&roots, None);
+        assert_eq!(native.skills.len(), 2);
+        assert!(Catalog::read_rows(&roots, &[]).is_empty());
+        // Recreate the definitions an older catalog emitted, with the same stable ids.
+        let mut old = native.clone();
+        for skill in &mut old.skills {
+            for (root, _) in &mut skill.entries {
+                assert!(matches!(root, SkillRoot::ClaudeSynced(_)));
+                *root = SkillRoot::ClaudeUser;
+            }
+        }
+        let mut stale = Catalog::rows(&[old]);
+        assert_eq!(stale.len(), 2);
+        for row in &mut stale {
+            for definition in &mut row.definitions {
+                definition.provenance.native = format!("synced-skill:{}", row.name);
+                definition.provenance.aliases = vec![definition.provenance.native.clone()];
+            }
+        }
+        for (on, removed) in [(true, None), (false, None), (true, Some(true))] {
+            Choices(
+                stale
+                    .iter()
+                    .map(|row| {
+                        (
+                            row.id.clone(),
+                            Choice {
+                                on,
+                                removed,
+                                scope: Scope::Global(Global::Global),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+            .save(&dir.join("data"))
+            .unwrap();
+            let choices = Choices::load(&dir.join("data")).unwrap();
+            for (agent, provider) in [
+                (Agent::Claude, ProviderKind::Claude),
+                (Agent::Codex, ProviderKind::Codex),
+            ] {
+                for role in [Role::Thread, Role::Worker { grants: &[] }] {
+                    let resolved = resolve::resolve(Context {
+                        agent,
+                        account_home: &roots,
+                        project_root: None,
+                        cwd: &dir,
+                        trusted: false,
+                        role,
+                        rows: &stale,
+                        choices: &choices,
+                        gateway: None,
+                    });
+                    assert!(resolved.skills.is_empty());
+                    assert_eq!(resolved.off, Default::default());
+                    let mut spec = test_spec(&dir);
+                    apply_resolved(&mut spec, &resolved, &dir.join("session"), provider).unwrap();
+                    assert!(spec.skill_plugins.is_empty());
+                    assert!(spec.add_dirs.is_empty());
+                    assert_eq!(spec.switched_off, Default::default());
+                }
+            }
+        }
+        for (path, text) in sources {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn provider_plugins_are_neither_injected_nor_suppressed_even_with_saved_choices() {
         use super::super::choices::{Choice, Global, Scope};
         let dir = std::env::temp_dir().join(format!("launch-provider-{}", uuid::Uuid::new_v4()));
