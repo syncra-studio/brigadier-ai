@@ -54,6 +54,7 @@ import type {
 import { getSessionDiff } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
+import { isNativeWorker } from "@/state/nativeWorkers";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
@@ -447,7 +448,8 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
   const attachments = useApp(useShallow((s) => [...new Map((s.threads[conversation.id]?.items ?? [])
     .flatMap((item) => item.attachments).map((attachment) => [attachment.id, attachment])).values()]));
   const context = useBoard((s) => s.board?.conversationId === conversation.id ? s.board.context : null);
-  const workers = useWorkerRows(conversation.id).length > 0;
+  // Its CLI's subagents are not workers (`WorkersSummary`).
+  const workers = useWorkerRows(conversation.id).some((row) => !isNativeWorker(row));
   const empty = sources.length === 0 && attachments.length === 0 && !context && !workers;
   return <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
     <div className="flex flex-col py-2.5">

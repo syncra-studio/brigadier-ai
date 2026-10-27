@@ -71,3 +71,25 @@ test("the context card's Workers row names each worker at work by its row, with 
     await server.close();
   }
 });
+
+test("the context card's Workers lists no subagent of the session's CLI", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { WorkersSummary } = await server.ssrLoadModule("/src/app/side-panel/WorkerSummary.tsx");
+    const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const subagent = (id: string, title: string) => ({ ...row(id, title), native: { conversationId: "c", callId: id, backgroundId: null, prompt: "" } });
+    const text = (rows: WorkerRow[]) => {
+      Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: rows } });
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(WorkersSummary, { conversationId: "c" }))
+        .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    };
+    // Only subagents: no Workers section at all.
+    assert.equal(text([subagent("n1", "Explore the parser"), subagent("n2", "Review the diff")]).trim(), "");
+    // Beside a worker: the worker alone.
+    const mixed = text([row("t1", "Demo of the fixes"), subagent("n1", "Explore the parser")]);
+    assert.match(mixed, /Demo of the fixes working/);
+    assert.doesNotMatch(mixed, /Explore the parser/);
+  } finally {
+    await server.close();
+  }
+});

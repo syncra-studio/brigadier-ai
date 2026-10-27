@@ -1,7 +1,7 @@
 import { type FC, memo, type ReactNode, useMemo, useState } from "react";
 
 import { checkLines, checkWords, type StripLine, type StripLines } from "@/app/conversation/activity/sessionTasks";
-import { StripRow } from "@/app/conversation/activity/StripRow";
+import { SubagentRow } from "@/app/conversation/activity/StripRow";
 import { type SubagentsView, subagentsStrip, subagentWords } from "@/app/conversation/activity/stripView";
 import { useAction } from "@/app/conversation/useAction";
 import { StateIcon } from "@/components/conversation";
@@ -101,8 +101,8 @@ const Strip: FC<{
 };
 
 /**
- * The Subagents strip, under the Workers strip: the session CLI's own agents, each a worker's
- * strip row (its transcript on a click, what it does now, its Stop).
+ * The Subagents strip, under the Workers strip: the session CLI's own agents, each a plain row
+ * (`SubagentRow`: its task and time, no model's icon; its transcript on a click, its Stop).
  */
 export const SubagentsStrip: FC<{ conversationId: string; view: SubagentsView }> = ({ conversationId, view }) => (
   <Strip
@@ -113,7 +113,7 @@ export const SubagentsStrip: FC<{ conversationId: string; view: SubagentsView }>
     stopTip="Stop every subagent still working"
     onStop={() => Promise.all(view.stops.map((id) => stopBackgroundTask(conversationId, id, undefined, view.stopStarts?.[id])))}
   >
-    {view.rows.map((id) => <StripRow key={id} conversationId={conversationId} taskId={id} />)}
+    {view.rows.map((id) => <SubagentRow key={id} conversationId={conversationId} taskId={id} />)}
   </Strip>
 );
 
