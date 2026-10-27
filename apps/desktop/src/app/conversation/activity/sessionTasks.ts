@@ -143,7 +143,8 @@ const commandName = (task: BackgroundTask) => (task.kind === "terminal" ? comman
  */
 export function checkLines(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): StripLines {
   const all = tasks.filter((task) => task.kind !== "agent" && task.status === "running").map((task) => ({ task, command: taskCommand(task, entries), cwd: commandCwd(task, entries) }));
-  const own = all.filter(({ command }) => !persistentApp(command ?? ""));
+  // A command that only waits on workers is the Workers strip's, never a row here.
+  const own = all.filter(({ command }) => !persistentApp(command ?? "") && !runsBrigadier(command ?? "", "wait"));
   const waits = new Map(own.map(({ task, command, cwd }) => [task.id, waitOf(task, command, cwd, own)] as const));
   const shown = own;
   void now;

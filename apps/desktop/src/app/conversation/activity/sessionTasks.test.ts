@@ -56,11 +56,14 @@ test("a wait on two commands' output is no fold: never a guess", () => {
   assert.deepEqual(view.lines.map((line) => line.id), ["a", "b", "w"]);
 });
 
-test("finished rows leave immediately while worker waits remain live", () => {
+test("a brigadier wait makes no row while a real command does; finished rows leave immediately", () => {
   const ended = task("t", "Tests", { status: "completed", endedAtMs: NOW, summary: "exit code 0" });
-  const view = checkLines([ended, task("bw", "Workers")], [bash("bw", "brigadier wait --any"), bash("t", "pnpm test; echo done")], NOW);
-  assert.deepEqual(view.lines.map((line) => line.id), ["bw"]);
-  assert.equal(checkWords(view), "Waiting on Workers");
+  const waits = [task("bw", "Workers"), task("bx", "Workers", { startedAtMs: NOW - 5_000 })];
+  const only = checkLines(waits, [bash("bw", "brigadier wait --any"), bash("bx", "echo go && brigadier wait w1 w2 --timeout 600")], NOW);
+  assert.deepEqual(only.lines, []);
+  const view = checkLines([...waits, task("p", "Run tests")], [bash("bw", "brigadier wait --any"), bash("bx", "brigadier wait"), bash("p", "pnpm test")], NOW);
+  assert.deepEqual(view.lines.map((line) => line.id), ["p"]);
+  assert.equal(checkWords(view), "1 check running");
   assert.deepEqual(checkLines([ended], [], NOW).lines, []);
   assert.equal(STRIP_TAIL_MS, 0);
 });
