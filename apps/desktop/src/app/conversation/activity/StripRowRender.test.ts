@@ -13,6 +13,8 @@ const row = (patch: Partial<WorkerRow> = {}): WorkerRow => ({
   branch: null, base: null, diff: null, ahead: 0, merged: false, ...patch,
 });
 
+const renderSubagent = (component: unknown) => ReactDOMServer.renderToStaticMarkup(React.createElement(component as React.FC<{ conversationId: string; taskId: string }>, { conversationId: "c", taskId: "native:c:call1" }));
+
 test("a strip row says what its worker does while it works, shimmering, else its state", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
@@ -43,10 +45,9 @@ test("a subagent's strip row is plain: a neutral mark, its task and time, no wor
     const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
     const subagent = { ...row({ id: "native:c:call1", title: "Explore the parser" }), native: { conversationId: "c", callId: "call1", backgroundId: null, prompt: "" } };
     Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: [subagent] } });
-    const render = (component: unknown) => ReactDOMServer.renderToStaticMarkup(React.createElement(component as React.FC<{ conversationId: string; taskId: string }>, { conversationId: "c", taskId: "native:c:call1" }));
     // A worker's row carries its glyph (the two-tone avatar in its own colour); a subagent's never does.
-    assert.match(render(StripRow), /text-glyph-/);
-    const html = render(SubagentRow);
+    assert.match(renderSubagent(StripRow), /text-glyph-/);
+    const html = renderSubagent(SubagentRow);
     assert.doesNotMatch(html, /text-glyph-/);
     assert.match(html, /data-slot="subagents-strip-row"/);
     assert.equal(html.match(/<svg/g)?.length, 1);
