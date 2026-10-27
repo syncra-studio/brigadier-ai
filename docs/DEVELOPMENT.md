@@ -398,7 +398,10 @@ that folder) removes the shortcuts, the uninstall entry and the program files on
 `%LOCALAPPDATA%\Brigadier\Data` stays, as do `HKCU\Software\SYNCRA SRL\Brigadier` and the
 webview's folders `%APPDATA%\ai.brigadier.app` and `%LOCALAPPDATA%\ai.brigadier.app` unless its
 *Delete the application data* box is ticked (a silent `/S` run never ticks it). Updates run the
-same installer (`/UPDATE`) over the installed one; a reinstall keeps the data too.
+same installer (`/UPDATE`) over the installed one; a reinstall keeps the data too. Over a build
+from before the app was `brigadier-app.exe`, Tauri's installer would delete the old main binary's
+name, `brigadier.exe`, after copying the new files, which is now the command;
+`src-tauri/installer-hooks.nsh` makes it forget that name first.
 
 The installer isn't Authenticode-signed yet: Windows SmartScreen warns before it runs, and
 `scripts/install.ps1` accepts it on its checksum alone. Signing needs a code-signing certificate
