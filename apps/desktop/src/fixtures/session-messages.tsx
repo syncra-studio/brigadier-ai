@@ -65,7 +65,8 @@ const views: Record<string, ThreadView> = {
   },
   [RECEIVER]: {
     entries: [
-      user("p1", header(FIRST, ASK), T + 3000),
+      user("p1", header(FIRST, ASK), T + 3000, { said: { by: "brigadier" } }),
+      user("notice", "Automatic engine wake.", T + 3100, { said: { by: "brigadier" }, steer: true }),
       reply("b1", "The export job reads customer_id; I'll point it at the new column.", T + 9000),
     ],
     // Brigadier's own turn: the message carries no request of the user's.
@@ -151,7 +152,7 @@ try {
   await openConversation(RECEIVER);
   await until(() => received().length > 0 && document.querySelector("[data-role=assistant]"));
   await wait(300);
-  seen.receiver = { received: received(), headers: headers(), answer: text(document.querySelector("[data-slot=aui_assistant-message-content][data-answer]")) };
+  seen.receiver = { received: received(), headers: headers(), answer: text(document.querySelector("[data-slot=aui_assistant-message-content][data-answer]")), automaticNotice: document.querySelector("main")!.textContent!.includes("Automatic engine wake.") };
 
   // Its caption opens the sender at the row of that message, its work unfolded.
   all("[data-slot=peer-caption]")[0]?.click();
@@ -189,7 +190,7 @@ try {
   // Live, in the receiver: the message steered into its running turn shows there, captioned.
   await openConversation(RECEIVER);
   await until(() => received().length > 0);
-  live(RECEIVER, [user("p2", "Fix the export job", L + 200), user("s2", header(SECOND, MORE), L + 300, { steer: true })], turn("p2", L + 200, null, ["r3"]));
+  live(RECEIVER, [user("p2", "Fix the export job", L + 200), user("s2", header(SECOND, MORE), L + 300, { steer: true, said: { by: "brigadier" } })], turn("p2", L + 200, null, ["r3"]));
   await until(() => received().some((each) => each.id === SECOND));
   await wait(200);
   seen.receivedLive = { received: received(), headers: headers() };

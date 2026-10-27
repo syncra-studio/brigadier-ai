@@ -8,7 +8,7 @@ type Row = { text: string | null; state: string | null; id: string | null; link:
 type Seen = {
   failed?: string;
   renderError: string | null;
-  receiver: { received: Received[]; headers: boolean; answer: string | null };
+  receiver: { received: Received[]; headers: boolean; answer: string | null; automaticNotice: boolean };
   jump: { opened: string | null; rows: Row[] };
   tooltip: string | null;
   sending: Row | null;
@@ -32,6 +32,7 @@ test("sessions messaging each other: the receiver's captioned message and the se
   // The receiver, read back: the message, never Brigadier's header, captioned, right-aligned; its reply below.
   assert.deepEqual(seen.receiver.received, [{ id: "sm-0123456789ab", caption: CAPTION, text: ASK, right: true }]);
   assert.equal(seen.receiver.headers, false, "Brigadier's header never shows");
+  assert.equal(seen.receiver.automaticNotice, false, "automatic engine notices never become bubbles beside authored peer content");
   assert.equal(seen.receiver.answer, "The export job reads customer_id; I'll point it at the new column.");
 
   // Its caption opens the sender at the row of that message, its folded work opened.

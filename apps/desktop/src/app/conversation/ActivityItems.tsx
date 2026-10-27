@@ -92,10 +92,11 @@ export const ActivityItems: FC<{
       {activity.map((item, index) =>
         item.type === "group" ? (
           <KeptScope key={`group:${item.key}`} name={`group:${item.key}`}>
+            {/* Message exchanges retain their sender rows; tool-call runs use collapsed groups. */}
             <ActivityGroup
               items={item.items}
               live={!!live && (!live.quotaWait || !!line) && index === activity.length - 1}
-              working={working}
+              working={working && !item.items.every(({ step }) => ["peerSent", "sessionSent", "messageRefused"].includes(step.kind.type))}
               liveLabel={inGroup && index === activity.length - 1 ? line : null}
               summary={summary}
               describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}

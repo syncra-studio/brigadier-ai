@@ -705,7 +705,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const asked = event.type === "message" && event.role === "user" ? event : null;
     // Who wrote it, as Brigadier noted when it sent it to the CLI (L12): its own words (a note,
     // a nudge, a frame, its `/compact`) are never a bubble, and of the user's words with its
-    // own around them only the user's show. Of a message it has no note of (sent before it
+    // own around them only the user's show. Peer deliveries keep their sender and authored
+    // content. Of a message it has no note of (sent before it
     // noted them) its words say whose it is, the way they begin.
     const said = asked ? entry.said : undefined;
     const ours = said?.by === "brigadier";
