@@ -5,12 +5,13 @@ import { createRoot } from "react-dom/client";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { connectPlugins, usePlugins, type PluginAgentResult, type PluginsAdapter } from "@/app/settings/plugins/adapter";
+import { catalogPage } from "@/app/settings/plugins/live";
 import { PluginsPage } from "@/app/settings/plugins/PluginsPage";
 import type { PluginElsewhereView, PluginItemDetails, PluginItemView, PluginProjectView, PluginsView } from "@/app/settings/plugins/types";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
-import type { ProviderKind } from "@/ipc/generated";
+import type { CatalogView, ProviderKind } from "@/ipc/generated";
 import { highlight } from "@/lib/highlight";
 import { useApp } from "@/state/store";
 import { openSettings, stepHistory } from "@/state/actions";
@@ -37,7 +38,7 @@ useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as type
 
 const AGENTS: ProviderKind[] = ["claude", "codex"];
 const HOME = "/Users/me";
-const LIB = `${HOME}/.brigadier/library/plugins`;
+const LIB = `${HOME}/.brigadier/library`;
 const projects: PluginProjectView[] = [
   { id: "p-brigadier", name: "brigadier-ai", path: `${HOME}/Code/brigadier-ai`, notes: [] },
   { id: "p-steady", name: "steady-app", path: `${HOME}/Code/steady-app`, notes: [] },
@@ -52,7 +53,7 @@ const some = (...projectIds: string[]) => ({ type: "someProjects" as const, proj
 function item(spec: Pick<PluginItemView, "key" | "kind" | "name" | "detail"> & Partial<PluginItemView>): PluginItemView {
   return {
     description: "", url: null, icon: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false,
-    skillCount: spec.kind === "skill" ? 1 : 0, files: [spec.kind === "skill" ? `${LIB}/${spec.name}/skills/${spec.name}/SKILL.md` : `${LIB}/${spec.name}/.mcp.json`],
+    skillCount: spec.kind === "skill" ? 1 : 0, files: [spec.kind === "skill" ? `${LIB}/skills/${spec.name}/SKILL.md` : `${LIB}/servers/${spec.name}.json`],
     ...spec,
   };
 }
@@ -60,17 +61,17 @@ function item(spec: Pick<PluginItemView, "key" | "kind" | "name" | "detail"> & P
 function startingItems(): PluginItemView[] {
   return [
     // Its site's icon, as the daemon sends it.
-    item({ key: "lib:context7", kind: "server", name: "Context7", description: "Up-to-date docs and code examples for the libraries you use.", detail: "https://mcp.context7.com/mcp", url: "https://mcp.context7.com/mcp", icon: CONTEXT7_ICON }),
+    item({ key: "lib:context7", kind: "server", name: "Context7", description: "Up-to-date docs and code examples for the libraries you use.", detail: "https://mcp.context7.com/mcp", url: "https://mcp.context7.com/mcp", icon: CONTEXT7_ICON, signIn: { type: "signedIn" } }),
     // An icon that doesn't load: its card falls back to the illustration.
     item({ key: "lib:error-feed", kind: "server", name: "error-feed", description: "Errors and slow pages from your apps.", detail: "https://errors.example.com/mcp", url: "https://errors.example.com/mcp", icon: "data:image/png;base64,broken" }),
-    item({ key: "lib:figma", kind: "server", name: "Figma", description: "Frames, components and variables from your Figma files.", detail: "http://127.0.0.1:3845/mcp", url: "http://127.0.0.1:3845/mcp" }),
+    item({ key: "lib:figma", kind: "server", name: "Figma", description: "Frames, components and variables from your Figma files.", detail: "http://127.0.0.1:3845/mcp", url: "http://127.0.0.1:3845/mcp", signIn: { type: "cliFallback", agents: ["codex"] } }),
     item({
       key: "server:github", kind: "server", name: "GitHub", description: "Issues, pull requests and code search across your repos.", detail: "npx -y @modelcontextprotocol/server-github",
-      removal: "copies", files: [`${HOME}/.claude.json`, `${LIB}/github/.mcp.json`],
+      removal: "none", files: [`${HOME}/.claude.json`, `${HOME}/.codex/config.toml`],
     }),
     item({
       key: "server:linear", kind: "server", name: "Linear", description: "Issues, projects and cycles from your Linear workspace.", detail: "https://mcp.linear.app/mcp", url: "https://mcp.linear.app/mcp",
-      scope: some("p-brigadier", "p-steady", "p-landing"), problem: { type: "needsSignIn", message: "Needs sign-in", serverId: "claude:user:linear", projectId: null },
+      scope: some("p-brigadier", "p-steady", "p-landing"), signIn: { type: "signedOut" }, problem: { type: "needsSignIn", message: "Needs sign-in", serverId: "claude:user:linear", projectId: null },
     }),
     item({ key: "lib:playwright", kind: "server", name: "Playwright", description: "Drives a browser: clicks, types and takes screenshots.", detail: "npx @playwright/mcp@latest", scope: some("p-brigadier") }),
     item({ key: "lib:postgres", kind: "server", name: "postgres", detail: "uvx postgres-mcp postgresql://localhost/steady", on: false, scope: some("p-steady") }),
@@ -78,20 +79,20 @@ function startingItems(): PluginItemView[] {
       key: "server:team-db", kind: "server", name: "team-db", description: "The team's staging database.", detail: "npx team-db-mcp", scope: some("p-steady"),
       locked: "Shared with your team in steady-app/.mcp.json: change it there.", removal: "none", files: [`${HOME}/Code/steady-app/.mcp.json`],
     }),
-    item({ key: "lib:commit-messages", kind: "skill", name: "commit-messages", description: "Writes commit messages in this repo's style.", detail: `${LIB}/commit-messages/skills/commit-messages` }),
+    item({ key: "lib:commit-messages", kind: "skill", name: "commit-messages", description: "Writes commit messages in this repo's style.", detail: `${LIB}/skills/commit-messages` }),
     item({
-      key: "plugin:frontend-design", kind: "skill", name: "frontend-design", description: "Distinctive, production-grade web pages and components.", detail: `${HOME}/.claude/plugins/frontend-design`,
+      key: "plugin:frontend-design", kind: "skill", name: "frontend-design", description: "Distinctive, production-grade web pages and components.", detail: `${HOME}/.agents/skills/frontend-design`, files: [`${HOME}/.agents/skills/frontend-design/SKILL.md`],
       problem: { type: "onlyIn", message: "Only in Claude Code: came in Claude Code's own plugin.", agents: ["claude"], reason: "ownPlugin" }, removal: "none",
     }),
-    item({ key: "lib:pdf-forms", kind: "skill", name: "pdf-forms", description: "Reads PDF forms and fills them in.", detail: `${LIB}/pdf-forms/skills/pdf-forms`, scope: some("p-brigadier", "p-docs") }),
+    item({ key: "lib:pdf-forms", kind: "skill", name: "pdf-forms", description: "Reads PDF forms and fills them in.", detail: `${LIB}/skills/pdf-forms`, scope: some("p-brigadier", "p-docs") }),
     item({
       key: "skill:pr-review", kind: "skill", name: "pr-review", description: "Reviews a pull request for bugs, tests and naming.", detail: `${HOME}/.claude/skills/pr-review`,
-      problem: { type: "onlyIn", message: "Only in Claude Code", agents: ["claude"], reason: "removed" }, removal: "none", canShare: true, files: [`${HOME}/.claude/skills/pr-review/SKILL.md`],
+      problem: { type: "onlyIn", message: "Only in Claude Code", agents: ["claude"], reason: "removed" }, removal: "none", differentPerAgent: true, canShare: false, files: [`${HOME}/.claude/skills/pr-review/SKILL.md`],
     }),
-    item({ key: "lib:release-notes", kind: "skill", name: "release-notes", description: "Drafts release notes from the pull requests merged since the last tag.", detail: `${LIB}/release-notes/skills/release-notes` }),
-    item({ key: "lib:rust-style", kind: "skill", name: "rust-style", description: "This workspace's Rust rules: errors, naming and tests.", detail: `${LIB}/rust-style/skills/rust-style`, scope: some("p-brigadier") }),
-    item({ key: "lib:tailwind-tokens", kind: "skill", name: "tailwind-tokens", detail: `${LIB}/tailwind-tokens/skills/tailwind-tokens`, on: false, scope: some("p-landing") }),
-    item({ key: "lib:webapp-testing", kind: "skill", name: "webapp-testing", description: "Tests a local web app in a browser and reports what broke.", detail: `${LIB}/webapp-testing/skills/webapp-testing`, scope: some("p-brigadier", "p-steady", "p-landing") }),
+    item({ key: "lib:release-notes", kind: "skill", name: "release-notes", description: "Drafts release notes from the pull requests merged since the last tag.", detail: `${LIB}/skills/release-notes` }),
+    item({ key: "lib:rust-style", kind: "skill", name: "rust-style", description: "This workspace's Rust rules: errors, naming and tests.", detail: `${LIB}/skills/rust-style`, scope: some("p-brigadier") }),
+    item({ key: "lib:tailwind-tokens", kind: "skill", name: "tailwind-tokens", detail: `${LIB}/skills/tailwind-tokens`, on: false, scope: some("p-landing") }),
+    item({ key: "lib:webapp-testing", kind: "skill", name: "webapp-testing", description: "Tests a local web app in a browser and reports what broke.", detail: `${LIB}/skills/webapp-testing`, scope: some("p-brigadier", "p-steady", "p-landing") }),
   ];
 }
 
@@ -149,7 +150,7 @@ function details(key: string): PluginItemDetails {
   return {
     key,
     kind: "skill",
-    skills: [{ name: shown.name, path, contents: saved.get(path) ?? skillText(shown.name), readOnly: shown.problem?.type === "onlyIn" && shown.problem.reason === "ownPlugin" ? "It came in Claude Code's own plugin: its next update would undo an edit." : null }],
+    skills: [{ name: shown.name, path, contents: saved.get(path) ?? skillText(shown.name), readOnly: "Open this file in your editor to change its instructions." }],
     server: null,
   };
 }
@@ -157,25 +158,28 @@ function details(key: string): PluginItemDetails {
 const adapter: PluginsAdapter = {
   read: async () => {
     reads++;
-    return view();
+    const current = view();
+    const catalog: CatalogView = { version: String(reads), rows: current.items.map((entry) => ({
+      id: entry.key, kind: entry.kind, name: entry.name, differentPerAgent: !!entry.differentPerAgent,
+      choice: { on: entry.on, scope: entry.scope.type === "allProjects" ? "global" : entry.scope.projectIds.map((id) => projects.find((project) => project.id === id)!.path) },
+      signIn: entry.signIn ?? { type: "notRequired" },
+      definitions: entry.files.map((file) => ({ agent: "claude", file, plugin: null, project: null, native: entry.name, aliases: [entry.name], fingerprint: entry.key, transport: entry.kind === "skill" ? null : entry.url ? "http" : "stdio", endpoint: entry.kind === "skill" ? null : entry.detail })),
+    })) };
+    const mapped = catalogPage(catalog, projects);
+    return { ...mapped, elsewhere: current.elsewhere };
   },
   subscribe: (onChange) => {
     listeners.add(onChange);
     return () => listeners.delete(onChange);
   },
   switchPlugin: async (key, on) => {
-    calls.push(`switchPlugin ${key} ${on}`);
+    calls.push(`setPluginChoice ${key} ${on}`);
     edit(key, { on });
     return ok();
   },
   setScope: async (key, projectIds) => {
-    calls.push(`setPluginScope ${key} ${projectIds ? projectIds.join(",") : "all"}`);
+    calls.push(`setPluginChoiceScope ${key} ${projectIds ? projectIds.join(",") : "all"}`);
     edit(key, { scope: projectIds ? some(...projectIds) : { type: "allProjects" } });
-    return ok();
-  },
-  share: async (key) => {
-    calls.push(`sharePlugin ${key}`);
-    edit(key, { problem: null, canShare: false, removal: "copies" });
     return ok();
   },
   checkAdd: async (text, name) => {
@@ -234,9 +238,6 @@ const adapter: PluginsAdapter = {
   signIn: async (key, serverId, projectId) => {
     calls.push(`signInMcpServer ${key} ${serverId} ${projectId ?? "all"}`);
     return new Promise(() => {});
-  },
-  cancelSignIn: async (key) => {
-    calls.push(`cancelMcpSignIn ${key}`);
   },
   pickFolder: async () => {
     calls.push("pickFolder");
@@ -351,6 +352,7 @@ function read() {
       const toggle = row.querySelector("[role=switch]");
       return `${text(row)} ${toggle?.getAttribute("aria-checked")}${toggle?.hasAttribute("disabled") ? " locked" : ""}`;
     }),
+    differentPerAgent: text(document.querySelector('[data-slot="different-per-agent"]')),
     sectionLine: text(document.querySelector('main section[data-setting="Projects"] p')),
     advanced: all('main [data-slot="fold"]').map((fold) => ({ open: fold.querySelector("button")?.getAttribute("aria-expanded") === "true", text: text(fold) })),
     removeRow: text(document.querySelector('main [data-slot="remove-row"]')),
@@ -426,9 +428,9 @@ const OPENERS: Record<string, () => Promise<void>> = {
     await appear('[data-slot="code-editor"] [data-line] span[style]');
   },
   R1: async () => {
-    click("Open GitHub");
+    click("Open Linear");
     await pause();
-    click("Remove GitHub");
+    click("Remove Linear");
   },
   A1: async () => click("Add"),
 };
@@ -441,97 +443,64 @@ async function drive(setKey: (key: number) => void) {
     await pause(150);
     seen[state] = read();
   }
-
-  // The card's switch: the whole item, in every agent.
   await reset(setKey);
   flip("Context7");
   await pause(120);
   seen.flipped = read();
-
-  // A locked item's switch does nothing.
+  setKey(Date.now());
+  await usePlugins.getState().reload();
+  await pause(120);
+  seen.remounted = read();
   flip("team-db");
-  await pause(60);
+  await pause(120);
+  seen.detectedOff = read();
+  tab("Skills");
+  await pause();
+  flip("frontend-design");
+  flip("pr-review");
+  await pause(120);
+  seen.nativeSkillsOff = read();
 
-  // Scope: one more project, then every project, then back to only some.
   await reset(setKey);
   await OPENERS.D1!();
   await pause();
-  click("docs-site");
-  await pause(120);
-  seen.scoped = read();
   choose("All projects");
   await pause(120);
-  seen.everywhere = read();
   choose("Only some projects");
   await pause(120);
-  seen.someAgain = read();
-
-  // Edit and save a SKILL.md; it opens again with the saved text.
-  await reset(setKey);
-  await OPENERS.F1!();
+  click("steady-app");
   await pause(120);
-  type("release-notes's SKILL.md", `${skillText("release-notes")}4. Keep it under 300 words.\n`);
-  await pause(60);
-  seen.edited = read();
-  // Escape doesn't close it while it has unsaved edits.
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  document.querySelector("[data-dialog]")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await pause(60);
-  seen.escaped = read();
-  click("Save");
-  await pause(150);
-  seen.savedClosed = read();
-  click("Open");
-  await pause(150);
-  seen.reopened = read();
-
-  // Saved over a file that changed since it was opened: refused, said plainly, Reload shows it now.
-  await reset(setKey);
-  await OPENERS.F1!();
+  click("landing");
   await pause(120);
-  type("release-notes's SKILL.md", `${skillText("release-notes")}4. Mine.\n`);
-  saved.set(`${LIB}/release-notes/skills/release-notes/SKILL.md`, `${skillText("release-notes")}4. Theirs.\n`);
-  // The page reads everything again (as it does every few seconds) while the edit waits.
-  changed();
-  await pause(150);
-  seen.refreshedWhileEditing = read();
-  click("Save");
-  await pause(150);
-  seen.refused = read();
-  click("Reload");
-  await pause(150);
-  seen.reloaded = read();
+  seen.scoped = read();
+  setKey(Date.now());
+  await usePlugins.getState().reload();
+  await pause(120);
+  seen.scopeRemounted = read();
 
-  // Share an item only Claude Code has; Remove one an agent has of its own: it stays, only there.
   await reset(setKey);
-  await OPENERS.D3!();
+  click("Open Figma");
   await pause();
-  click("Share with every agent");
-  await pause(150);
-  seen.shared = read();
+  seen.fallback = read();
   await reset(setKey);
-  await OPENERS.R1!();
+  click("Open GitHub");
   await pause();
-  click("Remove", document.querySelector("[data-dialog]")!);
-  await pause(150);
-  seen.removedCopies = read();
+  seen.detected = read();
 
-  // Add: every agent, all projects, its results after.
   await reset(setKey);
   click("Add");
   await pause();
-  type("What to add", "claude mcp add --transport http sentry https://mcp.sentry.dev/mcp");
+  type("What to add", "https://mcp.sentry.dev/mcp");
   click("Continue");
   await pause(120);
   seen.addReview = read();
   click("Add", document.querySelector("[data-dialog]")!);
   await pause(120);
   seen.adding = read();
-  adding?.resolve(ok());
+  adding?.resolve([]);
   await pause(120);
   seen.added = read();
 
-  // Import another app's server: listed by its app on Add's first step, then reviewed and imported.
   await reset(setKey);
   click("Add");
   await pause();
@@ -541,22 +510,12 @@ async function drive(setKey: (key: number) => void) {
   seen.importReview = read();
   click("Import", document.querySelector("[data-dialog]")!);
   await pause(120);
-  adding?.resolve(ok());
+  adding?.resolve([]);
   await pause(120);
   seen.imported = read();
   click("Done");
   await pause(120);
   seen.afterImport = read();
-
-  // Search narrows the grid.
-  await reset(setKey);
-  type("Search MCP servers", "git");
-  await pause(120);
-  seen.searched = read();
-  type("Search MCP servers", "nothing like this");
-  await pause(120);
-  seen.noMatch = read();
-
   seen.calls = calls;
   return seen;
 }

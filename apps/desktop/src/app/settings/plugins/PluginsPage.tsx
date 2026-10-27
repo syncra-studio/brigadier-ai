@@ -8,7 +8,6 @@ import { SettingsCard, SettingsSearch } from "@/components/shared";
 import { cn } from "@/lib/utils";
 import { openSettings, select } from "@/state/actions";
 import { useApp } from "@/state/store";
-import { toast } from "@/state/toasts";
 import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginAgentResult, type PluginsAdapter } from "./adapter";
 import { Changes, type Overlay } from "./changes";
@@ -40,6 +39,7 @@ type Open =
 
 export function PluginsPage() {
   const { view, adapter, error, refresh } = usePlugins();
+  useEffect(refresh, [refresh]);
   return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} />;
 }
 
@@ -124,13 +124,9 @@ function PluginsScreen({ view: read, adapter, error, refresh }: {
             { scope: projectIds ? { type: "someProjects", projectIds, folders: current.scope.type === "someProjects" ? current.scope.folders : [] } : { type: "allProjects" } },
             () => adapter.setScope(current.key, projectIds),
           ),
-          onSignIn: adapter.signIn && current.problem?.type === "needsSignIn"
-            ? (() => {
-              const { serverId, projectId } = current.problem;
-              return () => setDialog({ type: "signIn", key: current.key, serverId, projectId });
-            })()
+          onSignIn: adapter.signIn && current.signIn && !["notRequired", "signedIn"].includes(current.signIn.type)
+            ? () => setDialog({ type: "signIn", key: current.key, serverId: current.key, projectId: null })
             : undefined,
-          onShare: () => change(current.key, {}, () => adapter.share(current.key), () => toast(`${current.name} is in every agent now`)),
           onRemove: () => setDialog({ type: "remove", key: current.key }),
           onRetry: refresh,
           onUpdate: () => change(current.key, {}, () => adapter.update(current.key)),

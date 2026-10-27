@@ -13,19 +13,17 @@ import { TooltipProvider } from "@/components/overlays";
 import { TitlebarNav } from "@/components/shared";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { accounts, overviews, usageView } from "@/fixtures/providersData";
-import type { PluginsView } from "@/app/settings/plugins/types";
+import type { CatalogView } from "@/ipc/generated";
 import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { openAgentPage, useAgentPageAsk } from "@/state/agentPage";
 import { useHistory } from "@/state/history";
 import { useApp } from "@/state/store";
 
-const plugins: PluginsView = {
-  projects: [], elsewhere: [],
-  items: [{
-    key: "server:example", kind: "server", name: "Example server", description: "Fixture server", detail: "example-mcp",
-    url: null, icon: null, on: true, scope: { type: "allProjects" }, problem: null, locked: null, removal: "everything", canShare: false, skillCount: 0, files: [],
-  }],
+const catalog: CatalogView = {
+  version: "fixture",
+  rows: [{ id: "server:example", kind: "server", name: "Example server", choice: { on: true, scope: "global" }, differentPerAgent: false,
+    signIn: { type: "notRequired" }, definitions: [{ agent: "claude", file: "/fixture/.claude.json", plugin: null, project: null, native: "example", aliases: ["example"], fingerprint: "fixture", transport: "stdio", endpoint: "example-mcp" }] }],
 };
 const native: string[] = [];
 let signIns = 0;
@@ -38,7 +36,8 @@ mockIPC((command, payload) => {
   switch (req.method) {
     case "getAccounts": return { method: req.method, accounts: { accounts, warnings: [] } };
     case "getUsage": return { method: req.method, usage: usageView() };
-    case "getPlugins": return { method: req.method, plugins };
+    case "getPluginCatalog": return { method: req.method, catalog };
+    case "getPluginSignInStatus": return { method: req.method, state: { type: "notRequired" } };
     case "connectAgent": signIns++; break;
     default: break;
   }

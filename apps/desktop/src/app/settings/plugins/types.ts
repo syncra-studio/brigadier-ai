@@ -3,7 +3,6 @@ export type {
   OnlyInReason,
   PluginElsewhereView,
   PluginItemDetails,
-  PluginItemView,
   PluginKind,
   PluginProblem,
   PluginProjectView,
@@ -11,5 +10,12 @@ export type {
   PluginScope,
   PluginServerSettings,
   PluginSkillFile,
-  PluginsView,
 } from "@/ipc/generated";
+
+import type { CatalogSignIn, PluginItemView as LegacyItem, PluginsView as LegacyView } from "@/ipc/generated";
+
+export type PluginItemView = LegacyItem & {
+  differentPerAgent?: boolean;
+  signIn?: CatalogSignIn;
+};
+export type PluginsView = Omit<LegacyView, "items"> & { items: PluginItemView[] };

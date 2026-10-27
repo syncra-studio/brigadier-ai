@@ -174,3 +174,51 @@ test("queued requests also lose their error after leaving and returning", async 
   assert.equal(changes.failure(place), null);
   assert.equal(changes.pending("server:pencil"), false);
 });
+
+test("live catalog adapter saves project roots and reads persisted choices on a new connection", async () => {
+  const { mockIPC, clearMocks } = await import("@tauri-apps/api/mocks");
+  const { livePlugins } = await import("./live");
+  const { useApp } = await import("@/state/store");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const previousProjects = useApp.getState().projects;
+  const paths = ["/fixture/project-a", "/fixture/project-b"];
+  useApp.setState({ projects: { fixture: {
+    id: "fixture", name: "Fixture", createdAtMs: 0, repos: paths.map((path) => ({ path, name: path.split("/").at(-1)! })),
+    prefs: {} as import("@/ipc/generated").ProjectPrefs,
+    trust: paths.map((path) => ({ path, trusted: true, decidedAtMs: 0 })),
+  } } });
+  const catalog: import("@/ipc/generated").CatalogView = { version: "v1", rows: [{
+    id: "server:detected", kind: "server", name: "detected", differentPerAgent: false,
+    choice: { on: true, scope: "global" }, signIn: { type: "signedOut" },
+    definitions: [{ agent: "claude", file: "/fixture/.claude.json", plugin: null, project: null, native: "detected", aliases: ["detected"], fingerprint: "one", transport: "http", endpoint: "https://fixture.test/mcp" }],
+  }] };
+  const sent: import("@/ipc/generated").Request[] = [];
+  mockIPC((command, payload) => {
+    assert.equal(command, "ipc_request");
+    const { request } = payload as { request: import("@/ipc/generated").Request };
+    sent.push(request);
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: structuredClone(catalog) };
+    if (request.method === "getPluginSignInStatus") return { method: request.method, state: { type: "signedIn" } };
+    if (request.method === "setPluginChoice") catalog.rows[0]!.choice.on = request.on;
+    if (request.method === "setPluginChoiceScope") catalog.rows[0]!.choice.scope = request.scope;
+    return { method: request.method };
+  });
+  try {
+    const first = livePlugins();
+    await first.switchPlugin("server:detected", false);
+    await first.setScope("server:detected", paths);
+    const fresh = await livePlugins().read();
+    assert.equal(fresh.items[0]!.on, false);
+    assert.deepEqual(fresh.items[0]!.scope, { type: "someProjects", projectIds: paths, folders: [] });
+    assert.deepEqual(fresh.items[0]!.signIn, { type: "signedIn" });
+    assert.equal(fresh.items[0]!.locked, null);
+    assert.equal(fresh.items[0]!.removal, "none");
+    assert.deepEqual(sent.map((request) => request.method), ["setPluginChoice", "setPluginChoiceScope", "getPluginCatalog", "getPluginSignInStatus"]);
+    assert.deepEqual(sent[1], { method: "setPluginChoiceScope", rowId: "server:detected", scope: paths });
+  } finally {
+    clearMocks();
+    useApp.setState({ projects: previousProjects });
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+  }
+});

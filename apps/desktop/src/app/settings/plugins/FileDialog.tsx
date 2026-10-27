@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { SkillSave } from "./adapter";
 import type { PluginItemDetails, PluginItemView, PluginServerSettings } from "./types";
 
-/** What a value Brigadier keeps in the Keychain shows as: never the value itself. */
+/** What a configured value shows as: never the value itself. */
 export const HIDDEN_VALUE = "••••••••";
 
 /** Each name with its value hidden. */
