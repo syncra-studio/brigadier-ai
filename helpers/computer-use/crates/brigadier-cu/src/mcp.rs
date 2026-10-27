@@ -366,13 +366,34 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn real_tool_list_per_audience_and_lean_budget() {
+    fn macos_real_registry_tool_list_budget() {
+        assert_real_tool_list_budget();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_real_registry_tool_list_budget() {
+        assert_real_tool_list_budget();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_real_registry_tool_list_budget() {
+        assert_real_tool_list_budget();
+    }
+
+    fn assert_real_tool_list_budget() {
         let registry = crate::one_shot_registry(false);
         let full = agent_tools_list(&registry);
         assert_eq!(lean::tools_list(full.clone(), false), full);
         let small = lean::tools_list(full, true);
         assert_eq!(small["tools"].as_array().unwrap().len(), 20);
         let bytes = serde_json::to_vec(&small).unwrap().len();
+        eprintln!(
+            "{} tools/list: {bytes} bytes (~{} tokens)",
+            std::env::consts::OS,
+            bytes / 4
+        );
         assert!(
             bytes <= 28_000,
             "lean list is {bytes} bytes (~{} tokens)",

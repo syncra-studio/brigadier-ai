@@ -63,6 +63,11 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
                 object.remove("risk");
             }
             shorten_schema(&mut tool["inputSchema"]);
+            // These duplicate the tool name and the concise description above.
+            if let Some(schema) = tool["inputSchema"].as_object_mut() {
+                schema.remove("description");
+                schema.remove("title");
+            }
             if name == "get_window_state" {
                 for (field, description) in [
                     ("include_screenshot", "Default false; thin trees automatically include an image. Explicit false disables fallback; true requests an image."),
@@ -109,6 +114,9 @@ fn description(name: &str) -> &'static str {
 fn shorten_schema(schema: &mut Value) {
     match schema {
         Value::Object(object) => {
+            if let Some(Value::String(description)) = object.get_mut("description") {
+                *description = offered_tool_prose(description);
+            }
             if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
                 properties.remove("session");
                 let has_element_target = properties.contains_key("element_token");
@@ -154,14 +162,30 @@ fn shorten_schema(schema: &mut Value) {
 
 fn property_description(name: &str) -> Option<&'static str> {
     Some(match name {
-        "element_token" => "Fresh S:N handle from snapshot_id S and row [N]. New reads stale old tokens.",
+        "include_accessibility_tree" => "Default true. False skips the tree; then include_screenshot must be true.",
+        "query" => "Case-insensitive substring: return matches and ancestors with original ids. No automatic screenshot for filtered reads.",
+        "max_elements" => "Walk node budget; default 250. Raise if truncated to reach later nodes.",
+        "max_depth" => "Maximum walk depth; deeper nodes omitted. Raise to reach nested content.",
+        "capture_id" => "Target screenshot capture id; consumed before dispatch.",
+        "from_zoom" => "Use coordinates from the last zoom image; mapped back to the window.",
+        "button" => "Mouse button (default left).",
+        "modifier" => "Modifier held during this action.",
+        "modifiers" => "Modifiers held during this action.",
+        "additional_arguments" => "Extra launch arguments passed to the app.",
+        "environment" => "Environment variables for the launched process.",
+        "start_minimized" => "Start minimized when supported. A minimized window may have no screenshot content.",
+        "launch_path" => "Exact launch_path returned by list_apps; takes precedence over aliases (Windows: command line or AUMID; Linux: desktop Exec command).",
+        "display_only" => "Screenshot preview only: does not refresh snapshots or captures and cannot ground input.",
+        "coordinate_frame" => "Window-local screenshot pixels.",
+        "app" => "Filter by case-insensitive app name or exact bundle id; prefer app or pid to an unfiltered listing.",
+        "element_token" => "S:N from snapshot_id S and row [N]; new reads stale old tokens.",
         "target" => "Exact window: {kind:\"window\",pid,window_id}.",
         "scope" => "Window scope (default).",
         "kind" => "Window target requires pid and window_id.",
-        "pid" => "Process id; optional with element_token.",
-        "window_id" => "Window id from list_windows; omit with element_token.",
-        "x" => "Screenshot-pixel X; pass with y and window_id.",
-        "y" => "Screenshot-pixel Y; pass with x and window_id.",
+        "pid" => "Process id; omit with element_token.",
+        "window_id" => "Window id from list_windows; omit with token.",
+        "x" => "Screenshot X; requires y and window_id.",
+        "y" => "Screenshot Y; requires x and window_id.",
         "since" => "Prior snapshot_id or latest (same window/query/limits). Returns diff with NEW snapshot_id; obey reindexed mappings. Invalid baseline falls back to full read. Null requests full read in run_steps.observe.",
         "tree_format" => "Default markdown; elements for per-row geometry; both includes both representations.",
         "full_output" => "Full metadata and both tree forms; larger walk limits. Incompatible with since.",
@@ -214,7 +238,8 @@ pub fn arguments(name: &str, mut args: Value, brigadier: bool) -> Value {
 }
 
 fn geometry_for_classification(args: &Value) -> bool {
-    args["include_accessibility_tree"] != false
+    args.get("query").is_none_or(Value::is_null)
+        && args["include_accessibility_tree"] != false
         && args["full_output"] != true
         && matches!(args["tree_format"].as_str(), None | Some("markdown"))
 }
@@ -249,6 +274,7 @@ pub fn result(name: &str, mut result: Value, brigadier: bool) -> Value {
             .filter(|block| block["type"] == "text")
             .filter_map(|block| block["text"].as_str().map(str::to_owned))
             .collect();
+        rewrite_tool_hints(&mut result, true);
         if let Some(structured) = result.get_mut("structuredContent") {
             remove_error_tree_duplicates(structured, &texts);
         }
@@ -275,7 +301,142 @@ pub fn result(name: &str, mut result: Value, brigadier: bool) -> Value {
         }
         content.retain(|block| block["type"] != "text" || block["text"] != "");
     }
+    rewrite_tool_hints(&mut result, name != "page");
     result
+}
+
+// Rewrite driver guidance only. App labels, trees, page text and URLs are data.
+fn rewrite_tool_hints(value: &mut Value, content_is_prose: bool) {
+    match value {
+        Value::Object(object) => {
+            let mut trees = Vec::new();
+            if let Some(structured) = object.get("structuredContent") {
+                collect_trees(structured, &mut trees);
+            }
+            for (key, value) in object {
+                if matches!(
+                    key.as_str(),
+                    "tree_markdown"
+                        | "tree"
+                        | "tree_diff"
+                        | "app_name"
+                        | "window_title"
+                        | "selected_text"
+                        | "menu"
+                        | "path"
+                        | "screenshot"
+                        | "image"
+                        | "elements"
+                        | "value"
+                        | "values"
+                        | "title"
+                        | "label"
+                        | "name"
+                        | "html"
+                        | "url"
+                        | "urls"
+                        | "apps"
+                        | "windows"
+                        | "items"
+                ) {
+                    continue;
+                }
+                if key == "result"
+                    && value.get("content").is_none()
+                    && value.get("structuredContent").is_none()
+                {
+                    continue;
+                }
+                if key == "text" && value.is_string() {
+                    // A text content block is driver prose; structured text is
+                    // page/app content. The content array is handled below.
+                    continue;
+                }
+                if key == "content" {
+                    if let Some(blocks) = value.as_array_mut().filter(|_| content_is_prose) {
+                        for block in blocks {
+                            if block["type"] == "text" {
+                                if let Some(text) = block["text"].as_str() {
+                                    block["text"] =
+                                        offered_tool_prose_around_trees(text, &trees).into();
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    rewrite_tool_hints(value, content_is_prose);
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| rewrite_tool_hints(item, content_is_prose)),
+        Value::String(text) => *text = offered_tool_prose(text),
+        _ => {}
+    }
+}
+
+fn offered_tool_prose_around_trees(text: &str, trees: &[String]) -> String {
+    let mut rest = text;
+    let mut out = String::new();
+    while let Some((start, tree)) = trees
+        .iter()
+        .filter(|tree| !tree.is_empty())
+        .filter_map(|tree| rest.find(tree).map(|start| (start, tree)))
+        .min_by_key(|(start, _)| *start)
+    {
+        out.push_str(&offered_tool_prose(&rest[..start]));
+        out.push_str(tree);
+        rest = &rest[start + tree.len()..];
+    }
+    out.push_str(&offered_tool_prose(rest));
+    out
+}
+
+fn offered_tool_prose(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let row = line
+                .trim_start()
+                .trim_start_matches(['-', '+', '~', '*', ' ']);
+            if row.starts_with('[') && row[1..].starts_with(|c: char| c.is_ascii_digit()) {
+                return line.to_owned();
+            }
+            if line.contains("escalate_session") || line.contains("bring_to_front") {
+                return "Use list_windows, then get_window_state for the target window; ask the user to handle unsupported steps.".into();
+            }
+            let mut out = String::new();
+            for word in line.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                let token = word.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+                let hidden = !ROSTER.contains(&token)
+                    && (cu_layer::catalog::OFFERED.contains(&token)
+                        || cu_layer::catalog::WITHHELD
+                            .iter()
+                            .any(|(name, _)| *name == token)
+                        || token == "type_text_chars");
+                let replacement = match token {
+                    "get_desktop_state" => {
+                        "list_windows then get_window_state with include_screenshot:true"
+                    }
+                    "get_accessibility_tree" => "get_window_state",
+                    "browser_navigate" => "launch_app",
+                    "type_text_chars" | "browser_type" => "type_text",
+                    "browser_click" | "browser_pointer" => "click",
+                    "get_browser_state"
+                    | "browser_prepare"
+                    | "browser_dialog"
+                    | "browser_download"
+                    | "browser_set_input_files" => "page",
+                    "get_screen_size" | "get_cursor_position" => "get_window_state",
+                    _ => "get_window_state",
+                };
+                out.push_str(if hidden { replacement } else { token });
+                out.push_str(&word[token.len()..]);
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collect_trees(value: &Value, trees: &mut Vec<String>) {
@@ -353,6 +514,12 @@ impl View {
             return None;
         }
         let window = (original["pid"].as_i64()?, original["window_id"].as_i64()?);
+        // A narrow search says nothing about the complete window's readability.
+        // Do not replace the full-window quality baseline with query results.
+        if original.get("query").is_some_and(|query| !query.is_null()) {
+            restore_read_format(original, read);
+            return None;
+        }
         let state = &read["structuredContent"];
         if state["since_status"] == "no_change" {
             restore_read_format(original, read);
@@ -507,6 +674,89 @@ mod tests {
     fn read(markdown: &str) -> Value {
         json!({"content":[{"type":"text","text":format!("snapshot_id=s00000001\n{markdown}")}],
             "structuredContent":{"snapshot_id":"s00000001", "tree_markdown":markdown}, "isError":false})
+    }
+
+    #[test]
+    fn filtered_reads_and_observations_do_not_request_automatic_images() {
+        let mut view = View::default();
+        let mut empty = json!({"structuredContent":{"tree_markdown":"", "elements":[]}});
+        assert!(view
+            .fallback_arguments(
+                "get_window_state",
+                &json!({"pid":1,"window_id":2,"query":"Save"}),
+                &mut empty,
+                true
+            )
+            .is_none());
+        assert!(view.windows.is_empty());
+        let mut batch = json!({"structuredContent":{"observation":{"ok":true,"state":{"pid":1,"window_id":2,"tree_markdown":""}}}});
+        assert!(view
+            .fallback_arguments(
+                "run_steps",
+                &json!({"observe":{"query":"Save"}}),
+                &mut batch,
+                true
+            )
+            .is_none());
+        assert!(view.windows.is_empty());
+        assert!(view
+            .fallback_arguments(
+                "get_window_state",
+                &json!({"pid":1,"window_id":2}),
+                &mut empty,
+                true
+            )
+            .is_some());
+    }
+
+    #[test]
+    fn driver_hints_and_errors_use_offered_tools_without_changing_app_data() {
+        for error in [false, true] {
+            let tree = "- [1] Button \"get_desktop_state\"";
+            let out = result(
+                "get_window_state",
+                json!({"isError":error,
+                    "content":[{"type":"text","text":"Call `get_desktop_state` to refresh."}],
+                    "structuredContent":{"hint":"Call get_desktop_state or get_accessibility_tree.", "tree_markdown":tree,"text":"get_desktop_state", "elements":[{"name":"get_desktop_state"}]}
+                }),
+                true,
+            );
+            assert!(!out["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("get_desktop_state"));
+            assert!(!out["structuredContent"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("get_desktop_state"));
+            assert_eq!(out["structuredContent"]["tree_markdown"], tree);
+            assert_eq!(out["structuredContent"]["text"], "get_desktop_state");
+            assert_eq!(
+                out["structuredContent"]["elements"][0]["name"],
+                "get_desktop_state"
+            );
+        }
+        let page = json!({"content":[{"type":"text","text":"Documentation: get_desktop_state"}]});
+        assert_eq!(result("page", page.clone(), true), page);
+        let tree = "- [1] Button \"Name\nget_desktop_state\"";
+        let out = result(
+            "get_window_state",
+            json!({"content":[{"type":"text","text":format!("snapshot\n{tree}\nCall get_desktop_state.")}],"structuredContent":{"tree_markdown":tree}}),
+            true,
+        );
+        assert_eq!(out["structuredContent"]["tree_markdown"], tree);
+        assert!(!out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("get_desktop_state"));
+        let out = result(
+            "get_window_state",
+            json!({"isError":true,"content":[{"type":"text","text":format!("Read failed\n{tree}\nCall get_desktop_state.")}],"structuredContent":{"tree_markdown":tree}}),
+            true,
+        );
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(tree));
+        assert!(text.contains("Call list_windows then get_window_state"));
     }
 
     #[test]
