@@ -1,4 +1,4 @@
-import type { Unstable_TriggerMatcher } from "@assistant-ui/react";
+import type { Unstable_TriggerItem, Unstable_TriggerMatcher } from "@assistant-ui/react";
 
 /**
  * Where `query` matches `text`, as the `/` and `@` menus match: at its start, anywhere
@@ -34,3 +34,15 @@ export const slashTrigger: Unstable_TriggerMatcher = (text, char, cursor) => {
   if (!word.startsWith(char)) return null;
   return { query: word.slice(char.length), offset: cursor - word.length, endOffset: cursor };
 };
+
+
+/** Rank matches within each original group so filtering never repeats a group heading. */
+export function commandMatches(items: readonly Unstable_TriggerItem[], query: string): Unstable_TriggerItem[] {
+  const groups = [...new Set(items.map((item) => item.metadata?.group))];
+  return items.map((item) => ({
+    item,
+    rank: Math.min(fuzzyMatch(item.label, query)?.rank ?? 3, fuzzyMatch(item.id, query)?.rank ?? 3),
+  })).filter(({ rank }) => rank < 3).toSorted((a, b) =>
+    groups.indexOf(a.item.metadata?.group) - groups.indexOf(b.item.metadata?.group) || a.rank - b.rank,
+  ).map(({ item }) => item);
+}

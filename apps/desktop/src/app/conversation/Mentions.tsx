@@ -8,6 +8,7 @@ import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { Chat, File, Folder, Globe } from "@/components/icons";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
+import { skillLabel, hasSkillToken } from "@/app/conversation/cliCommands";
 import { foldersOf, mentionSections, type MentionRow, type MentionTab, type MentionTarget } from "@/app/conversation/mentionSearch";
 import { listFiles, listProjectFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -22,9 +23,8 @@ const NO_TARGETS: readonly MentionTarget[] = [];
 /** What a mention leaves in the text, after `@`. */
 function label(mention: Mention, targets: readonly MentionTarget[]): string | null {
   switch (mention.type) {
-    // D: composer input supplies skill-chip labels.
     case "skill":
-      return null;
+      return skillLabel(mention.rowId);
     case "task": {
       const target = targets.find((entry) => entry.id === mention.id);
       return target ? `task-${target.number}` : null;
@@ -126,7 +126,7 @@ export function mentionsIn(
     if (mention.type === "task") continue;
     const name = label(mention, targets);
     const key = itemOf(mention, name ?? "").id;
-    if (name && !seen.has(key) && hasMention(text, name)) {
+    if (name && !seen.has(key) && (mention.type === "skill" ? hasSkillToken(text, name) : hasMention(text, name))) {
       seen.add(key);
       mentions.push(mention);
     }
@@ -153,7 +153,8 @@ export class MentionMemory {
   /** Remembers the files and conversations a message, queued item or draft mentions. */
   recall(mentions: readonly Mention[]): void {
     for (const mention of mentions) {
-      if (mention.type === "file" || mention.type === "folder") this.record(mention, mention.path);
+      if (mention.type === "skill") this.record(mention, skillLabel(mention.rowId));
+      else if (mention.type === "file" || mention.type === "folder") this.record(mention, mention.path);
       else if (mention.type === "chat") this.record(mention, mention.title);
       else if (mention.type === "browserTab") this.record(mention, mention.title.trim() || mention.url);
     }
@@ -195,7 +196,6 @@ export function directTaskOf(item: { id: string; type: string }): string | null 
 /** A mention's menu item: its id is unique across kinds, its label goes in the text. */
 function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
   const id = "path" in mention ? `${mention.type}:${mention.path}`
-    // D: composer input uses the resolver row identity for skill chips.
     : mention.type === "skill" ? `${mention.type}:${mention.rowId}`
     : mention.type === "browserTab" ? `${mention.type}:${mention.tab}`
     : `${mention.type}:${mention.id}`;
@@ -206,6 +206,8 @@ function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
 export function mentionOf(item: { id: string; type: string; label: string }): Mention | null {
   const rest = item.id.slice(item.id.indexOf(":") + 1);
   switch (item.type) {
+    case "skill":
+      return { type: "skill", rowId: rest };
     case "file":
       return { type: "file", path: rest };
     case "folder":

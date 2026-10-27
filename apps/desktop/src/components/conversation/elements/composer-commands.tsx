@@ -15,7 +15,7 @@ import {
 } from "react";
 
 import { MatchedText } from "@/components/conversation/elements/fuzzy-match";
-import { fuzzyMatch, slashTrigger } from "@/components/conversation/elements/menuMatch";
+import { commandMatches, slashTrigger } from "@/components/conversation/elements/menuMatch";
 import { floatingMenu } from "@/components/conversation/elements/surfaces";
 import { itemBase, MenuRow } from "@/components/overlays/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,8 @@ export type ComposerCommand = {
   run?: () => void;
   /** What picking it types where the `/` was (a CLI's "/review"), the rest of the message kept. */
   text?: string;
+  chip?: Unstable_TriggerItem;
+  trailing?: string;
 };
 
 /** assistant-ui's trigger adapter (its type lives in @assistant-ui/core). */
@@ -44,7 +46,7 @@ type TriggerAdapter = NonNullable<
  * categories, so every command shows at once with its group heading, and typing filters by
  * name (letters in order are enough).
  */
-function commandAdapter(commands: readonly ComposerCommand[]): TriggerAdapter {
+export function commandAdapter(commands: readonly ComposerCommand[]): TriggerAdapter {
   const items: Unstable_TriggerItem[] = commands.map((command) => ({
     id: command.id,
     type: "command",
@@ -56,15 +58,7 @@ function commandAdapter(commands: readonly ComposerCommand[]): TriggerAdapter {
     categories: () => [],
     categoryItems: () => [],
     search(query) {
-      // Over names and ids: names that start with the query first, then those
-      // holding it, then those with its letters in order; alphabetical within each.
-      const rankOf = (item: Unstable_TriggerItem) =>
-        Math.min(fuzzyMatch(item.label, query)?.rank ?? 3, fuzzyMatch(item.id, query)?.rank ?? 3);
-      return items
-        .map((item) => ({ item, rank: rankOf(item) }))
-        .filter(({ rank }) => rank < 3)
-        .toSorted((a, b) => a.rank - b.rank)
-        .map(({ item }) => item);
+      return commandMatches(items, query);
     },
   };
 }
@@ -79,7 +73,8 @@ export const ComposerCommands: FC<{
   commands: readonly ComposerCommand[];
   /** Called as the menu opens, to bring its commands up to date. */
   onOpen?: () => void;
-}> = ({ commands, onOpen }) => {
+  onPick?: (command: ComposerCommand, text: string) => boolean;
+}> = ({ commands, onOpen, onPick }) => {
   const adapter = useMemo(() => commandAdapter(commands), [commands]);
   const byId = useMemo(() => new Map(commands.map((command) => [command.id, command])), [commands]);
   // Where the typed `/` and its query are, for a command that types its text there.
@@ -98,7 +93,7 @@ export const ComposerCommands: FC<{
         removeOnExecute
         onExecute={(item) => byId.get(item.id)?.run?.()}
       />
-      <TypeCommandText byId={byId} trigger={trigger} onOpen={onOpen} />
+      <TypeCommandText byId={byId} trigger={trigger} onOpen={onOpen} onPick={onPick} />
       <ComposerPrimitive.Unstable_TriggerPopoverItems>
         {(matches) => (
           <CommandList>
@@ -120,6 +115,7 @@ export const ComposerCommands: FC<{
                       icon={command?.icon ?? null}
                       title={<MatchedText text={item.label} />}
                       detail={item.description}
+                      hint={command?.trailing}
                     />
                   </ComposerPrimitive.Unstable_TriggerPopoverItem>
                 </div>
@@ -144,10 +140,12 @@ function TypeCommandText({
   byId,
   trigger,
   onOpen,
+  onPick,
 }: {
   byId: ReadonlyMap<string, ComposerCommand>;
   trigger: { readonly current: { offset: number; endOffset: number } | null };
   onOpen: (() => void) | undefined;
+  onPick: ((command: ComposerCommand, text: string) => boolean) | undefined;
 }) {
   const aui = useAui();
   const { open, registerSelectItemOverride, setCursorPosition } = unstable_useTriggerPopoverScopeContext();
@@ -157,17 +155,19 @@ function TypeCommandText({
   useEffect(
     () =>
       registerSelectItemOverride((item) => {
-        const text = byId.get(item.id)?.text;
+        const command = byId.get(item.id);
+        const text = command?.chip?.label ?? command?.text;
         const at = trigger.current;
         if (text === undefined || !at) return false;
         const current = aui.composer().getState().text;
+        if (command && onPick && !onPick(command, current)) return true;
         const before = current.slice(0, at.offset);
         const after = current.slice(at.endOffset);
         aui.composer().setText(before + text + (after.startsWith(" ") ? after : ` ${after}`));
         setCursorPosition(before.length + text.length + 1);
         return true;
       }),
-    [aui, byId, trigger, registerSelectItemOverride, setCursorPosition],
+    [aui, byId, trigger, onPick, registerSelectItemOverride, setCursorPosition],
   );
   return null;
 }

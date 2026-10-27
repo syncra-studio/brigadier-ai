@@ -2,6 +2,7 @@ import { inlineKind, normalizedImages } from "@/lib/inlineImages";
 import { useAui, useAuiState } from "@/components/conversation/kit";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
+import { skillLabel } from "@/app/conversation/cliCommands";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import type { MentionMemory } from "@/app/conversation/Mentions";
 import { markersIn } from "@/app/conversation/inlineImages";
@@ -88,6 +89,7 @@ export function keepWhole(scope: string, draft: SentDraft): void {
 /** Each file, folder, conversation or tab mention with the `@name` it leaves in the text. */
 function named(mentions: readonly Mention[]): [string, Mention][] {
   return mentions.flatMap((mention): [string, Mention][] => {
+    if (mention.type === "skill") return [[skillLabel(mention.rowId), mention]];
     if (mention.type === "file" || mention.type === "folder") return [[mention.path, mention]];
     if (mention.type === "chat") return [[mention.title, mention]];
     if (mention.type === "browserTab") return [[mention.title.trim() || mention.url, mention]];
@@ -99,7 +101,9 @@ function named(mentions: readonly Mention[]): [string, Mention][] {
 function mentionsAt(text: string, entries: Iterable<[string, Mention]>): DraftMention[] {
   const found: DraftMention[] = [];
   for (const [name, mention] of entries) {
-    for (let at = text.indexOf(`@${name}`); at >= 0; at = text.indexOf(`@${name}`, at + 1)) {
+    const token = mention.type === "skill" ? name : `@${name}`;
+    for (let at = text.indexOf(token); at >= 0; at = text.indexOf(token, at + 1)) {
+      if (mention.type === "skill" && ((at > 0 && !/\s/.test(text[at - 1] ?? "")) || /[\p{L}\p{N}_\-./]/u.test(text[at + token.length] ?? ""))) continue;
       found.push({ at, name, mention });
     }
   }
@@ -135,7 +139,7 @@ export function useComposerDraft(
     if (!draft || !composer.getState().isEmpty) return;
     memory.recall(
       (draft.mentions ?? [])
-        .filter(({ at, name }) => saved!.text.startsWith(`@${name}`, at))
+        .filter(({ at, name, mention }) => saved!.text.startsWith(mention.type === "skill" ? name : `@${name}`, at))
         .map(({ mention }) => mention),
     );
     composer.setText(draft.text);

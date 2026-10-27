@@ -2357,8 +2357,13 @@ impl CodexSession {
                         type_: p::TextUserInputType::Text,
                     });
                 }
-                // D: composer input serializes resolved skill references.
-                crate::InputPart::Skill { .. } => {}
+                crate::InputPart::Skill { invocation, path } => {
+                    items.push(p::UserInput::SkillUserInput {
+                        name: invocation.clone(),
+                        path: path.display().to_string(),
+                        type_: p::SkillUserInputType::Skill,
+                    });
+                }
                 crate::InputPart::Text(_) => {}
             }
         }
@@ -3055,6 +3060,31 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair[0] == "--disable" && pair[1] == "browser_use"),
             "{args:?}"
+        );
+    }
+
+    #[test]
+    fn skill_input_serializes_exact_name_and_path_for_send_and_steer() {
+        let input = TurnInput {
+            parts: vec![
+                crate::InputPart::Skill {
+                    invocation: "proj-hello".into(),
+                    path: "/resolved/proj-hello/SKILL.md".into(),
+                },
+                crate::InputPart::Text("explain this".into()),
+            ],
+            files: Vec::new(),
+        };
+        let items = CodexSession::input(&input).unwrap();
+        assert_eq!(
+            serde_json::to_value(&items[0]).unwrap(),
+            json!({
+                "type": "skill", "name": "proj-hello", "path": "/resolved/proj-hello/SKILL.md"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&items[1]).unwrap()["text"],
+            "explain this"
         );
     }
 

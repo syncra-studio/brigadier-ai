@@ -108,7 +108,6 @@ function score(row: MentionRow, query: string): number | null {
   return path.rank === 2 ? 5 : 3;
 }
 
-// D: composer input supplies skill menu rows.
 const KIND_ORDER: Record<Mention["type"], number> = { task: 0, browserTab: 1, file: 2, folder: 3, chat: 4, page: 5, skill: 6 };
 
 /**

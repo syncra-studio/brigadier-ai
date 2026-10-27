@@ -118,6 +118,13 @@ export function tokenAt(
       };
     }
   }
+  if (char === "/" && afterSpace) {
+    const known = mention(text, at);
+    const end = known ? at + known.label.length : -1;
+    if (known?.type === "skill" && !WORD.test(text[end] ?? "")) {
+      return { start: at, end, segment: { kind: "mention", ...known } };
+    }
+  }
   if (char === "@" && afterSpace) {
     const known = mention(text, at + 1);
     const end = known ? at + 1 + known.label.length : -1;
@@ -170,7 +177,7 @@ export function chipFormatter(
     serialize: (item) =>
       item.type === CODE
         ? `\`${item.label}\``
-        : item.type === URL_CHIP
+        : item.type === URL_CHIP || item.type === "skill"
           ? item.label
           : item.type === IMAGE_CHIP || item.type === PASTE_CHIP
             ? `[${item.label}]`
