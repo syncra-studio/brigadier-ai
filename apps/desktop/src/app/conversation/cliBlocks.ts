@@ -499,7 +499,8 @@ function onlyWithdrawn(text: string): boolean {
 }
 
 /** A user message as the thread shows it: another session's when its header says so, its body without the header. */
-function fromSession(message: Message): { message: Message; text: string } {
+function fromSession(message: Message, authored = false): { message: Message; text: string } {
+  if (authored) return { message, text: message.text };
   const queued = QUEUED.exec(message.text);
   const body = message.text.slice(queued?.[0].length ?? 0).replace(WITHDRAWN, "\n").trim();
   if (queued || body !== message.text.trim()) message = { ...message, text: body };
@@ -690,7 +691,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   const inRail = new Set((board?.queueItems ?? []).flatMap((item) => (item.delivered ? [item.id.slice(-8)] : [])));
   const lastTaken = new Map<string, number>();
   view.entries.forEach((entry, position) => {
-    const id = !entry.parent && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
+    const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
     if (id) lastTaken.set(id, position);
   });
   // The steers that name no queued message answer the turn's other requests, in order.
@@ -700,7 +701,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (startsTurn(entry)) turn += 1;
     let { event } = entry;
     // A successor's first message: the hand-off, then the user's words, if any.
-    const handoff = event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
+    const handoff = entry.said?.by !== "user" && event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
     if (handoff && event.type === "message") {
       const end = event.text.indexOf(HANDOFF_END);
       if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
@@ -741,7 +742,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     }
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
     const news = asked && !theirs && workerNotices(asked.text);
-    const queued = asked && queuedId(asked.text);
+    const queued = asked && said?.by !== "user" && queuedId(asked.text);
     const unshown =
       !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
@@ -816,13 +817,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // the CLI began a turn with is its own request, which the turn names only once it joined:
       // the request before it may still lead the turn's list.
       const first = requests[0];
-      const named = queuedId(event.text);
+      const named = said?.by === "user" ? null : queuedId(event.text);
       const id = named
         ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
         : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
           ? first
           : event.itemId;
-      const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1));
+      const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
       if (goesOn(block)) {
@@ -848,12 +849,12 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         if (event.type === "message" && event.role === "user") {
           // A steer answers its own request, the next the turn names; a queued message's is
           // its own id (the request it joined as).
-          const named = queuedId(event.text);
+          const named = said?.by === "user" ? null : queuedId(event.text);
           const taken = new Set(current.steers.map((steer) => steer.message.id));
           const id = named
             ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
             : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId);
-          current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1)), position });
+          current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs), position });
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;

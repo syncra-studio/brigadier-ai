@@ -3282,7 +3282,7 @@ impl SessionManager {
         for message in users {
             let user_text = self.full_text(message).await;
             let frame = conv.take_frame(&message.id);
-            let inline = self
+            let (inline, authored) = self
                 .message_input(
                     &FilesAt::Conversation(conv),
                     &conv.id,
@@ -3301,12 +3301,10 @@ impl SessionManager {
                 at += super::cli_thread::solid_len(&frame);
                 ordered.push(InputPart::Text(frame));
             }
-            for (index, part) in inline.into_iter().enumerate() {
+            user.extend(authored.into_iter().map(|(from, to)| (at + from, at + to)));
+            for part in inline {
                 if let InputPart::Text(text) = &part {
                     let len = super::cli_thread::solid_len(text);
-                    if index == 0 && len > 0 {
-                        user.push((at, at + len));
-                    }
                     at += len;
                 }
                 ordered.push(part);
@@ -3372,7 +3370,7 @@ impl SessionManager {
             copied.insert(attachment.id.clone(), Some(file));
         }
         let mut files = Vec::new();
-        let parts = self
+        let (parts, _) = self
             .message_input(
                 &at,
                 owner,
@@ -3401,7 +3399,7 @@ impl SessionManager {
         mentions: &[Mention],
         copied: &mut HashMap<String, Option<InputFile>>,
         files: &mut Vec<InputFile>,
-    ) -> Vec<InputPart> {
+    ) -> (Vec<InputPart>, Vec<(usize, usize)>) {
         let plan = image_plan(user_text, attachments, copied);
         for attachment in &plan.copies {
             copied.insert(
@@ -3423,6 +3421,9 @@ impl SessionManager {
             }
         }
         let mut inline = vec![InputPart::Text(place_inline_pastes(&text, &pastes))];
+        // Capture authored text before attachment descriptions and mention context append to
+        // the same text part. An empty range still identifies an attachment-only user send.
+        let mut user = vec![(0, input_text_len(&inline))];
         for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
             if attachment.pasted
                 && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
@@ -3430,7 +3431,9 @@ impl SessionManager {
                 let whole = self
                     .whole_paste(at, kind, attachment, &pasted, copied)
                     .await;
+                let from = input_text_len(&inline);
                 push_input_block(&mut inline, &pasted_inline(&pasted, whole.as_deref()));
+                user.push((from, input_text_len(&inline)));
                 continue;
             }
             if kind == ConversationKind::Chat && !is_image(&attachment.mime) {
@@ -3484,7 +3487,7 @@ impl SessionManager {
                 }
             }
         }
-        inline
+        (inline, user)
     }
 
     /// Another conversation the user @-mentioned, as context: its latest messages on the
@@ -6167,6 +6170,16 @@ fn append_input_text(parts: &mut Vec<InputPart>, text: &str) {
     } else {
         parts.push(InputPart::Text(text.into()));
     }
+}
+
+fn input_text_len(parts: &[InputPart]) -> usize {
+    parts
+        .iter()
+        .map(|part| match part {
+            InputPart::Text(text) => super::cli_thread::solid_len(text),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Preserve push_block's replacement of whitespace-only user text, without byte slicing.

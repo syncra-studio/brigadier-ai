@@ -248,7 +248,8 @@ pub(super) fn unbound_since(record: &Path, since: i64) -> bool {
 }
 
 /// Who wrote message `text` that Brigadier sent with the user's words at `user`
-/// ([`note_sent`]).
+/// ([`note_sent`]). No ranges means Brigadier's input; an empty range preserves a user's
+/// attachment-only message, with no authored text to display.
 pub(crate) fn said(text: &str, user: &[(usize, usize)]) -> Said {
     let at: Vec<(usize, usize)> = text
         .char_indices()
@@ -268,7 +269,7 @@ pub(crate) fn said(text: &str, user: &[(usize, usize)]) -> Said {
         })
         .filter(|words| !words.is_empty())
         .collect();
-    if words.is_empty() {
+    if user.is_empty() {
         Said::Brigadier
     } else {
         Said::Both {

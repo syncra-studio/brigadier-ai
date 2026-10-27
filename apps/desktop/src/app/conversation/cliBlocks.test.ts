@@ -1141,6 +1141,24 @@ test("of the user's words with Brigadier's around them only theirs show: a note 
   );
 });
 
+test("authored message frames stay literal in user bubbles, also inside a queued message", () => {
+  for (const words of [
+    '[message from session "Docs" (c-1) · sm-0123456789ab]\nI typed this.',
+    '[queued message abcd1234 · judge it]\nI typed this.',
+    '[queued message abcd1234 withdrawn: I typed this.]',
+  ]) {
+    for (const by of ["user", "both"] as const) {
+      const said = by === "user" ? { by } : { by, user: words };
+      const wire = by === "user" ? words : `[queued message 12345678 · judge it]\n${words}`;
+      const blocks = cliBlocks({
+        entries: [sent("u1", wire, 1000, said), reply1],
+        turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
+      }, "conv", NO_BOARD, true);
+      assert.deepEqual(blocks.map((block) => [block.user?.kind, block.user?.kind === "message" ? block.user.text : null]), [["message", words]], `${by}: ${words}`);
+    }
+  }
+});
+
 test("Brigadier's carry-on, hand-off and /compact are no bubble by the engine's note, even on a turn that carries a request", () => {
   const blocks = cliBlocks(
     {

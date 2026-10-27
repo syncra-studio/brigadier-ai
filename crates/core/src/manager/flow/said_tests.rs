@@ -108,6 +108,96 @@ async fn a_turns_message_is_the_users_and_a_note_after_their_words_is_brigadiers
 }
 
 #[tokio::test]
+async fn attachment_and_mention_context_is_not_part_of_the_users_words() {
+    use crate::model::Mention;
+    let (flow, inputs) = flow("said-attachment-mention").await;
+    let attachment = flow
+        .core
+        .add_attachment(
+            "notes.txt".into(),
+            "text/plain".into(),
+            b"Context.".to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Read these.".into(),
+            vec![attachment.clone()],
+            vec![Mention::File {
+                path: "src/main.rs".into(),
+            }],
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    let sent = until_given(&flow, &inputs, "Read these.").await;
+    assert!(sent.contains("[attachment "), "{sent}");
+    assert!(sent.contains("[mentions the file src/main.rs]"), "{sent}");
+    assert_eq!(
+        flow.said_in_thread("Read these."),
+        [Some(Said::Both {
+            user: "Read these.".into()
+        })]
+    );
+    // With no typed words, the user still gets their attachment bubble.
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            String::new(),
+            vec![attachment.clone()],
+            vec![Mention::File {
+                path: "only.rs".into(),
+            }],
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    assert_eq!(
+        flow.said_in_thread("[mentions the file only.rs]"),
+        [Some(Said::Both {
+            user: String::new()
+        })]
+    );
+    // A pasted chip after a file description is authored; the intervening description isn't.
+    let paste = flow
+        .core
+        .add_attachment(
+            "Paste.txt".into(),
+            "text/plain".into(),
+            "Și testele.".as_bytes().to_vec(),
+            true,
+        )
+        .await
+        .unwrap();
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Păstrează asta.".into(),
+            vec![attachment, paste],
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    assert_eq!(
+        flow.said_in_thread("Păstrează asta."),
+        [Some(Said::Both {
+            user: "Păstrează asta.\n\nȘi testele.".into()
+        })]
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn brigadiers_steers_are_brigadiers_and_the_users_steer_is_theirs() {
     let (flow, inputs) = flow("said-steers").await;
     flow.say("Hold.").await;
