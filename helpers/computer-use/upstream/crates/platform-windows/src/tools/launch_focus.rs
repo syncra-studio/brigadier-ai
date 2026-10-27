@@ -84,6 +84,10 @@ impl LaunchForegroundGuard {
         // Capture before spawning so user input during the launch always disarms restoration.
         let initial_input = input_tick();
         let prior_pid = window_process(HWND(prior as *mut _));
+        // Name resolution can take time. Do not undo a switch made before the watcher starts.
+        if unsafe { GetForegroundWindow() } != HWND(prior as *mut _) {
+            return Self(state);
+        }
         std::thread::spawn(move || {
             let hard_deadline = Instant::now() + Duration::from_secs(20);
             loop {

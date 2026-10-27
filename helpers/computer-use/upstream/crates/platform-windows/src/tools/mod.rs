@@ -5,8 +5,12 @@
 
 use cua_driver_core::tool::ToolRegistry;
 
+#[cfg(any(target_os = "windows", test))]
+mod browser_target;
 #[cfg(target_os = "windows")]
 mod impl_;
+#[cfg(target_os = "windows")]
+mod launch_browser;
 #[cfg(target_os = "windows")]
 mod launch_focus;
 #[cfg(any(target_os = "windows", test))]

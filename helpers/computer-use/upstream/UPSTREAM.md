@@ -64,6 +64,7 @@ Patches applied, in order:
 - `patches/0015-preserve-original-key-target.diff`: v0.36.0 key-window cleanup could pick a sibling after priming a target that was already AXFocusedWindow but lacked a focused element; when the original window is the target, restore nothing and leave that window focused.
 - `patches/0016-helper-windowserver-identity.diff`: the WindowServer diagnostic recognizes Brigadier's helper bundles (Brigadier Computer Use.app and BrigadierCu.app) and BRIGADIER_CU_EMBEDDED=1, and uses the helper's own launch setup instead of recommending the upstream app daemon.
 - `patches/0020-windows-launch-foreground.diff`: watch every Windows launch before shell activation, hand the foreground back only for the target without intervening user input, and report unconfirmed restoration honestly.
+- `patches/0021-windows-exact-browser-launch.diff`: pass URLs only to the named browser (or the associated default executable), quote each argument, and return only a window whose visible UIA document confirms the requested URL.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

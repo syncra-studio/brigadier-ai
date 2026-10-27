@@ -2232,7 +2232,7 @@ impl Tool for LaunchAppTool {
                 "name":{"type":"string","description":"App display name. Tried against the `shell:AppsFolder` index first for packaged-app lookup; on a miss, passed to ShellExecuteEx's PATH search."},
                 "path":{"type":"string","description":"Full path to executable. Windows-only; takes precedence over name/bundle_id/aumid (but not over `launch_path`)."},
                 "launch_path":{"type":"string","description":"Round-trip the `launch_path` returned by `list_apps`. Highest precedence — when set, this exact string is handed to ShellExecuteEx unchanged. For Windows desktop apps it's the full `.exe` commandline (path + arguments preserved from the source shortcut); for UWP apps it's `shell:appsFolder\\{PackageFamilyName}!{AppId}`. For precise UWP pid capture, prefer `aumid` over `launch_path`."},
-                "urls":{"type":"array","items":{"type":"string"},"description":"URLs to open in the default browser via ShellExecuteEx (no activation)."},
+                "urls":{"type":"array","items":{"type":"string"},"description":"URLs or files to pass to the named app, or to the default handler when no app is named. Browser replies require a URL-confirmed window; Windows activation is handed back when possible."},
                 "additional_arguments":{"type":"array","items":{"type":"string"},"description":"Extra command-line arguments passed to the launched process (or activation arguments for packaged apps)."},
                 "webkit_inspector_port":{"type":"integer","description":"Accepted for cross-platform parity; no-op on Windows."},
                 "creates_new_application_instance":{"type":"boolean","description":"Accepted for parity; no-op on Windows (ShellExecuteEx always creates a new process)."},
@@ -2423,6 +2423,9 @@ impl Tool for LaunchAppTool {
         // CreateProcess semantics, not Start Menu activation.
         let mut name_lookup_missed = false;
         let mut shell_target_from_name: Option<String> = None;
+        let browser_from_name = name_opt
+            .as_deref()
+            .and_then(super::browser_target::named_browser_executable);
         let aumid_for_uwp: Option<String> = if launch_path_opt.is_some() || path_opt.is_some() {
             None
         } else if let Some(a) = aumid_opt.clone() {
@@ -2432,6 +2435,9 @@ impl Tool for LaunchAppTool {
             .filter(|s| crate::launch_uwp::is_aumid(s))
         {
             Some(b)
+        } else if let Some(browser) = browser_from_name {
+            shell_target_from_name = Some(browser.into());
+            None
         } else if let Some(n) = name_opt.clone() {
             // The cold AppsFolder COM walk can stop making progress when its
             // interactive shell broker is unhealthy. Bound it before the
@@ -2470,7 +2476,45 @@ impl Tool for LaunchAppTool {
         } else {
             None
         };
-        let resolved_target = shell_target_from_name.or(target);
+        let mut resolved_target = shell_target_from_name.or(target);
+        let web_launch = !urls.is_empty()
+            && urls
+                .iter()
+                .all(|url| super::browser_target::is_web_url(url));
+        if resolved_target.is_none() && web_launch {
+            let Some(executable) = super::launch_focus::associated_executable(&urls[0]) else {
+                return ToolResult::error("Windows did not identify the default browser. No browser was launched; pass its executable path or name.");
+            };
+            if urls.iter().skip(1).any(|url| {
+                super::launch_focus::associated_executable(url).as_deref()
+                    != Some(executable.as_str())
+            }) {
+                return ToolResult::error("These URLs have different default handlers. No browser was launched; name one browser explicitly or open them separately.");
+            }
+            resolved_target = Some(executable);
+        }
+        if !urls.is_empty()
+            && (aumid_for_uwp.is_some()
+                || resolved_target
+                    .as_deref()
+                    .is_some_and(|target| target.starts_with("shell:") || target.contains('!')))
+        {
+            return ToolResult::error("Windows cannot pass these URLs to this shell app registration reliably. No app was launched; pass the named browser's executable path instead.");
+        }
+        if resolved_target
+            .as_deref()
+            .is_some_and(is_chromium_browser_target)
+        {
+            inject_chromium_anti_throttling_flags(&mut extra_args);
+        }
+        let urls_in_arguments =
+            super::browser_target::urls_belong_to_app(resolved_target.is_some(), !urls.is_empty());
+        if urls_in_arguments {
+            extra_args.extend(
+                urls.iter()
+                    .map(|url| super::browser_target::quote_argument(url)),
+            );
+        }
 
         // Single launch path. `display` is the human-readable identifier
         // we report in the success header; for the packaged path it's
@@ -2538,9 +2582,14 @@ impl Tool for LaunchAppTool {
         if let Some(target) = target_file_opt.as_deref() {
             foreground_targets.push(super::launch_policy::executable_name(target));
         }
+        if let Some(name) = name_opt.as_deref() {
+            foreground_targets.push(super::launch_policy::executable_name(name));
+        }
         for url in &urls {
-            if let Some(exe) = super::launch_focus::associated_executable(url) {
-                foreground_targets.push(super::launch_policy::executable_name(&exe));
+            if target_file_opt.is_none() {
+                if let Some(exe) = super::launch_focus::associated_executable(url) {
+                    foreground_targets.push(super::launch_policy::executable_name(&exe));
+                }
             }
             if url.starts_with("ms-settings:") {
                 foreground_targets.push("systemsettings".into());
@@ -2583,7 +2632,11 @@ impl Tool for LaunchAppTool {
                 Ok(token) => token,
                 Err(message) => return ToolResult::error(message),
             };
-            let urls_clone = urls.clone();
+            let urls_clone = if urls_in_arguments {
+                Vec::new()
+            } else {
+                urls.clone()
+            };
             let target_for_shell = target_file_opt.clone();
             let extra_for_shell = extra_joined.clone();
             let n_show_for_shell = n_show;
@@ -2721,13 +2774,14 @@ impl Tool for LaunchAppTool {
                 let first_unopened_url = first_unopened_shell_url_index(target_for_shell.is_some());
                 for url in &urls_clone[first_unopened_url.min(urls_clone.len())..] {
                     if let AppLaunchToken::StandardUser(token) = &launch_token {
-                        let _ = crate::standard_user_launch::shell_execute(
+                        crate::standard_user_launch::shell_execute(
                             token,
                             url,
                             "",
                             n_show_for_shell,
                             STANDARD_USER_SHELL_LAUNCH_TIMEOUT,
-                        );
+                        )
+                        .map_err(anyhow::Error::msg)?;
                         continue;
                     }
                     let file = to_wide(url);
@@ -2740,7 +2794,7 @@ impl Tool for LaunchAppTool {
                         ..Default::default()
                     };
                     unsafe {
-                        let _ = ShellExecuteExW(&mut url_info);
+                        ShellExecuteExW(&mut url_info)?;
                     }
                 }
 
@@ -2778,36 +2832,6 @@ impl Tool for LaunchAppTool {
             }
         };
 
-        // When the packaged path was taken we still need to fan out any
-        // extra URLs to the default browser (ShellExecuteEx — no pid
-        // capture, mirroring Swift's NSWorkspace secondary-URL flow).
-        if aumid_for_uwp.is_some() && !urls.is_empty() {
-            let urls_clone = urls.clone();
-            let n_show_for_urls = n_show;
-            let _ = tokio::task::spawn_blocking(move || {
-                use windows::core::PCWSTR;
-                use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
-                fn to_wide(s: &str) -> Vec<u16> {
-                    s.encode_utf16().chain(std::iter::once(0)).collect()
-                }
-                let op_w = to_wide("open");
-                for url in &urls_clone {
-                    let file = to_wide(url);
-                    let mut url_info = SHELLEXECUTEINFOW {
-                        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-                        lpVerb: PCWSTR(op_w.as_ptr()),
-                        lpFile: PCWSTR(file.as_ptr()),
-                        nShow: n_show_for_urls,
-                        ..Default::default()
-                    };
-                    unsafe {
-                        let _ = ShellExecuteExW(&mut url_info);
-                    }
-                }
-            })
-            .await;
-        }
-
         // Resolve the pid's windows so the caller can skip a list_windows
         // round-trip — same approach as Swift's `resolveWindows`. Retry
         // 5×200ms; Win32 window registration can lag the launch.
@@ -2822,6 +2846,48 @@ impl Tool for LaunchAppTool {
         // so callers can target it with subsequent calls. See #1615.
         let mut windows_json: Vec<serde_json::Value> = Vec::new();
         let mut resolved_pid: u32 = pid;
+
+        if web_launch {
+            let executable = target_file_opt.as_deref().unwrap_or("");
+            let mut confirmed = Vec::new();
+            for url in &urls {
+                let mut found = None;
+                for _ in 0..30 {
+                    found = super::launch_browser::window_showing_url(executable, url).await;
+                    if found.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                let Some(window) = found else {
+                    let note = foreground_guard
+                        .as_ref()
+                        .map(|guard| guard.report().0)
+                        .unwrap_or("");
+                    return ToolResult::error(format!(
+                        "Launch was requested in {display}, but Windows did not expose a visible document with URL {url:?} in that browser. No unrelated browser window is being returned. The URL may be loading, redirected, or in an inactive tab; inspect that browser with list_windows/get_window_state. {note}"
+                    )).with_structured(json!({"code": "browser_url_unconfirmed", "requested_url": url, "launched_pid": pid}));
+                };
+                confirmed.push(window);
+            }
+            resolved_pid = confirmed[0].pid;
+            for window in confirmed {
+                if window.pid != resolved_pid {
+                    continue;
+                }
+                if windows_json
+                    .iter()
+                    .any(|value| value["window_id"].as_u64() == Some(window.hwnd))
+                {
+                    continue;
+                }
+                windows_json.push(json!({
+                    "window_id": window.hwnd, "title": window.title,
+                    "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                    "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                }));
+            }
+        }
 
         // UWP / packaged-app host-window resolution. `launch_uwp` returns the
         // real packaged-app pid (e.g. CalculatorApp.exe), but a UWP app's
@@ -3153,7 +3219,7 @@ impl Tool for LaunchAppTool {
             "pid":       pid,
             "bundle_id": bundle_id_response,
             "name":      display,
-            "running":   true,
+            "running":   pid != 0 || !windows_json.is_empty(),
             "active":    unsafe {
                 let mut foreground_pid = 0;
                 windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
