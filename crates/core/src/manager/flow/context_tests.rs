@@ -540,7 +540,7 @@ async fn library_sign_in_status_uses_the_managers_data_dir_without_an_env_overri
             .unwrap(),
         crate::manager::plugins::CatalogSignIn::SignedOut
     );
-    flow.manager.sign_out_plugin(&row.id).await.unwrap();
+    flow.manager.cancel_plugin_sign_in(&row.id).await.unwrap();
     flow.stop().await;
 }
 

@@ -184,29 +184,13 @@ impl SessionManager {
         Ok(self.cache_plugin_sign_in(row_id, state))
     }
 
-    pub async fn sign_out_plugin(&self, row_id: &str) -> Result<()> {
-        let (resource, target, library_only) = self.plugin_sign_in_target(row_id).await?;
-        if matches!(
-            self.mcp_gateway.status(&resource).await,
-            CatalogSignIn::CliFallback { .. }
-        ) && !library_only
-        {
-            let (logins, clis, runtime) =
-                (self.mcp_logins.clone(), self.clis(), self.runtime.clone());
-            let row_id = row_id.to_owned();
-            let resource = resource.clone();
-            super::super::blocking(move || {
-                logins
-                    .forget_fallback_accounts(&row_id, &target, &resource, &clis, &runtime)
-                    .map_err(Error::Invalid)
-            })
+    pub async fn cancel_plugin_sign_in(&self, row_id: &str) -> Result<CatalogSignIn> {
+        let (resource, _, _) = self.plugin_sign_in_target(row_id).await?;
+        let logins = self.mcp_logins.clone();
+        let row = row_id.to_owned();
+        super::super::blocking(move || logins.cancel_fallback(&row).map_err(Error::Invalid))
             .await?;
-        }
-        self.mcp_gateway
-            .sign_out(&resource)
-            .await
-            .map_err(|_| Error::Invalid("Cannot remove gateway Keychain grant".into()))?;
-        self.cache_plugin_sign_in(row_id, CatalogSignIn::SignedOut);
-        Ok(())
+        let state = self.mcp_gateway.cancel_sign_in(&resource).await;
+        Ok(self.cache_plugin_sign_in(row_id, state))
     }
 }

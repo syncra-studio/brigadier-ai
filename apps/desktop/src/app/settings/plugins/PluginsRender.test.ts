@@ -28,7 +28,7 @@ test("plugins: durable catalog choices, editable detected items, per-agent note 
   assert.equal(findCard(seen.L1!, "Context7").chip, "Global");
   assert.equal(findCard(seen.L1!, "Linear").chip, "3 projects");
   assert.equal(findCard(seen.L1!, "Linear").line, "Must sign in");
-  assert.equal(findCard(seen.L1!, "Context7").line, "Signed in");
+  assert.equal(findCard(seen.L1!, "Context7").line, "");
   assert.ok(seen.L1!.cards.every((card) => !card.locked));
   assert.ok(seen.L2!.cards.every((card) => !card.locked));
   assert.equal(findCard(seen.flipped!, "Context7").on, false);

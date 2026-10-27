@@ -178,7 +178,7 @@ test("sign-in follows shared state and updates the grid within 500 ms", async (t
     status = { type: "signedIn" };
     t.mock.timers.tick(500);
     await tick();
-    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Signed in");
+    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "");
     assert.equal(reads, 2, "status polling is independent of the one background catalog version check");
     const finishedPolls = polls;
     t.mock.timers.tick(2000);
@@ -209,7 +209,7 @@ test("an already signed-in start reply updates a stale Sign in row immediately",
   try {
     await tick();
     await adapter.signIn!("one", "one", null);
-    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Signed in");
+    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "");
   } finally { disconnect(); usePlugins.setState(previous); restore(); }
 });
 
@@ -261,7 +261,7 @@ test("Cancel before start replies stays signed out and serializes backend invali
     if (request.method === "getPluginSignInStatus") { polls++; return { method: request.method, state: { type: "signedOut" } }; }
     sent.push(request.method);
     if (request.method === "startPluginSignIn") return new Promise((resolve) => { reply = resolve; });
-    return { method: request.method };
+    return { method: request.method, state: { type: "signedOut" } };
   });
   const adapter = livePlugins();
   const disconnect = connectPlugins(adapter);
@@ -270,7 +270,7 @@ test("Cancel before start replies stays signed out and serializes backend invali
     const start = adapter.signIn!("one", "one", null);
     assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signingIn");
     await tick();
-    const cancel = adapter.signOut!("one");
+    const cancel = adapter.cancelSignIn!("one");
     assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedOut", "Cancel stops waiting immediately");
     t.mock.timers.tick(500);
     await tick();
@@ -278,7 +278,7 @@ test("Cancel before start replies stays signed out and serializes backend invali
     assert.deepEqual(sent, ["startPluginSignIn"], "invalidation waits for the pending start acknowledgement");
     reply({ method: "startPluginSignIn", state: { type: "signingIn", flowId: "late" } });
     await Promise.all([start, cancel]);
-    assert.deepEqual(sent, ["startPluginSignIn", "signOutPlugin"]);
+    assert.deepEqual(sent, ["startPluginSignIn", "cancelPluginSignIn"]);
     assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedOut");
     t.mock.timers.tick(2000);
     await tick();

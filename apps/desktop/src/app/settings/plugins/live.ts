@@ -67,6 +67,7 @@ export function livePlugins(): PluginsAdapter {
   let catalogVersion: string | null = null;
   let checkingCatalog = false;
   const states = new Map<string, { revision: number; state: CatalogSignIn }>();
+  const previousSignIns = new Map<string, CatalogSignIn>();
   const mutations = new Map<string, Promise<void>>();
   const update = (rowId: string, signIn: CatalogSignIn) => {
     states.set(rowId, { revision: ++revision, state: signIn });
@@ -74,7 +75,7 @@ export function livePlugins(): PluginsAdapter {
     view = { ...view, items: view.items.map((item) => item.key === rowId ? { ...item, signIn } : item) };
     changed?.(view);
   };
-  // Serialize start/cancel/sign-out requests per row. A late start reply must not undo Cancel.
+  // Serialize start/cancel requests per row. A late start reply must not undo Cancel.
   const mutate = async (rowId: string, optimistic: CatalogSignIn, action: () => Promise<CatalogSignIn>) => {
     update(rowId, optimistic);
     const before = states.get(rowId);
@@ -182,7 +183,9 @@ export function livePlugins(): PluginsAdapter {
       return outcome.type === "changedSinceOpened" ? { type: "changed", current: outcome.current } : { type: "saved" };
     },
     signIn: async (rowId) => {
-      const fallback = view?.items.find((item) => item.key === rowId)?.signIn?.type === "cliFallback";
+      const previous = view?.items.find((item) => item.key === rowId)?.signIn ?? { type: "signedOut" as const };
+      if (!signingIn(previous)) previousSignIns.set(rowId, previous);
+      const fallback = previous.type === "cliFallback";
       return mutate(rowId, { type: "signingIn", flowId: "" }, async () => {
         let { state } = await request({ method: "startPluginSignIn", rowId });
         if (!fallback && state.type === "cliFallback" && state.agents.length) {
@@ -194,9 +197,9 @@ export function livePlugins(): PluginsAdapter {
         return state;
       });
     },
-    signOut: (rowId) => mutate(rowId, { type: "signedOut" }, async () => {
-      await request({ method: "signOutPlugin", rowId });
-      return { type: "signedOut" };
+    cancelSignIn: (rowId) => mutate(rowId, previousSignIns.get(rowId) ?? { type: "signedOut" }, async () => {
+      const { state } = await request({ method: "cancelPluginSignIn", rowId });
+      return state;
     }),
     pickFolder,
     trustProject: async () => {},

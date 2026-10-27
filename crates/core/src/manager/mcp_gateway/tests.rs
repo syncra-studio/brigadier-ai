@@ -592,6 +592,282 @@ async fn mcp_gateway_rejects_missing_wrong_secret_cross_row_and_browser_origin()
     );
 }
 
+fn previous_account(fixture: &Fixture) -> Grant {
+    Grant {
+        access_token: "previous-account".into(),
+        refresh_token: Some("previous-refresh".into()),
+        expires_at: oauth::now() + 3600,
+        client_id: "previous-client".into(),
+        client_secret: None,
+        token_endpoint: format!("{}/token", fixture.state.origin),
+        revocation_endpoint: Some(format!("{}/revoke", fixture.state.origin)),
+    }
+}
+
+#[tokio::test]
+async fn mcp_gateway_sign_in_again_replaces_the_saved_account_only_after_success() {
+    let fixture = Fixture::new().await;
+    let store = Arc::new(MemoryStore::default());
+    store
+        .save(&fixture.resource(), &previous_account(&fixture))
+        .unwrap();
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+    let open: crate::manager::mcp_login::Open = Arc::new(move |url| {
+        send.send(url.to_owned()).unwrap();
+    });
+    assert!(matches!(
+        gateway.start_sign_in(&fixture.resource(), open).await,
+        CatalogSignIn::SigningIn { .. }
+    ));
+    let url = tokio::time::timeout(std::time::Duration::from_secs(5), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store
+            .load(&fixture.resource())
+            .unwrap()
+            .unwrap()
+            .access_token,
+        "previous-account"
+    );
+    assert_eq!(
+        gateway.bearer(&fixture.resource()).await.unwrap().0,
+        "previous-account"
+    );
+    reqwest::get(url).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while matches!(
+            gateway.status(&fixture.resource()).await,
+            CatalogSignIn::SigningIn { .. }
+        ) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        gateway.status(&fixture.resource()).await,
+        CatalogSignIn::SignedIn
+    );
+    assert_eq!(
+        store
+            .load(&fixture.resource())
+            .unwrap()
+            .unwrap()
+            .access_token,
+        "access-0"
+    );
+    assert_eq!(
+        gateway.bearer(&fixture.resource()).await.unwrap().0,
+        "access-0"
+    );
+    assert!(!fixture.state.revoked.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn mcp_gateway_manager_starts_a_fresh_flow_for_a_signed_in_plugin() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    let fixture = Fixture::new().await;
+    let flow = Flow::start(
+        "sign-in-again",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let file = flow.manager.data_dir.join("library/servers/again.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!({"mcpServers":{"again":{"type":"http","url":fixture.resource()}}}).to_string(),
+    )
+    .unwrap();
+    let row = flow
+        .manager
+        .plugin_catalog()
+        .unwrap()
+        .rows
+        .into_iter()
+        .find(|row| row.name == "again")
+        .unwrap();
+    let entry = flow.manager.mcp_gateway().resource(&fixture.resource());
+    {
+        let mut credentials = entry.credentials.lock().await;
+        credentials.grant = Some(previous_account(&fixture));
+        credentials.state = CatalogSignIn::SignedIn;
+        entry.granted.store(true, Ordering::Release);
+    }
+    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+    assert!(
+        flow.manager
+            .sign_in_browser
+            .set(Arc::new(move |url| {
+                send.send(url.to_owned()).unwrap();
+            }))
+            .is_ok()
+    );
+    assert!(matches!(
+        flow.manager.start_plugin_sign_in(&row.id).await.unwrap(),
+        CatalogSignIn::SigningIn { .. }
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        flow.manager.cancel_plugin_sign_in(&row.id).await.unwrap(),
+        CatalogSignIn::SignedIn
+    );
+    assert_eq!(
+        flow.manager
+            .mcp_gateway()
+            .bearer(&fixture.resource())
+            .await
+            .unwrap()
+            .0,
+        "previous-account"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn mcp_gateway_cancel_sign_in_again_keeps_the_saved_account_and_blocks_late_callbacks() {
+    let fixture = Fixture::new().await;
+    let store = Arc::new(MemoryStore::default());
+    store
+        .save(&fixture.resource(), &previous_account(&fixture))
+        .unwrap();
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
+    let open: crate::manager::mcp_login::Open = Arc::new(move |url| {
+        send.send(url.to_owned()).unwrap();
+    });
+    gateway.start_sign_in(&fixture.resource(), open).await;
+    let url = tokio::time::timeout(std::time::Duration::from_secs(5), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        gateway.cancel_sign_in(&fixture.resource()).await,
+        CatalogSignIn::SignedIn
+    );
+    // A browser already open at Cancel may still try to finish its callback.
+    let _ = reqwest::get(url).await;
+    assert_eq!(
+        store
+            .load(&fixture.resource())
+            .unwrap()
+            .unwrap()
+            .access_token,
+        "previous-account"
+    );
+    assert_eq!(
+        gateway.bearer(&fixture.resource()).await.unwrap().0,
+        "previous-account"
+    );
+    assert_eq!(
+        gateway.status(&fixture.resource()).await,
+        CatalogSignIn::SignedIn
+    );
+    assert!(!fixture.state.revoked.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn mcp_gateway_failed_sign_in_again_keeps_the_saved_account() {
+    struct Store {
+        inner: MemoryStore,
+        fail: bool,
+    }
+    impl TokenStore for Store {
+        fn load(&self, r: &str) -> io::Result<Option<Grant>> {
+            self.inner.load(r)
+        }
+        fn save(&self, r: &str, g: &Grant) -> io::Result<()> {
+            if self.fail {
+                Err(io::Error::other("fixture save failure"))
+            } else {
+                self.inner.save(r, g)
+            }
+        }
+        fn delete(&self, r: &str) -> io::Result<()> {
+            self.inner.delete(r)
+        }
+    }
+    for failure in ["declined", "refused", "save"] {
+        let fixture = Fixture::new().await;
+        fixture
+            .state
+            .refused
+            .store(failure == "refused", Ordering::SeqCst);
+        let inner = MemoryStore::default();
+        inner
+            .save(&fixture.resource(), &previous_account(&fixture))
+            .unwrap();
+        let store = Arc::new(Store {
+            inner,
+            fail: failure == "save",
+        });
+        let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+        let open = if failure == "declined" {
+            Arc::new(|url: &str| {
+                let query: HashMap<_, _> = reqwest::Url::parse(url)
+                    .unwrap()
+                    .query_pairs()
+                    .into_owned()
+                    .collect();
+                let mut callback = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
+                callback.query_pairs_mut().extend_pairs([
+                    ("state", query["state"].as_str()),
+                    ("error", "access_denied"),
+                ]);
+                tokio::spawn(async move {
+                    reqwest::get(callback).await.unwrap();
+                });
+            }) as crate::manager::mcp_login::Open
+        } else {
+            fixture.browser()
+        };
+        gateway.start_sign_in(&fixture.resource(), open).await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while matches!(
+                gateway.status(&fixture.resource()).await,
+                CatalogSignIn::SigningIn { .. }
+            ) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                gateway.status(&fixture.resource()).await,
+                CatalogSignIn::Failed { .. }
+            ),
+            "{failure}"
+        );
+        assert_eq!(
+            store
+                .load(&fixture.resource())
+                .unwrap()
+                .unwrap()
+                .access_token,
+            "previous-account",
+            "{failure}"
+        );
+        assert_eq!(
+            gateway.bearer(&fixture.resource()).await.unwrap().0,
+            "previous-account",
+            "{failure}"
+        );
+        assert!(
+            gateway.test_endpoint("row", &fixture.resource()).is_some(),
+            "{failure}"
+        );
+        assert!(!fixture.state.revoked.load(Ordering::SeqCst));
+    }
+}
+
 #[tokio::test]
 async fn mcp_gateway_refused_dcr_is_cli_fallback_without_opening_browser() {
     let fixture = Fixture::new().await;

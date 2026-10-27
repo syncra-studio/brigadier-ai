@@ -37,6 +37,7 @@ struct Credentials {
     state: CatalogSignIn,
     generation: u64,
     streams: CancellationToken,
+    sign_in_cancel: CancellationToken,
 }
 struct Resource {
     credentials: tokio::sync::Mutex<Credentials>,
@@ -251,6 +252,7 @@ impl McpGatewayService {
                         state,
                         generation: 0,
                         streams: CancellationToken::new(),
+                        sign_in_cancel: CancellationToken::new(),
                     }),
                 })
             })
@@ -282,14 +284,14 @@ impl McpGatewayService {
         let mut credentials = entry.credentials.lock().await;
         if matches!(
             credentials.state,
-            CatalogSignIn::SigningIn { .. }
-                | CatalogSignIn::SignedIn
-                | CatalogSignIn::CliFallback { .. }
+            CatalogSignIn::SigningIn { .. } | CatalogSignIn::CliFallback { .. }
         ) {
-            tracing::info!("MCP sign-in already active or signed in");
+            tracing::info!("MCP sign-in already active");
             return credentials.state.clone();
         }
         credentials.generation += 1;
+        credentials.sign_in_cancel = CancellationToken::new();
+        let cancel = credentials.sign_in_cancel.clone();
         let generation = credentials.generation;
         credentials.state = CatalogSignIn::SigningIn {
             flow_id: oauth::random(),
@@ -299,7 +301,10 @@ impl McpGatewayService {
         let gateway = self.clone();
         let resource = resource.to_owned();
         tokio::spawn(async move {
-            let result = gateway.authorize(&resource, open).await;
+            let result = tokio::select! {
+                _ = cancel.cancelled() => return,
+                result = gateway.authorize(&resource, open) => result,
+            };
             let mut credentials = entry.credentials.lock().await;
             if credentials.generation != generation {
                 return;
@@ -313,6 +318,8 @@ impl McpGatewayService {
                         );
                         credentials.pending = None;
                         credentials.grant = Some(grant);
+                        credentials.streams.cancel();
+                        gateway.prompt_cache.invalidate(&resource);
                         credentials.streams = CancellationToken::new();
                         entry.grant_generation.store(generation, Ordering::Release);
                         entry.granted.store(true, Ordering::Release);
@@ -331,6 +338,15 @@ impl McpGatewayService {
                 },
                 Ok(None) => {
                     tracing::info!("MCP sign-in requires CLI fallback");
+                    // A refused re-sign-in must leave the existing shared grant usable.
+                    if credentials.grant.is_some() || credentials.pending.is_some() {
+                        credentials.state = CatalogSignIn::Failed {
+                            message:
+                                "This server refused a new sign-in; the saved sign-in was kept"
+                                    .into(),
+                        };
+                        return;
+                    }
                     entry.fallback.store(true, Ordering::Release);
                     CatalogSignIn::CliFallback {
                         steps: Vec::new(),
@@ -408,6 +424,7 @@ impl McpGatewayService {
             .with_state(callback);
         let stop = CancellationToken::new();
         let ended = stop.clone();
+        let _stop_on_drop = stop.clone().drop_guard();
         tokio::spawn(async move {
             let _ = axum::serve(listener, router)
                 .with_graceful_shutdown(ended.cancelled_owned())
@@ -446,10 +463,29 @@ impl McpGatewayService {
         .await
         .map(Some)
     }
+    /// Stop a browser flow without revoking or deleting any saved credentials.
+    pub async fn cancel_sign_in(&self, resource: &str) -> CatalogSignIn {
+        let entry = self.resource(resource);
+        let mut credentials = entry.credentials.lock().await;
+        credentials.generation += 1;
+        credentials.sign_in_cancel.cancel();
+        credentials.state = if credentials.grant.is_some() || credentials.pending.is_some() {
+            CatalogSignIn::SignedIn
+        } else if entry.fallback.load(Ordering::Acquire) {
+            CatalogSignIn::CliFallback {
+                agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                steps: Vec::new(),
+            }
+        } else {
+            CatalogSignIn::SignedOut
+        };
+        credentials.state.clone()
+    }
     pub async fn sign_out(&self, resource: &str) -> io::Result<()> {
         let entry = self.resource(resource);
         let mut credentials = entry.credentials.lock().await;
         // Invalidate pending sign-ins and streams even if Keychain removal fails.
+        credentials.sign_in_cancel.cancel();
         credentials.generation += 1;
         credentials.streams.cancel();
         entry.granted.store(false, Ordering::Release);

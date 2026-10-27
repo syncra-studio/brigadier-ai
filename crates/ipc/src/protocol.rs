@@ -1207,7 +1207,7 @@ pub enum Request {
     GetPluginSignInStatus {
         row_id: String,
     },
-    SignOutPlugin {
+    CancelPluginSignIn {
         row_id: String,
     },
     /// What pasted `text` would add (a skill, an MCP server), before anything is added;
@@ -1972,7 +1972,9 @@ pub enum Response {
     GetPluginSignInStatus {
         state: brigadier_core::manager::plugins::CatalogSignIn,
     },
-    SignOutPlugin,
+    CancelPluginSignIn {
+        state: brigadier_core::manager::plugins::CatalogSignIn,
+    },
     CheckPluginAdd {
         check: brigadier_core::manager::plugins::ops::PluginAddCheck,
     },

@@ -2559,10 +2559,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetPluginSignInStatus { row_id } => Response::GetPluginSignInStatus {
             state: heap(|| daemon.sessions.get_plugin_sign_in_status(&row_id)).await?,
         },
-        Request::SignOutPlugin { row_id } => {
-            heap(|| daemon.sessions.sign_out_plugin(&row_id)).await?;
-            Response::SignOutPlugin
-        }
+        Request::CancelPluginSignIn { row_id } => Response::CancelPluginSignIn {
+            state: heap(|| daemon.sessions.cancel_plugin_sign_in(&row_id)).await?,
+        },
         Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
             check: daemon.sessions.check_plugin_add(text, name).await?,
         },

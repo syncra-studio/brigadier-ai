@@ -147,38 +147,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 type Spread = Arc<dyn Fn(ProviderKind) -> Result<(), String> + Send + Sync>;
 
 impl McpLogins {
-    pub(crate) fn forget_fallback_accounts(
-        &self,
-        row: &str,
-        target: &Target,
-        resource: &str,
-        clis: &Clis,
-        runtime: &crate::runtime::Runtime,
-    ) -> Result<(), String> {
-        let flow = lock(&self.fallback_flows).remove(row);
-        if let Some(flow) = flow
-            && self
-                .progress(&flow)
-                .is_some_and(|progress| !progress.finished)
-        {
+    pub(crate) fn cancel_fallback(&self, row: &str) -> Result<(), String> {
+        let flow = lock(&self.fallback_flows).get(row).cloned();
+        if let Some(flow) = flow {
             self.cancel(&flow)?;
             if self
                 .finished(&flow, Duration::from_secs(10))
                 .is_none_or(|progress| !progress.finished)
             {
-                return Err("The CLI sign-in is still stopping; retry sign-out".into());
+                return Err("The CLI sign-in is still stopping; retry Cancel".into());
             }
-        }
-        let _guard = lock(&self.account_sync);
-        self.sign_out(clis, target)?;
-        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
-            brigadier_providers::mcp_oauth::forget_resource(
-                kind,
-                runtime.cli_env(),
-                &runtime.account_homes(kind),
-                resource,
-            )
-            .map_err(|_| "Could not remove this MCP sign-in from its CLI accounts")?;
+            lock(&self.fallback_flows).remove(row);
         }
         Ok(())
     }
@@ -493,27 +472,6 @@ impl McpLogins {
             (Instant::now(), listed.clone()),
         );
         Ok(listed)
-    }
-
-    /// Signs every agent that lists `target` out of it, with its CLI's own `mcp logout`.
-    pub(crate) fn sign_out(&self, clis: &Clis, target: &Target) -> Result<(), String> {
-        for adapter in adapters() {
-            if (clis.binary)(adapter.agent()).is_none() {
-                continue;
-            }
-            let listed = self.list(clis, adapter, target.project.as_deref())?;
-            let plugin = target.plugin.as_deref();
-            for entry in listed
-                .iter()
-                .filter(|entry| adapter.is_server(&entry.name, &target.server, plugin))
-            {
-                let call = adapter.logout(&entry.name, target.project.as_deref());
-                let (binary, env) = clis.command(adapter)?;
-                capture(&binary, &call, &env, LIST_TIMEOUT)?;
-            }
-            self.list(clis, adapter, target.project.as_deref())?;
-        }
-        Ok(())
     }
 }
 

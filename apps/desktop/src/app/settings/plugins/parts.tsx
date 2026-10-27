@@ -91,7 +91,7 @@ export function PluginCard({ item, line, chip, busy, adapter, onOpen, onSwitch }
           <PluginMark item={item} />
           <span className="flex min-w-0 flex-1 flex-col gap-1">
             <span data-slot="row-name" className="truncate text-label font-medium">{item.name}</span>
-            <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>
+            {line.text && <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>}
             {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
           </span>
         </button>

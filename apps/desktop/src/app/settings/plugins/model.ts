@@ -32,6 +32,7 @@ export function placeNames(view: PluginsView, item: PluginItemView): string[] {
 
 /** A card's line: its problem, else why it can't be changed, else what it does, else how it runs. */
 export function lineOf(item: PluginItemView): Line {
+  if (signedIn(item.signIn)) return { text: "", tone: "muted" };
   if (item.signIn?.type === "signedOut") return { text: "Must sign in", tone: "warning" };
   if (item.signIn && item.signIn.type !== "notRequired") return { text: signInLine(item.signIn), tone: item.signIn.type === "cliSetupRequired" || (item.signIn.type === "cliFallback" && item.signIn.agents.length > 0 && !signingIn(item.signIn)) ? "warning" : "muted" };
   if (item.problem) return { text: item.problem.message, tone: "warning" };
