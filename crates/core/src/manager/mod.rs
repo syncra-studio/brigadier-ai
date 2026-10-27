@@ -480,7 +480,9 @@ impl SessionManager {
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_quiet_timer();
-        manager.start_plugin_sharing();
+        if crate::heap(|| manager.cleanup_plugins()).await.is_ok() {
+            manager.start_plugin_sharing();
+        }
         Ok(manager)
     }
 

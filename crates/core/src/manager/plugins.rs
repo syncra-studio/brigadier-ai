@@ -8,6 +8,7 @@
 //! ([`brigadier_registry::library`]) and reach each agent through its own plugin commands.
 
 pub mod choices;
+mod cleanup;
 mod jobs;
 pub mod launch;
 mod library_cli;
@@ -1062,7 +1063,7 @@ impl super::SessionManager {
     /// sees (the user's projects watched too). Shows nothing.
     pub(crate) fn start_plugin_sharing(&self) {
         // Tests share nothing behind their back.
-        if cfg!(test) {
+        if cfg!(test) || cleanup::sharing_disabled(&self.data_dir) {
             return;
         }
         let registry = self.registry();
@@ -1080,7 +1081,7 @@ impl super::SessionManager {
     /// again what failed with the same inputs.
     fn request_plugin_sync(&self, retry: bool) {
         // Tests share nothing behind their back.
-        if cfg!(test) {
+        if cfg!(test) || cleanup::sharing_disabled(&self.data_dir) {
             return;
         }
         self.registry().watch_projects(&self.plugin_repos());

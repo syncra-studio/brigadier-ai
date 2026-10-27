@@ -39,6 +39,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "process", "io-util", "net"] }
 tokio-util = { workspace = true, features = ["rt"] }
 toml = "1.1.6"
+toml_edit = { version = "0.25.15", default-features = false, features = ["parse", "display"] }
 tracing.workspace = true
 ts-rs.workspace = true
 uuid.workspace = true

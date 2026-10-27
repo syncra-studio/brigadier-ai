@@ -419,20 +419,19 @@ impl Codex {
 const SKILLS_MOVED_MARKER: &str = "codex-skills-moved";
 
 /// Removes `<skills>/<name>` for each plugin's `skills/<name>` when it holds only a
-/// `SKILL.md` that opens with the plugin's own name and description lines: the copy Brigadier
-/// wrote. Anything else there is the user's and stays.
+/// `SKILL.md` byte-for-byte identical to the plugin's. Anything else there is the user's
+/// and stays, including an edited body with the same name and description.
 fn remove_old_skill_copies(skills: &Path, plugins: &[PathBuf]) -> std::io::Result<()> {
-    let header = |text: &str| text.lines().take(3).collect::<Vec<_>>().join("\n");
     for plugin in plugins {
         for entry in std::fs::read_dir(plugin.join("skills"))? {
             let entry = entry?;
-            let ours = std::fs::read_to_string(entry.path().join("SKILL.md"))?;
+            let ours = std::fs::read(entry.path().join("SKILL.md"))?;
             let dir = skills.join(entry.file_name());
-            let Ok(copy) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+            let Ok(copy) = std::fs::read(dir.join("SKILL.md")) else {
                 continue;
             };
             let only_skill = std::fs::read_dir(&dir)?.count() == 1;
-            if only_skill && header(&copy) == header(&ours) {
+            if only_skill && copy == ours {
                 std::fs::remove_dir_all(&dir)?;
             }
         }
@@ -3876,8 +3875,7 @@ mod tests {
     }
 
     /// The copies of the installed skills Brigadier used to write into the user's skills
-    /// folder go, by their name and description; the user's own skills, and a same-named
-    /// skill of theirs, stay.
+    /// folder go only when byte-identical; the user's own skills stay.
     #[test]
     fn the_old_skill_copies_leave_the_users_skills_folder() {
         let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
@@ -3894,11 +3892,11 @@ mod tests {
             .unwrap();
         }
         let skills = dir.join("codex-home/skills");
-        // An older text of Brigadier's own skill, and the user's skill of the same name.
+        // An exact copy of Brigadier's skill, and the user's skill of the same name.
         std::fs::create_dir_all(skills.join("brigade")).unwrap();
         std::fs::write(
             skills.join("brigade/SKILL.md"),
-            skill("brigade", "Brigadier's.", "last week"),
+            skill("brigade", "Brigadier's.", "today"),
         )
         .unwrap();
         std::fs::create_dir_all(skills.join("fusion")).unwrap();
@@ -3915,6 +3913,27 @@ mod tests {
         // A missing folder is nothing to remove.
         remove_old_skill_copies(&dir.join("none"), std::slice::from_ref(&plugin)).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_skill_copy_with_an_edited_body_survives() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-old-skill-{}", uuid::Uuid::new_v4()));
+        let plugin = dir.join("plugin");
+        let skills = dir.join("skills");
+        let original = "---\nname: review\ndescription: Review\n---\nOriginal body\n";
+        let edited = original.replace("Original body", "My edited body");
+        for base in [plugin.join("skills/review"), skills.join("review")] {
+            std::fs::create_dir_all(base).unwrap();
+        }
+        std::fs::write(plugin.join("skills/review/SKILL.md"), original).unwrap();
+        std::fs::write(skills.join("review/SKILL.md"), &edited).unwrap();
+        remove_old_skill_copies(&skills, &[plugin]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(skills.join("review/SKILL.md")).unwrap(),
+            edited
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,
