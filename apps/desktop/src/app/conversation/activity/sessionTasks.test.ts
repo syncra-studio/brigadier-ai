@@ -102,3 +102,12 @@ test("literal tee arguments, comments and tee input redirects do not prove an ou
     assert.equal(view.lines[0]?.waitedOn, false, producer);
   }
 });
+
+test("a CI watch reads as watching CI, never as a running check", () => {
+  const ci = task("ci", "Watch CI run on the fix commit");
+  const watch = bash("ci", "gh run watch 40476598715 -R syncra-studio/brigadier-ai --exit-status >/dev/null 2>&1; gh run view 40476598715");
+  assert.equal(checkWords(checkLines([ci], [watch], NOW)), "Watching CI");
+  assert.equal(checkWords(checkLines([ci], [bash("ci", "gh pr checks 12 --watch")], NOW)), "Watching CI");
+  const both = checkLines([ci, task("p", "Run tests")], [watch, bash("p", "pnpm test")], NOW);
+  assert.equal(checkWords(both), "1 check running · watching CI");
+});

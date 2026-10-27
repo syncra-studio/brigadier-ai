@@ -37,6 +37,8 @@ export type StripLine = {
   /** Whether a click opens what it printed. */
   output: boolean;
   wait: boolean;
+  /** It watches a CI run until it ends (`gh run watch`, `gh pr checks --watch`). */
+  ci: boolean;
   /** The running tasks its Stop stops: itself, and a queued command's wait. */
   stops: string[];
 };
@@ -45,6 +47,9 @@ export type StripLine = {
 export type StripLines = { lines: StripLine[]; waitingOn: string | null; stops?: string[]; stopStarts?: Record<string, number> };
 
 const NONE: StripLines = { lines: [], waitingOn: null };
+
+/** A command that watches CI until it ends. */
+const CI_WATCH = /\bgh\s+(?:run\s+watch\b|pr\s+checks\b[^;&|]*--watch\b)/;
 
 /** A shell loop that waits for something, and what runs after it: `until grep -q … f; do sleep 10; done; cat f`. */
 const WAIT_LOOP = /^\s*(?:until|while)\s+([^]+?);\s*do\s+sleep\s+[\d.]+[smh]?\s*;?\s*done\s*(?:(?:;|&&)\s*([^]*))?$/;
@@ -178,6 +183,7 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
       waitedOn: task.status === "running" && watchers.length > 0,
       command,
       wait: !queued && (WAIT_LOOP.test(command ?? "") || /^\s*sleep\s+[\d.]+[smh]?\s*$/.test(command ?? "")),
+      ci: CI_WATCH.test(command ?? ""),
       output: (task.kind === "shell" || task.kind === "terminal") && task.outputFile !== null,
       stops: task.status === "running" ? [task.id] : [],
     };
@@ -192,8 +198,10 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
 export function checkWords({ lines, waitingOn }: StripLines): string {
   const [one, many, at] = ["check", "checks", "running"];
   const count = (test: (line: StripLine) => boolean) => lines.filter((line) => !line.wait && test(line)).length;
+  // A running CI watch is no check of its own: the strip says it watches CI.
+  const watching = count((line) => line.state === "running" && line.ci) > 0;
   const counts: [number, string][] = [
-    [count((line) => line.state === "running"), at],
+    [count((line) => line.state === "running" && !line.ci), at],
     [count((line) => line.state === "queued"), "queued"],
     [count((line) => line.state === "done" && line.word !== "finished"), "passed"],
     [count((line) => line.word === "finished"), "finished"],
@@ -201,5 +209,6 @@ export function checkWords({ lines, waitingOn }: StripLines): string {
     [count((line) => line.state === "stopped"), "stopped"],
   ];
   const words = counts.filter(([n]) => n > 0).map(([n, word], index) => (index === 0 ? `${n} ${n === 1 ? one : many} ${word}` : `${n} ${word}`));
-  return [waitingOn && `Waiting on ${waitingOn}`, ...words].filter(Boolean).join(" · ");
+  const ci = watching ? (words.length === 0 && !waitingOn ? "Watching CI" : "watching CI") : null;
+  return [waitingOn && `Waiting on ${waitingOn}`, ...words, ci].filter(Boolean).join(" · ");
 }
