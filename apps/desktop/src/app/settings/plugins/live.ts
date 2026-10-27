@@ -169,11 +169,11 @@ export function livePlugins(): PluginsAdapter {
       if (check.needsName && !name?.trim()) return { drafts: [], needsName: true };
       if (check.error) throw new Error(check.error);
       const drafts = check.items.map((item): PluginDraft => ({ name: item.name, kind: item.kind, detail: item.detail, remote: item.remote,
-        signsIn: item.remote && item.secrets.length === 0, secrets: item.secrets, error: null }));
+        signsIn: item.remote && item.secrets.length === 0, secrets: item.secrets, error: null, ...(item.contents !== undefined ? { contents: item.contents } : {}) }));
       return { drafts, needsName: false };
     },
-    add: async (text, name, projectIds, values) => { await request({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}) }); return []; },
-    importPlugin: async (key, name, projectIds) => { await request({ method: "importPlugin", key, name, projectIds }); return []; },
+    add: async (text, name, projectIds, values, source) => { await request({ method: "addPlugin", text, name, projectIds, ...(values ? { values } : {}), ...(source ? { source } : {}) }); return []; },
+    importPlugin: async (key, name, projectIds, contents) => { await request({ method: "importPlugin", key, name, projectIds, ...(contents !== undefined ? { contents } : {}) }); return []; },
     remove: async (key) => { await request({ method: "removePlugin", key }); return []; },
     update: async () => { throw new Error("Remove and add the library item to update it."); },
     details: async (key) => (await request({ method: "getPluginItem", key })).item,

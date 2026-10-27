@@ -183,6 +183,7 @@ const adapter: PluginsAdapter = {
     return ok();
   },
   checkAdd: async (text, name) => {
+    if (name === "filesystem") return { drafts: [{ name, kind: "server", detail: "npx filesystem", remote: false, signsIn: false, secrets: [], error: null }], needsName: false };
     calls.push(`checkPluginAdd ${text}${name ? ` name ${name}` : ""}`);
     if (!text.includes("sentry")) return { drafts: [{ name: "", kind: "server", detail: "", remote: false, signsIn: false, secrets: [], error: "That doesn't look like an MCP server or a skill." }], needsName: false };
     return { drafts: [{ name: "sentry", kind: "server", detail: "https://mcp.sentry.dev/mcp", remote: true, signsIn: true, secrets: [], error: null }], needsName: false };
@@ -224,6 +225,10 @@ const adapter: PluginsAdapter = {
     return ok();
   },
   details: async (key) => {
+    const external = elsewhere.find((entry) => entry.key === key);
+    if (external) return { key, kind: "server", skills: [], server: external.url
+      ? { type: "http", url: external.url, headerNames: [] }
+      : { type: "stdio", command: "npx", args: [external.name], cwd: null, envNames: [] } };
     calls.push(`getPluginItem ${key}`);
     return details(key);
   },
@@ -491,7 +496,7 @@ async function drive(setKey: (key: number) => void) {
   click("Add");
   await pause();
   type("What to add", "https://mcp.sentry.dev/mcp");
-  click("Continue");
+  click("Save");
   await pause(120);
   seen.addReview = read();
   click("Add", document.querySelector("[data-dialog]")!);
@@ -504,8 +509,12 @@ async function drive(setKey: (key: number) => void) {
   await reset(setKey);
   click("Add");
   await pause();
+  click("Import from…");
+  await pause();
   seen.importList = read();
   click("Import filesystem");
+  await pause(120);
+  click("Save");
   await pause(120);
   seen.importReview = read();
   click("Import", document.querySelector("[data-dialog]")!);

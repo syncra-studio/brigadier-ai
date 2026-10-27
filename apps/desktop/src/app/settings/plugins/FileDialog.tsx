@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { Badge, Button, TooltipIconButton } from "@/components/controls";
@@ -33,7 +33,7 @@ export function settingsText(settings: PluginServerSettings): string {
 type Shown = { name: string; path: string; shown: string; text: string; readOnly: string | null };
 
 /** What Open shows of an item: each SKILL.md, or the server's settings beside the file it's saved in. */
-function shownFiles(item: PluginItemView, details: PluginItemDetails): Shown[] {
+function shownFiles(item: Pick<PluginItemView, "name" | "kind" | "files">, details: PluginItemDetails): Shown[] {
   if (details.server) {
     const shown = `${item.name}.json`;
     return [{ name: item.name, path: item.files[0] ?? shown, shown, text: settingsText(details.server), readOnly: "Server settings are read only here." }];
@@ -47,15 +47,32 @@ function shownFiles(item: PluginItemView, details: PluginItemDetails): Shown[] {
  * edits, only Cancel or × closes the dialog, so a stray Escape or click outside doesn't lose them.
  * A server's settings show read only, their secret values hidden.
  */
-export function FileDialog({ item, details, save, onClose }: {
-  item: PluginItemView;
+export function FileDialog({ item, details, save, create, onClose }: {
+  item: Pick<PluginItemView, "name" | "kind" | "files">;
+  onClose: () => void;
+} & ({
   /** Reads the item's files afresh at each opening. */
   details: () => Promise<PluginItemDetails>;
   /** Writes one SKILL.md, by its path, if it still holds `expected`: "changed", with what it holds now, when it doesn't. */
   save: (path: string, contents: string, expected: string) => Promise<SkillSave>;
-  onClose: () => void;
-}) {
-  const [files, setFiles] = useState<Shown[] | null>(null);
+  create?: never;
+} | {
+  details?: never;
+  save?: never;
+  create: {
+    value: string;
+    onChange: (text: string) => void;
+    onSave: () => void;
+    controls: ReactNode;
+    extra?: ReactNode;
+    error: string | null;
+    busy: boolean;
+    disabled: boolean;
+  };
+})) {
+  const [loadedFiles, setFiles] = useState<Shown[] | null>(null);
+  const filename = item.kind === "skill" ? "SKILL.md" : "server.json";
+  const files: Shown[] | null = create ? [{ name: item.name, path: filename, shown: filename, text: "", readOnly: null }] : loadedFiles;
   const [failed, setFailed] = useState<string | null>(null);
   const [at, setAt] = useState(0);
   /** Each file's text as edited, by its path. */
@@ -72,6 +89,7 @@ export function FileDialog({ item, details, save, onClose }: {
   useEffect(() => {
     let live = true;
     const { details: read, item: opened } = opening.current;
+    if (!read) return;
     read().then(
       (found) => live && setFiles(shownFiles(opened, found)),
       (cause: unknown) => live && setFailed(cause instanceof Error ? cause.message : String(cause)),
@@ -89,12 +107,12 @@ export function FileDialog({ item, details, save, onClose }: {
   const staleCount = Object.keys(stale).length;
   const file = files?.[at] ?? null;
   const editable = !!file && file.readOnly === null;
-  const draft = file ? drafts[file.path] ?? file.text : "";
+  const draft = create?.value ?? (file ? drafts[file.path] ?? file.text : "");
   const changed = (files ?? []).filter((entry) => entry.readOnly === null && drafts[entry.path] !== undefined && drafts[entry.path] !== entry.text);
-  const dirty = changed.length > 0;
+  const dirty = create ? !!draft.trim() : changed.length > 0;
   const anyEditable = (files ?? []).some((entry) => entry.readOnly === null);
   const store = (then?: () => void) => {
-    if (!dirty || action.busy || staleCount) return;
+    if (!save || !dirty || action.busy || staleCount) return;
     const writes = changed.map((entry) => ({ path: entry.path, text: drafts[entry.path]!, expected: entry.text }));
     action.run(async () => {
       const refused: Record<string, string> = {};
@@ -109,11 +127,13 @@ export function FileDialog({ item, details, save, onClose }: {
       if (!Object.keys(refused).length) then?.();
     });
   };
-  const status = action.error ?? (dirty ? "Unsaved changes" : saved ? "Saved" : null);
+  const error = create ? create.error : action.error;
+  const busy = create ? create.busy : action.busy;
+  const status = error ?? (dirty ? "Unsaved changes" : saved ? "Saved" : null);
   return (
     <Dialog open onOpenChange={(open) => !open && !dirty && onClose()}>
       <DialogContent
-        data-dialog="plugin-file"
+        data-dialog={create ? "add" : "plugin-file"}
         showCloseButton={false}
         aria-describedby={undefined}
         // The text takes focus once it's read (an editable one); until then the dialog holds it, not Copy path.
@@ -126,7 +146,7 @@ export function FileDialog({ item, details, save, onClose }: {
           path={file?.path ?? item.name}
           shown={file ? shortPath(file.shown) : item.name}
           // A server's settings have a file only when it's saved in one.
-          reveal={file && (item.kind === "skill" || file.path !== file.shown) ? file.path : null}
+          reveal={!create && file && (item.kind === "skill" || file.path !== file.shown) ? file.path : null}
           heading={DialogTitle}
           actions={
             <TooltipIconButton tooltip={dirty ? "Close without saving" : "Close"} size="icon-sm" onClick={onClose}>
@@ -137,6 +157,8 @@ export function FileDialog({ item, details, save, onClose }: {
           {file && !editable && <Badge variant="secondary" title={file.readOnly ?? undefined}>Read only</Badge>}
           {file && <span className="text-muted-foreground shrink-0 text-xs">{formatBytes(new TextEncoder().encode(draft).length)}</span>}
         </CodeFileHeader>
+        {create?.controls}
+        {create?.extra && <div className="border-border max-h-48 shrink-0 overflow-y-auto border-b px-4 py-3">{create.extra}</div>}
         {files && files.length > 1 && (
           <div role="tablist" aria-label="Skills" className="border-border flex shrink-0 items-center gap-1 overflow-x-auto border-b px-3 py-1.5">
             {files.map((entry, index) => (
@@ -174,23 +196,24 @@ export function FileDialog({ item, details, save, onClose }: {
             autoFocus
             value={draft}
             language={languageOf(file.shown)}
-            label={item.kind === "skill" ? `${file.name}'s SKILL.md` : `${item.name}'s settings`}
+            label={create ? "What to add" : item.kind === "skill" ? `${file.name}'s SKILL.md` : `${item.name}'s settings`}
             {...(editable
               ? {
                   onChange: (text: string) => {
+                    if (create) { create.onChange(text); return; }
                     setDrafts((now) => ({ ...now, [file.path]: text }));
                     setSaved(false);
                   },
-                  onSave: () => store(),
+                  onSave: () => { if (create) { if (dirty && !busy && !create.disabled) create.onSave(); } else store(); },
                 }
               : {})}
           />
         )}
         {anyEditable && (
           <footer className="border-border flex shrink-0 items-center gap-3 border-t px-4 py-3">
-            <span role={action.error ? "alert" : "status"} className={cn("min-w-0 flex-1 truncate text-xs", action.error ? "text-destructive" : "text-muted-foreground")}>{status}</span>
+            <span role={error ? "alert" : "status"} className={cn("min-w-0 flex-1 truncate text-xs", error ? "text-destructive" : "text-muted-foreground")}>{status}</span>
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button size="sm" disabled={!dirty || action.busy || staleCount > 0} onClick={() => store(onClose)}>{action.busy ? "Saving…" : "Save"}</Button>
+            <Button size="sm" disabled={!dirty || busy || staleCount > 0 || create?.disabled} onClick={() => create ? create.onSave() : store(onClose)}>{busy ? create ? "Checking…" : "Saving…" : "Save"}</Button>
           </footer>
         )}
       </DialogContent>

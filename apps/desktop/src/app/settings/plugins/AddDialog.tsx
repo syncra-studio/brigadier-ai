@@ -8,7 +8,8 @@ import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "./adapter";
 import { failures, notes, PluginDialog, useWatch } from "./dialogs";
 import { KIND_LABEL, shownDetail } from "./model";
 import { PluginMark, RadioRow } from "./parts";
-import type { PluginElsewhereView, PluginsView } from "./types";
+import type { PluginElsewhereView, PluginKind, PluginsView } from "./types";
+import { FileDialog, settingsText } from "./FileDialog";
 
 export const ADD_HINT = "Works with an mcp add line from any agent, a server URL, mcpServers JSON, a GitHub link, a skills.sh name or a skill folder.";
 
@@ -16,6 +17,8 @@ export const ADD_HINT = "Works with an mcp add line from any agent, a server URL
 type ValueRow = { id: number; name: string; value: string; pasted: boolean };
 
 /** `from`: another app's server being imported, not a paste. */
+export const SKILL_STARTER = "---\nname: \ndescription: \n---\n\n";
+
 type Step =
   | { type: "paste" }
   | { type: "review"; drafts: PluginDraft[]; from?: PluginElsewhereView }
@@ -30,7 +33,12 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
 }) {
   const id = useId();
   const [step, setStep] = useState<Step>({ type: "paste" });
-  const [text, setText] = useState("");
+  const [kind, setKind] = useState<PluginKind>("server");
+  const [texts, setTexts] = useState({ skill: SKILL_STARTER, server: "" });
+  const text = texts[kind];
+  const [sourceFolder, setSourceFolder] = useState<string | null>(null);
+  const [importing, setImporting] = useState<PluginElsewhereView | null>(null);
+  const [showImports, setShowImports] = useState(false);
   const [where, setWhere] = useState<"every" | "one">("every");
   const [project, setProject] = useState(view.projects[0]?.id ?? "");
   const [advanced, setAdvanced] = useState(false);
@@ -44,7 +52,8 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
 
   if (step.type === "paste") {
     const check = () => action.run(async () => {
-      const { drafts, needsName: unnamed } = await adapter.checkAdd(text, needsName ? name.trim() : null);
+      const skillText = kind === "skill" && text.trimStart().startsWith("---");
+      const { drafts, needsName: unnamed } = await adapter.checkAdd(text, skillText ? null : name.trim() || null);
       if (unnamed) {
         setNeedsName(true);
         return;
@@ -55,57 +64,67 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
       setName(drafts.length === 1 ? drafts[0]!.name : "");
       const server = drafts.length === 1 && drafts[0]!.kind === "server" ? drafts[0]! : null;
       setValues((server?.secrets ?? []).map((secret, index) => ({ id: index, name: secret, value: "", pasted: true })));
-      setStep({ type: "review", drafts });
+      if (importing && (drafts.length !== 1 || drafts[0]!.kind !== "server")) throw new Error("Import one MCP server at a time.");
+      setStep({ type: "review", drafts, ...(importing ? { from: importing } : {}) });
     });
     const choose = () => action.run(async () => {
       const folder = await adapter.pickFolder();
-      if (folder) setText(folder);
+      if (!folder) return;
+      const { drafts } = await adapter.checkAdd(folder, null);
+      const draft = drafts[0];
+      if (drafts.length !== 1 || draft?.kind !== "skill" || draft.contents === undefined) throw new Error("Choose a folder containing one SKILL.md.");
+      const draftName = draft.name || folder.split(/[\\/]/).filter(Boolean).at(-1) || "skill";
+      setKind("skill");
+      setTexts((current) => ({ ...current, skill: draft.contents!.trimStart().startsWith("---") ? draft.contents!
+        : `---\nname: ${draftName}\ndescription: \n---\n\n${draft.contents}` }));
+      setName(draftName);
+      setSourceFolder(folder);
+      setImporting(null);
+      setNeedsName(false);
+      setShowImports(false);
+    });
+    const loadImport = (entry: PluginElsewhereView) => action.run(async () => {
+      const found = await adapter.details(entry.key);
+      if (!found.server) throw new Error("This item is not an MCP server.");
+      setKind("server");
+      setTexts((current) => ({ ...current, server: settingsText(found.server!) }));
+      setName(entry.name);
+      setImporting(entry);
+      setSourceFolder(null);
+      setNeedsName(false);
+      setShowImports(false);
     });
     return (
-      <PluginDialog slot="add" onClose={onClose} title="Add a skill or MCP server" description="Paste what you have. Brigadier adds it to its library for your next sessions.">
-        <div className="flex flex-col gap-2">
-          <textarea
-            id={`${id}-paste`}
-            aria-label="What to add"
-            value={text}
-            rows={6}
-            autoFocus
-            {...PLAIN_FIELD}
-            onChange={(event) => {
-              setText(event.target.value);
-              setNeedsName(false);
-            }}
-            className="border-input bg-popover rounded-control placeholder:text-muted-foreground focus-visible:ring-ring/50 min-h-28 w-full resize-y border px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2"
-          />
-          <p className="text-foreground/50 text-xs">{ADD_HINT}</p>
-          {needsName && (
-            <div data-slot="paste-name" className="flex flex-col gap-2 pt-2">
-              <p className="text-foreground/65 text-xs">What you pasted has no name. Give this server one.</p>
-              <div className="flex items-center gap-3">
-                <label htmlFor={`${id}-paste-name`} className="text-foreground/65 w-20 shrink-0 text-label">Name</label>
-                <Input id={`${id}-paste-name`} aria-label="Name" value={name} autoFocus {...PLAIN_FIELD} onChange={(event) => setName(event.target.value)} className="h-8 font-mono text-xs" />
-              </div>
+      <FileDialog
+        item={{ name: kind === "skill" ? "New skill" : "New MCP server", kind, files: [] }}
+        onClose={onClose}
+        create={{
+          value: text,
+          onChange: (value) => { setTexts((current) => ({ ...current, [kind]: value })); setNeedsName(false); },
+          onSave: check,
+          error: action.error,
+          busy: action.busy,
+          disabled: needsName && !name.trim(),
+          controls: <div className="border-border flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
+            <div role="tablist" aria-label="Plugin kind" className="flex items-center gap-1">
+              {(["skill", "server"] as const).map((choice) => <Button key={choice} role="tab" aria-selected={kind === choice} variant={kind === choice ? "soft" : "ghost"} size="sm" onClick={() => {
+                setKind(choice); setTexts((current) => ({ ...current, [choice]: choice === "skill" ? SKILL_STARTER : "" }));
+                setImporting(null); setSourceFolder(null); setNeedsName(false); setName(""); setShowImports(false);
+              }}>{KIND_LABEL[choice]}</Button>)}
             </div>
-          )}
-          <ErrorLine error={action.error} />
-        </div>
-        {view.elsewhere.length > 0 && (
-          <ImportList
-            entries={view.elsewhere}
-            onImport={(entry) => {
-              setName(entry.name);
-              setValues([]);
-              setStep({ type: "review", drafts: [importDraft(entry)], from: entry });
-            }}
-          />
-        )}
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={choose}>Choose folder…</Button>
-          <span className="flex-1" />
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button disabled={!text.trim() || (needsName && !name.trim()) || action.busy} onClick={check}>{action.busy ? "Checking…" : "Continue"}</Button>
-        </div>
-      </PluginDialog>
+            <span className="flex-1" />
+            <Button variant="ghost" size="sm" disabled={action.busy} onClick={choose}>Choose folder…</Button>
+            {view.elsewhere.length > 0 && <Button variant="ghost" size="sm" onClick={() => setShowImports(!showImports)}>Import from…</Button>}
+          </div>,
+          extra: needsName || showImports ? <>
+            {needsName && <div data-slot="paste-name" className="flex items-center gap-3">
+              <label htmlFor={`${id}-paste-name`} className="text-foreground/65 shrink-0 text-label">Name</label>
+              <Input id={`${id}-paste-name`} aria-label="Name" value={name} autoFocus {...PLAIN_FIELD} onChange={(event) => setName(event.target.value)} className="h-8 font-mono text-xs" />
+            </div>}
+            {showImports && <ImportList entries={view.elsewhere} onImport={loadImport} />}
+          </> : null,
+        }}
+      />
     );
   }
 
@@ -153,8 +172,8 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
     const typedValues = typed.length ? Object.fromEntries(typed.map((row) => [row.name.trim(), row.value])) : null;
     const projectIds = inProject ? [inProject.id] : null;
     const request = from
-      ? adapter.importPlugin(from.key, given && given !== from.name ? given : null, projectIds)
-      : adapter.add(text, given && (needsName || given !== single?.name) ? given : null, projectIds, typedValues);
+      ? adapter.importPlugin(from.key, given && given !== from.name ? given : null, projectIds, text)
+      : adapter.add(text, given && (needsName || given !== single?.name) ? given : null, projectIds, typedValues, sourceFolder ?? undefined);
     request.then(
       (results) => {
         setStep({ type: "adding", drafts, ...(from ? { from } : {}), results });
@@ -306,17 +325,6 @@ function about(draft: PluginDraft): string {
   }
   return `An MCP server from ${host}.${signs}`;
 }
-
-/** Another app's server as Add's review shows it. */
-const importDraft = (entry: PluginElsewhereView): PluginDraft => ({
-  name: entry.name,
-  kind: "server",
-  detail: entry.url ?? entry.detail,
-  remote: entry.url !== null,
-  signsIn: false,
-  secrets: [],
-  error: null,
-});
 
 /** Other apps' servers, by the app each is in: none of the agents uses them until imported. */
 function ImportList({ entries, onImport }: { entries: PluginElsewhereView[]; onImport: (entry: PluginElsewhereView) => void }) {

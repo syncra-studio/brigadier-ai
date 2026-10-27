@@ -17,6 +17,7 @@ export type PluginDraft = {
   secrets: string[];
   /** Why it can't be added, in words for the user. */
   error: string | null;
+  contents?: string;
 };
 
 /** How one agent took a change. */
@@ -42,12 +43,12 @@ export type PluginsAdapter = {
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   /** Adds it to every agent, in every project (`projectIds` null) or these; `values`: env or headers typed in Advanced. */
-  add: (text: string, name: string | null, projectIds: string[] | null, values: Record<string, string> | null) => Promise<PluginAgentResult[]>;
+  add: (text: string, name: string | null, projectIds: string[] | null, values: Record<string, string> | null, source?: string) => Promise<PluginAgentResult[]>;
   /**
    * Imports another app's server (an `elsewhere` entry, by key) into every agent, its settings
    * and values with it; `name` when its own clashes. The app's own stays as it is.
    */
-  importPlugin: (key: string, name: string | null, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
+  importPlugin: (key: string, name: string | null, projectIds: string[] | null, contents?: string) => Promise<PluginAgentResult[]>;
   /** Takes out what Brigadier added (its `removal`); an original stays as it is. */
   remove: (key: string) => Promise<PluginAgentResult[]>;
   update: (key: string) => Promise<PluginAgentResult[]>;

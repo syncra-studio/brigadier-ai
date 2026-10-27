@@ -1224,12 +1224,18 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         values: Option<std::collections::BTreeMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        source: Option<String>,
     },
     /// Imports a detected offer into Brigadier's Library; the source stays untouched.
     ImportPlugin {
         key: String,
         name: Option<String>,
         project_ids: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        contents: Option<String>,
     },
     /// Deletes a Library item, or hides a machine-found item from Brigadier.
     RemovePlugin {

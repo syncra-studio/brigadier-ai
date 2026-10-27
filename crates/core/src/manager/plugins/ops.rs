@@ -23,6 +23,10 @@ pub struct PluginAddItem {
     pub summary: String,
     /// The names of its configured values; values never enter the page model.
     pub secrets: Vec<String>,
+    /// Editable SKILL.md preview for a local skill folder; server values are never included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub contents: Option<String>,
 }
 
 /// What [`check_add`] read in a paste.
@@ -78,6 +82,7 @@ fn describe(item: &Item) -> PluginAddItem {
                 remote,
                 summary,
                 secrets: secrets.iter().map(|(name, _)| name.clone()).collect(),
+                contents: None,
             }
         }
         Item::Skill(spec) => {
@@ -96,6 +101,10 @@ fn describe(item: &Item) -> PluginAddItem {
                 remote: false,
                 summary,
                 secrets: Vec::new(),
+                contents: match &spec.source {
+                    SkillSource::Folder(dir) => std::fs::read_to_string(dir.join("SKILL.md")).ok(),
+                    _ => None,
+                },
             }
         }
     }
@@ -103,6 +112,31 @@ fn describe(item: &Item) -> PluginAddItem {
 
 /// What a paste would add, read before anything is added.
 pub(crate) fn check_add(home: &Path, text: &str, name: Option<&str>) -> PluginAddCheck {
+    match inline_skill(text, name, None) {
+        Ok(Some((_scratch, name))) => {
+            return PluginAddCheck {
+                items: vec![PluginAddItem {
+                    kind: PluginKind::Skill,
+                    name,
+                    detail: "SKILL.md".into(),
+                    remote: false,
+                    summary: "A skill saved in Brigadier's library.".into(),
+                    secrets: Vec::new(),
+                    contents: Some(text.into()),
+                }],
+                error: None,
+                needs_name: false,
+            };
+        }
+        Err(error) => {
+            return PluginAddCheck {
+                items: Vec::new(),
+                error: Some(error),
+                needs_name: false,
+            };
+        }
+        Ok(None) => {}
+    }
     match add_parse::parse(text, name, home) {
         Ok(items) => PluginAddCheck {
             items: items.iter().map(describe).collect(),
@@ -136,6 +170,41 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+fn inline_skill(
+    text: &str,
+    name: Option<&str>,
+    source: Option<&str>,
+) -> Result<Option<(Scratch, String)>, String> {
+    if !text.trim_start().starts_with("---\n") && !text.trim_start().starts_with("---\r\n") {
+        return Ok(None);
+    }
+    let scratch = Scratch::new()?;
+    let dir = scratch.0.join("skill");
+    if let Some(source) = source {
+        let items =
+            add_parse::folder(Path::new(source), None).map_err(|error| error.to_string())?;
+        let [
+            Item::Skill(SkillSpec {
+                source: SkillSource::Folder(source),
+                ..
+            }),
+        ] = items.as_slice()
+        else {
+            return Err("Choose a folder containing one SKILL.md.".into());
+        };
+        copy_skill(source, &dir, &mut Vec::new())?;
+    } else {
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(dir.join("SKILL.md"), text).map_err(|error| error.to_string())?;
+    let name = name
+        .map(str::to_owned)
+        .or_else(|| library::skill_name(&dir))
+        .ok_or("Give the skill a name in its SKILL.md frontmatter.")?;
+    valid_library_name(&name)?;
+    Ok(Some((scratch, name)))
 }
 
 /// `item`'s files, fetched: its skill's folder, and where it came from when fetched.
@@ -228,6 +297,37 @@ fn write_private(path: &Path, value: &impl Serialize) -> Result<(), String> {
     file.write_all(&serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())
+}
+
+fn edit_import(spec: ServerSpec, contents: &str, home: &Path) -> crate::Result<ServerSpec> {
+    let items = add_parse::parse(contents, Some(&spec.name), home)
+        .map_err(|error| crate::Error::Invalid(error.to_string()))?;
+    let [Item::Server(mut edited)] = <[Item; 1]>::try_from(items)
+        .map_err(|_| crate::Error::Invalid("Import one MCP server at a time.".into()))?
+    else {
+        return Err(crate::Error::Invalid(
+            "The imported settings must describe an MCP server.".into(),
+        ));
+    };
+    let original = match &spec.transport {
+        TransportSpec::Stdio { env, .. } => env,
+        TransportSpec::Http { headers, .. } => headers,
+    };
+    let edited_values = match &mut edited.transport {
+        TransportSpec::Stdio { env, .. } => env,
+        TransportSpec::Http { headers, .. } => headers,
+    };
+    for (key, value) in edited_values {
+        if value.expose() == "••••••••" {
+            *value = original
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| crate::Error::Invalid(format!("Give {key} a value.")))?;
+        }
+    }
+    edited.oauth = spec.oauth;
+    Ok(edited)
 }
 
 fn server_value(spec: &ServerSpec) -> serde_json::Value {
@@ -513,6 +613,36 @@ impl crate::manager::SessionManager {
     }
 
     /// Completes before replying: Add/Import/Remove need no frontend job runner.
+    pub async fn add_library_draft(
+        &self,
+        text: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+        values: Option<BTreeMap<String, String>>,
+        source: Option<String>,
+    ) -> crate::Result<()> {
+        let draft = text.clone();
+        let given = name.clone();
+        let prepared = super::super::blocking(move || {
+            inline_skill(&draft, given.as_deref(), source.as_deref()).map_err(crate::Error::Invalid)
+        })
+        .await?;
+        if let Some((scratch, name)) = prepared {
+            let result = self
+                .add_library_item(
+                    scratch.0.join("skill").to_string_lossy().into_owned(),
+                    Some(name),
+                    project_ids,
+                    values,
+                )
+                .await;
+            drop(scratch);
+            result
+        } else {
+            self.add_library_item(text, name, project_ids, values).await
+        }
+    }
+
     pub async fn add_library_item(
         &self,
         text: String,
@@ -651,6 +781,17 @@ impl crate::manager::SessionManager {
         name: Option<String>,
         project_ids: Option<Vec<String>>,
     ) -> crate::Result<()> {
+        self.import_library_draft(row_id, name, project_ids, None)
+            .await
+    }
+
+    pub async fn import_library_draft(
+        &self,
+        row_id: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+        contents: Option<String>,
+    ) -> crate::Result<()> {
         let rows = self.plugin_catalog_rows();
         let row = rows
             .iter()
@@ -686,7 +827,7 @@ impl crate::manager::SessionManager {
                 headers: headers.clone(),
             },
         };
-        let spec = ServerSpec {
+        let mut spec = ServerSpec {
             name: name.unwrap_or_else(|| server.name.clone()),
             transport,
             oauth: server
@@ -697,6 +838,9 @@ impl crate::manager::SessionManager {
                     client_id: id.clone(),
                 }),
         };
+        if let Some(contents) = contents {
+            spec = edit_import(spec, &contents, &self.registry().roots().home)?;
+        }
         let values = match &spec.transport {
             TransportSpec::Stdio { env, .. } => env,
             TransportSpec::Http { headers, .. } => headers,

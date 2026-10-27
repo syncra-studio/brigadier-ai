@@ -884,3 +884,85 @@ async fn library_remove_still_deletes_the_library_item() {
     assert!(view.rows.iter().all(|row| row.name != "delete-me"));
     flow.stop().await;
 }
+
+#[test]
+fn inline_skill_check_uses_frontmatter_and_local_folder_preview() {
+    let home = home("inline-skill-check");
+    let text = "---\nname: authored\ndescription: A new skill\n---\n\nFollow these instructions.\n";
+    let check = check_add(&home, text, None);
+    assert_eq!(check.error, None);
+    assert_eq!(check.items[0].name, "authored");
+    assert_eq!(check.items[0].contents.as_deref(), Some(text));
+    let folder = home.join("picked");
+    write(&folder.join("SKILL.md"), text);
+    let preview = check_add(&home, folder.to_str().unwrap(), None);
+    assert_eq!(preview.items[0].contents.as_deref(), Some(text));
+    assert!(
+        check_add(&home, "---\nname: ../escape\n---\n", None)
+            .error
+            .is_some()
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn imported_editor_changes_preserve_opaque_values_without_exposing_them() {
+    let original = ServerSpec {
+        name: "source".into(),
+        transport: TransportSpec::Http {
+            url: "https://old.test/mcp".into(),
+            headers: vec![("Authorization".into(), Secret::new("fixture-original"))],
+        },
+        oauth: None,
+    };
+    let edited = edit_import(
+        original,
+        r#"{"url":"https://new.test/mcp","headers":{"Authorization":"••••••••"}}"#,
+        Path::new("/fixture"),
+    )
+    .unwrap();
+    assert!(
+        matches!(edited.transport, TransportSpec::Http { url, headers } if url == "https://new.test/mcp" && headers.iter().any(|(key, value)| key == "Authorization" && value.expose() == "fixture-original"))
+    );
+}
+
+#[tokio::test]
+async fn authored_skill_saves_editor_text_and_preserves_selected_folder_supporting_files() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    use std::sync::Arc;
+    let flow = Flow::start(
+        "authored-skill-folder",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let source = flow.manager.data_dir.join("picked");
+    let original = "---\nname: picked\ndescription: Original\n---\nOld instructions\n";
+    write(&source.join("SKILL.md"), original);
+    write(&source.join("examples/note.md"), "Supporting file");
+    let edited = "---\nname: authored\ndescription: Edited\n---\nNew instructions\n";
+    flow.manager
+        .add_library_draft(
+            edited.into(),
+            None,
+            None,
+            None,
+            Some(source.display().to_string()),
+        )
+        .await
+        .unwrap();
+    let saved = flow.manager.data_dir.join("library/skills/authored");
+    assert_eq!(
+        std::fs::read_to_string(saved.join("SKILL.md")).unwrap(),
+        edited
+    );
+    assert_eq!(
+        std::fs::read_to_string(saved.join("examples/note.md")).unwrap(),
+        "Supporting file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(source.join("SKILL.md")).unwrap(),
+        original
+    );
+    flow.stop().await;
+}

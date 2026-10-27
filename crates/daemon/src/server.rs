@@ -2571,10 +2571,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             name,
             project_ids,
             values,
+            source,
         } => {
             daemon
                 .sessions
-                .add_library_item(text, name, project_ids, values)
+                .add_library_draft(text, name, project_ids, values, source)
                 .await?;
             daemon.sessions.rebuild_plugin_catalog().await?;
             Response::AddPlugin { job: String::new() }
@@ -2583,10 +2584,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             key,
             name,
             project_ids,
+            contents,
         } => {
             daemon
                 .sessions
-                .import_library_item(key, name, project_ids)
+                .import_library_draft(key, name, project_ids, contents)
                 .await?;
             daemon.sessions.rebuild_plugin_catalog().await?;
             Response::ImportPlugin { job: String::new() }

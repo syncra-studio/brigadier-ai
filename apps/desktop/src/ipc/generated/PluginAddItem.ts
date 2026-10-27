@@ -17,4 +17,8 @@ summary: string,
 /**
  * The names of its configured values; values never enter the page model.
  */
-secrets: Array<string>, };
+secrets: Array<string>, 
+/**
+ * Editable SKILL.md preview for a local skill folder; server values are never included.
+ */
+contents?: string, };
