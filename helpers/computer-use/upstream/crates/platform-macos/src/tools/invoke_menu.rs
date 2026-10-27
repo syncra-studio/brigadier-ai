@@ -694,10 +694,15 @@ impl MenuRequest {
     }
 }
 
-fn needs_current_space(path: &[String], on_current_space: Option<bool>) -> bool {
+fn needs_current_space(
+    path: &[String],
+    on_current_space: Option<bool>,
+    selects_window: impl FnOnce() -> bool,
+) -> bool {
     on_current_space == Some(false)
         && path.first().is_some_and(|name| name == "Window")
-        && path.len() > 1
+        && path.len() == 2
+        && selects_window()
 }
 
 /// Run a menu command in a background app without activating it. Presses
@@ -718,6 +723,13 @@ pub(super) async fn run_in_background(
     if needs_current_space(
         &path,
         crate::windows::window_on_current_space_by_id(window_id),
+        || {
+            let label = &path[1];
+            crate::windows::all_windows_without_spaces()
+                .iter()
+                .any(|window| window.pid == pid && window.title == *label)
+                || crate::apps::get_app_name_for_pid(pid).as_ref() == Some(label)
+        },
     ) {
         return ToolResult::error(
             "Not done: this window is on another Space. The Window menu cannot bring it \
@@ -981,19 +993,30 @@ mod tests {
     fn regression_off_space_window_menu_never_claims_to_switch_spaces() {
         assert!(needs_current_space(
             &["Window".into(), "Scratch".into()],
-            Some(false)
+            Some(false),
+            || true
         ));
         assert!(!needs_current_space(
             &["File".into(), "Save".into()],
-            Some(false)
+            Some(false),
+            || panic!("no lookup for ordinary app menus")
         ));
         assert!(!needs_current_space(
             &["Window".into(), "Scratch".into()],
-            Some(true)
+            Some(true),
+            || panic!("no lookup for current Space")
         ));
         assert!(!needs_current_space(
             &["Window".into(), "Scratch".into()],
-            None
+            None,
+            || true
+        ));
+        // Zoom, tab navigation and other background window commands do not
+        // ask WindowServer to show a selected window on the user's Space.
+        assert!(!needs_current_space(
+            &["Window".into(), "Zoom".into()],
+            Some(false),
+            || false
         ));
     }
 
