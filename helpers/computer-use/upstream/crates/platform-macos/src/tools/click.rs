@@ -1138,45 +1138,75 @@ impl Tool for ClickTool {
                     && modifiers.is_empty()
             }) {
                 let focus_only = action == "focus";
-                let ax_result = tokio::task::spawn_blocking(move || unsafe {
-                    let Some(element) = element_at_screen_position(pid, screen_x, screen_y) else {
-                        return Ok::<bool, anyhow::Error>(false);
-                    };
-                    // The pid-scoped hit-test can resolve an element from a
-                    // same-process sibling overlapping the requested point.
-                    // Require proven ancestry in the requested window before
-                    // acting; otherwise fall through to the routed pixel path
-                    // (already gated for this exact window).
-                    if crate::ax::exact_target::element_window_id(element) != Some(hit_test_wid) {
-                        CFRelease(element as _);
-                        return Ok(false);
-                    }
-                    // An element that does not advertise AXPress can still
-                    // accept it as a no-op. On a toolkit that drops routed
-                    // mouse events (LibreOffice's Calc cells) that no-op used
-                    // to come back as a pressed click; fall through so the
-                    // pixel route refuses instead.
-                    if !focus_only
-                        && !crate::ax::bindings::copy_action_names(element)
-                            .iter()
-                            .any(|action| action == "AXPress")
-                        && crate::input::pointer_toolkit::detect(pid)
-                            == Some(crate::input::pointer_toolkit::PointerReadingToolkit::Vcl)
-                    {
-                        CFRelease(element as _);
-                        return Ok(false);
-                    }
-                    let delivered = if focus_only {
-                        crate::input::ax_actions::focus_element(element as usize).is_ok()
-                    } else {
-                        let press = core_foundation::string::CFString::new("AXPress");
-                        AXUIElementPerformAction(element, press.as_concrete_TypeRef())
-                            == kAXErrorSuccess
-                    };
-                    CFRelease(element as _);
-                    Ok(delivered)
-                })
+                let prior_front = apps::frontmost_pid();
+                let snapshot = WindowChangeDetector::snapshot(prior_front);
+                let ax_result = focus_guard::with_focus_suppressed(
+                    Some(pid),
+                    prior_front,
+                    "click.pixel.AXPress",
+                    || async move {
+                        tokio::task::spawn_blocking(move || unsafe {
+                            let element = if focus_only {
+                                element_at_screen_position(pid, screen_x, screen_y)
+                            } else {
+                                crate::ax::point_target::press_target(
+                                    pid,
+                                    hit_test_wid,
+                                    screen_x,
+                                    screen_y,
+                                )
+                            };
+                            let Some(element) = element else {
+                                return Ok::<bool, anyhow::Error>(false);
+                            };
+                            // The pid-scoped hit-test can resolve an element from a
+                            // same-process sibling overlapping the requested point.
+                            // Require proven ancestry in the requested window before
+                            // acting; otherwise fall through to the routed pixel path
+                            // (already gated for this exact window).
+                            if crate::ax::exact_target::element_window_id(element)
+                                != Some(hit_test_wid)
+                            {
+                                CFRelease(element as _);
+                                return Ok(false);
+                            }
+                            // An element that does not advertise AXPress can still
+                            // accept it as a no-op. On a toolkit that drops routed
+                            // mouse events (LibreOffice's Calc cells) that no-op used
+                            // to come back as a pressed click; fall through so the
+                            // pixel route refuses instead.
+                            if !focus_only
+                                && !crate::ax::bindings::copy_action_names(element)
+                                    .iter()
+                                    .any(|action| action == "AXPress")
+                            {
+                                CFRelease(element as _);
+                                return Ok(false);
+                            }
+                            let _key_focus = crate::key_focus_guard::protect(pid);
+                            let delivered = if focus_only {
+                                crate::input::ax_actions::focus_element(element as usize).is_ok()
+                            } else {
+                                let press = core_foundation::string::CFString::new("AXPress");
+                                let error =
+                                    AXUIElementPerformAction(element, press.as_concrete_TypeRef());
+                                if error != kAXErrorSuccess {
+                                    CFRelease(element as _);
+                                    return Err(anyhow::anyhow!(
+                                "AXPress returned error {error}; its effect is unknown, so a \
+                                 second pixel click was not sent. Read the window before retrying."
+                            ));
+                                }
+                                true
+                            };
+                            CFRelease(element as _);
+                            Ok(delivered)
+                        })
+                        .await
+                    },
+                )
                 .await;
+                let changes = super::finish_window_observation(snapshot).await;
                 match ax_result {
                     Ok(Ok(true)) => {
                         crate::cursor::overlay::send_command(
@@ -1188,10 +1218,12 @@ impl Tool for ClickTool {
                         );
                         let label = if focus_only { "focused" } else { "pressed" };
                         return ToolResult::text(format!(
-                            "✅ PX hit-test {label} the background element via AX."
+                            "AX accepted a request to {label} the element at this point; its effect is \
+                             unconfirmed. Read the window to verify.{}", changes.result_suffix()
                         ))
                         .with_structured(serde_json::json!({
                             "path": "ax",
+                            "delivery_attempted": true,
                             "verified": false,
                             "effect": "unverifiable"
                         }));
@@ -1209,6 +1241,17 @@ impl Tool for ClickTool {
                             .with_structured(serde_json::json!({
                                 "code": "background_unavailable"
                             }));
+                    }
+                    Ok(Err(error)) => {
+                        return ToolResult::error(error.to_string()).with_structured(
+                            serde_json::json!({
+                                "path": "ax", "effect": "unverifiable", "verified": false,
+                                "delivery_attempted": true
+                            }),
+                        );
+                    }
+                    Err(error) => {
+                        return ToolResult::error(format!("AX hit-test task failed: {error}; no second click was sent. Verify the window before retrying."));
                     }
                     _ => {}
                 }

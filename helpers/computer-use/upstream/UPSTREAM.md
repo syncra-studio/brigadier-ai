@@ -77,6 +77,7 @@ Patches applied, in order:
 - `patches/0042-windows-hosted-window-identity.diff`: supplement Windows enumeration with the current desktop and attribute each UWP frame to its own hosted app pid; accept the app/frame pair for reads and actions.
 - `patches/0043-windows-elevated-window-read-refusal.diff`: refuse reads before UIA silently returns a title-bar-only tree for elevated windows; reads and input explain the privilege boundary and remedy plainly.
 - `patches/0050-off-space-picture-and-window-menu.diff`: reject black off-Space window bodies instead of using them as visual grounding, and refuse Window menu Space switches with an explicit user step; accessibility reads and semantic actions remain available.
+- `patches/0051-window-scoped-pixel-press.diff`: resolve background pixel presses within the exact AX window, including off-Space controls and actionable ancestors; only advertised AXPress is attempted, and acceptance remains explicitly unconfirmed.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

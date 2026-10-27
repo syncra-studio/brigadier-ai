@@ -1,0 +1,320 @@
+Why: resolve background pixel presses within the exact AX window, including off-Space controls and actionable ancestors; only advertised AXPress is attempted, and acceptance remains explicitly unconfirmed.
+
+--- a/crates/platform-macos/src/ax/mod.rs
++++ b/crates/platform-macos/src/ax/mod.rs
+@@ -20,6 +20,7 @@
+ pub mod enablement;
+ pub mod exact_target;
+ pub mod launch;
++pub mod point_target;
+ pub mod reveal_scroll;
+ pub mod snapshot;
+ pub mod tree;
+--- /dev/null
++++ b/crates/platform-macos/src/ax/point_target.rs
+@@ -0,0 +1,157 @@
++//! Window-scoped accessibility hit testing for background pixel presses.
++use super::bindings::*;
++use core_foundation::base::{CFRelease, CFTypeRef};
++use std::time::{Duration, Instant};
++
++fn contains(frame: [f64; 4], x: f64, y: f64) -> bool {
++    frame.iter().all(|v| v.is_finite())
++        && x.is_finite()
++        && y.is_finite()
++        && frame[2] > 0.0
++        && frame[3] > 0.0
++        && x >= frame[0]
++        && y >= frame[1]
++        && x < frame[0] + frame[2]
++        && y < frame[1] + frame[3]
++}
++
++fn unique_deepest(paths: &[Vec<usize>]) -> Option<usize> {
++    let deepest = paths
++        .iter()
++        .enumerate()
++        .max_by_key(|(_, path)| path.len())?
++        .0;
++    paths
++        .iter()
++        .all(|path| paths[deepest].starts_with(path))
++        .then_some(deepest)
++}
++
++/// Returns +1 only for an advertised AXPress in this exact window. Unlike a
++/// process hit test, the geometry fallback works when its Space is inactive.
++///
++/// # Safety
++/// The caller must release the returned element.
++pub unsafe fn press_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
++    if let Some(mut element) = element_at_screen_position(pid, x, y) {
++        for _ in 0..12 {
++            AXUIElementSetMessagingTimeout(element, 0.05);
++            if crate::ax::exact_target::element_window_id(element) != Some(wid) {
++                break;
++            }
++            if copy_action_names(element).iter().any(|a| a == "AXPress")
++                && copy_bool_attr(element, "AXEnabled") != Some(false)
++                && element_screen_rect(element).is_some_and(|rect| contains(rect, x, y))
++            {
++                AXUIElementSetMessagingTimeout(element, 0.0);
++                return Some(element);
++            }
++            let parent = copy_element_attr(element, "AXParent");
++            CFRelease(element as CFTypeRef);
++            element = match parent {
++                Some(parent) => parent,
++                None => return geometry_target(pid, wid, x, y),
++            };
++        }
++        CFRelease(element as CFTypeRef);
++    }
++    geometry_target(pid, wid, x, y)
++}
++
++unsafe fn geometry_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
++    let app = AXUIElementCreateApplication(pid);
++    if app.is_null() {
++        return None;
++    }
++    let windows = copy_ax_windows_including(app, pid, wid);
++    CFRelease(app as CFTypeRef);
++    let mut pending = Vec::new();
++    let mut next_node = 0usize;
++    for window in windows {
++        if ax_get_window_id(window) == Some(wid) {
++            pending.push((window, vec![next_node]));
++            next_node += 1;
++        } else {
++            CFRelease(window as CFTypeRef);
++        }
++    }
++    let deadline = Instant::now() + Duration::from_millis(300);
++    let mut visited = 0;
++    let mut candidates: Vec<(AXUIElementRef, Vec<usize>)> = Vec::new();
++    while let Some((element, path)) = pending.pop() {
++        visited += 1;
++        if visited > 1500 || Instant::now() >= deadline {
++            CFRelease(element as CFTypeRef);
++            for (element, _) in pending {
++                CFRelease(element as CFTypeRef);
++            }
++            for (element, _) in candidates {
++                CFRelease(element as CFTypeRef);
++            }
++            return None;
++        }
++        AXUIElementSetMessagingTimeout(element, 0.05);
++        let inside = element_screen_rect(element).map(|rect| contains(rect, x, y));
++        // Never cross into another top-level window through a remote AX link.
++        let same_window = copy_string_attr(element, "AXRole").as_deref() != Some("AXWindow")
++            || ax_get_window_id(element) == Some(wid);
++        if same_window && inside != Some(false) {
++            if path.len() < 40 {
++                for child in copy_children(element) {
++                    let mut child_path = path.clone();
++                    child_path.push(next_node);
++                    next_node += 1;
++                    pending.push((child, child_path));
++                }
++            }
++            if inside == Some(true)
++                && copy_bool_attr(element, "AXEnabled") != Some(false)
++                && copy_action_names(element).iter().any(|a| a == "AXPress")
++            {
++                core_foundation::base::CFRetain(element as CFTypeRef);
++                candidates.push((element, path));
++            }
++        }
++        CFRelease(element as CFTypeRef);
++    }
++    let selected = unique_deepest(
++        &candidates
++            .iter()
++            .map(|(_, path)| path.clone())
++            .collect::<Vec<_>>(),
++    );
++    let mut found = None;
++    for (index, (element, _)) in candidates.into_iter().enumerate() {
++        if selected == Some(index) {
++            AXUIElementSetMessagingTimeout(element, 0.0);
++            found = Some(element);
++        } else {
++            CFRelease(element as CFTypeRef);
++        }
++    }
++    found
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn regression_pixel_press_chooses_a_child_but_never_an_overlapping_sibling() {
++        assert_eq!(
++            unique_deepest(&[vec![0], vec![0, 1], vec![0, 1, 2]]),
++            Some(2)
++        );
++        assert_eq!(unique_deepest(&[vec![0, 1], vec![0, 2, 3]]), None);
++        assert_eq!(unique_deepest(&[vec![0, 1], vec![0, 1]]), Some(1));
++        assert_eq!(unique_deepest(&[]), None);
++    }
++
++    #[test]
++    fn regression_pixel_geometry_uses_exact_point_and_rejects_bad_frames() {
++        assert!(contains([100.0, 200.0, 50.0, 40.0], 125.0, 220.0));
++        assert!(!contains([100.0, 200.0, 50.0, 40.0], 150.0, 220.0));
++        assert!(!contains([0.0, 0.0, -1.0, 40.0], 0.0, 0.0));
++        assert!(!contains([0.0, 0.0, 10.0, 10.0], f64::NAN, 0.0));
++        assert!(!contains([f64::NAN, 0.0, 10.0, 10.0], 0.0, 0.0));
++    }
++}
+--- a/crates/platform-macos/src/tools/click.rs
++++ b/crates/platform-macos/src/tools/click.rs
+@@ -1138,45 +1138,75 @@
+                     && modifiers.is_empty()
+             }) {
+                 let focus_only = action == "focus";
+-                let ax_result = tokio::task::spawn_blocking(move || unsafe {
+-                    let Some(element) = element_at_screen_position(pid, screen_x, screen_y) else {
+-                        return Ok::<bool, anyhow::Error>(false);
+-                    };
+-                    // The pid-scoped hit-test can resolve an element from a
+-                    // same-process sibling overlapping the requested point.
+-                    // Require proven ancestry in the requested window before
+-                    // acting; otherwise fall through to the routed pixel path
+-                    // (already gated for this exact window).
+-                    if crate::ax::exact_target::element_window_id(element) != Some(hit_test_wid) {
+-                        CFRelease(element as _);
+-                        return Ok(false);
+-                    }
+-                    // An element that does not advertise AXPress can still
+-                    // accept it as a no-op. On a toolkit that drops routed
+-                    // mouse events (LibreOffice's Calc cells) that no-op used
+-                    // to come back as a pressed click; fall through so the
+-                    // pixel route refuses instead.
+-                    if !focus_only
+-                        && !crate::ax::bindings::copy_action_names(element)
+-                            .iter()
+-                            .any(|action| action == "AXPress")
+-                        && crate::input::pointer_toolkit::detect(pid)
+-                            == Some(crate::input::pointer_toolkit::PointerReadingToolkit::Vcl)
+-                    {
+-                        CFRelease(element as _);
+-                        return Ok(false);
+-                    }
+-                    let delivered = if focus_only {
+-                        crate::input::ax_actions::focus_element(element as usize).is_ok()
+-                    } else {
+-                        let press = core_foundation::string::CFString::new("AXPress");
+-                        AXUIElementPerformAction(element, press.as_concrete_TypeRef())
+-                            == kAXErrorSuccess
+-                    };
+-                    CFRelease(element as _);
+-                    Ok(delivered)
+-                })
++                let prior_front = apps::frontmost_pid();
++                let snapshot = WindowChangeDetector::snapshot(prior_front);
++                let ax_result = focus_guard::with_focus_suppressed(
++                    Some(pid),
++                    prior_front,
++                    "click.pixel.AXPress",
++                    || async move {
++                        tokio::task::spawn_blocking(move || unsafe {
++                            let element = if focus_only {
++                                element_at_screen_position(pid, screen_x, screen_y)
++                            } else {
++                                crate::ax::point_target::press_target(
++                                    pid,
++                                    hit_test_wid,
++                                    screen_x,
++                                    screen_y,
++                                )
++                            };
++                            let Some(element) = element else {
++                                return Ok::<bool, anyhow::Error>(false);
++                            };
++                            // The pid-scoped hit-test can resolve an element from a
++                            // same-process sibling overlapping the requested point.
++                            // Require proven ancestry in the requested window before
++                            // acting; otherwise fall through to the routed pixel path
++                            // (already gated for this exact window).
++                            if crate::ax::exact_target::element_window_id(element)
++                                != Some(hit_test_wid)
++                            {
++                                CFRelease(element as _);
++                                return Ok(false);
++                            }
++                            // An element that does not advertise AXPress can still
++                            // accept it as a no-op. On a toolkit that drops routed
++                            // mouse events (LibreOffice's Calc cells) that no-op used
++                            // to come back as a pressed click; fall through so the
++                            // pixel route refuses instead.
++                            if !focus_only
++                                && !crate::ax::bindings::copy_action_names(element)
++                                    .iter()
++                                    .any(|action| action == "AXPress")
++                            {
++                                CFRelease(element as _);
++                                return Ok(false);
++                            }
++                            let _key_focus = crate::key_focus_guard::protect(pid);
++                            let delivered = if focus_only {
++                                crate::input::ax_actions::focus_element(element as usize).is_ok()
++                            } else {
++                                let press = core_foundation::string::CFString::new("AXPress");
++                                let error =
++                                    AXUIElementPerformAction(element, press.as_concrete_TypeRef());
++                                if error != kAXErrorSuccess {
++                                    CFRelease(element as _);
++                                    return Err(anyhow::anyhow!(
++                                "AXPress returned error {error}; its effect is unknown, so a \
++                                 second pixel click was not sent. Read the window before retrying."
++                            ));
++                                }
++                                true
++                            };
++                            CFRelease(element as _);
++                            Ok(delivered)
++                        })
++                        .await
++                    },
++                )
+                 .await;
++                let changes = super::finish_window_observation(snapshot).await;
+                 match ax_result {
+                     Ok(Ok(true)) => {
+                         crate::cursor::overlay::send_command(
+@@ -1188,10 +1218,12 @@
+                         );
+                         let label = if focus_only { "focused" } else { "pressed" };
+                         return ToolResult::text(format!(
+-                            "✅ PX hit-test {label} the background element via AX."
++                            "AX accepted a request to {label} the element at this point; its effect is \
++                             unconfirmed. Read the window to verify.{}", changes.result_suffix()
+                         ))
+                         .with_structured(serde_json::json!({
+                             "path": "ax",
++                            "delivery_attempted": true,
+                             "verified": false,
+                             "effect": "unverifiable"
+                         }));
+@@ -1209,6 +1241,17 @@
+                             .with_structured(serde_json::json!({
+                                 "code": "background_unavailable"
+                             }));
++                    }
++                    Ok(Err(error)) => {
++                        return ToolResult::error(error.to_string()).with_structured(
++                            serde_json::json!({
++                                "path": "ax", "effect": "unverifiable", "verified": false,
++                                "delivery_attempted": true
++                            }),
++                        );
++                    }
++                    Err(error) => {
++                        return ToolResult::error(format!("AX hit-test task failed: {error}; no second click was sent. Verify the window before retrying."));
+                     }
+                     _ => {}
+                 }
