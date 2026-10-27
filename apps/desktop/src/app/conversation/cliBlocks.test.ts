@@ -1095,3 +1095,100 @@ test("Brigadier's word that the user stopped workers, steered into the turn, is 
   );
   assert.deepEqual(block?.steers.map((steer) => steer.text), ["Also the docs"]);
 });
+
+/** A user message the engine noted sending (L12): `said` says whose words it holds. */
+const sent = (itemId: string, text: string, atMs: number, said: NonNullable<FileEntry["said"]>, more: Partial<FileEntry> = {}) => user(itemId, text, atMs, { said, ...more });
+const reply1 = at({ type: "message", itemId: "a1", role: "assistant", text: "Done." }, 1200);
+
+test("a message the engine noted as Brigadier's is no bubble whatever its words, and a user's is a bubble whatever theirs", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        sent("u1", "[decision] Ship it, I typed this.", 1000, { by: "user" }),
+        // Words no prefix names: hidden by the note alone.
+        sent("s1", "Something Brigadier says that no rule knows.", 1100, { by: "brigadier" }, { steer: true }),
+        sent("s2", '[worker] The user stopped task-3 "Fix".', 1150, { by: "brigadier" }, { steer: true }),
+        reply1,
+      ],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => [block.user?.kind === "message" ? block.user.text : null, block.steers.map((steer) => steer.text)]), [["[decision] Ship it, I typed this.", []]]);
+});
+
+test("of the user's words with Brigadier's around them only theirs show: a note after them, the word that the last turn stopped early, a queued message's frame", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        sent("u1", "Fix the login form.\n\n[answer] The user picked B.", 1000, { by: "both", user: "Fix the login form." }),
+        sent("s1", "[queued message abcd1234 · judge it]\nAlso the docs.", 1100, { by: "both", user: "Also the docs." }, { steer: true }),
+        reply1,
+        // A turn that carries a request already shown with a new one: its first id is reused.
+        sent("u2", "[Your last turn stopped early, on another account.]\n\nAnd the tests.", 2000, { by: "both", user: "And the tests." }),
+      ],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1", "r3"] }],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.user?.kind === "message" ? block.user.text : null, block.steers.map((steer) => steer.text)]),
+    [["Fix the login form.", ["Also the docs."]], ["And the tests.", []]],
+  );
+});
+
+test("Brigadier's carry-on, hand-off and /compact are no bubble by the engine's note, even on a turn that carries a request", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Grow", 1000),
+        reply1,
+        sent("c1", "Carry on from the hand-off note.", 2000, { by: "brigadier" }),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "Carried on." }, 2100),
+        compactionEnded(false, 3000),
+        sent("k1", "/compact Besides your usual summary, keep these exactly", 3001, { by: "brigadier" }),
+      ],
+      turns: [
+        { ...turn("u1", 1000, 1500, "done"), requests: ["r1"] },
+        { ...turn("c1", 2000, 2500, "done"), requests: ["r1"] },
+        // A turn of the user's request that the `/compact` started: still Brigadier's, by its note.
+        { ...turn("k1", 3001, 3500, "done"), requests: ["r9"] },
+      ],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.user?.kind ?? null]),
+    [["u1", "message"], ["c1", null]],
+  );
+  assert.deepEqual(blocks[1]?.compactions.map((each) => each.state), ["done"]);
+});
+
+test("a /compact the user typed is their bubble by the engine's note, in a session too", () => {
+  const blocks = cliBlocks(
+    { entries: [user("u1", "Grow", 1000), reply1, sent("k1", "/compact", 2000, { by: "user" })], turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }] },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => (block.user?.kind === "message" ? block.user.text : null)), ["Grow", "/compact"]);
+});
+
+test("another session's message the engine noted as Brigadier's keeps its own bubble on a turn it starts", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [sent("p1", '[message from session "Docs" (c-1) · sm-0123456789ab]\nThe docs are done.', 1000, { by: "brigadier" }), reply1],
+      turns: [{ ...turn("p1", 1000, 1500, "done"), requests: ["r1"] }],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => [block.user?.kind ?? null, block.user && "text" in block.user ? block.user.text : null]), [["peer", "The docs are done."]]);
+});

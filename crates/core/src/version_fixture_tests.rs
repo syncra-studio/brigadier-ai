@@ -375,6 +375,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                         steer: false,
                         images: vec![],
                         phase,
+                        said: None,
                     };
                     stream = session_file::merge(stream, vec![entry]);
                 }

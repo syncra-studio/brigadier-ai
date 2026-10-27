@@ -189,10 +189,11 @@ impl SessionManager {
                 // The message the session reads, kept nowhere until it is judged.
                 let message = as_message(&conv.id, &item);
                 conv.frame(&item.id, deciding_frame(&shown));
-                let input = self
+                let (input, user) = self
                     .turn_input(conv, std::slice::from_ref(&message), &[])
                     .await;
                 conv.take_frame(&item.id);
+                self.note_sent(&conv.id, &input, &user);
                 // Never a new turn (run2-D46): with none running it waits plainly.
                 matches!(cli.session.steer_running(input).await, Ok(true))
             }
@@ -478,12 +479,11 @@ impl SessionManager {
             .clone()
             .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         let steered = match cli {
-            Some(cli) => matches!(
-                cli.session
-                    .steer_running(brigadier_providers::TurnInput::text(text.clone()))
-                    .await,
-                Ok(true)
-            ),
+            Some(cli) => {
+                let input = brigadier_providers::TurnInput::text(text.clone());
+                self.note_sent(&conv.id, &input, &[]);
+                matches!(cli.session.steer_running(input).await, Ok(true))
+            }
             None => false,
         };
         if !steered {

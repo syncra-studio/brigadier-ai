@@ -16,6 +16,22 @@ use crate::{Error, Result, now_ms};
 
 #[path = "envelope_provenance.rs"]
 mod envelope_provenance;
+pub(crate) use envelope_provenance::solid_len;
+
+/// [`envelope_provenance::said`], for tests elsewhere in the manager.
+#[cfg(test)]
+pub(crate) fn said_for_test(
+    text: &str,
+    user: &[(usize, usize)],
+) -> brigadier_providers::session_file::Said {
+    envelope_provenance::said(text, user)
+}
+
+/// Whether `input` goes out as the daemon's internal input, which the thread never shows
+/// ([`SessionManager::register_internal_input`]).
+pub(crate) fn internal_input(input: &brigadier_providers::TurnInput) -> bool {
+    envelope_provenance::input_words(input).starts_with(envelope_provenance::MARK)
+}
 
 impl SessionManager {
     /// Producer calls immediately before a daemon-only send/steer, after final construction.
@@ -27,6 +43,34 @@ impl SessionManager {
         input: &mut brigadier_providers::TurnInput,
     ) -> Result<()> {
         envelope_provenance::register(&self.session_dir(id).record(), kinds, input)
+    }
+
+    /// Notes `input` before Brigadier sends it to conversation `id`'s CLI (L12): `user`, the
+    /// user's own words in it as ranges of its non-whitespace characters, none when all of it
+    /// is Brigadier's. The thread then tells the CLI's message of it for whose it is.
+    pub(super) fn note_sent(
+        &self,
+        id: &ConversationId,
+        input: &brigadier_providers::TurnInput,
+        user: &[(usize, usize)],
+    ) {
+        let record = self.session_dir(id).record();
+        let words = envelope_provenance::input_words(input);
+        if let Err(err) = envelope_provenance::note_sent(&record, &words, user, now_ms()) {
+            tracing::warn!(conversation = %id, error = %err, "could not note what was sent");
+        }
+    }
+
+    /// Who Brigadier noted wrote `text` when it sent it to conversation `id`'s CLI, without
+    /// binding it to a message.
+    #[cfg(test)]
+    pub(crate) fn noted_said(
+        &self,
+        id: &ConversationId,
+        text: &str,
+    ) -> Option<brigadier_providers::session_file::Said> {
+        let user = envelope_provenance::noted(&self.session_dir(id).record(), text)?;
+        Some(envelope_provenance::said(text, &user))
     }
 
     async fn note_daemon_context(
@@ -122,12 +166,50 @@ impl SessionManager {
         proven
     }
 
+    /// Who wrote the CLI's user message `event`, taken at `at`, when it is one Brigadier noted
+    /// sending ([`envelope_provenance::note_sent`]); `native_hint`: the CLI session it is in,
+    /// else the newest.
+    fn note_said(
+        &self,
+        id: &ConversationId,
+        event: Option<&ProviderEvent>,
+        native_hint: Option<&str>,
+        at: i64,
+    ) -> Option<brigadier_providers::session_file::Said> {
+        let Some(ProviderEvent::Message {
+            role: Role::User,
+            item_id,
+            text,
+            ..
+        }) = event
+        else {
+            return None;
+        };
+        let record = self.session_dir(id).record();
+        let native = native_hint.map(str::to_owned).or_else(|| {
+            read_lineage(&record)
+                .last()
+                .map(|entry| entry.session_id.clone())
+        })?;
+        let user =
+            envelope_provenance::bind_sent(&record, text, &format!("{native}:{item_id}"), at)
+                .ok()
+                .flatten()?;
+        Some(envelope_provenance::said(text, &user))
+    }
+
     /// Follows the running turn of `conv`'s CLI through one of its events (`None`: the CLI's
     /// events ended): its items, and its end, written to `record/turns.jsonl`.
     pub(super) async fn follow_cli_thread(&self, conv: &ConvLive, event: Option<&ProviderEvent>) {
         self.follow_background_history(&conv.id, None, event).await;
         let daemon_context = self.note_daemon_context(&conv.id, event, None).await;
         let at = now_ms();
+        // Who wrote a user message Brigadier sent, as it noted when it sent it (L12).
+        let said = if daemon_context {
+            None
+        } else {
+            self.note_said(&conv.id, event, None, at)
+        };
         // Brigadier's requests the turn carries, as the conversation knows them now, and whether
         // it joins the work before it: when the CLI says a user message (a turn's, or a steer's)
         // and when the turn ends.
@@ -291,6 +373,7 @@ impl SessionManager {
                     }
                     let entry = FileEntry {
                         steer,
+                        said: said.clone(),
                         ..entry(event.cloned(), at)
                     };
                     news.push(entry);
@@ -598,6 +681,38 @@ impl SessionManager {
                 }
             }
         }
+        // Sends whose message the stream didn't bind (the daemon restarted between the send
+        // and the CLI's word of it): bound from the files.
+        let since = now_ms() - SENT_BACKFILL_MS;
+        if !envelope_provenance::unbound_since(&record, since) {
+            return;
+        }
+        let bound = envelope_provenance::sent_ids(&record);
+        for lineage in read_lineage(&record) {
+            let Some(file) = &lineage.file else {
+                continue;
+            };
+            let entries = self
+                .session_files
+                .read(lineage.provider, std::path::Path::new(file));
+            for entry in entries.iter().filter(|entry| entry.parent.is_none()) {
+                if let ProviderEvent::Message {
+                    role: Role::User,
+                    item_id,
+                    ..
+                } = &entry.event
+                    && entry.at_ms.is_none_or(|at| at >= since)
+                    && !bound.contains_key(&format!("{}:{item_id}", lineage.session_id))
+                {
+                    self.note_said(
+                        id,
+                        Some(&entry.event),
+                        Some(&lineage.session_id),
+                        entry.at_ms.unwrap_or_else(now_ms),
+                    );
+                }
+            }
+        }
     }
 
     /// Conversation `id`'s thread as its CLI keeps it, with its workers' rows.
@@ -636,6 +751,7 @@ impl SessionManager {
         self.core.conversation(id)?;
         let record = self.session_dir(id).record();
         let daemon_ids = daemon_context_ids(&record);
+        let sent = envelope_provenance::sent_ids(&record);
         // A fork's thread starts with its source's, up to the answer it forks (#648).
         let forked = thread_view::read_forked(&record);
         let files = std::iter::once(std::sync::Arc::new(forked.entries))
@@ -655,7 +771,7 @@ impl SessionManager {
                     entries
                         .iter()
                         .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
-                        .cloned()
+                        .map(|entry| said_in(entry, &sent, &session.session_id))
                         .collect(),
                 ))
             }))
@@ -818,6 +934,30 @@ impl SessionManager {
     }
 }
 
+/// `entry` of CLI session `session`'s file, with who wrote it when it is a user message
+/// Brigadier noted sending (`sent`, by `<session>:<item>`).
+fn said_in(
+    entry: &FileEntry,
+    sent: &std::collections::HashMap<String, Vec<(usize, usize)>>,
+    session: &str,
+) -> FileEntry {
+    let mut entry = entry.clone();
+    if let ProviderEvent::Message {
+        role: Role::User,
+        item_id,
+        text,
+    } = &entry.event
+        && entry.parent.is_none()
+        && let Some(user) = sent.get(&format!("{session}:{item_id}"))
+    {
+        entry.said = Some(envelope_provenance::said(text, user));
+    }
+    entry
+}
+
+/// How far back a send whose message the stream didn't bind is looked for in the files.
+const SENT_BACKFILL_MS: i64 = 10 * 60_000;
+
 fn daemon_context_ids(record: &std::path::Path) -> std::collections::HashSet<String> {
     envelope_provenance::ids(record)
 }
@@ -938,6 +1078,7 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
         steer: false,
         images: Vec::new(),
         phase: None,
+        said: None,
     }
 }
 

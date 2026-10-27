@@ -228,15 +228,15 @@ impl SessionManager {
             && state.busy
             && !state.interrupted
             && !state.compacting;
-        if steer
-            && running
-            && let Some(cli) = cli
-            && cli
-                .session
-                .steer(TurnInput::text(text.clone()))
-                .await
-                .is_ok()
-        {
+        let steered = match cli.filter(|_| steer && running) {
+            Some(cli) => {
+                let input = TurnInput::text(text.clone());
+                self.note_sent(&conv.id, &input, &[]);
+                cli.session.steer(input).await.is_ok()
+            }
+            None => false,
+        };
+        if steered {
             drop(state);
             crate::logging::private_trace!(conv.private_logs, info, "asked for the hand-off note"; conversation = %conv.id, used);
             return Some(true);

@@ -42,6 +42,24 @@ pub struct FileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub phase: Option<crate::model::TextPhase>,
+    /// Who wrote a user message Brigadier sent the CLI, as Brigadier noted it when it sent it:
+    /// none for one it has no note of (sent before it noted them, or never sent by it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub said: Option<Said>,
+}
+
+/// Who wrote a user message of a CLI's thread that Brigadier sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", tag = "by")]
+pub enum Said {
+    /// The user's own words, as they sent them.
+    User,
+    /// Brigadier's words only: a note, a nudge, its `/compact`, a frame.
+    Brigadier,
+    /// The user's words with Brigadier's around them (a note after them, a line before them):
+    /// `user` is the user's words alone.
+    Both { user: String },
 }
 
 impl FileEntry {
@@ -54,6 +72,7 @@ impl FileEntry {
             steer: false,
             images: Vec::new(),
             phase: None,
+            said: None,
         }
     }
 }

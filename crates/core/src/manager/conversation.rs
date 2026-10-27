@@ -1259,9 +1259,10 @@ impl SessionManager {
                     .await?;
                 let steered = match &state.cli {
                     Some(cli) => {
-                        let input = self
+                        let (input, user) = self
                             .turn_input(&conv, std::slice::from_ref(&message), &[])
                             .await;
+                        self.note_sent(&conv.id, &input, &user);
                         cli.session.steer(input).await.is_ok()
                     }
                     None => false,
@@ -1479,9 +1480,10 @@ impl SessionManager {
             Some(cli) => {
                 // What waits for the next user message (a card's decision) goes with it.
                 let notes = std::mem::take(&mut state.notes);
-                let input = self
+                let (input, user) = self
                     .turn_input(conv, std::slice::from_ref(&message), &notes)
                     .await;
+                self.note_sent(&conv.id, &input, &user);
                 let steered = cli.session.steer(input).await.is_ok();
                 if !steered {
                     state.notes.splice(0..0, notes);
@@ -1673,15 +1675,13 @@ impl SessionManager {
             .cli
             .clone()
             .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
-        if let Some(cli) = cli
-            && cli
-                .session
-                .steer(TurnInput::text(text.clone()))
-                .await
-                .is_ok()
-        {
-            drop(state);
-            return;
+        if let Some(cli) = cli {
+            let input = TurnInput::text(text.clone());
+            self.note_sent(&conv.id, &input, &[]);
+            if cli.session.steer(input).await.is_ok() {
+                drop(state);
+                return;
+            }
         }
         state.notes.push(text);
     }
@@ -1722,6 +1722,10 @@ impl SessionManager {
                 // A disk failure must not swallow the notification's model context.
                 if let Err(err) = self.register_internal_input(id, &[envelope.kind], &mut input) {
                     tracing::warn!(conversation = %id, error = %err, "could not record internal input provenance");
+                }
+                // The rest (another session's message, a seam's word) is Brigadier's too.
+                if !super::cli_thread::internal_input(&input) {
+                    self.note_sent(id, &input, &[]);
                 }
                 if cli.session.steer(input).await.is_ok() {
                     drop(state);
@@ -2149,6 +2153,15 @@ impl SessionManager {
                 )));
             }
             self.set_run(&id, RunState::Running, None).await;
+            // The user's own `/compact`, as Claude keeps it.
+            if cli.provider == ProviderKind::Claude {
+                let input = TurnInput::text("/compact");
+                self.note_sent(
+                    &id,
+                    &input,
+                    &[(0, super::cli_thread::solid_len("/compact"))],
+                );
+            }
             cli.session
                 .compact(None)
                 .await
@@ -2572,18 +2585,22 @@ impl SessionManager {
             .cloned()
             .collect();
         let only_typed_notes = user_notes.is_empty();
-        let mut input = self
+        let (mut input, mut user) = self
             .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
             .await;
         if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
-            input.prepend_text(if stalled {
-                watchdog::CARRY_ON
-            } else if after_limit {
-                prompts::CONTINUE_AFTER_LIMIT
-            } else {
-                prompts::CONTINUE_ON_ACCOUNT
-            });
+            prepend_said(
+                &mut input,
+                &mut user,
+                if stalled {
+                    watchdog::CARRY_ON
+                } else if after_limit {
+                    prompts::CONTINUE_AFTER_LIMIT
+                } else {
+                    prompts::CONTINUE_ON_ACCOUNT
+                },
+            );
         }
         let handoff = match &successor {
             Some(successor) => Some(self.seam_handoff(&conv, &cli, successor).await),
@@ -2592,7 +2609,7 @@ impl SessionManager {
         if let Some(handoff) = handoff {
             match handoff {
                 Ok(text) => {
-                    input.prepend_text(&text);
+                    prepend_said(&mut input, &mut user, &text);
                 }
                 Err(err) => {
                     if let Some(successor) = successor {
@@ -2606,7 +2623,7 @@ impl SessionManager {
         } else if reseed {
             let transcript = self.reseed_text(&conv.id, &users).await;
             if !transcript.is_empty() {
-                input.prepend_text(&transcript);
+                prepend_said(&mut input, &mut user, &transcript);
             }
         }
         // Plan mode is the CLI's own (harness D7): set before the turn, never told in words.
@@ -2622,6 +2639,10 @@ impl SessionManager {
             if let Err(err) = self.register_internal_input(&conv.id, &kinds, &mut input) {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not record internal input provenance");
             }
+        }
+        // Who wrote what of the rest, the user's words and Brigadier's around them (L12).
+        if !super::cli_thread::internal_input(&input) {
+            self.note_sent(&conv.id, &input, &user);
         }
         {
             let mut state = conv.state.lock().await;
@@ -3233,22 +3254,24 @@ impl SessionManager {
     /// Text the user pasted is part of their message. Images go along as images. Other
     /// attachments are named so the orchestrator can hand them to workers; a Chat cannot open
     /// files, so it gets text files inline.
+    /// With it, where the user's own words are in it ([`SessionManager::note_sent`]): each
+    /// message's text, not its frame, nor the lines naming its attachments and mentions.
     async fn turn_input(
         &self,
         conv: &Arc<ConvLive>,
         users: &[Message],
         notes: &[String],
-    ) -> TurnInput {
+    ) -> (TurnInput, Vec<(usize, usize)>) {
         let mut parts = Vec::new();
         let mut files = Vec::new();
         let mut copied = HashMap::new();
         let mut ordered = Vec::new();
+        let mut user = Vec::new();
+        let mut at = 0;
         for message in users {
-            let mut user_text = self.full_text(message).await;
-            if let Some(frame) = conv.take_frame(&message.id) {
-                user_text.insert_str(0, &frame);
-            }
-            let mut inline = self
+            let user_text = self.full_text(message).await;
+            let frame = conv.take_frame(&message.id);
+            let inline = self
                 .message_input(
                     &FilesAt::Conversation(conv),
                     &conv.id,
@@ -3263,7 +3286,20 @@ impl SessionManager {
             if !ordered.is_empty() {
                 ordered.push(InputPart::Text("\n\n".into()));
             }
-            ordered.append(&mut inline);
+            if let Some(frame) = frame {
+                at += super::cli_thread::solid_len(&frame);
+                ordered.push(InputPart::Text(frame));
+            }
+            for (index, part) in inline.into_iter().enumerate() {
+                if let InputPart::Text(text) = &part {
+                    let len = super::cli_thread::solid_len(text);
+                    if index == 0 && len > 0 {
+                        user.push((at, at + len));
+                    }
+                    at += len;
+                }
+                ordered.push(part);
+            }
         }
         // A tab's chat answers about its tab; a side chat about the conversation beside it,
         // as it stands now.
@@ -3283,7 +3319,7 @@ impl SessionManager {
             }
             ordered.push(InputPart::Text(parts.join("\n\n")));
         }
-        merged_input(files, ordered)
+        (merged_input(files, ordered), user)
     }
 
     /// What the user sent one of `owner`'s workers directly, as its CLI takes it: their words,
@@ -6087,6 +6123,16 @@ pub(super) enum FilesAt<'a> {
     Worker(PathBuf),
 }
 
+/// Puts Brigadier's `text` before an input whose user's words are at `user`: they move along.
+fn prepend_said(input: &mut TurnInput, user: &mut [(usize, usize)], text: &str) {
+    input.prepend_text(text);
+    let by = super::cli_thread::solid_len(text);
+    for range in user {
+        range.0 += by;
+        range.1 += by;
+    }
+}
+
 /// A turn's input from its images and its parts in order.
 fn merged_input(files: Vec<InputFile>, ordered: Vec<InputPart>) -> TurnInput {
     // Row images keep today's image-first order. Inline images stay in the user text.
@@ -6207,6 +6253,30 @@ fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Brigadier's lines put before a turn's input (a hand-off, the word that the last turn
+    /// stopped early, a reseed's transcript) move the user's words along: only theirs show.
+    #[test]
+    fn what_brigadier_puts_before_the_users_words_leaves_only_theirs_shown() {
+        use brigadier_providers::session_file::Said;
+        let words = "Fix the login form.";
+        let mut input = TurnInput::text(format!("{words}\n\n[answer] The user picked B."));
+        let mut user = vec![(0, super::super::cli_thread::solid_len(words))];
+        prepend_said(&mut input, &mut user, prompts::CONTINUE_ON_ACCOUNT);
+        prepend_said(
+            &mut input,
+            &mut user,
+            "[Brigadier hand-off 1 · …]\nThe note.\n[End of the hand-off]",
+        );
+        let InputPart::Text(sent) = &input.parts[0] else {
+            panic!("text")
+        };
+        assert!(sent.starts_with("[Brigadier hand-off 1"));
+        assert_eq!(
+            super::super::cli_thread::said_for_test(sent, &user),
+            Said::Both { user: words.into() }
+        );
+    }
 
     fn image_ref(id: &str, inline: bool, mime: &str) -> AttachmentRef {
         AttachmentRef {

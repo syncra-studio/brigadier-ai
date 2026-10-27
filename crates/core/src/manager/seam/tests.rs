@@ -18,6 +18,7 @@ fn message(id: &str, role: Role, text: &str) -> FileEntry {
         steer: false,
         images: Vec::new(),
         phase: None,
+        said: None,
     }
 }
 
