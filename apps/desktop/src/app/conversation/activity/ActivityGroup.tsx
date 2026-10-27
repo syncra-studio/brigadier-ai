@@ -1,10 +1,10 @@
-import { type ReactNode, useContext, useEffect, useState } from "react";
+import { type ReactNode, useContext, useState } from "react";
 
 import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { GroupStepList } from "@/app/conversation/activity/GroupStepList";
-import { InFold, InGroup, LeadPaused, OpensWork } from "@/app/conversation/activity/groupContext";
+import { InFold, InGroup, LeadPaused } from "@/app/conversation/activity/groupContext";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
@@ -25,9 +25,6 @@ export type Described = {
   /** It failed only because the user's Stop ended it: it reads stopped, not failed. */
   stopped?: boolean | undefined;
 };
-
-/** After a step ends, the live group still says it this long, so a quick read is seen, not "Thinking". */
-export const STEP_LINGERS_MS = 1000;
 
 /** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
 function Words({ words, label, objectNode }: { words: StepWords; label: string; objectNode?: ReactNode }) {
@@ -73,12 +70,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   /** After the words, in and out of a group: an edit's "+7 −2". */
   trail?: ReactNode;
 }) {
-  const [open, setKept] = useKeptState("open", false);
-  const opensWork = useContext(OpensWork);
-  const setOpen = (next: boolean) => {
-    setKept(next);
-    if (next) opensWork?.();
-  };
+  const [open, setOpen] = useKeptState("open", false);
   // In a fold of its repeats, a call names what it was given: the fold's row already says the tool.
   const given = useContext(InFold) ? said.given : undefined;
   const words = given ? { ...said, doing: `${said.doing} ${given}`, done: `${said.done} ${given}`, object: given } : said;
@@ -128,34 +120,26 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
 }
 
 /**
- * Whether the newest step still names the live group: while it runs, and for `STEP_LINGERS_MS`
- * after it ended; it re-renders when that time is up.
- */
-function useStepNames(described: Described | undefined, live: boolean): boolean {
-  const end = described?.status === "inProgress" ? undefined : described?.endedAtMs;
-  // The end whose second is up.
-  const [lapsed, setLapsed] = useState<number | null>(null);
-  useEffect(() => {
-    if (!live || end === undefined) return;
-    const timer = window.setTimeout(() => setLapsed(end), Math.max(0, end + STEP_LINGERS_MS - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [live, end]);
-  return live && (described?.status === "inProgress" || (end !== undefined && lapsed !== end));
-}
-
-/**
  * A group of work as one row (THREAD-UX-PLAN.md §3.2). Closed, it sums its steps up ("Read
- * files, ran commands"); while it is the turn's open group, it says the current step
- * ("Reading blocks.ts"), also for a second after that step ended, and with nothing running the
- * turn's live line ("Thinking", the thought's heading, "Waiting for your answer"), so the turn
- * has one live line. Its live words change at most once a second. Opened, it lists each step,
- * also while it runs. A group of one step is that step's own row, except while it says the live
- * line or sums up work a follow-up cut short; opened, that row stays as it is, live line or not.
+ * files, ran commands"); while it is the turn's open group, it says the step running now (the
+ * newest of those running together, "Reading blocks.ts") and with nothing running the turn's
+ * live line ("Thinking", the thought's heading, "Waiting for your answer"), so the turn has one
+ * live line. A live label shows at least a second before the next takes its place; the summary
+ * shows at once. Opened, it lists each step, also while it runs. While the turn works
+ * (`working`) every run of steps is such a row, one step too, so a row never turns into another;
+ * in a turn done, a group of one step is that step's own row, unless it sums up work a follow-up
+ * cut short.
  */
-export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, liveLabel = null, summary: steeredAfter = false }: {
+export function ActivityGroup<S>({ items, live, working, describe, renderStep, reveal, liveLabel = null, summary: steeredAfter = false }: {
   items: readonly GroupItem<S>[];
   /** It is the live turn's last group: it says what happens now. */
   live: boolean;
+  /**
+   * Its turn still works (its newest group or not): it stays a group's row, one step too. Not
+   * given (a worker's thread), or paused for quota, a lone step is its own row except while it
+   * says the live line.
+   */
+  working?: boolean | undefined;
   /** The turn's live line, said by this row unless its step runs (what waits on the user wins even then). */
   liveLabel?: StatusHead | null | undefined;
   /** The user steered a message in after it: it sums its steps up at once ("Ran a command"), once none still runs. */
@@ -166,11 +150,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   reveal?: ((step: S) => boolean) | undefined;
 }) {
   const [open, setKept] = useKeptState("open", false);
-  const opensWork = useContext(OpensWork);
-  const setOpen = (next: boolean) => {
-    setKept(next);
-    if (next) opensWork?.();
-  };
+  const setOpen = setKept;
   // While Find searches, closed it keeps its rows, hidden, to be found.
   const searched = useFindSearching();
   // A lone step's row the user opened: swapping it for the live line would close it.
@@ -186,9 +166,10 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   const described = items.map((item) => describe(item.step));
   // A follow-up that joined is read once the command ends (#437): a step still running keeps its words (#445).
   const summary = steeredAfter && described.every((step) => step.status !== "inProgress");
-  const current = described.at(-1);
+  // The step running now (the newest of those running together), else the last.
+  const current = described.findLast((step) => step.status === "inProgress") ?? described.at(-1);
   const first = described[0];
-  const stepNames = useStepNames(current, !paused && !summary && live);
+  const stepNames = !paused && !summary && live && current?.status === "inProgress";
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
   const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
   const oneStep = !summary && (live || described.length === 1);
@@ -206,9 +187,13 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
           : summarize(described.map((step) => step.words));
   // Live words change at most once a second; a summary shows at once.
   const calm = useCalmLabel(label, live && !summary);
+  // The live line shows once the label before it has stood its second.
+  const saysLine = !!line && calm.shown === line.text;
   const [only] = items;
   if (!only) return null;
-  if (items.length === 1 && (!line || rowOpen) && !summary) {
+  // Paused for quota, a lone step keeps its own row, which says it is paused.
+  const ownRow = working === undefined || paused ? !line || rowOpen : !working || rowOpen;
+  if (items.length === 1 && ownRow && !summary) {
     return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
   }
   const list = <GroupStepList items={items} described={described} renderStep={renderStep} />;
@@ -217,7 +202,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
         {/* The live line ("Thinking") is no step's: it shows without a step's icon, but a
             question waiting for its answer has a checklist. */}
-        {line && calm.shown === line.text
+        {saysLine
           ? line.waitsOn === "answer" && <Tasks aria-hidden data-icon="tasks" className="size-4 shrink-0" />
           : head && <StepIcon words={head} />}
         {/* A live group's step changes in place, with no jump and no fade: a fade-in's first
@@ -225,10 +210,9 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
             replace the shimmer's. Keyed, a new label's sweep starts over. */}
         <span
           key={live ? calm.shown : undefined}
-          data-slot={line ? "group-live-line" : undefined}
-          data-tone={line?.tone}
+          data-slot={saysLine ? "group-live-line" : undefined}
+          data-tone={saysLine ? line.tone : undefined}
           data-pending={calm.pending || undefined}
-          data-lingers={(naming && current.status !== "inProgress") || undefined}
           className={cn(
             "min-w-0 truncate",
             (naming || (line && line.tone !== "still")) && "shimmer",

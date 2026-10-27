@@ -20,7 +20,15 @@
  *   in the reader, with its Save. `stop=answer|reader` holds the page for a screenshot.
  * - `drive=noanswer`: the turn ends with no reply: its work stays in view, then after a reload.
  * - `drive=opened`: the user opens the work's group while the turn runs; the answer comes and the
- *   work stays open.
+ *   work folds all the same; the user opens it from its header, and it stays open, also read again.
+ * - `drive=background`: the spec's fold with what runs beside the answer: a subagent keeps the work
+ *   open, ending it folds (150ms); one starting again opens it at once; a step after the answer
+ *   shows under it; a background command holding the turn leaves "Worked for", and its exit
+ *   changes nothing drawn; the header's click opens in 300ms with a slide, closes in 150ms, and
+ *   with less motion both take 150ms with no slide.
+ * - `drive=stopanswer`: the user stops the turn as its answer starts: the work opens again.
+ * - `drive=pace`: a live group's label: a quick step's name stands a second; a long one changes at
+ *   once; of steps running together it names the newest still running; a summary shows at once.
  * - `drive=update` (`kind=session` for a session): an ending that opens with "Update:" and has a
  *   `### Details` section is the answer, its Details folded; the opening line folds into the work.
  *
@@ -35,6 +43,7 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type {
+  BackgroundTask,
   Conversation,
   ConversationView as View,
   Message,
@@ -52,6 +61,7 @@ import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import { fixtureClick } from "@/fixtures/input";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -213,7 +223,7 @@ async function settle(ms = 50): Promise<void> {
     await frame();
     const now = text(turn());
     // A live label waiting its turn (at most a second), or a step's name lingering, still moves.
-    const moving = animating() || one("[data-slot=reply-loading]") || one("[data-pending],[data-lingers]");
+    const moving = animating() || one("[data-slot=reply-loading]") || one("[data-pending]");
     if (moving || now !== last) stillSince = performance.now();
     else if (performance.now() - stillSince >= 100) return;
     last = now;
@@ -502,7 +512,11 @@ async function driveNoAnswer(): Promise<object> {
   return { done, reloaded: workShown() };
 }
 
-/** The user opens the work's group while the turn runs: the answer comes and the work stays open (D44, D50). */
+/**
+ * The user opens the work's group while the turn runs: the answer comes and the work folds all
+ * the same (only the header's choice is the user's choice of the work's fold). Opened from its
+ * header, it stays open, also read again.
+ */
 async function driveOpened(): Promise<object> {
   await settle(600);
   steps([...daemon.steps, tool("sleep", 1.4, "shell", "sleep 4", "inProgress")]);
@@ -526,8 +540,197 @@ async function driveOpened(): Promise<object> {
   change(() => ({ streaming: null, head: "a1", run: "idle", runRequest: null }));
   request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await settle();
-  const header = one("[data-slot=request-work-header]", turn() ?? document);
-  return { opened, answering, done: seen().fold, expanded: header?.getAttribute("aria-expanded") ?? null, answer: seen().answer };
+  const header = () => one<HTMLButtonElement>("[data-slot=request-work-header]", turn() ?? document);
+  const done = seen().fold;
+  const expanded = header()?.getAttribute("aria-expanded") ?? null;
+  const toggle = header();
+  if (toggle) await fixtureClick(toggle);
+  await settle();
+  const chosen = { fold: seen().fold, expanded: header()?.getAttribute("aria-expanded") ?? null };
+  await loadConversation(ID);
+  await settle(300);
+  const reloaded = { fold: seen().fold, expanded: header()?.getAttribute("aria-expanded") ?? null };
+  return { opened, answering, done, expanded, answer: seen().answer, chosen, reloaded };
+}
+
+/** What the CLI runs beside the turn: its background tasks, and which of them hold the turn. */
+function background(tasks: BackgroundTask[], holding: string[] = []): void {
+  useCliThread.setState((state) => ({ views: { ...state.views, [ID]: { ...state.views[ID]!, background: tasks, jobs: { holding } } } }));
+}
+const task = (id: string, kind: "agent" | "shell", label: string, running: boolean): BackgroundTask => ({
+  id, itemId: null, kind, label, status: running ? "running" : "completed", startedAtMs: Date.now() - 500,
+  endedAtMs: running ? null : Date.now(), outputFile: null, summary: null, lastLine: null,
+});
+
+const keyframes = (animation: Animation) => (animation.effect as KeyframeEffect).getKeyframes();
+
+/** The fold's motion the frame after `act`: its height animation's duration and easing, whether its body slides. */
+async function foldMotion(act: () => unknown): Promise<{ fold: string; duration: number | null; easing: string | null; slides: boolean }> {
+  await act();
+  await frame();
+  const fold = one("[data-slot=request-fold]", turn() ?? document);
+  const animations = fold?.getAnimations({ subtree: true }) ?? [];
+  const height = animations.find((animation) => keyframes(animation).some((key) => "height" in key));
+  const fade = animations.find((animation) => keyframes(animation).some((key) => "opacity" in key));
+  const timing = height?.effect?.getTiming();
+  return {
+    fold: fold?.getAttribute("data-fold") ?? "gone",
+    duration: timing ? Number(timing.duration) : null,
+    easing: timing?.easing ?? null,
+    slides: !!fade && keyframes(fade).some((key) => typeof key["transform"] === "string" && key["transform"] !== "none"),
+  };
+}
+
+async function driveBackground(): Promise<object> {
+  await settle(600);
+  const out: Record<string, unknown> = {};
+  const header = () => one<HTMLButtonElement>("[data-slot=request-work-header]", turn() ?? document);
+  const state = () => ({ fold: seen().fold, header: seen().header, expanded: header()?.getAttribute("aria-expanded") ?? null });
+  // A subagent of the turn works in the background when its final answer starts: it stays open.
+  background([task("sub1", "agent", "Check the docs", true)]);
+  await settle();
+  const answerAtMs = Date.now();
+  const stored: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", text: "Fixed the rounding.", blob: null, createdAtMs: Date.now(), attachments: [],
+    mentions: [], model: null, requestId: "r1", parentId: "r1", answerAtMs,
+  };
+  daemon.messages = [...daemon.messages, stored];
+  useApp.setState((held) => ({ threads: { ...held.threads, [ID]: { ...held.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ head: "a1" }));
+  await settle();
+  out.subagentRuns = state();
+  // It ends: the work folds by itself, in the 150ms close.
+  out.subagentEnds = await foldMotion(() => background([task("sub1", "agent", "Check the docs", false)]));
+  await settle();
+  out.folded = state();
+  // Another starts: open at once, with no motion; it ends, and it folds again.
+  out.subagentAgain = await foldMotion(() => background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", true)]));
+  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false)]);
+  await settle();
+  // A step after the answer while the turn still runs: under the answer, the work still folded,
+  // the header and the answer the same nodes.
+  const headerNode = header();
+  const answerNode = one("[data-answer]", turn() ?? document);
+  steps([...daemon.steps, tool("late", 3, "shell", "npm run lint", "inProgress")]);
+  await settle();
+  out.after = {
+    ...state(),
+    below: text(one("[data-slot=request-after-answer]", turn() ?? document)),
+    sameHeader: header() === headerNode,
+    sameAnswer: one("[data-answer]", turn() ?? document) === answerNode,
+  };
+  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "late" ? tool("late", 3, "shell", "npm run lint", "completed") : step)));
+  await settle();
+  // Done, with a background command still holding the turn: "Worked for", folded.
+  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false), task("bg1", "shell", "gh run watch", true)], ["bg1"]);
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
+  await settle();
+  out.held = state();
+  // The command exits: nothing drawn changes, nothing is taken out.
+  const body = one("[data-slot=request-body]", turn() ?? document);
+  const before = { header: header(), answer: one("[data-answer]", turn() ?? document), body };
+  let removed = 0;
+  const removals = new MutationObserver((records) => {
+    for (const record of records) removed += [...record.removedNodes].filter((node) => node instanceof Element).length;
+  });
+  if (body) removals.observe(body, { childList: true, subtree: true });
+  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false), task("bg1", "shell", "gh run watch", false)], []);
+  await settle();
+  removals.disconnect();
+  out.exited = {
+    ...state(),
+    removed,
+    sameHeader: header() === before.header,
+    sameAnswer: one("[data-answer]", turn() ?? document) === before.answer,
+    sameBody: one("[data-slot=request-body]", turn() ?? document) === before.body,
+  };
+  // The header's click: open in 300ms with a slide, closed in 150ms.
+  out.clickOpen = await foldMotion(() => fixtureClick(header()!));
+  await settle();
+  out.clickClose = await foldMotion(() => fixtureClick(header()!));
+  await settle();
+  // With less motion: 150ms both ways, no slide.
+  const matchMedia = window.matchMedia;
+  window.matchMedia = ((media: string) => ({ ...matchMedia.call(window, media), matches: media.includes("reduce") })) as typeof window.matchMedia;
+  out.reducedOpen = await foldMotion(() => fixtureClick(header()!));
+  await settle();
+  out.reducedClose = await foldMotion(() => fixtureClick(header()!));
+  await settle();
+  window.matchMedia = matchMedia;
+  return out;
+}
+
+async function driveStopAnswer(): Promise<object> {
+  await settle(600);
+  change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.\n", requestId: "r1", phase: "answer", startedAtMs: Date.now() } }));
+  await frame();
+  const answering = seen().fold;
+  // Stopped within the 150ms close.
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "stopped" }, endedAtMs: Date.now() });
+  await settle();
+  const stopped = { fold: seen().fold, header: seen().header };
+  // A background command of it ending later changes nothing.
+  background([task("bg1", "shell", "npm run dev", false)]);
+  await settle();
+  return { answering, stopped, later: { fold: seen().fold, header: seen().header } };
+}
+
+async function drivePace(): Promise<object> {
+  await settle(600);
+  const label = () => text(one("button", all("[data-slot=work-group]", turn() ?? document).at(-1) ?? document.createElement("div")));
+  /** The group's label as it changes over `ms`, each with when it first showed (by the frames' clock). */
+  const watch = async (ms: number, act?: () => void, onLabel?: (label: string | null) => void) => {
+    const labels: { t: number; label: string | null }[] = [];
+    act?.();
+    const start = Number(document.timeline.currentTime);
+    for (let now = start; now - start < ms; now = Number(document.timeline.currentTime)) {
+      const shown = label();
+      if (labels.at(-1)?.label !== shown) {
+        labels.push({ t: Math.round(now - start), label: shown });
+        onLabel?.(shown);
+      }
+      await frame();
+    }
+    return labels;
+  };
+  const out: Record<string, unknown> = {};
+  // A quick read (done 100ms after its name shows), then a build: the read's name stands a second.
+  let ended = false;
+  out.quick = await watch(
+    2000,
+    () => steps([...daemon.steps, tool("quick", 1.5, "Read", "/repo/src/a.ts", "inProgress")]),
+    (shown) => {
+      if (ended || !/a\.ts/.test(shown ?? "")) return;
+      ended = true;
+      setTimeout(() => steps([...daemon.steps.filter((step) => step.kind.type !== "tool" || step.kind.itemId !== "quick"),
+        tool("quick", 1.5, "Read", "/repo/src/a.ts", "completed"), tool("build", 1.6, "shell", "npm run build", "inProgress")]), 100);
+    },
+  );
+  // The build, shown longer than a second, ends: the next label shows at once.
+  await wait(1500);
+  out.long = await watch(400, () => steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "build" ? tool("build", 1.6, "shell", "npm run build", "completed") : step))));
+  await settle();
+  // Two commands run together: the newer is named; it ends first, and the older is named again.
+  steps([...daemon.steps, tool("sleep", 1.7, "shell", "sleep 9", "inProgress")]);
+  await wait(1500);
+  steps([...daemon.steps, tool("lint", 1.8, "shell", "npm run lint", "inProgress")]);
+  await wait(1500);
+  out.together = label();
+  out.newerEnds = await watch(400, () => steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "lint" ? tool("lint", 1.8, "shell", "npm run lint", "completed") : step))));
+  // The older ends, a quick read starts, its name waiting its turn: a line between steps comes,
+  // and the group sums up at once.
+  await wait(1500);
+  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "sleep" ? tool("sleep", 1.7, "shell", "sleep 9", "completed") : step)));
+  await wait(300);
+  steps([...daemon.steps, tool("quick2", 1.9, "Read", "/repo/src/b.ts", "inProgress")]);
+  await frame();
+  out.pending = !!one("[data-pending]", turn() ?? document);
+  out.summary = await watch(200, () => change(() => ({ streaming: { messageId: "line", text: "Now the docs.\n", requestId: "r1", phase: "commentary", startedAtMs: Date.now() } })));
+  return out;
 }
 
 /** A finished turn with a call the user denied: "1 denied action" in its header shows it. */
@@ -927,7 +1130,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "denied" ? driveDenied() : drive === "noanswer" ? driveNoAnswer() : drive === "opened" ? driveOpened() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
+void (drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "denied" ? driveDenied() : drive === "noanswer" ? driveNoAnswer() : drive === "opened" ? driveOpened() : drive === "background" ? driveBackground() : drive === "stopanswer" ? driveStopAnswer() : drive === "pace" ? drivePace() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

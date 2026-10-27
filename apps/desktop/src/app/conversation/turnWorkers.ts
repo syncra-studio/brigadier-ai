@@ -31,3 +31,14 @@ export function workingWorkers(
     return newest && (worker.working || worker.waiting.length > 0);
   }).length;
 }
+
+/**
+ * How many of its CLI's own subagents a turn that ran from `startedAtMs` to `endedAtMs` (null:
+ * still running) started that still work: while any does, its work doesn't fold by itself when
+ * its answer starts (the user still can).
+ */
+export function runningSubagents(workers: readonly WorkerRow[], startedAtMs: number, endedAtMs: number | null): number {
+  return workers.filter(
+    (worker) => isNativeWorker(worker) && worker.working && worker.startedAtMs >= startedAtMs && (endedAtMs === null || worker.startedAtMs <= endedAtMs),
+  ).length;
+}

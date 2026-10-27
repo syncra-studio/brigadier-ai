@@ -45,7 +45,8 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   );
   // A step running says itself, shimmering: still one line.
   assert.deepEqual([seen.running.groupRow, seen.running.shimmer, seen.running.groupLine, seen.running.status], ["Running sleep 4", true, null, null]);
-  // A command that just ended still names its group for a second, then the group says "Thinking".
+  // A command that just ended still names its group until that has shown a second, then the
+  // group says "Thinking".
   assert.deepEqual([seen.justEnded.groupRow, seen.justEnded.shimmer, seen.justEnded.groupLine], ["Running sleep 4", true, null]);
   assert.deepEqual([seen.ended.groupLine, seen.ended.groupTone], ["Thinking", "busy"]);
   // A step's row has the step's icon; "Thinking" is no step's, so only the chevron is left.
@@ -101,9 +102,82 @@ test("a turn that ends with no reply keeps its work in view, also read again (D4
   }
 });
 
-test("work the user opened while the turn ran stays open when the answer comes (D44, D50)", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ opened: string | null; answering: string; done: string; expanded: string | null; answer: string | null }>(t, "drive=opened");
-  assert.deepEqual(seen, { opened: "open", answering: "open", done: "open", expanded: "true", answer: "Fixed the rounding." });
+test("work the user opened inside while the turn ran folds when the answer starts; opened from its header it stays open", { timeout: 120000 }, async (t) => {
+  type Fold = { fold: string; expanded: string | null };
+  const seen = await drive<{ opened: string | null; answering: string; done: string; expanded: string | null; answer: string | null; chosen: Fold; reloaded: Fold }>(t, "drive=opened");
+  assert.deepEqual(seen, {
+    opened: "open", answering: "gone", done: "gone", expanded: "false", answer: "Fixed the rounding.",
+    chosen: { fold: "open", expanded: "true" }, reloaded: { fold: "open", expanded: "true" },
+  });
+});
+
+type FoldSeen = { fold: string; header: string | null; expanded: string | null };
+type Motion = { fold: string; duration: number | null; easing: string | null; slides: boolean };
+
+test("the work folds when the answer starts, not while a subagent runs; a background command's end changes nothing drawn; the fold's motion by its cause", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{
+    subagentRuns: FoldSeen; subagentEnds: Motion; folded: FoldSeen; subagentAgain: Motion;
+    after: FoldSeen & { below: string | null; sameHeader: boolean; sameAnswer: boolean };
+    held: FoldSeen; exited: FoldSeen & { removed: number; sameHeader: boolean; sameAnswer: boolean; sameBody: boolean };
+    clickOpen: Motion; clickClose: Motion; reducedOpen: Motion; reducedClose: Motion;
+  }>(t, "drive=background");
+  // The answer started while a subagent of the turn works: "Worked for", the work still open.
+  assert.match(seen.subagentRuns.header ?? "", /^Worked for /);
+  assert.deepEqual([seen.subagentRuns.fold, seen.subagentRuns.expanded], ["open", "true"]);
+  // It ends: the work folds by itself, in the 150ms close.
+  assert.deepEqual(seen.subagentEnds, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: true });
+  assert.deepEqual([seen.folded.fold, seen.folded.expanded], ["gone", "false"]);
+  // Opened by anything but the user's click, it is open at once.
+  assert.deepEqual(seen.subagentAgain, { fold: "open", duration: null, easing: null, slides: false });
+  // A step after the answer while the turn runs shows under it; nothing opens or is drawn again.
+  assert.equal(seen.after.fold, "gone");
+  assert.match(seen.after.below ?? "", /npm run lint/);
+  assert.deepEqual([seen.after.sameHeader, seen.after.sameAnswer], [true, true]);
+  // Done with a background command holding the turn: "Worked for", folded.
+  assert.match(seen.held.header ?? "", /^Worked for /);
+  assert.equal(seen.held.fold, "gone");
+  // The command exits: the same header, answer and body, nothing taken out, still folded.
+  assert.deepEqual(
+    [seen.exited.fold, seen.exited.header, seen.exited.removed, seen.exited.sameHeader, seen.exited.sameAnswer, seen.exited.sameBody],
+    ["gone", seen.held.header, 0, true, true, true],
+  );
+  // The header's click opens in 300ms with an 8px slide and closes in 150ms; with less motion both take 150ms, no slide.
+  assert.deepEqual(seen.clickOpen, { fold: "open", duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)", slides: true });
+  assert.deepEqual(seen.clickClose, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: true });
+  assert.deepEqual(seen.reducedOpen, { fold: "open", duration: 150, easing: "cubic-bezier(0.19, 1, 0.22, 1)", slides: false });
+  assert.deepEqual(seen.reducedClose, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: false });
+});
+
+test("a turn the user stops as its answer starts opens its work again; a background end after changes nothing", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ answering: string; stopped: { fold: string; header: string | null }; later: { fold: string; header: string | null } }>(t, "drive=stopanswer");
+  assert.equal(seen.answering, "closed");
+  assert.equal(seen.stopped.fold, "open");
+  assert.match(seen.stopped.header ?? "", /^You stopped after /);
+  assert.deepEqual(seen.later, seen.stopped);
+});
+
+test("a live group's label: a quick step's name stands a second, a long one's changes at once, the newest running step is named, a summary shows at once", { timeout: 120000 }, async (t) => {
+  type Labels = { t: number; label: string | null }[];
+  const seen = await drive<{ quick: Labels; long: Labels; together: string | null; newerEnds: Labels; pending: boolean; summary: Labels }>(t, "drive=pace");
+  // The read shows, then the build once the read's name has stood 1000ms (within a frame or two).
+  const read = seen.quick.findIndex((each) => /a\.ts/.test(each.label ?? ""));
+  const build = seen.quick.findIndex((each) => /npm run build/.test(each.label ?? ""));
+  assert.ok(read >= 0 && build === read + 1, JSON.stringify(seen.quick));
+  const stood = seen.quick[build]!.t - seen.quick[read]!.t;
+  assert.ok(stood >= 1000 - 20 && stood <= 1000 + 100, `the read's name stood ${stood}ms: ${JSON.stringify(seen.quick)}`);
+  // The build ran over a second: its end shows the next label within a couple of frames.
+  assert.ok(seen.long.length >= 2 && seen.long[1]!.t <= 100, JSON.stringify(seen.long));
+  assert.equal(seen.long[1]!.label, "Thinking");
+  // Two commands together: the newer named; it ends, and the older (not the last) is named again.
+  assert.match(seen.together ?? "", /npm run lint/);
+  assert.match(seen.newerEnds.at(-1)?.label ?? "", /sleep 9/);
+  assert.ok(seen.newerEnds.at(-1)!.t <= 100, JSON.stringify(seen.newerEnds));
+  // A label waiting its turn; a line comes after the group: its summary shows at once.
+  assert.equal(seen.pending, true);
+  const summary = seen.summary.at(-1)!;
+  assert.ok(summary.t <= 100, JSON.stringify(seen.summary));
+  assert.match(summary.label ?? "", /^(Read|Ran)/);
+  assert.doesNotMatch(summary.label ?? "", /Reading|Running|Thinking/);
 });
 
 test("a long message is clipped at the end of a code block crossing its 20-line cut, Show more with a chevron", { timeout: 120000 }, async (t) => {

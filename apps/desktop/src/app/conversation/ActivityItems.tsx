@@ -29,6 +29,8 @@ export const ActivityItems: FC<{
   activity: readonly Activity<LeadStep, Entry>[];
   /** The live turn's newest work: what its live line reads from; `null` for any other. */
   live: ThreadStatusProps | null;
+  /** Its turn still works: each run of steps is a group's row, one step too (see `ActivityGroup`). */
+  working?: boolean;
   /** The live thought, if the lead thinks right now. */
   thought: string | null;
   streaming: (entry: Entry) => boolean;
@@ -40,7 +42,7 @@ export const ActivityItems: FC<{
   summary: boolean;
   /** The header's "{n} denied actions" was clicked: the groups holding them open. */
   revealDenied: boolean;
-}> = ({ activity: unjoined, live, thought, streaming, commentary, requestIds, summary, revealDenied }) => {
+}> = ({ activity: unjoined, live, working = false, thought, streaming, commentary, requestIds, summary, revealDenied }) => {
   const head = useThreadStatusHead(live);
   // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
@@ -93,6 +95,7 @@ export const ActivityItems: FC<{
             <ActivityGroup
               items={item.items}
               live={!!live && (!live.quotaWait || !!line) && index === activity.length - 1}
+              working={working}
               liveLabel={inGroup && index === activity.length - 1 ? line : null}
               summary={summary}
               describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}

@@ -1,15 +1,21 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 
-/** Opening takes 300ms on a fast-out curve; closing, also when an answer folds the work, 150ms on a quicker one. */
-const OPEN = { duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)" } as const;
-const CLOSE = { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" } as const;
+/** Opening by a click takes 300ms on a fast-out curve; closing, also when an answer folds the work, 150ms on a quicker one. */
+export const OPEN = { duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)" } as const;
+export const CLOSE = { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" } as const;
+/** With less motion, both ways take this long, with no slide. */
+export const REDUCED_MS = 150;
 
 /**
- * Whether it opens and closes at once: with less motion, or while the window is hidden, where
- * WebKit holds animations still and a fold that closed there would stay open until it is shown.
+ * Whether it opens and closes at once: while the window is hidden, where WebKit holds animations
+ * still and a fold that closed there would stay open until it is shown.
  */
 function atOnce(): boolean {
-  return document.hidden || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  return document.hidden;
+}
+
+function lessMotion(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 /**
@@ -17,11 +23,20 @@ function atOnce(): boolean {
  * unmounted when it has closed. Height (in px, from what it measures), opacity and an 8px slide
  * run on one clock, the Web Animations API's, and the body leaves in that animation's own finish,
  * so what follows moves with the height frame by frame and nothing jumps when it settles. Turned
- * around midway, it goes back from where it is. With less motion, or hidden, it opens and closes at once.
+ * around midway, it goes back from where it is. Only a click (`clicked`) animates opening; opened
+ * by anything else (a reveal) it is open at once, while closing always takes its 150ms. With less
+ * motion both take 150ms with no slide; hidden, it opens and closes at once. It never animates on
+ * mounting.
  * While Find searches (`searched`), closed it keeps its body mounted, inert and, once still,
  * hidden (`data-kept`), so Find counts what it holds; going to a match there opens it.
  */
-export function WorkFold({ open, searched = false, children }: { open: boolean; searched?: boolean; children: ReactNode }) {
+export function WorkFold({ open, clicked = false, searched = false, children }: {
+  open: boolean;
+  /** The change to `open` is the user's click on its header. */
+  clicked?: boolean;
+  searched?: boolean;
+  children: ReactNode;
+}) {
   const [mounted, setMounted] = useState(open || searched);
   const body = useRef<HTMLDivElement>(null);
   const running = useRef<Animation[]>([]);
@@ -52,14 +67,20 @@ export function WorkFold({ open, searched = false, children }: { open: boolean; 
     growing.current = null;
     // It clips only while it moves: open, focus rings and shadows inside it show in full.
     element.dataset.moving = "";
-    if (atOnce()) {
+    // Opened by anything but a click, it is open at once.
+    if (atOnce() || (open && !clicked)) {
       delete element.dataset.moving;
       if (!open) element.dataset.kept = "";
       return;
     }
     let to = open ? inner.offsetHeight : 0;
-    const slide = `translateY(calc(${getComputedStyle(element).getPropertyValue("--spacing-fold-slide")} * -1))`;
-    const timing = { ...(open ? OPEN : CLOSE), fill: open ? ("none" as const) : ("forwards" as const) };
+    const reduced = lessMotion();
+    const slide = reduced ? "none" : `translateY(calc(${getComputedStyle(element).getPropertyValue("--spacing-fold-slide")} * -1))`;
+    const timing = {
+      ...(open ? OPEN : CLOSE),
+      ...(reduced && { duration: REDUCED_MS }),
+      fill: open ? ("none" as const) : ("forwards" as const),
+    };
     const height = element.animate([{ height: `${from}px` }, { height: `${to}px` }], timing);
     const fade = inner.animate(
       open
@@ -95,14 +116,15 @@ export function WorkFold({ open, searched = false, children }: { open: boolean; 
         current.onfinish = null;
         current.cancel();
         to = target;
-        const left = Math.max(0, OPEN.duration - (performance.now() - started));
+        const left = Math.max(0, timing.duration - (performance.now() - started));
         const next = element.animate([{ height: `${now}px` }, { height: `${to}px` }], { ...timing, duration: left });
         next.onfinish = finish;
         running.current = [next, fade];
       });
       growing.current.observe(inner);
     }
-  }, [open]);
+    // Only `open` changing starts a move; `clicked` is read with it.
+  }, [open, clicked]);
 
   // After the one above, which starts its close: Find is done, and it is closed and still, so its body goes.
   useLayoutEffect(() => {

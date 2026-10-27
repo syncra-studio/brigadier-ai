@@ -754,19 +754,27 @@ export function foldsWork(done: boolean, answer: number | null, hasWork: boolean
   return done && answer !== null && hasWork;
 }
 
+/** Whether its CLI said a reply is the turn's final answer. */
+const said = (text: { answerAtMs?: number }) => text.answerAtMs !== undefined;
+
 /**
- * The reply a block still at work answers with: the one its CLI said is the turn's final answer,
- * while it is the newest thing in the work. Its work folds the moment it starts and the answer
- * goes under "Worked for …", though the request may still wait (for another session's reply,
- * say). `null` otherwise, always with a CLI that doesn't say: its work folds once it is done.
+ * The reply a block still at work answers with: the one its CLI said is the turn's final answer.
+ * Its work folds the moment it starts and the answer goes under "Worked for …", though the
+ * request may still wait (for another session's reply, say); what comes after it while the turn
+ * still runs (a step, a notice, a card) shows under it, never opening the work again. A follow-up
+ * steered in or a compaction after it starts new work: no answer yet. `null` otherwise, always
+ * with a CLI that doesn't say: its work folds once it is done.
  */
 export function answeringIndex(texts: readonly { answerAtMs?: number; update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
-  const newest = sequence.findLast((entry) => entry.kind !== "thinking");
-  if (newest?.kind !== "text") return null;
-  // A late event's "Update: …" line goes under the answer it follows, which stays the answer.
-  const answer = texts.findLastIndex((text) => !text.update);
-  const at = texts[newest.index]?.update && answer >= 0 ? answer : newest.index;
-  return texts[at]?.answerAtMs === undefined ? null : at;
+  // A late event's "Update: …" line goes under the answer it follows, which stays the answer;
+  // a block of update lines alone answers with its newest.
+  const answer = texts.findLastIndex((text) => said(text) && !text.update);
+  const at = answer >= 0 ? answer : texts.findLastIndex(said);
+  if (at < 0) return null;
+  const position = sequence.find((entry) => entry.kind === "text" && entry.index === at)?.position;
+  if (position === undefined) return null;
+  const cut = sequence.some((entry) => entry.position > position && (entry.kind === "steer" || entry.kind === "compaction"));
+  return cut ? null : at;
 }
 
 /**

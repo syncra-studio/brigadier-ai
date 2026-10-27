@@ -662,15 +662,19 @@ test("a block's sequence keeps the anchors on its text", () => {
 
 const text = (index: number, position: number): SequenceEntry => ({ kind: "text", index, position });
 
-test("a block still at work answers with the reply its CLI called the final answer, only while that is its newest entry", () => {
+test("a block still at work answers with the reply its CLI called the final answer, through what comes after it, until a follow-up or compaction", () => {
   const thinking = { kind: "thinking", segment: {} as never, live: true, position: 9 } as SequenceEntry;
   const texts = [{}, { answerAtMs: 50 }];
   assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3)]), 1);
-  // A thought after it doesn't take it back.
+  // A thought, a step, a line or a card after it don't take it back.
   assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3), thinking]), 1);
-  // A line between steps, or the answer with work after it, is not the answer yet.
-  assert.equal(answeringIndex(texts, [text(1, 3), text(0, 4)]), null);
+  const step = { kind: "orchestrator", steps: [], position: 4 } as unknown as SequenceEntry;
+  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3), step]), 1);
+  assert.equal(answeringIndex([{}, { answerAtMs: 50 }, {}], [text(0, 1), text(1, 3), text(2, 4)]), 1);
+  // A follow-up steered in, or a compaction, after it starts new work.
   assert.equal(answeringIndex(texts, [text(1, 3), { kind: "steer", position: 4, text: "more", atMs: 0, attachments: [] } as SequenceEntry]), null);
+  assert.equal(answeringIndex(texts, [text(1, 3), { kind: "compaction", compaction: {} as never, position: 4 }]), null);
+  // Before its final answer, a line between steps is no answer.
   assert.equal(answeringIndex([{}], [text(0, 1)]), null);
 });
 

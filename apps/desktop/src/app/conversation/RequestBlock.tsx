@@ -1,4 +1,4 @@
-import { MessagePrimitive, useAuiState, jumpInThread } from "@/components/conversation";
+import { MessagePrimitive, useAuiState, jumpInThread, useThreadAnswerStarted } from "@/components/conversation";
 import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { ActivityItems } from "@/app/conversation/ActivityItems";
@@ -19,8 +19,8 @@ import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
-import { OpensWork } from "@/app/conversation/activity/groupContext";
 import { turnParts } from "@/app/conversation/workParts";
+import { runningSubagents } from "@/app/conversation/turnWorkers";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -54,7 +54,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useTurnCommands, useTurnWorkers } from "@/state/cliThread";
+import { useTurnCommands, useTurnWorkers, useWorkerRows } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -116,9 +116,11 @@ export type BlockMeta = {
 /**
  * One request's answer, shown as a turn. While the request works (and after it was stopped
  * or failed) its work shows in place, in order: replies, workers and cards, then what happens
- * right now. Once it is done, everything before the answer folds into "Worked for 3m 4s"; the
- * cards that matter (decisions, failures, what needs the user) and the user's follow-ups stay
- * in view.
+ * right now. Once its final answer starts (or, with a CLI that doesn't say, once it is done),
+ * everything before the answer folds into "Worked for 3m 4s"; the cards that matter (decisions,
+ * failures, what needs the user), the user's follow-ups and what comes after the answer while
+ * the turn still runs stay in view. It doesn't fold by itself while subagents or workers the
+ * turn started still work; the user's own choice, kept per turn, wins over both.
  */
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
@@ -165,13 +167,16 @@ export const RequestBlock: FC = () => {
     const board = s.board;
     return !quotaWait && !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
   });
-  // The workers its turn started that still work: over, it stays open and live until they finish
-  // (its own wake-ups when they do are in the same turn), with no end cards yet; then it folds.
+  // The workers its turn started that still work: over, it stays live until they finish (its own
+  // wake-ups when they do are in the same turn), with no end cards yet, and its work doesn't
+  // fold by itself meanwhile.
   const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
   const holding = useTurnWorkers(conversationId, starts);
   // So do the background commands it started (a CI watch, a Monitor) until the turn their end
-  // starts is over (D21).
+  // starts is over (D21), though its work folds as it would without them.
   const commands = useTurnCommands(conversationId, starts);
+  // Its CLI's own subagents, which keep its work from folding by itself while they work.
+  const workerRows = useWorkerRows(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -183,20 +188,30 @@ export const RequestBlock: FC = () => {
   const live = isLive(meta.state) || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  const finished = blockFinished(meta.state) && !held && quotaWait === null && !(quotaRecovered && turnRuns);
+  // Done, whatever it started still runs in the background (a CI watch, a worker): its work's
+  // fold doesn't wait for that, so their end changes nothing in it.
+  const finished = blockFinished(meta.state) && quotaWait === null && !(quotaRecovered && turnRuns);
   const transitions = leadTransitions(meta.orchestratorSteps);
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
-  // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
-  // Until then a reply streams in place.
-  const answering = !quotaWait && !finished && !held && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
+  // (for another session's reply, say), unless the user stopped it. Until then a reply streams in
+  // place.
+  const answering = !quotaWait && !finished && live && meta.state !== "stopped" ? answeringIndex(meta.texts, sequence) : null;
   const done = finished || answering !== null;
   const answer = answering ?? answerIndex(meta.texts, finished);
   const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
   const updates = updateIndices(meta.texts, answer);
+  // Its own subagents and workers that still work keep it from folding by itself.
+  const keepsOpen = workersActive || holding > 0 || runningSubagents(workerRows, meta.startedAtMs, meta.endedAtMs) > 0;
   // Decide which peer send is still in flight where the live row state is known.
-  const activity = turnActivity(sequence, false);
+  const fullActivity = turnActivity(sequence, false);
+  // What came after the final answer while the turn still runs shows under it (its update lines
+  // apart, which show as such).
+  const answerAt = answering === null ? -1 : fullActivity.findIndex((item) => item.type === "entry" && item.entry.kind === "text" && item.entry.index === answering);
+  const activity = answerAt < 0 ? fullActivity : fullActivity.slice(0, answerAt + 1);
+  const trailing = answerAt < 0 ? [] : fullActivity.slice(answerAt + 1).filter((item) => item.type === "group" || item.entry.kind !== "text" || !meta.texts[item.entry.index]?.update);
+  const trailingEntries = new Set(trailing.flatMap((item) => (item.type === "entry" ? [item.entry] : [])));
   // The answer, kept cards and access notices stay outside the fold.
-  const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
+  const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer) && !trailingEntries.has(entry));
   const allParts = turnParts(activity, answer, done, live, (index) => {
     const text = meta.texts[index];
     return !!text && !text.commentary && !text.update;
@@ -206,7 +221,7 @@ export const RequestBlock: FC = () => {
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
   const foldable = foldsWork(done, answer, parts.some((part) => part.type === "work" && part.items.length > 0));
-  const open = fold.open ?? false;
+  const open = fold.open ?? keepsOpen;
   const header =
     foldable ||
     meta.state === "stopped" ||
@@ -240,8 +255,6 @@ export const RequestBlock: FC = () => {
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       {/* A feedback offer waits for the turn that made it to end: never mid-turn (#486). */}
       <TurnEnded.Provider value={!live || !turnRuns}>
-      {/* A row or group the user opens while the turn works keeps its work open past the answer (D44, D50). */}
-      <OpensWork.Provider value={done ? null : show}>
       <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
@@ -257,8 +270,10 @@ export const RequestBlock: FC = () => {
             quota={quotaWait !== null}
             answering={answering !== null}
             answerAtMs={answerAtMs}
+            // Once its answer started or it is done: "Worked for …" whatever command still runs
+            // (its workers still say they are waited for, L3).
             workers={holding}
-            commands={commands}
+            commands={done ? 0 : commands}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {
@@ -277,7 +292,7 @@ export const RequestBlock: FC = () => {
             </div>
           ) : (
             <Fragment key={`work:${index}`}>
-            <WorkFold open={!foldable || open} searched={searched}>
+            <WorkFold open={!foldable || open} clicked={fold.clicked} searched={searched}>
               <div
                 data-slot="request-work"
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
@@ -286,6 +301,7 @@ export const RequestBlock: FC = () => {
                   activity={part.items}
                   requestIds={meta.requestIds}
                   live={live && !done && index === parts.length - 1 ? status : null}
+                  working={live && !done}
                   thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null}
                   streaming={streaming}
                   commentary={commentary}
@@ -327,6 +343,22 @@ export const RequestBlock: FC = () => {
                 </AnswerDetails.Provider>
               </div>
             )}
+            {/* What came after the answer while the turn still runs. */}
+            {trailing.length > 0 && (
+              <div data-slot="request-after-answer" className="gap-activity pt-activity flex min-w-0 flex-col">
+                <ActivityItems
+                  activity={trailing}
+                  requestIds={meta.requestIds}
+                  live={null}
+                  working
+                  thought={null}
+                  streaming={streaming}
+                  commentary={commentary}
+                  summary={false}
+                  revealDenied={revealDenied}
+                />
+              </div>
+            )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
             {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} reopened={meta.state === "working" && reopenedSince(meta.worked, answerAtMs)} />}
             {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
@@ -342,7 +374,6 @@ export const RequestBlock: FC = () => {
           </>
         )}
       </div>
-      </OpensWork.Provider>
       </TurnEnded.Provider>
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
@@ -351,6 +382,7 @@ export const RequestBlock: FC = () => {
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}
+      <AnswerStarted requestIds={meta.requestIds} started={answering !== null} />
       {!live && last >= 0 && (
         <AnswerActions
           session={meta.session}
@@ -382,18 +414,29 @@ const folds = new Map<string, boolean>();
 
 /**
  * Whether a finished turn's work is open: as the user last left it (`undefined` while they never
- * chose, for the turn's default). The thread keeps the header in place on screen while the work
- * opens or closes under it (see `thread-scroll.ts`).
+ * chose, for the turn's default), and whether that was their click on its header (`clicked`),
+ * which alone animates it opening. The thread keeps the header in place on screen while the
+ * work opens or closes under it (see `thread-scroll.ts`).
  */
 function useFold(requestId: string | null) {
-  const [open, setOpen] = useState<boolean | undefined>(() => (requestId === null ? undefined : folds.get(requestId)));
-  const set = useCallback((next: boolean) => {
+  const [state, setState] = useState<{ open: boolean | undefined; clicked: boolean }>(() => ({
+    open: requestId === null ? undefined : folds.get(requestId),
+    clicked: false,
+  }));
+  const set = useCallback((next: boolean, clicked = true) => {
     if (requestId !== null) folds.set(requestId, next);
-    setOpen(next);
+    setState({ open: next, clicked });
   }, [requestId]);
-  const show = useCallback(() => set(true), [set]);
-  return { open, set, show };
+  // Opened for a jump to what it holds: no click's.
+  const show = useCallback(() => set(true, false), [set]);
+  return { open: state.open, clicked: state.clicked, set, show };
 }
+
+/** Tells the thread when the turn's final answer starts (see `useThreadAnswerStarted`). */
+const AnswerStarted: FC<{ requestIds: readonly string[]; started: boolean }> = ({ requestIds, started }) => {
+  useThreadAnswerStarted(requestIds, started);
+  return null;
+};
 
 /**
  * Says the turn's answer to a screen reader: "Response started" when it starts, then "Response
