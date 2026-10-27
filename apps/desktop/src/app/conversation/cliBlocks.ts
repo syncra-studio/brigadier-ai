@@ -30,7 +30,11 @@ import { sessionImageRef } from "@/state/cliThread";
 import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
 
-/** Internal continuation markers, also recognized with an older daemon or incomplete seam metadata. */
+/**
+ * Internal continuation markers, also recognized with an older daemon or incomplete seam
+ * metadata. Whose a message is comes from the engine's note of it (`FileEntry.said`, L12); these
+ * words decide only for one it has no note of, and say what one of Brigadier's is.
+ */
 const NUDGE_MARK = "[Brigadier] A fresh session will continue this work.";
 const HANDOFF_MARK = "[Brigadier hand-off ";
 const HANDOFF_END = "[End of the hand-off]";
@@ -40,6 +44,7 @@ const CARRY_ON = "Carry on from the hand-off note.";
  * Automatic engine messages to the CLI are no bubble: a card's answer, a resume, a background
  * command's result, a preview's end, a carry-on after a limit, or the workers the user stopped.
  * Peer messages retain their sender and authored content. The CLI's resulting work still shows.
+ * Prefix matching is only a fallback for entries without the engine's provenance note.
  */
 const BRIGADIER_SAYS =
   /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early|worker\] The user stopped )/;
@@ -701,6 +706,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
     }
     const asked = event.type === "message" && event.role === "user" ? event : null;
+    // Who wrote it, as Brigadier noted when it sent it to the CLI (L12): its own words (a note,
+    // a nudge, a frame, its `/compact`) are never a bubble, and of the user's words with its
+    // own around them only the user's show. Of a message it has no note of (sent before it
+    // noted them) its words say whose it is, the way they begin.
+    const said = asked ? entry.said : undefined;
+    const ours = said?.by === "brigadier";
+    const theirs = said?.by === "user" || said?.by === "both";
     // Brigadier's own turn carries no request of the user's: what the user sent shows as ever.
     const brigadiers = startsTurn(entry) && view.turns[turn]?.requests.length === 0;
     // The hand-off is under the hood (run2-D44): Brigadier's word to write the note, the turn
@@ -708,7 +720,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // work the CLI finishes first still shows. A notice the CLI starts a turn with goes on it.
     if (asked) {
       const text = asked.text.trimStart();
-      const nudge = nudges.has(asked.itemId) || text.startsWith(NUDGE_MARK);
+      const nudge = nudges.has(asked.itemId) || (!theirs && text.startsWith(NUDGE_MARK));
       if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && CLI_NOTICE.test(text))) maintenance = null;
       if (nudge) {
         if (startsTurn(entry)) {
@@ -728,10 +740,10 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
-    const news = asked && workerNotices(asked.text);
+    const news = asked && !theirs && workerNotices(asked.text);
     const queued = asked && queuedId(asked.text);
     const unshown =
-      !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || onlyWithdrawn(asked.text));
+      !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep, from the stream's first word of
     // it on. Its checkpoint request before Codex compacts is Brigadier's too (run2-D9). Its turn
@@ -741,20 +753,25 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const read = view.turns[turn];
     const compacting =
       !!asked &&
-      session &&
       startsTurn(entry) &&
       (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK)) &&
-      (read
-        ? read.requests.every((request) => blocks.some((earlier) => earlier.requestIds.includes(request)))
-        : !typed.includes(asked.text.trim()));
+      (said
+        ? ours
+        : session &&
+          (read
+            ? read.requests.every((request) => blocks.some((earlier) => earlier.requestIds.includes(request)))
+            : !typed.includes(asked.text.trim())));
     // Brigadier's word to a session's CLI is no bubble (run2-D44): its own turn's, or a turn
     // of a request already shown (a background command's end), or steered in.
     const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
-    const says = !!asked && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore);
+    // Another session's message keeps its own rule: a bubble of its own on a turn it starts.
+    const peer = !!asked && FROM_SESSION.test(asked.text);
+    const says =
+      !!asked && (said && !peer ? ours : !theirs && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore));
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
     // its word to carry on, no bubble; the successor's work shows.
-    const own = !!asked && (carried.has(asked.itemId) || (brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
+    const own = !!asked && (carried.has(asked.itemId) || (!said && brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
     // Brigadier's word that a Codex command ended after its turn: its one plain line (D21).
     const woke = !!asked && says && CODEX_WAKE.test(asked.text);
     const before = block;
@@ -805,17 +822,17 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
           ? first
           : event.itemId;
-      const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
+      const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1));
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
       if (goesOn(block)) {
         join(block, position, entry.atMs);
-        block.steers.push({ ...said, position });
+        block.steers.push({ ...shown, position });
         return;
       }
       if (block) close(block);
       block = emptyBlock(event.itemId, atMs, requests);
-      block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
+      block.user = shown.message.role === "peer" ? { kind: "peer", ...shown, earlier: false } : { kind: "message", ...shown };
       blocks.push(block);
       turnOf.set(block, view.turns[turn]);
       times.push([[position, atMs]]);
@@ -836,7 +853,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           const id = named
             ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
             : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId);
-          current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, event.text, position + 1)), position });
+          current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1)), position });
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
