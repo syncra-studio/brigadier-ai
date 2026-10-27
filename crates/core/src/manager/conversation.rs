@@ -3121,6 +3121,14 @@ impl SessionManager {
                 },
             )
             .await?;
+        for warning in &resolved.warnings {
+            self.notice(
+                &conv.id,
+                brigadier_providers::NoticeLevel::Warning,
+                &warning.message,
+            )
+            .await;
+        }
         super::plugins::launch::apply_resolved(
             &mut spec,
             &resolved,

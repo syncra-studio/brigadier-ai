@@ -364,7 +364,25 @@ impl SessionManager {
                 super::plugins::resolve::Role::Thread,
             )
             .await?;
-        let grants = select_grants(&resolved.servers, names).map_err(Error::Invalid)?;
+        for warning in &resolved.warnings {
+            self.notice(
+                conversation,
+                brigadier_providers::NoticeLevel::Warning,
+                &warning.message,
+            )
+            .await;
+        }
+        let available_names: Vec<_> = names
+            .iter()
+            .filter(|name| {
+                !resolved
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.server == **name)
+            })
+            .cloned()
+            .collect();
+        let grants = select_grants(&resolved.servers, &available_names).map_err(Error::Invalid)?;
         let resolved = self
             .resolve_plugins(
                 account,
@@ -400,7 +418,25 @@ impl SessionManager {
             )
             .await
             .map_err(|error| error.to_string())?;
-        select_grants(&resolved.servers, names)
+        for warning in &resolved.warnings {
+            self.notice(
+                conversation,
+                brigadier_providers::NoticeLevel::Warning,
+                &warning.message,
+            )
+            .await;
+        }
+        let available_names: Vec<_> = names
+            .iter()
+            .filter(|name| {
+                !resolved
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.server == **name)
+            })
+            .cloned()
+            .collect();
+        select_grants(&resolved.servers, &available_names)
             .map(|servers| servers.into_iter().map(|server| server.name).collect())
     }
 }

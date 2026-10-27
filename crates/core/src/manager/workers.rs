@@ -856,6 +856,14 @@ impl SessionManager {
                 },
             )
             .await?;
+        for warning in &resolved.warnings {
+            self.notice(
+                &conversation_id,
+                brigadier_providers::NoticeLevel::Warning,
+                &warning.message,
+            )
+            .await;
+        }
         super::plugins::launch::apply_resolved(&mut spec, &resolved, &worker_dir, provider)?;
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {

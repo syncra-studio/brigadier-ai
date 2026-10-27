@@ -47,11 +47,18 @@ pub struct ResolvedSkill {
     pub native: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveWarning {
+    pub server: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Resolved {
     pub servers: Vec<McpServer>,
     pub skills: Vec<ResolvedSkill>,
     pub off: SwitchedOff,
+    pub warnings: Vec<ResolveWarning>,
 }
 
 /// An actual checkout, rather than the registered project's files, supplies native presence.

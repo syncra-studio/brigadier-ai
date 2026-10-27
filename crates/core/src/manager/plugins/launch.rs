@@ -67,14 +67,24 @@ impl SessionManager {
             .collect();
         let project = registered_root(&registered, project, cwd);
         let (cwd, data_dir) = (cwd.to_owned(), self.data_dir.clone());
+        let secrets = CliSecretReader {
+            cli: self.brigadier_cli(),
+            env: roots.vars.clone(),
+        };
+        let gateway = self.mcp_gateway().clone();
         let agent = super::super::integrations::agent(account.provider);
         let grants = match role {
             Role::Thread => None,
             Role::Worker { grants } => Some(grants.to_vec()),
         };
         blocking(move || {
-            let rows = Catalog::read_rows(&roots, &registered);
+            let mut rows = Catalog::read_rows_with_library(&roots, &registered, &data_dir);
             let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
+            let warnings = if grants.is_none() {
+                fill_library_headers(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
+            } else {
+                Vec::new()
+            };
             let mut resolved = resolve::resolve(Context {
                 agent,
                 account_home: &effective,
@@ -86,7 +96,7 @@ impl SessionManager {
                     .map_or(Role::Thread, |grants| Role::Worker { grants }),
                 rows: &rows,
                 choices: &choices,
-                gateway: None,
+                gateway: Some(gateway.as_ref()),
             });
             // Plugin clients have a separate native namespace from the canonical injected
             // server name. Suppress those clients even when their row is selected.
@@ -118,6 +128,7 @@ impl SessionManager {
                     }
                 }
             }
+            resolved.warnings = warnings;
             Ok(resolved)
         })
         .await
@@ -171,6 +182,17 @@ pub fn apply_resolved(
             .collect::<Vec<_>>(),
     );
     spec.switched_off = resolved.off.clone();
+    // Native configs used helpers before injection. Protect newly materialized values in
+    // adapter stdio recordings and events too, including inline Codex thread configuration.
+    let values: Vec<_> = spec
+        .mcp_servers
+        .iter()
+        .flat_map(|server| server.env.iter().map(|(_, value)| value.clone()))
+        .collect();
+    spec.redactor = Some(std::sync::Arc::new(match &spec.redactor {
+        Some(redactor) => redactor.with(values),
+        None => brigadier_providers::Redactor::new(values),
+    }));
     let overlay = session_dir.join("overlay");
     if overlay.exists() {
         std::fs::remove_dir_all(&overlay).map_err(|error| Error::Invalid(error.to_string()))?;
@@ -382,6 +404,207 @@ mod overlay_tests {
                 assert!(naked.add_dirs.is_empty());
             }
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// Read through the credential-owning executable, never the daemon's own Keychain identity.
+struct CliSecretReader {
+    cli: PathBuf,
+    env: std::collections::BTreeMap<String, String>,
+}
+impl brigadier_cli::secrets::Store for CliSecretReader {
+    fn get(&self, server: &str) -> std::result::Result<brigadier_cli::secrets::Values, String> {
+        let mut command = std::process::Command::new(&self.cli);
+        command
+            .args(["secret", "headers", server])
+            .envs(&self.env)
+            .stdin(std::process::Stdio::null());
+        let output = brigadier_registry::adapter::output_within(
+            &mut command,
+            std::time::Duration::from_secs(30),
+        )
+        .map_err(|_| "couldn't read the server's saved credentials".to_owned())?;
+        if !output.status.success() {
+            return Err("couldn't read the server's saved credentials".into());
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|_| "the server's saved credentials weren't readable".into())
+    }
+    fn put(&self, _: &str, _: &brigadier_cli::secrets::Values) -> std::result::Result<(), String> {
+        Err("launch secret access is read-only".into())
+    }
+}
+
+fn fill_library_headers(
+    rows: &mut [brigadier_registry::catalog::Row],
+    data_dir: &Path,
+    choices: &Choices,
+    project: Option<&Path>,
+    store: &dyn brigadier_cli::secrets::Store,
+) -> Vec<super::resolve::ResolveWarning> {
+    use brigadier_registry::catalog::Content;
+    use brigadier_registry::{Secret, Transport};
+    let mut warnings = Vec::new();
+    for row in rows {
+        let choice = choices.choice(row);
+        if !choice.on || !choice.scope.contains(project) {
+            continue;
+        }
+        row.definitions.retain_mut(|definition| {
+            let owned = definition.provenance.file.starts_with(data_dir.join("library"))
+                || definition.provenance.plugin.as_ref().is_some_and(|id| id.ends_with("@brigadier"));
+            if !owned {return true;}
+            let Content::Server(server)=&mut definition.content else {return true;};
+            let Transport::Http{headers,..}=&mut server.transport else{return true;};
+            let raw:serde_json::Value=std::fs::read(&definition.provenance.file).ok().and_then(|bytes|serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+            let entry=raw.get("mcpServers").and_then(|all|all.get(&server.name)).or_else(||raw.get(&server.name)).unwrap_or(&raw);
+            let helper=entry.get("headersHelper").or_else(||entry.get("http_headers_helper")).and_then(serde_json::Value::as_str);
+            let Some(id)=helper.and_then(|helper| {
+                let words:Vec<_>=helper.split_whitespace().collect();
+                let tail=words.len().checked_sub(3).map(|at|&words[at..])?;
+                (tail[0]=="secret" && tail[1]=="headers").then_some(tail[2].to_owned())
+            }) else{return true;};
+            let mut expected:Vec<String>=definition.provenance.file.parent().and_then(|path|std::fs::read(path.join(".brigadier.json")).ok())
+                .and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|meta|meta.get("values").and_then(serde_json::Value::as_array).cloned())
+                .unwrap_or_default().iter().filter_map(|value|value.as_str().map(str::to_owned)).collect();
+            // Flat entries may declare empty placeholders; legacy packages keep their
+            // expected names in .brigadier.json. Neither holds the credential values.
+            expected.extend(headers.iter().filter(|(_, value)| value.expose().is_empty()).map(|(name, _)| name.clone()));
+            let loaded=store.get(&id);
+            if let Ok(values)=loaded && !values.is_empty() && expected.iter().all(|name|values.get(name).is_some_and(|value|!value.is_empty())) && values.values().all(|value|!value.is_empty()) {
+                for (name,value) in values {
+                    if let Some((_,old))=headers.iter_mut().find(|(key,_)|key==&name) {*old=Secret::new(value);} else {headers.push((name,Secret::new(value)));}
+                }
+                server.signs_in=false;
+                true
+            } else {
+                warnings.push(super::resolve::ResolveWarning {server:server.name.clone(),message:format!("MCP server {:?} was left out because its saved credentials are missing or unavailable. Add the missing values in Plugins before starting it again.",server.name)});
+                false
+            }
+        });
+    }
+    warnings
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    use brigadier_cli::secrets::{Store, Values};
+    use brigadier_registry::{Agent, Roots};
+    use std::cell::RefCell;
+
+    struct Memory {
+        values: RefCell<Values>,
+        reads: RefCell<Vec<String>>,
+    }
+    impl Store for Memory {
+        fn get(&self, id: &str) -> std::result::Result<Values, String> {
+            self.reads.borrow_mut().push(id.to_owned());
+            Ok(self.values.borrow().clone())
+        }
+        fn put(&self, _: &str, _: &Values) -> std::result::Result<(), String> {
+            panic!("launch must never write credentials")
+        }
+    }
+    fn write(path: &Path, value: serde_json::Value) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value.to_string()).unwrap();
+    }
+    #[test]
+    fn library_http_values_stay_in_memory_and_missing_values_omit_the_server_with_a_warning() {
+        let dir = std::env::temp_dir().join(format!("launch-secrets-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let roots = Roots::from_vars([
+            ("HOME".into(), dir.join("home").display().to_string()),
+            ("USERPROFILE".into(), dir.join("home").display().to_string()),
+        ])
+        .unwrap();
+        let plugin = dir.join("library/plugins/fixture");
+        write(
+            &dir.join("library/.claude-plugin/marketplace.json"),
+            serde_json::json!({"plugins":[{"name":"fixture","version":"1"}]}),
+        );
+        write(
+            &plugin.join(".claude-plugin/plugin.json"),
+            serde_json::json!({"name":"fixture"}),
+        );
+        write(
+            &plugin.join(".brigadier.json"),
+            serde_json::json!({"values":["Authorization","X-Workspace"]}),
+        );
+        let file = plugin.join(".mcp.json");
+        write(
+            &file,
+            serde_json::json!({"mcpServers":{"api":{"type":"http","url":"https://fixture.invalid/mcp","headersHelper":"brigadier secret headers fixture/api"}}}),
+        );
+        let original = std::fs::read(&file).unwrap();
+        let values = Values::from_iter([
+            ("Authorization".into(), "Bearer in-memory-only-token".into()),
+            ("X-Workspace".into(), "workspace-id".into()),
+        ]);
+        let store = Memory {
+            values: RefCell::new(values.clone()),
+            reads: RefCell::new(Vec::new()),
+        };
+        let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store).is_empty()
+        );
+        for agent in [Agent::Claude, Agent::Codex] {
+            let resolved = resolve::resolve(Context {
+                agent,
+                account_home: &roots,
+                project_root: None,
+                cwd: &dir,
+                trusted: false,
+                role: Role::Thread,
+                rows: &rows,
+                choices: &Choices::default(),
+                gateway: None,
+            });
+            assert_eq!(resolved.servers.len(), 1);
+            let found: Values = resolved.servers[0].env.iter().cloned().collect();
+            assert_eq!(found, values);
+        }
+        assert_eq!(*store.reads.borrow(), ["fixture/api"]);
+        store.values.borrow_mut().remove("X-Workspace");
+        let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
+        let warnings = fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].server, "api");
+        assert!(!warnings[0].message.contains("in-memory-only-token"));
+        let resolved = resolve::resolve(Context {
+            agent: Agent::Claude,
+            account_home: &roots,
+            project_root: None,
+            cwd: &dir,
+            trusted: false,
+            role: Role::Thread,
+            rows: &rows,
+            choices: &Choices::default(),
+            gateway: None,
+        });
+        assert!(resolved.servers.is_empty());
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        assert!(
+            !String::from_utf8(original)
+                .unwrap()
+                .contains("in-memory-only-token")
+        );
+        write(&plugin.join(".brigadier.json"), serde_json::json!({}));
+        write(
+            &file,
+            serde_json::json!({"mcpServers":{"api":{"type":"http","url":"https://fixture.invalid/mcp","headers":{"Authorization":"","X-Workspace":""},"headersHelper":"brigadier secret headers fixture/api"}}}),
+        );
+        let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
+        assert_eq!(
+            fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store).len(),
+            1
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
