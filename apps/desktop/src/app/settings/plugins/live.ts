@@ -3,6 +3,7 @@ import { pickFolder, request } from "@/ipc/client";
 import type { CatalogSignIn, CatalogView } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import type { PluginProjectView, PluginsView } from "./types";
+import { signingIn } from "./model";
 
 /** The catalog's durable choices, rendered with the shared Settings grid. */
 export function catalogPage(catalog: CatalogView, projects: PluginProjectView[]): PluginsView {
@@ -63,23 +64,44 @@ export function livePlugins(): PluginsAdapter {
   let revision = 0;
   let reads = 0;
   const states = new Map<string, { revision: number; state: CatalogSignIn }>();
-  const waiting = (state: CatalogSignIn | undefined) => state?.type === "signingIn" ||
-    (state?.type === "cliFallback" && state.steps.some((step) => ["waiting", "starting", "inBrowser"].includes(step.state.type)));
+  const mutations = new Map<string, Promise<void>>();
   const update = (rowId: string, signIn: CatalogSignIn) => {
     states.set(rowId, { revision: ++revision, state: signIn });
     if (!view) return;
     view = { ...view, items: view.items.map((item) => item.key === rowId ? { ...item, signIn } : item) };
     changed?.(view);
   };
+  // Serialize start/cancel/sign-out requests per row. A late start reply must not undo Cancel.
+  const mutate = async (rowId: string, optimistic: CatalogSignIn, action: () => Promise<CatalogSignIn>) => {
+    update(rowId, optimistic);
+    const before = states.get(rowId);
+    const operation = (mutations.get(rowId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      let next: CatalogSignIn;
+      try { next = await action(); }
+      catch (cause) {
+        if (states.get(rowId) === before) update(rowId, { type: "failed", message: cause instanceof Error ? cause.message : String(cause) });
+        throw cause;
+      }
+      if (states.get(rowId) === before) update(rowId, next);
+      if (next.type === "failed") throw new Error(next.message);
+    });
+    mutations.set(rowId, operation);
+    try { await operation; }
+    finally { if (mutations.get(rowId) === operation) mutations.delete(rowId); }
+    return [];
+  };
   const poll = async () => {
     if (polling || !view || !changed) return;
     polling = true;
     try {
-      await Promise.all(view.items.filter((item) => waiting(item.signIn)).map(async (item) => {
+      await Promise.all(view.items.filter((item) => signingIn(item.signIn) && !mutations.has(item.key)).map(async (item) => {
         const before = states.get(item.key);
         try {
           const { state } = await request({ method: "getPluginSignInStatus", rowId: item.key });
-          if (changed && states.get(item.key) === before) update(item.key, state);
+          if (changed && states.get(item.key) === before) {
+            // The native CLI flow can take a moment to publish its first pair of steps.
+            if (state.type !== "cliFallback" || state.steps.length || !state.agents.length) update(item.key, state);
+          }
         } catch { /* A transient IPC failure must not stop following the pending flow. */ }
       }));
     } finally { polling = false; }
@@ -94,13 +116,15 @@ export function livePlugins(): PluginsAdapter {
           try {
             row.signIn = (await request({ method: "getPluginSignInStatus", rowId: row.id })).state;
           } catch (cause) {
-            row.signIn = { type: "failed", message: cause instanceof Error ? cause.message : String(cause) };
+            const pending = states.get(row.id)?.state ?? view?.items.find((item) => item.key === row.id)?.signIn;
+            row.signIn = pending && signingIn(pending) ? pending : { type: "failed", message: cause instanceof Error ? cause.message : String(cause) };
           }
         }
       }));
       for (const row of catalog.rows) {
         const latest = states.get(row.id);
-        if (latest && latest.revision > before) row.signIn = latest.state;
+        const collectingSteps = row.signIn.type === "cliFallback" && row.signIn.agents.length > 0 && !row.signIn.steps.length;
+        if (latest && (latest.revision > before || mutations.has(row.id) || (collectingSteps && signingIn(latest.state)))) row.signIn = latest.state;
       }
       const fresh = catalogPage(catalog, projects());
       if (read === reads) view = fresh;
@@ -136,11 +160,22 @@ export function livePlugins(): PluginsAdapter {
       return outcome.type === "changedSinceOpened" ? { type: "changed", current: outcome.current } : { type: "saved" };
     },
     signIn: async (rowId) => {
-      const { state } = await request({ method: "startPluginSignIn", rowId });
-      update(rowId, state);
-      if (state.type === "failed") throw new Error(state.message);
-      return [];
+      const fallback = view?.items.find((item) => item.key === rowId)?.signIn?.type === "cliFallback";
+      return mutate(rowId, { type: "signingIn", flowId: "" }, async () => {
+        let { state } = await request({ method: "startPluginSignIn", rowId });
+        if (!fallback && state.type === "cliFallback" && state.agents.length) {
+          state = (await request({ method: "startPluginSignIn", rowId })).state;
+        }
+        if (state.type === "cliFallback" && state.agents.length && !state.steps.length) {
+          return { ...state, steps: state.agents.map((agent) => ({ agent, server: rowId, state: { type: "starting" as const } })) };
+        }
+        return state;
+      });
     },
+    signOut: (rowId) => mutate(rowId, { type: "signedOut" }, async () => {
+      await request({ method: "signOutPlugin", rowId });
+      return { type: "signedOut" };
+    }),
     pickFolder,
     trustProject: async () => {},
   };

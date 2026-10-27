@@ -1,9 +1,11 @@
 import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
 import { Folder } from "@/components/icons";
-import { Banner, CopyButton, SettingsCard } from "@/components/shared";
+import { CopyButton, SettingsCard } from "@/components/shared";
 import { shortPath } from "@/lib/format";
-import { folderName, KIND_LABEL, shownDetail, signInLine } from "./model";
+import { folderName, KIND_LABEL, shownDetail } from "./model";
+import type { PluginsAdapter } from "./adapter";
+import { SignInStatus } from "./SignIn";
 import { FoldCard, PluginMark, RadioRow } from "./parts";
 import type { PluginItemView, PluginsView } from "./types";
 
@@ -13,8 +15,6 @@ type DetailsActions = {
   onBack: () => void;
   /** Where it's on: every project (null), or only these projects (by id), never none. */
   onScope: (projectIds: string[] | null) => void;
-  /** Absent while it can't be signed in from here. */
-  onSignIn?: (() => void) | undefined;
   onRemove: () => void;
   onRetry: () => void;
   onUpdate: () => void;
@@ -23,7 +23,7 @@ type DetailsActions = {
 };
 
 /** One item: what needs the user, where it's on, Advanced (how it runs, where it's saved, Open), and Remove. */
-export function DetailsPage({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
+export function DetailsPage({ view, item, actions, adapter }: { view: PluginsView; item: PluginItemView; actions: DetailsActions; adapter: PluginsAdapter }) {
   const some = item.scope.type === "someProjects" ? item.scope : null;
   const on = some?.projectIds ?? [];
   const scope = (projectId: string, next: boolean) => actions.onScope(next ? [...on, projectId] : on.filter((id) => id !== projectId));
@@ -37,7 +37,7 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
       sectionsClassName="gap-9 pt-4"
     >
       {item.differentPerAgent && <p data-slot="different-per-agent" className="text-foreground/65 text-xs">Different per agent</p>}
-      <Banners item={item} actions={actions} />
+      <SignInStatus key={item.key} item={item} adapter={adapter} disabled={actions.busy} />
       <SettingsSection
         title="Projects"
         description="Where it's on. New sessions pick up changes."
@@ -118,18 +118,6 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
         </div>
       )}
     </SettingsPage>
-  );
-}
-
-/** What needs the user, over everything else: it won't start, a sign-in, an update, only some agents have it. */
-function Banners({ item, actions }: { item: PluginItemView; actions: DetailsActions }) {
-  if (!item.signIn || item.signIn.type === "notRequired") return null;
-  return (
-    <div data-slot="banners" className="flex flex-col gap-2">
-      <Banner tone="info" text={signInLine(item.signIn)} className="rounded-control border-b-0">
-        {actions.onSignIn && item.signIn.type !== "signedIn" && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>{item.signIn.type === "signingIn" ? "Waiting for browser…" : "Sign in"}</Button>}
-      </Banner>
-    </div>
   );
 }
 

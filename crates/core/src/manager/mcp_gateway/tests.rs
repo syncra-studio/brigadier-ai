@@ -186,6 +186,10 @@ impl Fixture {
             tokio::spawn(async move {
                 let response = reqwest::get(url).await.unwrap();
                 assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(
+                    response.text().await.unwrap(),
+                    "You can close this tab and return to Brigadier."
+                );
             });
         })
     }

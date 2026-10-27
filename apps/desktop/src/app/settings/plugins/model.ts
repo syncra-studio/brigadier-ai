@@ -1,3 +1,4 @@
+import type { AgentSignInState, CatalogSignIn } from "@/ipc/generated";
 import type { PluginItemView, PluginKind, PluginsView } from "./types";
 
 /*
@@ -31,10 +32,17 @@ export function placeNames(view: PluginsView, item: PluginItemView): string[] {
 
 /** A card's line: its problem, else why it can't be changed, else what it does, else how it runs. */
 export function lineOf(item: PluginItemView): Line {
-  if (item.signIn && item.signIn.type !== "notRequired") return { text: signInLine(item.signIn), tone: "muted" };
+  if (item.signIn?.type === "signedOut") return { text: "Must sign in", tone: "warning" };
+  if (item.signIn && item.signIn.type !== "notRequired") return { text: signInLine(item.signIn), tone: item.signIn.type === "cliSetupRequired" || (item.signIn.type === "cliFallback" && item.signIn.agents.length > 0 && !signingIn(item.signIn)) ? "warning" : "muted" };
   if (item.problem) return { text: item.problem.message, tone: "warning" };
   return { text: item.description || item.detail, tone: "muted" };
 }
+
+export const signingIn = (state: CatalogSignIn | undefined): boolean => state?.type === "signingIn" ||
+  (state?.type === "cliFallback" && state.steps.some((step) => ["waiting", "starting", "inBrowser"].includes(step.state.type)));
+
+export const signedIn = (state: CatalogSignIn | undefined): boolean => state?.type === "signedIn" ||
+  (state?.type === "cliFallback" && state.agents.length === 0);
 
 /** Where an item is on, as its tag: "Global", a project's name, "3 projects"; null when it's in none. */
 export function chipOf(view: PluginsView, item: PluginItemView): string | null {
@@ -59,7 +67,7 @@ export const shownDetail = (detail: string) => detail.replace(/^https:\/\//, "")
 /** What a won't-start message says is wrong: "unknown type "websocket"". */
 export const wontStartReason = (message: string) => message.replace(/^Won't start:\s*/i, "").replace(/\.$/, "");
 
-function cliSignInState(state: import("@/ipc/generated").AgentSignInState): string {
+function cliSignInState(state: AgentSignInState): string {
   switch (state.type) {
     case "alreadySignedIn": case "signedIn": return "signed in";
     case "waiting": return "waiting to sign in";
@@ -70,10 +78,10 @@ function cliSignInState(state: import("@/ipc/generated").AgentSignInState): stri
   }
 }
 
-export function signInLine(state: import("@/ipc/generated").CatalogSignIn): string {
+export function signInLine(state: CatalogSignIn): string {
   switch (state.type) {
     case "signedIn": return "Signed in";
-    case "signedOut": return "Sign in";
+    case "signedOut": return "Not signed in";
     case "signingIn": return "Waiting for your browser…";
     case "failed": return state.message;
     case "cliSetupRequired": return `This server only accepts sign-in from ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : "Codex").join(" or ")}: add it in that CLI`;

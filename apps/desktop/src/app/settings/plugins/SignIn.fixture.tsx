@@ -10,7 +10,7 @@ import { PluginsPage } from "./PluginsPage";
 
 let state: CatalogSignIn = { type: "signedOut" };
 let starts = 0;
-let reads = 0;
+let stops = 0;
 const catalog: CatalogView = { version: "fixture", rows: [{
   id: "server", kind: "server", name: "Test server", differentPerAgent: false,
   choice: { on: true, scope: "global" }, signIn: { type: "signedOut" },
@@ -19,11 +19,16 @@ const catalog: CatalogView = { version: "fixture", rows: [{
 }] };
 mockIPC((_command, payload) => {
   const request = (payload as { request: Request }).request;
-  if (request.method === "getPluginCatalog") { reads++; return { method: request.method, catalog: structuredClone(catalog) }; }
+  if (request.method === "getPluginCatalog") return { method: request.method, catalog: structuredClone(catalog) };
   if (request.method === "startPluginSignIn") {
     starts++;
-    if (state.type !== "signedIn") state = { type: "signingIn", flowId: "fixture" };
+    if (state.type === "cliFallback") state = { type: "cliFallback", agents: ["codex"], steps: [
+      { agent: "claude", server: "server", state: { type: "alreadySignedIn" } },
+      { agent: "codex", server: "server", state: { type: "inBrowser" } },
+    ] };
+    else if (state.type !== "signedIn") state = { type: "signingIn", flowId: "fixture" };
   }
+  if (request.method === "signOutPlugin") { stops++; state = { type: "signedOut" }; }
   return { method: request.method, state };
 });
 useApp.setState({ selection: { type: "settings", page: "plugins" } });
@@ -37,44 +42,68 @@ async function wait(check: () => boolean) {
 const text = (selector: string) => document.querySelector(selector)?.textContent ?? "";
 const buttons = (selector: string) => [...document.querySelectorAll<HTMLButtonElement>(`${selector} button`)];
 const click = (selector: string, label: string) => {
-  const button = buttons(selector).find((button) => button.textContent === label || button.getAttribute("aria-label") === label);
+  const button = buttons(selector).find((candidate) => candidate.textContent === label || candidate.getAttribute("aria-label") === label);
   if (!button) throw new Error(`Missing button ${label}`);
   button.click();
 };
+const waiting = (selector: string) => buttons(selector).some((button) => button.textContent === "Waiting for browser…" && button.disabled && !!button.querySelector("svg"));
+const row = '[data-slot="plugin-row"]';
+const detail = '[data-slot="sign-in-status"]';
 async function run() {
-  await wait(() => text('[data-slot="row-line"]') === "Sign in");
-  click("#root", "Open Test server");
-  await wait(() => !!buttons('[data-slot="banners"]').length);
-  click('[data-slot="banners"]', "Sign in");
-  await wait(() => text('[data-slot="sign-in-state"]') === "Waiting for your browser…");
-  const waitingDisabled = buttons('[data-dialog="sign-in"]').find((button) => button.textContent === "Waiting for your browser…")?.disabled;
-  click('[data-dialog="sign-in"]', "Done");
-  await wait(() => !document.querySelector('[data-dialog="sign-in"]'));
-  click('[data-slot="banners"]', "Waiting for browser…");
-  await wait(() => text('[data-slot="sign-in-state"]') === "Waiting for your browser…");
-  const midFlowStarts = starts;
+  await wait(() => text('[data-slot="row-line"]') === "Must sign in");
+  const warning = document.querySelector('[data-slot="row-line"]')?.classList.contains("text-warning");
+  click(row, "Sign in");
+  await wait(() => waiting(row));
+  const gridWaiting = waiting(row);
+  const gridStayedOpen = !!document.querySelector('[data-slot="plugins-grid"]');
+  click(row, "Cancel");
+  await wait(() => stops === 1 && text('[data-slot="row-line"]') === "Must sign in");
+  const canceled = text('[data-slot="row-line"]');
+  click(row, "Sign in");
+  await wait(() => waiting(row));
+  click(row, "Open Test server");
+  await wait(() => waiting(detail));
+  const detailWaiting = waiting(detail);
+  const beforeCallbackStarts = starts;
   const callback = performance.now();
   state = { type: "signedIn" };
-  await wait(() => text('[data-slot="sign-in-state"]') === "Signed in");
+  await wait(() => text(`${detail} [role="status"]`) === "Signed in");
   const callbackMs = performance.now() - callback;
-  const signedInButtons = buttons('[data-dialog="sign-in"]').map((button) => button.textContent);
-  click('[data-dialog="sign-in"]', "Done");
-  await wait(() => !document.querySelector('[data-dialog="sign-in"]'));
-  const detailButtons = buttons('[data-slot="banners"]').map((button) => button.textContent);
+  const signedInButtons = buttons(detail).map((button) => button.textContent);
+  click(detail, "Sign out");
+  await wait(() => text(`${detail} [role="status"]`) === "Not signed in" && stops === 2);
+  const signedOutButtons = buttons(detail).map((button) => button.textContent);
+  click(detail, "Sign in");
+  await wait(() => waiting(detail));
   openSettings("plugins");
+  await wait(() => waiting(row));
+  state = { type: "signedIn" };
   await wait(() => text('[data-slot="row-line"]') === "Signed in");
   const grid = text('[data-slot="row-line"]');
+  click(row, "Sign out");
+  await wait(() => stops === 3 && text('[data-slot="row-line"]') === "Must sign in");
 
-  // Reproduce an already signed-in backend behind a stale row.
-  usePlugins.setState(({ view }) => ({ view: { ...view, items: view.items.map((item) => ({ ...item, signIn: { type: "signedOut" as const } })) } }));
-  await wait(() => text('[data-slot="row-line"]') === "Sign in");
-  click("#root", "Open Test server");
-  await wait(() => !!buttons('[data-slot="banners"]').length);
-  click('[data-slot="banners"]', "Sign in");
-  await wait(() => text('[data-slot="sign-in-state"]') === "Signed in");
-  const staleReply = text('[data-slot="sign-in-state"]');
+  state = { type: "cliFallback", agents: ["codex"], steps: [] };
+  await usePlugins.getState().reload();
+  await wait(() => text('[data-slot="row-line"]').includes("Uses each CLI's sign-in"));
+  const fallback = text('[data-slot="row-line"]');
+  click(row, "Sign in");
+  await wait(() => waiting(row) && text('[data-slot="row-line"]').includes("Codex: waiting for browser"));
+  click(row, "Cancel");
+  await wait(() => stops === 4 && text('[data-slot="row-line"]') === "Must sign in");
+
+  state = { type: "cliSetupRequired", agents: ["claude", "codex"] };
+  await usePlugins.getState().reload();
+  await wait(() => text('[data-slot="row-line"]').includes("add it in that CLI"));
+  click(row, "Open Test server");
+  await wait(() => text(detail).includes("add it in that CLI"));
+  const setup = text(detail);
+  const setupButtons = buttons(detail).map((button) => button.textContent);
+  const dialogs = document.querySelectorAll('[data-dialog="sign-in"]').length;
+  const banners = document.querySelectorAll('[data-slot="banner"]').length;
   disconnect();
-  return { waitingDisabled, midFlowStarts, callbackMs, signedInButtons, detailButtons, grid, staleReply, reads };
+  return { warning, gridWaiting, gridStayedOpen, canceled, detailWaiting, beforeCallbackStarts,
+    callbackMs, signedInButtons, signedOutButtons, grid, fallback, setup, setupButtons, dialogs, banners };
 }
 void run().then((result) => { document.getElementById("result")!.textContent = JSON.stringify(result); }, (error: unknown) => {
   disconnect(); document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) });

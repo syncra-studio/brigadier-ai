@@ -61,6 +61,8 @@ export type PluginsAdapter = {
   saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<SkillSave>;
   /** Starts Brigadier's shared sign-in, or the explicit CLI fallback reported by the catalog. */
   signIn?: (key: string, serverId: string, projectId: string | null) => Promise<PluginAgentResult[]>;
+  /** Also invalidates any pending sign-in before its callback can save a grant. */
+  signOut?: (key: string) => Promise<PluginAgentResult[]>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;
   /** Trusts the project's folder, in Brigadier and in each agent's own settings (a project's note asks for it). */

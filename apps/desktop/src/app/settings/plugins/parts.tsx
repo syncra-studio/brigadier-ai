@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { brandOf } from "./brand";
 import type { Line, Tone } from "./model";
 import type { PluginItemView, PluginKind } from "./types";
+import type { PluginsAdapter } from "./adapter";
+import { SignInActions } from "./SignIn";
 
 /** The agents with a mark of their own; any other shows its name's first letter. */
 const GLYPHS: readonly string[] = ["claude", "codex"] satisfies ProviderKind[];
@@ -70,11 +72,12 @@ function ScopeChip({ text }: { text: string }) {
 }
 
 /** One item in the list's grid: its mark, name, line and where it's on; its switch at the corner. */
-export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
+export function PluginCard({ item, line, chip, busy, adapter, onOpen, onSwitch }: {
   item: PluginItemView;
   line: Line;
   chip: string | null;
   busy: boolean;
+  adapter: PluginsAdapter | null;
   onOpen: () => void;
   onSwitch: (on: boolean) => void;
 }) {
@@ -83,14 +86,17 @@ export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
   const code = line.text === item.detail && !item.problem;
   return (
     <SettingsCard data-slot="plugin-row" data-key={item.key} data-off={!on || undefined} data-setting={`plugin:${item.key}`} split={false} className="flex-row items-start gap-3 px-4 py-3.5">
-      <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex min-w-0 flex-1 items-start gap-3 text-start", !on && "opacity-50")}>
-        <PluginMark item={item} />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span data-slot="row-name" className="truncate text-label font-medium">{item.name}</span>
-          <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>
-          {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
-        </span>
-      </button>
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex w-full min-w-0 items-start gap-3 text-start", !on && "opacity-50")}>
+          <PluginMark item={item} />
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span data-slot="row-name" className="truncate text-label font-medium">{item.name}</span>
+            <span data-slot="row-line" data-tone={line.tone} className={cn("truncate text-xs", TONE[line.tone], code && "font-mono")}>{line.text}</span>
+            {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
+          </span>
+        </button>
+        <div className="pl-12"><SignInActions item={item} adapter={adapter} disabled={busy} /></div>
+      </div>
       <SettingsSwitch label={item.name} checked={on} disabled={busy} onCheckedChange={onSwitch} />
     </SettingsCard>
   );

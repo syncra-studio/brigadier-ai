@@ -12,7 +12,7 @@ import { AddDialog, ADD_HINT } from "./AddDialog";
 import { usePlugins, type PluginAgentResult, type PluginsAdapter } from "./adapter";
 import { Changes, type Overlay } from "./changes";
 import { DetailsPage } from "./DetailsPage";
-import { checked, RemoveDialog, SignInDialog } from "./dialogs";
+import { checked, RemoveDialog } from "./dialogs";
 import { FileDialog } from "./FileDialog";
 import { chipOf, lineOf, listed, TAB_LABEL } from "./model";
 import { PluginCard } from "./parts";
@@ -33,7 +33,6 @@ export function pluginSearchRows() {
 /** A dialog open over the page. */
 type Open =
   | { type: "add" }
-  | { type: "signIn"; key: string; serverId: string; projectId: string | null }
   | { type: "remove"; key: string }
   | { type: "file"; key: string };
 
@@ -117,6 +116,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
       <DetailsPage
         view={view}
         item={current}
+        adapter={adapter}
         actions={{
           busy,
           onBack: () => openSettings("plugins"),
@@ -125,9 +125,6 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
             { scope: projectIds ? { type: "someProjects", projectIds, folders: current.scope.type === "someProjects" ? current.scope.folders : [] } : { type: "allProjects" } },
             () => adapter.setScope(current.key, projectIds),
           ),
-          onSignIn: adapter.signIn && current.signIn && !["notRequired", "signedIn"].includes(current.signIn.type)
-            ? () => setDialog({ type: "signIn", key: current.key, serverId: current.key, projectId: null })
-            : undefined,
           onRemove: () => setDialog({ type: "remove", key: current.key }),
           onRetry: refresh,
           onUpdate: () => change(current.key, {}, () => adapter.update(current.key)),
@@ -172,7 +169,6 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
       {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} refresh={refresh} onClose={close} />}
-      {adapter && open?.type === "signIn" && target && <SignInDialog item={target} serverId={open.serverId} projectId={open.projectId} adapter={adapter} refresh={refresh} onClose={close} />}
       {adapter && open?.type === "remove" && target && (
         <RemoveDialog
           item={target}
@@ -230,6 +226,7 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
               line={lineOf(item)}
               chip={chipOf(view, item)}
               busy={busy}
+              adapter={adapter}
               onOpen={() => onOpen(item)}
               onSwitch={(on) => onFlip(item, on)}
             />

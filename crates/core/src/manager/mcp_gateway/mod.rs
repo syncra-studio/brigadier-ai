@@ -618,7 +618,10 @@ async fn callback_handler(
         tracing::info!("MCP sign-in callback received");
         let _ = sender.send(result);
     }
-    (StatusCode::OK, "You can return to Brigadier.")
+    (
+        StatusCode::OK,
+        "You can close this tab and return to Brigadier.",
+    )
 }
 
 fn hop_header(name: &str) -> bool {

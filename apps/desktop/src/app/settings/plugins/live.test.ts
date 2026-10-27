@@ -4,7 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { CatalogRow, CatalogView, Request } from "@/ipc/generated";
 import { catalogPage, livePlugins } from "./live";
 import { connectPlugins, usePlugins } from "./adapter";
-import { lineOf } from "./model";
+import { lineOf, signedIn, signingIn } from "./model";
 
 const server = (id: string): CatalogRow => ({
   id, kind: "server", name: id, differentPerAgent: false,
@@ -76,7 +76,7 @@ test("project scopes from the catalog render as projects, including when switche
   }
 });
 
-test("sign-in polls independently of the dialog and updates the grid within 500 ms", async (t) => {
+test("sign-in follows shared state and updates the grid within 500 ms", async (t) => {
   const restore = mockedWindow();
   const previous = usePlugins.getState();
   t.mock.timers.enable({ apis: ["setInterval"] });
@@ -181,6 +181,79 @@ test("a catalog refresh started before the callback cannot overwrite the polled 
     reply({ method: "getPluginSignInStatus", state: { type: "signingIn", flowId: "fixture" } });
     await tick();
     assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedIn");
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
+});
+
+test("Cancel before start replies stays signed out and serializes backend invalidation", async (t) => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let reply!: (value: unknown) => void;
+  let polls = 0;
+  const sent: string[] = [];
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: catalog(server("one")) };
+    if (request.method === "getPluginSignInStatus") { polls++; return { method: request.method, state: { type: "signedOut" } }; }
+    sent.push(request.method);
+    if (request.method === "startPluginSignIn") return new Promise((resolve) => { reply = resolve; });
+    return { method: request.method };
+  });
+  const adapter = livePlugins();
+  const disconnect = connectPlugins(adapter);
+  try {
+    await tick();
+    const start = adapter.signIn!("one", "one", null);
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signingIn");
+    await tick();
+    const cancel = adapter.signOut!("one");
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedOut", "Cancel stops waiting immediately");
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(polls, 1, "no pending-state poll can undo Cancel");
+    assert.deepEqual(sent, ["startPluginSignIn"], "invalidation waits for the pending start acknowledgement");
+    reply({ method: "startPluginSignIn", state: { type: "signingIn", flowId: "late" } });
+    await Promise.all([start, cancel]);
+    assert.deepEqual(sent, ["startPluginSignIn", "signOutPlugin"]);
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedOut");
+    t.mock.timers.tick(2000);
+    await tick();
+    assert.equal(polls, 1, "canceled flows stop polling");
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
+});
+
+test("a refused gateway starts CLI fallback inline and follows its startup and completion", async (t) => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let starts = 0;
+  let status: CatalogRow["signIn"] = { type: "signedOut" };
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: catalog(server("one")) };
+    if (request.method === "startPluginSignIn") { starts++; status = { type: "cliFallback", agents: ["claude", "codex"], steps: [] }; }
+    return { method: request.method, state: status };
+  });
+  const adapter = livePlugins();
+  const disconnect = connectPlugins(adapter);
+  try {
+    await tick();
+    await adapter.signIn!("one", "one", null);
+    assert.equal(starts, 2, "gateway refusal hands off to native sign-in from the same click");
+    assert.equal(signingIn(usePlugins.getState().view.items[0]!.signIn), true);
+    await usePlugins.getState().reload();
+    assert.equal(signingIn(usePlugins.getState().view.items[0]!.signIn), true, "a focus refresh cannot stop following native startup");
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(signingIn(usePlugins.getState().view.items[0]!.signIn), true, "keeps waiting while native steps are being collected");
+    status = { type: "cliFallback", agents: [], steps: [
+      { agent: "claude", server: "one", state: { type: "signedIn" } },
+      { agent: "codex", server: "one", state: { type: "alreadySignedIn" } },
+    ] };
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(signingIn(usePlugins.getState().view.items[0]!.signIn), false);
+    assert.equal(signedIn(usePlugins.getState().view.items[0]!.signIn), true);
   } finally { disconnect(); usePlugins.setState(previous); restore(); }
 });
 

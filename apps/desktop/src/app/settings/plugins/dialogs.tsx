@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { useAction } from "@/app/conversation/useAction";
@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import type { PluginAgentResult, PluginsAdapter } from "./adapter";
 import { type PluginAgent } from "./parts";
 import type { PluginItemView } from "./types";
-import { signInLine } from "./model";
 
 /** How often a dialog that waits on the agents reads the page again. */
 const WATCH_MS = 1000;
@@ -103,39 +102,6 @@ export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="destructive" disabled={action.busy} onClick={remove}>{action.busy ? "Removing…" : "Remove"}</Button>
-      </div>
-    </PluginDialog>
-  );
-}
-
-/** One sign-in state shared by all sessions, with explicit CLI fallback when needed. */
-export function SignInDialog({ item, serverId, projectId, adapter, refresh, onClose }: {
-  item: PluginItemView;
-  serverId: string;
-  projectId: string | null;
-  adapter: PluginsAdapter;
-  refresh: () => void;
-  onClose: () => void;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const waiting = item.signIn?.type === "signingIn";
-  const signedIn = item.signIn?.type === "signedIn";
-  const start = () => {
-    if (starting || waiting || signedIn) return;
-    setError(null);
-    setStarting(true);
-    void adapter.signIn?.(item.key, serverId, projectId).then(refresh, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setStarting(false));
-  };
-  useEffect(start, []);
-  return (
-    <PluginDialog slot="sign-in" onClose={onClose} title={`Sign in to ${item.name}`} description="Sign in once for your Brigadier sessions.">
-      <p data-slot="sign-in-state" role="status" className="text-foreground/65 text-label">{starting && !waiting && !signedIn ? "Opening your browser…" : item.signIn ? signInLine(item.signIn) : "Sign in"}</p>
-      <ErrorLine error={error} />
-      <div className="flex items-center gap-2">
-        {!signedIn && <Button variant="ghost" disabled={starting || waiting} onClick={start}>{waiting ? "Waiting for your browser…" : "Try again"}</Button>}
-        <span className="flex-1" />
-        <Button onClick={onClose}>Done</Button>
       </div>
     </PluginDialog>
   );

@@ -27,7 +27,7 @@ test("plugins: durable catalog choices, editable detected items, per-agent note 
   assert.equal(seen.L1!.columns, 2);
   assert.equal(card(seen.L1!, "Context7").chip, "Global");
   assert.equal(card(seen.L1!, "Linear").chip, "3 projects");
-  assert.equal(card(seen.L1!, "Linear").line, "Sign in");
+  assert.equal(card(seen.L1!, "Linear").line, "Must sign in");
   assert.equal(card(seen.L1!, "Context7").line, "Signed in");
   assert.ok(seen.L1!.cards.every((card) => !card.locked));
   assert.ok(seen.L2!.cards.every((card) => !card.locked));
@@ -44,7 +44,7 @@ test("plugins: durable catalog choices, editable detected items, per-agent note 
   assert.deepEqual(seen.D3!.banners, [], "L12 is a small note, without a warning");
   assert.equal(seen.D3!.removeRow, "");
   assert.equal(seen.detected!.removeRow, "", "detected servers cannot be deleted");
-  assert.match(seen.fallback!.banners.join(""), /Uses each CLI's sign-in: Codex still need it/);
+  assert.deepEqual(seen.fallback!.banners, [], "fallback status is inline, without a banner");
   assert.match(seen.D1!.removeRow, /Brigadier's library/);
   assert.ok(seen.D1!.advanced[0]!.open);
   assert.match(seen.D1!.advanced[0]!.text, /Saved in.*Open$/);
