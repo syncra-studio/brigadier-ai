@@ -1,0 +1,389 @@
+Why: watch every Windows launch before shell activation, hand the foreground back only for the target without intervening user input, and report unconfirmed restoration honestly.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 94d1c6861..1c1618c63 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2017,31 +2017,14 @@ struct LaunchTargetShape {
+     has_urls: bool,
+ }
+ 
+-/// True iff the launch is "open an app in the background" (so we want to
+-/// restore the user's foreground after the spawn activates the new window)
+-/// rather than "open a URL in the default browser" (where the user
+-/// explicitly asked for that page to come up).
+-///
+-/// Rule, matching the audit spec:
+-/// - URLs-only call (no app-identifying field set) → SKIP restore. The
+-///   user asked for `https://…` to be openable in their default browser;
+-///   a browser instance freshly launched for that URL is the legitimate
+-///   foreground.
+-/// - Any app-identifying field present (`aumid` / `bundle_id` / `name` /
+-///   `path` / `launch_path`) → RESTORE. The intent is hidden-launch +
+-///   background drive; the no-foreground contract applies.
++/// Every launch, including URLs-only navigation, preserves the user's foreground.
+ fn should_restore_foreground_after_launch(shape: LaunchTargetShape) -> bool {
+-    let has_app_identifier = shape.has_aumid
++    shape.has_aumid
+         || shape.has_bundle_id
+         || shape.has_name
+         || shape.has_path
+-        || shape.has_launch_path;
+-    // URLs-only carve-out: when the caller passed urls AND no
+-    // app-identifying field, skip the restore.
+-    if shape.has_urls && !has_app_identifier {
+-        return false;
+-    }
+-    has_app_identifier
++        || shape.has_launch_path
++        || shape.has_urls
+ }
+ 
+ /// Async polling restore of the prior foreground window, used by
+@@ -2551,6 +2534,26 @@ impl Tool for LaunchAppTool {
+             }));
+         }
+ 
++        let mut foreground_targets = Vec::new();
++        if let Some(target) = target_file_opt.as_deref() {
++            foreground_targets.push(super::launch_policy::executable_name(target));
++        }
++        for url in &urls {
++            if let Some(exe) = super::launch_focus::associated_executable(url) {
++                foreground_targets.push(super::launch_policy::executable_name(&exe));
++            }
++            if url.starts_with("ms-settings:") {
++                foreground_targets.push("systemsettings".into());
++                foreground_targets.push("applicationframehost".into());
++            }
++        }
++        let foreground_guard = restore_foreground.then(|| {
++            super::launch_focus::LaunchForegroundGuard::start(
++                foreground_before_addr,
++                foreground_targets,
++            )
++        });
++
+         // Branch: AUMID activation if we resolved one; else legacy
+         // ShellExecuteExW. Both branches still need to handle `urls`
+         // (additional URLs always go through ShellExecuteExW since the
+@@ -2775,30 +2778,6 @@ impl Tool for LaunchAppTool {
+             }
+         };
+ 
+-        // Best-effort foreground-restore for the legacy ShellExecuteExW
+-        // path. The UWP/AUMID branch already restores foreground
+-        // synchronously inside `launch_uwp::launch_uwp`, so we only spawn
+-        // the polling task when we went through the ShellExecuteExW
+-        // branch. URLs-only invocations are excluded via `restore_foreground`
+-        // (see `should_restore_foreground_after_launch`).
+-        //
+-        // `HWND` wraps a raw `*mut c_void` which is `!Send`, so we marshal
+-        // the foreground handle across the spawn boundary as a `usize` and
+-        // reconstruct the `HWND` only inside the synchronous probes (see
+-        // `restore_foreground_polling_best_effort`). Mirrors how
+-        // `launch_uwp.rs` carries its restore target.
+-        if aumid_for_uwp.is_none() && restore_foreground {
+-            let spawned_pid_for_restore = pid;
+-            let target_foreground_addr = foreground_before_addr;
+-            tokio::spawn(async move {
+-                restore_foreground_polling_best_effort(
+-                    target_foreground_addr,
+-                    spawned_pid_for_restore,
+-                )
+-                .await;
+-            });
+-        }
+-
+         // When the packaged path was taken we still need to fan out any
+         // extra URLs to the default browser (ShellExecuteEx — no pid
+         // capture, mirroring Swift's NSWorkspace secondary-URL flow).
+@@ -3141,7 +3120,11 @@ impl Tool for LaunchAppTool {
+         }
+ 
+         // Match Swift text format 1:1.
+-        let mut summary = format!("✅ Launched {display} (pid {pid}) in background.");
++        let (foreground_note, foreground_failed) = foreground_guard
++            .as_ref()
++            .map(|guard| guard.report())
++            .unwrap_or(("Foreground preservation was not confirmed.", true));
++        let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+         if !windows_json.is_empty() {
+             summary.push_str("\n\nWindows:");
+             for w in &windows_json {
+@@ -3171,10 +3154,20 @@ impl Tool for LaunchAppTool {
+             "bundle_id": bundle_id_response,
+             "name":      display,
+             "running":   true,
+-            "active":    false,  // SW_SHOWNOACTIVATE — Swift's background-launch invariant
++            "active":    unsafe {
++                let mut foreground_pid = 0;
++                windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
++                    windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), Some(&mut foreground_pid));
++                foreground_pid == pid
++            },
++            "foreground_note": foreground_note,
+             "windows":   windows_json,
+         });
+-        ToolResult::text(summary).with_structured(structured)
++        let mut result = ToolResult::text(summary).with_structured(structured);
++        if foreground_failed {
++            result.is_error = Some(true);
++        }
++        result
+     }
+ }
+ 
+diff --git a/crates/platform-windows/src/tools/impl_/launch_focus_restore_decision_tests.rs b/crates/platform-windows/src/tools/impl_/launch_focus_restore_decision_tests.rs
+index 8c3da651c..5e5d2ba58 100644
+--- a/crates/platform-windows/src/tools/impl_/launch_focus_restore_decision_tests.rs
++++ b/crates/platform-windows/src/tools/impl_/launch_focus_restore_decision_tests.rs
+@@ -3,11 +3,10 @@ use super::{
+ };
+ 
+ #[test]
+-fn only_app_identifying_launches_restore_foreground() {
++fn all_launches_restore_foreground() {
+     for (fields, restore) in [
+-        // A urls-only launch explicitly asks for navigation in the default
+-        // browser; that browser is the legitimate foreground.
+-        (&["urls"][..], false),
++        // URL-only navigation also preserves the user's foreground.
++        (&["urls"][..], true),
+         (&["name"], true),
+         (&["path"], true),
+         // The AUMID path restores synchronously in launch_uwp.rs; the
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+new file mode 100644
+index 000000000..26ca6fb3c
+--- /dev/null
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -0,0 +1,168 @@
++//! Watch launch-time activation, including shell delegation to existing processes.
++use std::sync::{Arc, Mutex};
++use std::time::{Duration, Instant};
++use windows::Win32::Foundation::{CloseHandle, HWND};
++use windows::Win32::System::Threading::{
++    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
++};
++use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
++use windows::Win32::UI::WindowsAndMessaging::{
++    GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
++};
++
++#[derive(Default)]
++struct State {
++    restored: bool,
++    failed: bool,
++    ended: Option<Instant>,
++}
++
++pub(super) struct LaunchForegroundGuard(Arc<Mutex<State>>);
++
++fn input_tick() -> Option<u32> {
++    let mut info = LASTINPUTINFO {
++        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
++        ..Default::default()
++    };
++    unsafe { GetLastInputInfo(&mut info) }
++        .as_bool()
++        .then_some(info.dwTime)
++}
++
++fn window_process(hwnd: HWND) -> u32 {
++    let mut pid = 0;
++    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++    pid
++}
++
++fn process_name(pid: u32) -> Option<String> {
++    unsafe {
++        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
++        let mut path = vec![0u16; 32768];
++        let mut len = path.len() as u32;
++        let result = QueryFullProcessImageNameW(
++            handle,
++            PROCESS_NAME_WIN32,
++            windows::core::PWSTR(path.as_mut_ptr()),
++            &mut len,
++        );
++        let _ = CloseHandle(handle);
++        result.ok()?;
++        Some(super::launch_policy::executable_name(
++            &String::from_utf16_lossy(&path[..len as usize]),
++        ))
++    }
++}
++
++pub(super) fn associated_executable(url: &str) -> Option<String> {
++    use windows::core::{PCWSTR, PWSTR};
++    use windows::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_NONE, ASSOCSTR_EXECUTABLE};
++    let protocol = url.split_once(':')?.0;
++    let wide: Vec<u16> = protocol.encode_utf16().chain(Some(0)).collect();
++    let mut output = vec![0u16; 32768];
++    let mut len = output.len() as u32;
++    unsafe {
++        AssocQueryStringW(
++            ASSOCF_NONE,
++            ASSOCSTR_EXECUTABLE,
++            PCWSTR(wide.as_ptr()),
++            PCWSTR::null(),
++            PWSTR(output.as_mut_ptr()),
++            &mut len,
++        )
++        .ok()
++        .ok()?;
++    }
++    let executable = String::from_utf16_lossy(&output[..len.saturating_sub(1) as usize]);
++    (!executable.is_empty()).then_some(executable)
++}
++
++impl LaunchForegroundGuard {
++    pub(super) fn start(prior: usize, expected: Vec<String>) -> Self {
++        let state = Arc::new(Mutex::new(State::default()));
++        let worker = state.clone();
++        // Capture before spawning so user input during the launch always disarms restoration.
++        let initial_input = input_tick();
++        let prior_pid = window_process(HWND(prior as *mut _));
++        std::thread::spawn(move || {
++            let hard_deadline = Instant::now() + Duration::from_secs(20);
++            loop {
++                let ended = worker.lock().unwrap().ended;
++                if Instant::now() >= hard_deadline
++                    || ended.is_some_and(|end| end.elapsed() >= Duration::from_secs(3))
++                    || initial_input.is_none()
++                    || input_tick() != initial_input
++                {
++                    break;
++                }
++                let prior_hwnd = HWND(prior as *mut _);
++                let foreground = unsafe { GetForegroundWindow() };
++                let prior_valid = prior != 0
++                    && unsafe { IsWindow(prior_hwnd) }.as_bool()
++                    && window_process(prior_hwnd) == prior_pid;
++                if !prior_valid {
++                    break;
++                }
++                if foreground != prior_hwnd {
++                    let matches = process_name(window_process(foreground))
++                        .is_some_and(|name| expected.contains(&name));
++                    if super::launch_policy::may_restore_foreground(
++                        prior_valid,
++                        input_tick() == initial_input,
++                        false,
++                        matches,
++                    ) {
++                        // No synthetic keypress: attach only for this verified hand-back.
++                        let restored =
++                            unsafe { crate::input::force_foreground_attached(prior_hwnd) };
++                        let mut state = worker.lock().unwrap();
++                        state.restored |= restored;
++                        state.failed = !restored;
++                    } else if !foreground.0.is_null() {
++                        // Another app took over; preserve that switch for the rest of this launch.
++                        break;
++                    }
++                }
++                std::thread::sleep(Duration::from_millis(20));
++            }
++        });
++        Self(state)
++    }
++
++    pub(super) fn report(&self) -> (&'static str, bool) {
++        let state = self.0.lock().unwrap();
++        if state.failed {
++            (
++                "Windows activated the app; handing the foreground back could not be confirmed.",
++                true,
++            )
++        } else if state.restored {
++            (
++                "Windows activated the app; the previous foreground window was restored.",
++                false,
++            )
++        } else {
++            ("No launch activation was observed; foreground hand-back remains guarded for late windows.", false)
++        }
++    }
++}
++
++impl Drop for LaunchForegroundGuard {
++    fn drop(&mut self) {
++        self.0.lock().unwrap().ended = Some(Instant::now());
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn report_never_claims_unconfirmed_handoff_succeeded() {
++        let guard = LaunchForegroundGuard(Arc::new(Mutex::new(State {
++            failed: true,
++            ..State::default()
++        })));
++        assert!(guard.report().1);
++        assert!(guard.report().0.contains("could not be confirmed"));
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+new file mode 100644
+index 000000000..4a4a573d0
+--- /dev/null
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -0,0 +1,39 @@
++//! Pure launch decisions, shared with host-side regression tests.
++pub(crate) fn executable_name(target: &str) -> String {
++    let target = target.trim().trim_matches('"').to_ascii_lowercase();
++    let name = target.rsplit(['\\', '/']).next().unwrap_or(&target);
++    match name.strip_suffix(".exe").unwrap_or(name) {
++        "microsoft edge" => "msedge".into(),
++        "google chrome" => "chrome".into(),
++        "file explorer" => "explorer".into(),
++        other => other.into(),
++    }
++}
++
++pub(crate) fn may_restore_foreground(
++    prior_valid: bool,
++    input_unchanged: bool,
++    foreground_is_prior: bool,
++    foreground_is_target: bool,
++) -> bool {
++    prior_valid && input_unchanged && !foreground_is_prior && foreground_is_target
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn hand_back_only_launch_activation_without_user_input() {
++        assert!(may_restore_foreground(true, true, false, true));
++        assert!(!may_restore_foreground(true, false, false, true));
++        assert!(!may_restore_foreground(true, true, false, false));
++        assert!(!may_restore_foreground(false, true, false, true));
++        assert!(!may_restore_foreground(true, true, true, true));
++    }
++    #[test]
++    fn identifies_shell_delegates_and_browser_names() {
++        assert_eq!(executable_name("Microsoft Edge"), "msedge");
++        assert_eq!(executable_name(r"C:\Program Files\Chrome.EXE"), "chrome");
++        assert_eq!(executable_name("File Explorer"), "explorer");
++    }
++}
+diff --git a/crates/platform-windows/src/tools/mod.rs b/crates/platform-windows/src/tools/mod.rs
+index b7c479360..2da24cdb3 100644
+--- a/crates/platform-windows/src/tools/mod.rs
++++ b/crates/platform-windows/src/tools/mod.rs
+@@ -8,6 +8,10 @@ use cua_driver_core::tool::ToolRegistry;
+ #[cfg(target_os = "windows")]
+ mod impl_;
+ #[cfg(target_os = "windows")]
++mod launch_focus;
++#[cfg(any(target_os = "windows", test))]
++mod launch_policy;
++#[cfg(target_os = "windows")]
+ pub(crate) mod page;
+ #[cfg(target_os = "windows")]
+ pub(crate) mod page_bookmark;

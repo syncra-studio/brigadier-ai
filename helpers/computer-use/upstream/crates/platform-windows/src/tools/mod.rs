@@ -8,6 +8,10 @@ use cua_driver_core::tool::ToolRegistry;
 #[cfg(target_os = "windows")]
 mod impl_;
 #[cfg(target_os = "windows")]
+mod launch_focus;
+#[cfg(any(target_os = "windows", test))]
+mod launch_policy;
+#[cfg(target_os = "windows")]
 pub(crate) mod page;
 #[cfg(target_os = "windows")]
 pub(crate) mod page_bookmark;

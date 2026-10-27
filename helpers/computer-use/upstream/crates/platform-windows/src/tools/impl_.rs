@@ -2017,31 +2017,14 @@ struct LaunchTargetShape {
     has_urls: bool,
 }
 
-/// True iff the launch is "open an app in the background" (so we want to
-/// restore the user's foreground after the spawn activates the new window)
-/// rather than "open a URL in the default browser" (where the user
-/// explicitly asked for that page to come up).
-///
-/// Rule, matching the audit spec:
-/// - URLs-only call (no app-identifying field set) → SKIP restore. The
-///   user asked for `https://…` to be openable in their default browser;
-///   a browser instance freshly launched for that URL is the legitimate
-///   foreground.
-/// - Any app-identifying field present (`aumid` / `bundle_id` / `name` /
-///   `path` / `launch_path`) → RESTORE. The intent is hidden-launch +
-///   background drive; the no-foreground contract applies.
+/// Every launch, including URLs-only navigation, preserves the user's foreground.
 fn should_restore_foreground_after_launch(shape: LaunchTargetShape) -> bool {
-    let has_app_identifier = shape.has_aumid
+    shape.has_aumid
         || shape.has_bundle_id
         || shape.has_name
         || shape.has_path
-        || shape.has_launch_path;
-    // URLs-only carve-out: when the caller passed urls AND no
-    // app-identifying field, skip the restore.
-    if shape.has_urls && !has_app_identifier {
-        return false;
-    }
-    has_app_identifier
+        || shape.has_launch_path
+        || shape.has_urls
 }
 
 /// Async polling restore of the prior foreground window, used by
@@ -2551,6 +2534,26 @@ impl Tool for LaunchAppTool {
             }));
         }
 
+        let mut foreground_targets = Vec::new();
+        if let Some(target) = target_file_opt.as_deref() {
+            foreground_targets.push(super::launch_policy::executable_name(target));
+        }
+        for url in &urls {
+            if let Some(exe) = super::launch_focus::associated_executable(url) {
+                foreground_targets.push(super::launch_policy::executable_name(&exe));
+            }
+            if url.starts_with("ms-settings:") {
+                foreground_targets.push("systemsettings".into());
+                foreground_targets.push("applicationframehost".into());
+            }
+        }
+        let foreground_guard = restore_foreground.then(|| {
+            super::launch_focus::LaunchForegroundGuard::start(
+                foreground_before_addr,
+                foreground_targets,
+            )
+        });
+
         // Branch: AUMID activation if we resolved one; else legacy
         // ShellExecuteExW. Both branches still need to handle `urls`
         // (additional URLs always go through ShellExecuteExW since the
@@ -2774,30 +2777,6 @@ impl Tool for LaunchAppTool {
                 }
             }
         };
-
-        // Best-effort foreground-restore for the legacy ShellExecuteExW
-        // path. The UWP/AUMID branch already restores foreground
-        // synchronously inside `launch_uwp::launch_uwp`, so we only spawn
-        // the polling task when we went through the ShellExecuteExW
-        // branch. URLs-only invocations are excluded via `restore_foreground`
-        // (see `should_restore_foreground_after_launch`).
-        //
-        // `HWND` wraps a raw `*mut c_void` which is `!Send`, so we marshal
-        // the foreground handle across the spawn boundary as a `usize` and
-        // reconstruct the `HWND` only inside the synchronous probes (see
-        // `restore_foreground_polling_best_effort`). Mirrors how
-        // `launch_uwp.rs` carries its restore target.
-        if aumid_for_uwp.is_none() && restore_foreground {
-            let spawned_pid_for_restore = pid;
-            let target_foreground_addr = foreground_before_addr;
-            tokio::spawn(async move {
-                restore_foreground_polling_best_effort(
-                    target_foreground_addr,
-                    spawned_pid_for_restore,
-                )
-                .await;
-            });
-        }
 
         // When the packaged path was taken we still need to fan out any
         // extra URLs to the default browser (ShellExecuteEx — no pid
@@ -3141,7 +3120,11 @@ impl Tool for LaunchAppTool {
         }
 
         // Match Swift text format 1:1.
-        let mut summary = format!("✅ Launched {display} (pid {pid}) in background.");
+        let (foreground_note, foreground_failed) = foreground_guard
+            .as_ref()
+            .map(|guard| guard.report())
+            .unwrap_or(("Foreground preservation was not confirmed.", true));
+        let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
         if !windows_json.is_empty() {
             summary.push_str("\n\nWindows:");
             for w in &windows_json {
@@ -3171,10 +3154,20 @@ impl Tool for LaunchAppTool {
             "bundle_id": bundle_id_response,
             "name":      display,
             "running":   true,
-            "active":    false,  // SW_SHOWNOACTIVATE — Swift's background-launch invariant
+            "active":    unsafe {
+                let mut foreground_pid = 0;
+                windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                    windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), Some(&mut foreground_pid));
+                foreground_pid == pid
+            },
+            "foreground_note": foreground_note,
             "windows":   windows_json,
         });
-        ToolResult::text(summary).with_structured(structured)
+        let mut result = ToolResult::text(summary).with_structured(structured);
+        if foreground_failed {
+            result.is_error = Some(true);
+        }
+        result
     }
 }
 

@@ -3,11 +3,10 @@ use super::{
 };
 
 #[test]
-fn only_app_identifying_launches_restore_foreground() {
+fn all_launches_restore_foreground() {
     for (fields, restore) in [
-        // A urls-only launch explicitly asks for navigation in the default
-        // browser; that browser is the legitimate foreground.
-        (&["urls"][..], false),
+        // URL-only navigation also preserves the user's foreground.
+        (&["urls"][..], true),
         (&["name"], true),
         (&["path"], true),
         // The AUMID path restores synchronously in launch_uwp.rs; the
