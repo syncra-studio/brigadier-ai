@@ -9,6 +9,7 @@
 
 pub mod choices;
 mod jobs;
+pub mod launch;
 mod library_cli;
 mod model;
 pub mod ops;
