@@ -177,12 +177,12 @@ export function checkLines(tasks: readonly BackgroundTask[], entries: readonly F
       endedAtMs: task.endedAtMs,
       waitedOn: task.status === "running" && watchers.length > 0,
       command,
-      wait: !queued && (runsBrigadier(command ?? "", "wait") || WAIT_LOOP.test(command ?? "") || /^\s*sleep\s+[\d.]+[smh]?\s*$/.test(command ?? "")),
+      wait: !queued && (WAIT_LOOP.test(command ?? "") || /^\s*sleep\s+[\d.]+[smh]?\s*$/.test(command ?? "")),
       output: (task.kind === "shell" || task.kind === "terminal") && task.outputFile !== null,
       stops: task.status === "running" ? [task.id] : [],
     };
   });
-  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? lines.find((line) => runsBrigadier(line.command ?? "", "wait") || (line.state !== "queued" && WAIT_LOOP.test(line.command ?? "")))?.name.replace(/^wait(?:ing)?\s+(?:for|on)\s+/i, "") ?? null, stops: own.map(({ task }) => task.id), stopStarts: Object.fromEntries(own.map(({ task }) => [task.id, task.startedAtMs])) };
+  return { lines, waitingOn: lines.find((line) => line.waitedOn)?.name ?? lines.find((line) => line.state !== "queued" && WAIT_LOOP.test(line.command ?? ""))?.name.replace(/^wait(?:ing)?\s+(?:for|on)\s+/i, "") ?? null, stops: own.map(({ task }) => task.id), stopStarts: Object.fromEntries(own.map(({ task }) => [task.id, task.startedAtMs])) };
 }
 
 /**
