@@ -173,19 +173,23 @@ impl Reading {
 /// Where `kind`'s session file recorded at `path` is now. Codex moves a thread's rollout from
 /// `<home>/sessions/<y>/<m>/<d>/` to `<home>/archived_sessions/` when it is archived (Brigadier
 /// archives a thread it closes, so the user's own Codex apps don't list it), and back when
-/// it is resumed.
+/// it is resumed. A Claude file that earlier builds recorded under the project folder of a
+/// verbatim Windows path (`----C--…`, which Claude never writes) is read where Claude wrote it.
 pub fn locate(kind: ProviderKind, path: &Path) -> std::path::PathBuf {
-    if kind != ProviderKind::Codex || path.exists() {
+    if path.exists() {
         return path.to_owned();
     }
-    let archived = path
-        .ancestors()
-        .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
-        .and_then(Path::parent)
-        .zip(path.file_name())
-        .map(|(home, name)| home.join("archived_sessions").join(name));
-    archived
-        .filter(|archived| archived.exists())
+    let moved = match kind {
+        ProviderKind::Codex => path
+            .ancestors()
+            .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
+            .and_then(Path::parent)
+            .zip(path.file_name())
+            .map(|(home, name)| home.join("archived_sessions").join(name)),
+        ProviderKind::Claude => crate::claude::files::without_verbatim_project(path),
+    };
+    moved
+        .filter(|moved| moved.exists())
         .unwrap_or_else(|| path.to_owned())
 }
 
@@ -366,6 +370,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    /// A Claude file earlier builds recorded under a verbatim Windows path's project folder is
+    /// read where Claude wrote it; one recorded where it is stays.
+    #[test]
+    fn a_claude_file_recorded_under_a_verbatim_project_is_located() {
+        let home = std::env::temp_dir().join(format!("brigadier-locate-{}", uuid::Uuid::new_v4()));
+        let written = home.join("projects").join("C--repo").join("s.jsonl");
+        std::fs::create_dir_all(written.parent().unwrap()).unwrap();
+        std::fs::write(&written, "").unwrap();
+        let recorded = home.join("projects").join("----C--repo").join("s.jsonl");
+        assert_eq!(locate(ProviderKind::Claude, &recorded), written);
+        assert_eq!(locate(ProviderKind::Claude, &written), written);
+        let missing = home.join("projects").join("----D--other").join("s.jsonl");
+        assert_eq!(locate(ProviderKind::Claude, &missing), missing);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     fn context_file(lines: &[Value]) -> (Scratch, std::path::PathBuf) {

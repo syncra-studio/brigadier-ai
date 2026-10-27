@@ -5,8 +5,9 @@ name: Nightly
 # macOS clippy and the computer-use helper's macOS checks, which the per-push run (ci.yml) leaves
 # out. The macOS app is built as released (full optimization),
 # signed with the Developer ID, notarized and published as the `nightly` prerelease, which
-# installed nightly builds update themselves from. Without the signing secrets (the signing step
-# below names them) it is built unsigned and nothing is published.
+# installed nightly builds update themselves from. The Windows installer joins it, signed for the
+# updater, when its build passed. Without the signing secrets (the signing step below names them)
+# it is built unsigned and nothing is published.
 #
 # A release tag (v*, e.g. v0.1.0-alpha) runs the same builds, the macOS one universal (Apple
 # silicon and Intel), and publishes that tag's GitHub release: the signed, notarized DMG, the
@@ -60,13 +61,17 @@ jobs:
       actions: read
     outputs:
       run: ${{ steps.check.outputs.run }}
+      stamp: ${{ steps.check.outputs.stamp }}
     steps:
       - id: check
-        # A scheduled run skips a commit the last good nightly already built.
+        # A scheduled run skips a commit the last good nightly already built. The stamp is the
+        # nightly's version for every platform: the feed has one version, and an updater whose
+        # build carries another would offer the same update again after installing it.
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
         run: |
+          echo "stamp=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
           last="$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main \
             --status success --limit 1 --json headSha --jq '.[0].headSha // ""')"
           if [ "$EVENT" = schedule ] && [ "$last" = "$GITHUB_SHA" ]; then
@@ -139,6 +144,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           UPDATER_PUBKEY: ${{ secrets.UPDATER_PUBKEY }}
+          STAMP: ${{ needs.gate.outputs.stamp }}
         run: |
           missing=()
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID \
@@ -171,7 +177,7 @@ jobs:
           # version, so the feed can't pair a newer version with an older build's archive.
           # A release tag's version is the tag's, and its updater reads the latest release's feed.
           base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
-          stamp="$(date -u +%Y%m%d%H%M)"
+          stamp="$STAMP"
           if [ "$UNIVERSAL" = true ]; then
             version="${GITHUB_REF_NAME#v}"
             case "$version" in
@@ -438,13 +444,16 @@ jobs:
         id: updater
         if: runner.os == 'Windows'
         # As the macOS job's nightly settings: with the updater key the installer is built with
-        # the same version scheme, feed and public key, and signed for the updater. Without it
-        # it is built unsigned. Nothing from Windows is published: the publish and release jobs
-        # take the macOS files only, as the installer has no Authenticode signature yet.
+        # the same version, feed and public key, and signed for the updater. Without it it is
+        # built unsigned. The publish job adds a signed nightly installer to the nightly and its
+        # feed, so installed Windows nightlies update themselves; a tag's release takes the macOS
+        # files only. The installer has no Authenticode signature yet: the updater checks its
+        # updater signature instead, and SmartScreen warns only when it is run by hand.
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           UPDATER_PUBKEY: ${{ secrets.UPDATER_PUBKEY }}
           RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          STAMP: ${{ needs.gate.outputs.stamp }}
         run: |
           base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$UPDATER_PUBKEY" ]; then
@@ -452,7 +461,7 @@ jobs:
             printf '%s\n' signed=false "version=$base" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          stamp="$(date -u +%Y%m%d%H%M)"
+          stamp="$STAMP"
           if [ "$RELEASE" = true ]; then
             version="${GITHUB_REF_NAME#v}"
             case "$version" in
@@ -512,6 +521,17 @@ jobs:
           elif pgrep -fl brigadierd; then
             echo "brigadierd is still running"; exit 1
           fi
+      - name: Installer updates keep every file
+        if: runner.os == 'Windows'
+        # Before the installer can be uploaded or published: a fresh install, then an update over
+        # it for each name an earlier install's app could have had, must leave every file.
+        shell: pwsh
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          $setup = @(Get-ChildItem "$env:BUNDLE/nsis/*-setup.exe")
+          if ($setup.Count -ne 1) { throw "expected one installer, found $($setup.Count)" }
+          tools/ci/installer-upgrade.ps1 -Setup $setup[0].FullName
       - name: Windows installer files
         if: runner.os == 'Windows'
         # Named as a release names it, with its checksum, and with the updater's signature and
@@ -553,8 +573,10 @@ jobs:
 
   publish:
     name: Publish the nightly
-    needs: macos
-    if: needs.macos.outputs.publish == 'true'
+    # After the Windows build too, whose installer joins the nightly when it passed; its failure
+    # (or Linux's) doesn't hold back the macOS nightly.
+    needs: [macos, others]
+    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.macos.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -566,6 +588,35 @@ jobs:
         with:
           name: nightly-macOS
           path: nightly
+      - uses: actions/download-artifact@v7
+        # Missing when the Windows build or its smoke check failed.
+        continue-on-error: true
+        with:
+          name: installer-Windows
+          path: windows
+      - name: Add the Windows installer to the feed
+        # Only one signed for the updater with the macOS build's version: the feed names one
+        # version for every platform.
+        run: |
+          set -euo pipefail
+          entry=windows/latest-windows.json
+          if [ ! -f "$entry" ]; then
+            echo "::warning::No Windows installer signed for the updater; the nightly is macOS only"
+            exit 0
+          fi
+          version="$(jq -r .version nightly/latest.json)"
+          if [ "$(jq -r .version "$entry")" != "$version" ]; then
+            echo "::warning::The Windows installer's version isn't $version; the nightly is macOS only"
+            exit 0
+          fi
+          name="$(jq -r '.platforms["windows-x86_64"].url' "$entry")"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/$name"
+          cp "windows/$name" nightly/
+          jq --slurpfile win "$entry" --arg url "$url" \
+            '.platforms["windows-x86_64"] = ($win[0].platforms["windows-x86_64"] | .url = $url)' \
+            nightly/latest.json > nightly/latest.json.new
+          mv nightly/latest.json.new nightly/latest.json
+          cat nightly/latest.json
       - name: Move the nightly tag and replace its files
         run: |
           set -euo pipefail
@@ -581,15 +632,19 @@ jobs:
           else
             gh release create nightly -R "$repo" --prerelease --verify-tag --title Nightly --notes "$notes"
           fi
-          # The archive and the DMG first, the feed that names them last.
-          gh release upload nightly -R "$repo" --clobber nightly/*.tar.gz nightly/*.dmg
+          # The archive, the DMG and the Windows installer first, the feed that names them last.
+          shopt -s nullglob
+          gh release upload nightly -R "$repo" --clobber nightly/*.tar.gz nightly/*.dmg nightly/*-setup.exe
           gh release upload nightly -R "$repo" --clobber nightly/latest.json
-          # Then the earlier nightlies' archives go.
+          # Then the earlier nightlies' archives and installers go.
           keep="$(basename nightly/*.tar.gz)"
+          setup=(nightly/*-setup.exe)
+          keep_setup="$(if [ "${#setup[@]}" -gt 0 ]; then basename "${setup[0]}"; fi)"
           gh release view nightly -R "$repo" --json assets --jq '.assets[].name' |
             while read -r name; do
               case "$name" in
                 *.app.tar.gz) if [ "$name" != "$keep" ]; then gh release delete-asset nightly "$name" -R "$repo" -y; fi ;;
+                *-setup.exe) if [ "$name" != "$keep_setup" ]; then gh release delete-asset nightly "$name" -R "$repo" -y; fi ;;
               esac
             done
 

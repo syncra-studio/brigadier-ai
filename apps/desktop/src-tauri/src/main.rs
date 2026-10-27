@@ -18,6 +18,8 @@ mod computer_setup;
 mod documents;
 mod downloads;
 mod drops;
+#[cfg(test)]
+mod installer;
 mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
