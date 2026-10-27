@@ -1170,6 +1170,12 @@ fn copy_skill(from: &Path, to: &Path, ancestors: &mut Vec<PathBuf>) -> Result<()
     Ok(())
 }
 
+fn library_name_exists(root: &Path, name: &str) -> bool {
+    root.join("skills").join(name).exists()
+        || root.join("servers").join(format!("{name}.json")).exists()
+        || root.join("plugins").join(name).exists()
+}
+
 fn add_plain(
     root: &Path,
     items: &[Item],
@@ -1192,7 +1198,7 @@ fn add_plain(
             Item::Server(_) => root.join("servers").join(format!("{name}.json")),
             Item::Skill(_) => root.join("skills").join(&name),
         };
-        if target.exists() {
+        if library_name_exists(root, &name) {
             return Err(format!("Your Library already has something called {name}."));
         }
         for path in [root.to_owned(), target.parent().unwrap().to_owned()] {
@@ -1788,7 +1794,7 @@ impl crate::manager::SessionManager {
                     .strip_prefix(&staged_library)
                     .map_err(|e| crate::Error::Invalid(e.to_string()))?;
                 let destination = root.join(relative);
-                if destination.exists() {
+                if destination.exists() || library_name_exists(&root, &row.name) {
                     return Err(crate::Error::Invalid(format!(
                         "Your Library already has something called {}.",
                         row.name

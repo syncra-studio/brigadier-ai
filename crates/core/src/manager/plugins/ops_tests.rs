@@ -1095,6 +1095,16 @@ fn add_remove_only_write_the_data_dir_library_and_catalog_resolves_both_agents()
         "---\nname: tidy\n---\nDo tidy work.\n",
     );
     write(&source.join("reference.bin"), "supporting content");
+    let duplicate = Item::Skill(SkillSpec {
+        name: Some("docs".into()),
+        source: SkillSource::Folder(source.clone()),
+    });
+    assert!(
+        add_plain(&root, &[duplicate], None)
+            .unwrap_err()
+            .contains("already has")
+    );
+
     add(
         &ctx,
         &source.to_string_lossy(),
