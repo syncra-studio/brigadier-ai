@@ -359,7 +359,8 @@ function Fixture() {
         },
         () => {
           // Refresh asks the agents and accounts again, the ratings, then reads the file again.
-          seen.refreshAsked = [...new Set(asked)].toSorted();
+          // The Plugins catalog polls independently of Refresh models.
+          seen.refreshAsked = [...new Set(asked.filter((method) => method !== "getPluginCatalog"))].toSorted();
           seen.unrevealable = Object.values(ROUTING_PAGE_ROWS)
             .map((row) => ("target" in row ? row.target : row.label))
             .filter(

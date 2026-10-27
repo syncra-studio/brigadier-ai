@@ -25,6 +25,7 @@ fn the_sign_in_page_is_the_link_with_an_oauth_request() {
     );
 }
 
+#[cfg(unix)]
 fn assert_signed(progress: &McpSignInProgress) {
     assert!(progress.finished && !progress.agents.is_empty());
     assert!(
