@@ -5,7 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
-import { applyThreadNews, loadThreadView, mergeEntries, useCliThread } from "@/state/cliThread";
+import { applyThreadNews, loadThreadView, mergeEntries, resyncThreadViews, unreadSince, useCliThread } from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
 const command = (status: "inProgress" | "completed", output: string | null = null): ProviderEvent => ({
@@ -230,6 +230,26 @@ test("a background command's end and the turn it starts land together: the block
     assert.deepEqual(seen.filter(Boolean), [], "never finished between");
   } finally {
     unsubscribe();
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a view dropped on reconnect is unread from then on; one never read, since the app started", async () => {
+  const empty: ThreadView = { entries: [], turns: [] };
+  useCliThread.setState({ views: { shown: empty, away: empty } });
+  mockIPC((cmd) => (cmd === "ipc_request" ? { method: "threadView", view: empty } : null));
+  try {
+    const started = unreadSince("never");
+    assert.ok(started <= Date.now());
+    const before = Date.now();
+    await resyncThreadViews(["shown"]);
+    assert.equal(useCliThread.getState().views["away"], undefined);
+    // Its earlier turns are no message on its way; one sent from now on is.
+    assert.ok(unreadSince("away") >= before && unreadSince("away") <= Date.now());
+    assert.equal(unreadSince("shown"), started, "a shown view is kept, not dropped");
+    assert.equal(unreadSince("never"), started);
+  } finally {
     clearMocks();
     useCliThread.setState({ views: {} });
   }

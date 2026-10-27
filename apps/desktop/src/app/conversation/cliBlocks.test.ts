@@ -519,6 +519,23 @@ test("a thread opened again before its view is read invents no live turns from t
   }
 });
 
+/** A tree's nodes as drawn on their way: kind, state, start and bubble text. */
+const sentBubbles = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.kind, node.block.state, node.block.startedAtMs, node.block.user?.kind === "message" ? node.block.user.text : node.block.user?.kind === "pending" ? node.block.user.pending.text : null]);
+
+test("a message sent while the view is read again stays on its way once stored", () => {
+  // The view went missing at 3000 (a reconnect, or a session new in this app): m0 and m1 are
+  // turns from before, m2 is sent now, and the daemon stores it before the view lands.
+  const pending = [{ localId: "local-2", conversationId: "conv", text: "stored m2", createdAtMs: 5000, attachments: [] }];
+  const run = { state: "running", error: null } as const;
+  const sending = cliThreadTree(null, "conv", [stored("m0", 900), stored("m1", 2000)], {}, pending, NO_BOARD, run, true, 3000);
+  const kept = cliThreadTree(null, "conv", [stored("m0", 900), stored("m1", 2000), stored("m2", 5000)], {}, [], NO_BOARD, run, true, 3000);
+  assert.deepEqual(sentBubbles(sending), [["user", "working", 5000, "stored m2"], ["block", "working", 5000, "stored m2"]]);
+  assert.deepEqual(sentBubbles(kept), sentBubbles(sending), "the bubble stays, and the earlier turns still don't show as working");
+  // A new session's first message, its view never read, likewise.
+  assert.deepEqual(cliThreadTree(null, "conv", [stored("m2", 5000)], {}, [], NO_BOARD, run, true, 3000).nodes.map((node) => node.id), ["m2", "request:m2"]);
+});
+
 /** A tree's nodes as drawn: each user bubble's text, each block's requests. */
 const bubbles = (tree: ReturnType<typeof cliThreadTree>) =>
   tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user?.kind === "message" ? node.block.user.text : node.block.requestIds]);

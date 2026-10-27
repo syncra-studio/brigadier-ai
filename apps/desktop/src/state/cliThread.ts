@@ -248,12 +248,28 @@ export function applyThreadNews(news: ThreadNews): void {
   if (queued.length === 1) scheduleNews();
 }
 
+/** When the app started: a conversation's view not read since was never read here. */
+const APP_START_MS = Date.now();
+
+/** When each conversation's view was dropped (`resyncThreadViews`). */
+const dropped = new Map<string, number>();
+
+/**
+ * Since when conversation `conversationId` has had no view read: its turns were all before that,
+ * so only a message stored since may be on its way while its view is read (`cliThreadTree`).
+ */
+export function unreadSince(conversationId: string): number {
+  return dropped.get(conversationId) ?? APP_START_MS;
+}
+
 /**
  * After (re)connecting: the news missed is read again with the shown conversations' threads;
  * the others are dropped and read when they open.
  */
 export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   const { views } = useCliThread.getState();
+  const now = Date.now();
+  for (const id of Object.keys(views)) if (!shown.includes(id)) dropped.set(id, now);
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
 }

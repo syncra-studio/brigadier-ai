@@ -105,7 +105,7 @@ import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDire
 import { holdDirect } from "@/state/heldDirect";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { loadWorkerThread, readSessionImageBlob, sessionImageOf, useThreadView, useWorkerRows } from "@/state/cliThread";
+import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadView, useWorkerRows } from "@/state/cliThread";
 import { isNativeWorker } from "@/state/nativeWorkers";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
@@ -615,7 +615,7 @@ export function ConversationView({
   const full = useMemo(
     () =>
       conversationId
-        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session))
+        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session, unreadSince(conversationId)))
         : cliThreadTree(null, "", [], {}, built.pending, EMPTY_DIGEST, { state: built.run, error: built.runError }),
     [built.cliView, conversationId, built.items, built.fullText, built.digest, built.pending, built.run, built.runError, session],
   );
