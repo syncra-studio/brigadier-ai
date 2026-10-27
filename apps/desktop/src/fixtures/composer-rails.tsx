@@ -2,7 +2,7 @@
 /**
  * A standalone Vite entry, excluded from the production build: the strips above the composer
  * (`ComposerStatusSlot` in a real rail over the composer's card) from synthetic thread views:
- * the session's workers, its own subagents (its CLI's Agent calls, as worker rows) and its own commands, with a wait folded into the
+ * the session's workers, its own subagents (its CLI's Agent calls, as plain rows) and its own commands, with a wait folded into the
  * test it watches and a command queued behind a build. `?scene=` shows one of them alone
  * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, opens a check's
  * output, presses a Stop and Stop all, and writes what it saw as JSON into
@@ -161,7 +161,7 @@ async function read(id: Scene) {
   return {
     order: strips.map((strip) => strip.getAttribute("aria-label")),
     closed,
-    subagents: [...scene(id).querySelectorAll('[data-slot="subagents-strip"] [data-slot="workers-strip-row"]')].map((row) => ({
+    subagents: [...scene(id).querySelectorAll('[data-slot="subagents-strip"] [data-slot="subagents-strip-row"]')].map((row) => ({
       state: row.getAttribute("data-worker-state"),
       text: text(row),
       stop: !!row.parentElement?.querySelector('[data-slot="worker-stop"]'),
@@ -189,7 +189,7 @@ async function drive() {
   await frame();
   seen.opened = sessionTabs("checks").active;
   // A subagent's row opens its transcript, as a worker's does.
-  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="workers-strip-row"]')?.click();
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="subagents-strip-row"]')?.click();
   await frame();
   seen.panel = panelOpened;
   // Per-row Stop owns the producer; its watcher is independent.

@@ -16,7 +16,7 @@ test("above the composer: Workers, then the session's Subagents, then its Checks
   assert.deepEqual(seen.all.order, ["Live work", "Subagents", "Checks"]);
   assert.deepEqual(seen.all.closed, ["1 worker working · 1 waiting", "2 subagents working", "Waiting on Run full core tests · 1 check running"]);
 
-  // Subagents: the CLI's own agents, out of the Workers strip, as worker rows.
+  // Subagents: the CLI's own agents, out of the Workers strip, as plain rows.
   assert.deepEqual(seen.subagents.order, ["Subagents"], "no Workers strip for subagents alone");
   assert.deepEqual(seen.subagents.closed, ["2 subagents working"]);
   assert.deepEqual(seen.subagents.subagents.map((row) => [row.state, row.stop]), [["working", true], ["working", true]]);
