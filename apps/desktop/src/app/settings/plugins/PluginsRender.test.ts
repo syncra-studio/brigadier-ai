@@ -42,8 +42,8 @@ test("plugins: durable catalog choices, editable detected items, per-agent note 
   assert.ok(seen.scopeRemounted!.projectSwitches[3]!.endsWith(" true"));
   assert.equal(seen.D3!.differentPerAgent, "Different per agent");
   assert.deepEqual(seen.D3!.banners, [], "L12 is a small note, without a warning");
-  assert.equal(seen.D3!.removeRow, "");
-  assert.equal(seen.detected!.removeRow, "", "detected servers cannot be deleted");
+  assert.match(seen.D3!.removeRow, /Remove pr-review.*files stay/i);
+  assert.match(seen.detected!.removeRow, /Remove .*files stay/i, "detected servers can be hidden without deleting their files");
   assert.deepEqual(seen.fallback!.banners, [], "fallback status is inline, without a banner");
   assert.match(seen.D1!.removeRow, /Brigadier's library/);
   assert.ok(seen.D1!.advanced[0]!.open);

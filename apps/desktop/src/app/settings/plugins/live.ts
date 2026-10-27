@@ -45,7 +45,7 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
         on: row.choice.on,
         scope: paths ? { type: "someProjects" as const, projectIds, folders: paths.filter((path) => !projects.some((project) => project.path === path)) } : { type: "allProjects" as const },
         differentPerAgent: row.differentPerAgent, signIn: row.signIn,
-        problem: null, locked: null, removal: library ? "everything" as const : "none" as const, canShare: false, skillCount: row.kind === "skill" ? 1 : 0, files,
+        problem: null, locked: null, removal: library ? "everything" as const : "hide" as const, canShare: false, skillCount: row.kind === "skill" ? 1 : 0, files,
       };
     }).toSorted((a, b) => a.name.localeCompare(b.name)),
   };

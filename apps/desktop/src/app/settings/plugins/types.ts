@@ -21,7 +21,7 @@ export type PluginProblem =
   | { type: "needsSignIn"; message: string; serverId: string; projectId: string | null }
   | { type: "wontStart" | "conflict" | "updateReady"; message: string }
   | { type: "onlyIn"; message: string; agents: ProviderKind[]; reason: OnlyInReason };
-export type PluginRemoval = "everything" | "copies" | "none";
+export type PluginRemoval = "everything" | "hide" | "copies" | "none";
 export type PluginScope = { type: "allProjects" } | { type: "someProjects"; projectIds: string[]; folders: string[] };
 export type PluginItemView = {
   key: string;
