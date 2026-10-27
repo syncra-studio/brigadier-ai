@@ -53,15 +53,52 @@ pub(super) fn check_session_id(id: &str) -> Result<()> {
 }
 
 /// Where Claude keeps a working directory's sessions: every character that is not an ASCII
-/// letter or digit becomes `-`.
+/// letter or digit becomes `-`. Claude names it by the plain path it runs in, so the verbatim
+/// prefix `canonicalize` gives a Windows path (`\\?\C:\…`) is not part of the name.
 pub(super) fn project_dir(config: &Path, cwd: &Path) -> PathBuf {
-    let encoded: String = cwd
-        .display()
-        .to_string()
+    let encoded: String = without_verbatim_prefix(&cwd.display().to_string())
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     config.join("projects").join(encoded)
+}
+
+/// A Windows path without the verbatim prefix: `C:\x` for `\\?\C:\x`, `\\server\share` for
+/// `\\?\UNC\server\share`. Any other path is returned as it is.
+pub(crate) fn without_verbatim_prefix(path: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}").into();
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(drive)
+            if drive
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+                && drive.as_bytes().get(1) == Some(&b':') =>
+        {
+            drive.into()
+        }
+        _ => path.into(),
+    }
+}
+
+/// A Claude session file recorded under the project folder of a verbatim Windows path (as
+/// [`project_dir`] named it before it dropped the prefix), under the folder Claude uses.
+pub(crate) fn without_verbatim_project(file: &Path) -> Option<PathBuf> {
+    let project = file.parent()?;
+    let name = project.file_name()?.to_str()?;
+    let plain = if let Some(share) = name.strip_prefix("----UNC-") {
+        format!("--{share}")
+    } else {
+        let drive = name.strip_prefix("----")?;
+        let bytes = drive.as_bytes();
+        if !(bytes.first().is_some_and(u8::is_ascii_alphabetic) && drive.get(1..3) == Some("--")) {
+            return None;
+        }
+        drive.to_owned()
+    };
+    Some(project.with_file_name(plain).join(file.file_name()?))
 }
 
 /// The directories Claude Code creates under `cwd` to stage writes, outermost first:
@@ -1289,6 +1326,47 @@ mod session_tests {
         let dir = std::env::temp_dir().join(format!("bcs-{}", &short[..8]));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Claude names a Windows folder's project by its plain path; `canonicalize` gives the
+    /// verbatim one, whose name Claude never writes (the thread read nothing on Windows).
+    #[test]
+    fn a_verbatim_windows_folder_names_the_project_claude_writes() {
+        let config = Path::new("config");
+        for (cwd, project) in [
+            (r"\\?\C:\Development\mebrand", "C--Development-mebrand"),
+            (r"C:\Development\mebrand", "C--Development-mebrand"),
+            (r"\\?\UNC\server\share\repo", "--server-share-repo"),
+            (r"\\?\Volume{1}\repo", "----Volume-1--repo"),
+            ("/Users/me/repo", "-Users-me-repo"),
+        ] {
+            assert_eq!(
+                project_dir(config, Path::new(cwd)),
+                config.join("projects").join(project),
+                "{cwd}"
+            );
+        }
+    }
+
+    /// What earlier builds recorded under the verbatim path's project folder is where Claude
+    /// wrote it; any other folder isn't one of those.
+    #[test]
+    fn a_file_recorded_under_a_verbatim_project_is_found_under_claudes() {
+        let projects = Path::new("config").join("projects");
+        let file = "s.jsonl";
+        for (recorded, plain) in [
+            ("----C--Development-mebrand", Some("C--Development-mebrand")),
+            ("----UNC-server-share-repo", Some("--server-share-repo")),
+            ("C--Development-mebrand", None),
+            ("-Users-me-repo", None),
+            ("----Volume-1--repo", None),
+        ] {
+            assert_eq!(
+                without_verbatim_project(&projects.join(recorded).join(file)),
+                plain.map(|plain| projects.join(plain).join(file)),
+                "{recorded}"
+            );
+        }
     }
 
     #[test]
