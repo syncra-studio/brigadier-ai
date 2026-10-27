@@ -31,8 +31,8 @@ export function placeNames(view: PluginsView, item: PluginItemView): string[] {
 
 /** A card's line: its problem, else why it can't be changed, else what it does, else how it runs. */
 export function lineOf(item: PluginItemView): Line {
+  if (item.signIn && item.signIn.type !== "notRequired") return { text: signInLine(item.signIn), tone: "muted" };
   if (item.problem) return { text: item.problem.message, tone: "warning" };
-  if (item.locked) return { text: item.locked, tone: "muted" };
   return { text: item.description || item.detail, tone: "muted" };
 }
 
@@ -58,3 +58,14 @@ export const shownDetail = (detail: string) => detail.replace(/^https:\/\//, "")
 
 /** What a won't-start message says is wrong: "unknown type "websocket"". */
 export const wontStartReason = (message: string) => message.replace(/^Won't start:\s*/i, "").replace(/\.$/, "");
+
+export function signInLine(state: import("@/ipc/generated").CatalogSignIn): string {
+  switch (state.type) {
+    case "signedIn": return "Signed in";
+    case "signedOut": return "Sign in";
+    case "signingIn": return "Waiting for your browser…";
+    case "failed": return state.message;
+    case "cliFallback": return `Uses each CLI's sign-in${state.agents.length ? `: ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(", ")} still need it` : ""}`;
+    case "notRequired": return "";
+  }
+}

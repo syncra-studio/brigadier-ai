@@ -1,13 +1,13 @@
 import { useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, Button, ErrorLine, Input, SettingsSelect } from "@/components/controls";
+import { Button, ErrorLine, Input, SettingsSelect } from "@/components/controls";
 import { ChevronDown, ChevronRight, Folder, Plus, Spinner, X } from "@/components/icons";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
 import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "./adapter";
-import { agentOf, failures, notes, PluginDialog, useWatch } from "./dialogs";
+import { failures, notes, PluginDialog, useWatch } from "./dialogs";
 import { KIND_LABEL, shownDetail } from "./model";
-import { AgentRow, PluginMark, RadioRow } from "./parts";
+import { PluginMark, RadioRow } from "./parts";
 import type { PluginElsewhereView, PluginsView } from "./types";
 
 export const ADD_HINT = "Works with an mcp add line from any agent, a server URL, mcpServers JSON, a GitHub link, a skills.sh name or a skill folder.";
@@ -62,7 +62,7 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
       if (folder) setText(folder);
     });
     return (
-      <PluginDialog slot="add" onClose={onClose} title="Add a skill or MCP server" description="Paste what you have. Brigadier works out the rest and adds it to every agent.">
+      <PluginDialog slot="add" onClose={onClose} title="Add a skill or MCP server" description="Paste what you have. Brigadier adds it to its library for your next sessions.">
         <div className="flex flex-col gap-2">
           <textarea
             id={`${id}-paste`}
@@ -124,15 +124,15 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
     // Added, with something to know: it didn't start, say.
     const note = step.results && !problem ? notes(step.results) : null;
     return (
-      <PluginDialog slot="adding" onClose={onClose} title={`Adding ${shownName}`} description="Each agent adds it its own way, so it works in a terminal too.">
+      <PluginDialog slot="adding" onClose={onClose} title={`Adding ${shownName}`} description="Saved in Brigadier's library for your next sessions.">
         <div className="flex flex-col gap-3">
           {step.results === null ? (
             <div data-slot="adding-wait" className="text-foreground/65 flex items-center gap-3 text-label">
               <Spinner aria-label="Adding" className="size-icon-sm animate-spin" />
-              Adding it to every agent…
+              Adding it to your library…
             </div>
           ) : (
-            step.results.map((result) => <AddingRow key={result.agent} result={result} />)
+            <p className="text-foreground/65 text-label">Added to your library.</p>
           )}
         </div>
         {problem && <ErrorLine error={problem} />}
@@ -171,7 +171,7 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
       slot="add-review"
       onClose={onClose}
       title={`${from ? "Import" : "Add"} ${shownName}${inProject ? ` to ${inProject.name}` : ""}`}
-      description={from ? `An MCP server from ${from.foundIn}. Every agent gets it with its settings and values; ${from.foundIn}'s own stays as it is.` : single ? about(single) : "Each one goes to every agent."}
+      description={from ? `An MCP server from ${from.foundIn}. Brigadier sessions get it with its settings and values; ${from.foundIn}'s own stays as it is.` : single ? about(single) : "Each one goes to every agent."}
     >
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
@@ -287,7 +287,7 @@ function ValueRows({ label, rows, onChange }: { label: string; rows: ValueRow[];
           <Plus />
           Add a {one}
         </Button>
-        <p className="text-foreground/50 text-xs">Kept in your Keychain, never in a file.{rows.some((row) => row.pasted) ? " Leave one empty to keep what you pasted." : ""}</p>
+        <p className="text-foreground/50 text-xs">Saved in Brigadier’s private library entry.{rows.some((row) => row.pasted) ? " Leave one empty to keep what you pasted." : ""}</p>
       </div>
     </div>
   );
@@ -343,9 +343,3 @@ function ImportList({ entries, onImport }: { entries: PluginElsewhereView[]; onI
 }
 
 /** How one agent took the add. */
-function AddingRow({ result }: { result: PluginAgentResult }) {
-  const agent = agentOf(result.agent);
-  return result.ok
-    ? <AgentRow agent={agent} line="Added" end={<Badge variant="success">Done</Badge>} />
-    : <AgentRow agent={agent} tone="error" line={result.message ?? "Couldn't add it."} end={<Badge variant="destructive">Failed</Badge>} />;
-}

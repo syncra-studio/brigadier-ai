@@ -80,9 +80,9 @@ export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
 }) {
   const on = item.on;
   // How it runs (a command, an address or a folder) is in code's letters.
-  const code = line.text === item.detail && !item.problem && !item.locked;
+  const code = line.text === item.detail && !item.problem;
   return (
-    <SettingsCard data-slot="plugin-row" data-key={item.key} data-off={!on || undefined} data-locked={item.locked ? true : undefined} data-setting={`plugin:${item.key}`} split={false} className="flex-row items-start gap-3 px-4 py-3.5">
+    <SettingsCard data-slot="plugin-row" data-key={item.key} data-off={!on || undefined} data-setting={`plugin:${item.key}`} split={false} className="flex-row items-start gap-3 px-4 py-3.5">
       <button type="button" onClick={onOpen} aria-label={`Open ${item.name}`} className={cn("flex min-w-0 flex-1 items-start gap-3 text-start", !on && "opacity-50")}>
         <PluginMark item={item} />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -91,7 +91,7 @@ export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
           {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
         </span>
       </button>
-      <SettingsSwitch label={item.name} checked={on} disabled={busy || !!item.locked} onCheckedChange={onSwitch} />
+      <SettingsSwitch label={item.name} checked={on} disabled={busy} onCheckedChange={onSwitch} />
     </SettingsCard>
   );
 }

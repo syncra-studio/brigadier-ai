@@ -1,18 +1,15 @@
-//! `brigadier library list|add|remove|login` (STRIP-DOWN-PLAN X7): the Library as Settings ›
-//! Plugins has it, from a session's own shell. The changes run as the page's jobs, through
-//! each agent's own setup; a worker can only list.
+//! `brigadier library list|add|remove|login`: data-dir library content, never CLI installs.
+//! Workers can list; user sessions can change the library.
 
 use std::path::Path;
 use std::time::Duration;
 
 use brigadier_cli::protocol::{
-    CliReply, ErrorCode, LibraryAgentResult, LibraryAgentState, LibraryItem, LibraryOutput,
+    CliReply, ErrorCode, LibraryAgentResult, LibraryItem, LibraryOutput,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::LibraryRow;
-use super::ops::{PluginJobView, PluginStep};
 use crate::manager::SessionManager;
 use crate::manager::cli::CliCaller;
 use crate::manager::mcp_login::{AgentSignInState, McpSignInProgress};
@@ -48,7 +45,7 @@ fn tag(value: impl serde::Serialize) -> String {
     }
 }
 
-fn item(row: &LibraryRow) -> LibraryItem {
+fn legacy_login_item(row: &super::LibraryRow) -> LibraryItem {
     LibraryItem {
         name: row.name.clone(),
         kind: tag(row.kind),
@@ -59,36 +56,15 @@ fn item(row: &LibraryRow) -> LibraryItem {
         agents: row
             .agents
             .iter()
-            .map(|(agent, state)| LibraryAgentState {
-                agent: tag(super::provider(*agent)),
-                state: tag(state),
-            })
+            .map(
+                |(agent, state)| brigadier_cli::protocol::LibraryAgentState {
+                    agent: tag(super::provider(*agent)),
+                    state: tag(state),
+                },
+            )
             .collect(),
         attention: row.attention.clone(),
     }
-}
-
-fn library_items(rows: &[LibraryRow]) -> Vec<LibraryItem> {
-    rows.iter().map(item).collect()
-}
-
-fn job_agents(job: &PluginJobView) -> Vec<LibraryAgentResult> {
-    job.agents
-        .iter()
-        .map(|agent| {
-            let (outcome, message) = match &agent.step {
-                PluginStep::Done => ("done", None),
-                PluginStep::Failed { reason } => ("failed", Some(reason.clone())),
-                PluginStep::Skipped { reason } => ("skipped", Some(reason.clone())),
-                PluginStep::Waiting | PluginStep::Working => ("skipped", None),
-            };
-            LibraryAgentResult {
-                agent: tag(agent.agent),
-                outcome: outcome.to_owned(),
-                message,
-            }
-        })
-        .collect()
 }
 
 fn sign_in_agents(progress: &McpSignInProgress) -> Vec<LibraryAgentResult> {
@@ -148,54 +124,24 @@ impl SessionManager {
             },
         };
         let answer = match action {
-            "list" => self.library_rows(project).await.map(|rows| LibraryOutput {
-                action: action.to_owned(),
-                items: library_items(&rows),
-                agents: Vec::new(),
-                warning: None,
-            }),
+            "list" => Ok(()),
             "add" => {
-                let text = args.text.unwrap_or_default();
-                let job = match self.add_plugin_as(
-                    text,
-                    args.name,
-                    project.clone().map(|id| vec![id]),
-                    args.shared,
-                    None,
-                ) {
-                    Ok(id) => self.finished_job(&id).await,
-                    Err(err) => return failed(err.to_string()),
-                };
-                if let Some(error) = &job.error {
-                    return failed(error.clone());
+                if args.shared {
+                    return failed(
+                        "--shared is no longer supported: library items are used by Brigadier sessions.",
+                    );
                 }
-                self.library_rows(project).await.map(|rows| LibraryOutput {
-                    action: action.to_owned(),
-                    items: library_items(&rows)
-                        .into_iter()
-                        .filter(|item| job.keys.contains(&format!("lib:{}", item.name)))
-                        .collect(),
-                    agents: job_agents(&job),
-                    warning: job.warning.clone(),
-                })
+                self.add_library_item(
+                    args.text.unwrap_or_default(),
+                    args.name,
+                    args.project.map(|path| vec![path]),
+                    None,
+                )
+                .await
             }
             "remove" => {
-                let name = args.name.unwrap_or_default();
-                if self.library().entry(&name).is_none() {
-                    return failed(format!("{name} isn't in your Library"));
-                }
-                let job = self
-                    .finished_job(&self.remove_plugin(format!("lib:{name}")))
-                    .await;
-                if let Some(error) = &job.error {
-                    return failed(error.clone());
-                }
-                Ok(LibraryOutput {
-                    action: action.to_owned(),
-                    items: Vec::new(),
-                    agents: job_agents(&job),
-                    warning: job.warning.clone(),
-                })
+                self.remove_library_item(format!("lib:{}", args.name.unwrap_or_default()))
+                    .await
             }
             "login" => {
                 return self
@@ -204,30 +150,64 @@ impl SessionManager {
             }
             other => return CliReply::error(ErrorCode::Usage, format!("no action {other:?}")),
         };
-        match answer {
-            Ok(output) => CliReply::ok(&output),
-            Err(err) => failed(err.to_string()),
+        if let Err(error) = answer {
+            return failed(error.to_string());
         }
-    }
-
-    /// Plugin job `id`, once it finished.
-    async fn finished_job(&self, id: &str) -> PluginJobView {
-        loop {
-            match self.plugin_job_view(id) {
-                Ok(job) if job.finished => return job,
-                Ok(_) => tokio::time::sleep(Duration::from_millis(250)).await,
-                Err(err) => {
-                    return PluginJobView {
-                        id: id.to_owned(),
-                        agents: Vec::new(),
-                        finished: true,
-                        error: Some(err.to_string()),
-                        warning: None,
-                        keys: Vec::new(),
-                    };
+        let catalog = match self.plugin_catalog() {
+            Ok(catalog) => catalog,
+            Err(error) => return failed(error.to_string()),
+        };
+        let root = self.data_dir.join("library");
+        let items = catalog
+            .rows
+            .into_iter()
+            .filter(|row| {
+                row.definitions
+                    .iter()
+                    .any(|definition| Path::new(&definition.file).starts_with(&root))
+            })
+            .map(|row| {
+                let (everywhere, on_in) = match &row.choice.scope {
+                    super::choices::Scope::Global(_) => (row.choice.on, Vec::new()),
+                    super::choices::Scope::Projects(paths) => (
+                        false,
+                        if row.choice.on {
+                            paths
+                                .iter()
+                                .map(|path| path.to_string_lossy().into_owned())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
+                    ),
+                };
+                LibraryItem {
+                    name: row.name,
+                    kind: tag(row.kind),
+                    detail: row
+                        .definitions
+                        .first()
+                        .map(|definition| {
+                            definition
+                                .endpoint
+                                .clone()
+                                .unwrap_or_else(|| definition.file.clone())
+                        })
+                        .unwrap_or_default(),
+                    everywhere,
+                    on_in,
+                    off_in: Vec::new(),
+                    agents: Vec::new(),
+                    attention: None,
                 }
-            }
-        }
+            })
+            .collect();
+        CliReply::ok(&LibraryOutput {
+            action: action.to_owned(),
+            items,
+            agents: Vec::new(),
+            warning: None,
+        })
     }
 
     /// `login <name>`: every agent that needs it signs in to the Library server `name`, all at
@@ -269,7 +249,7 @@ impl SessionManager {
             };
         CliReply::ok(&LibraryOutput {
             action: "login".to_owned(),
-            items: Vec::new(),
+            items: rows.iter().map(legacy_login_item).collect(),
             agents: sign_in_agents(&progress),
             warning: None,
         })

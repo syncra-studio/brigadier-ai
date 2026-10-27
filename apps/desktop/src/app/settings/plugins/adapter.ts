@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { AgentSignInState, ProviderKind } from "@/ipc/generated";
+import type { ProviderKind } from "@/ipc/generated";
 import type { PluginItemDetails, PluginKind, PluginsView } from "./types";
 
 /** Something read from what the user pasted, before it is added. */
@@ -27,9 +27,6 @@ export type PluginAgentResult = {
   message: string | null;
 };
 
-/** One agent's sign-in as it goes. */
-export type SignInStep = { agent: ProviderKind; state: AgentSignInState };
-
 /** How a SKILL.md save went: written, or refused because the file changed since it was opened. */
 export type SkillSave = { type: "saved" } | { type: "changed"; current: string };
 
@@ -42,8 +39,6 @@ export type PluginsAdapter = {
   switchPlugin: (key: string, on: boolean) => Promise<PluginAgentResult[]>;
   /** Where it's on: every project (null), or only these projects (never none). */
   setScope: (key: string, projectIds: string[] | null) => Promise<PluginAgentResult[]>;
-  /** Share with every agent: an item only some agents have goes to the rest. */
-  share: (key: string) => Promise<PluginAgentResult[]>;
   /** What a paste would add; `needsName` when it has no name of its own (a bare server, an address). */
   checkAdd: (text: string, name: string | null) => Promise<{ drafts: PluginDraft[]; needsName: boolean }>;
   /** Adds it to every agent, in every project (`projectIds` null) or these; `values`: env or headers typed in Advanced. */
@@ -60,17 +55,12 @@ export type PluginsAdapter = {
   details: (key: string) => Promise<PluginItemDetails>;
   /**
    * Writes one of a skill's SKILL.md files, if it still holds `expected` (the text as opened);
-   * the copies follow it. "changed" when the file changed since: nothing is written, and
+   * library content stays in the data directory. "changed" when the file changed since: nothing is written, and
    * `current` is what it holds now.
    */
   saveSkill: (key: string, path: string, contents: string, expected: string) => Promise<SkillSave>;
-  /**
-   * Signs every agent in to a server at once, each in its own browser tab: `serverId` and
-   * `projectId` from its problem; `onProgress` hears each agent's step as it happens. Absent
-   * while the daemon can't: the page offers no Sign in then.
-   */
-  signIn?: (key: string, serverId: string, projectId: string | null, onProgress?: (steps: SignInStep[]) => void) => Promise<PluginAgentResult[]>;
-  cancelSignIn?: (key: string) => Promise<void>;
+  /** Starts Brigadier's shared sign-in, or the explicit CLI fallback reported by the catalog. */
+  signIn?: (key: string, serverId: string, projectId: string | null) => Promise<PluginAgentResult[]>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;
   /** Trusts the project's folder, in Brigadier and in each agent's own settings (a project's note asks for it). */

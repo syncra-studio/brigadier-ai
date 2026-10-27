@@ -1,16 +1,5 @@
-//! Settings › Plugins' actions on the Library and plugins: placing a plugin per agent (on in
-//! every project, in some, off), Add, Update, and taking a Library plugin away.
-//!
-//! Every action is carried out by each agent's own commands (and, for Codex in one project, the
-//! project's own file: D8), planned by its adapter, so a plain `claude` or `codex` started in a
-//! terminal gets what the page shows. Nothing here names an agent: each runs through
-//! [`adapters()`]. Sharing an agent's own items with the others is [`super::share`]'s.
-//!
-//! - A Library item (`lib:<name>`) is a plugin every agent installs. Every project: on in the
-//!   user's scope. One project: on in that project's scope; when it is off in the user's scope
-//!   that makes it that project's only (Claude Code's `--scope local`, Codex's project file).
-//! - Another marketplace's plugin is switched the same way; it isn't installed by Brigadier.
-//! - What the old Use everywhere moved aside ([`Moved`]) stays the user's: Remove puts it back.
+//! Plain data-dir library operations and catalog choices for the Settings page and CLI.
+//! Legacy placement/migration helpers remain here until the cleanup wave retires callers.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +10,7 @@ use brigadier_registry::adapter::{
 };
 use brigadier_registry::add_parse;
 use brigadier_registry::item::{Item, ServerSpec, SkillSource, SkillSpec, TransportSpec};
-use brigadier_registry::library::{self, Entry, Library, Origin, SecretSink, plugin_id};
+use brigadier_registry::library::{self, Library, Origin, SecretSink, plugin_id};
 use brigadier_registry::{Agent, Catalog, Plugin, Roots, Secret};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -83,7 +72,7 @@ pub struct PluginAddItem {
     pub remote: bool,
     /// Where it comes from, in plain words: "An MCP server from mcp.sentry.dev."
     pub summary: String,
-    /// The names of the values it is given (env, headers): kept in the Keychain.
+    /// The names of its configured values; values never enter the page model.
     pub secrets: Vec<String>,
 }
 
@@ -1048,27 +1037,9 @@ fn skill_name(spec: &SkillSpec, dir: &Path) -> String {
         })
 }
 
-/// Starts a packed stdio server as the first agent's copy does and asks it for its tools;
-/// why it didn't answer.
-fn check_started(ctx: &Ctx<'_>, entry: &Entry) -> Option<String> {
-    let first = adapters()[0].agent();
-    let (command, args) = ctx.library.server_command(entry, first)?;
-    let env: BTreeMap<String, String> = ctx.env.iter().cloned().collect();
-    library::check_tools(
-        &command,
-        &args,
-        &env,
-        None,
-        std::time::Duration::from_secs(60),
-    )
-    .err()
-}
-
-/// What Add's Advanced asks for beyond the name and where.
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub(crate) struct AddOptions {
-    /// Set or added to the one pasted server's env (a command) or headers (an address). They
-    /// go to the Keychain, as pasted values do, never into a file.
+    /// Set or added to the one pasted server's private library entry.
     pub values: BTreeMap<String, String>,
 }
 
@@ -1103,10 +1074,7 @@ fn give_values(items: &mut [Item], values: &BTreeMap<String, String>) -> Result<
     Ok(())
 }
 
-/// Adds what `text` holds to the Library and gives it to every agent: in every project
-/// (`scope` `None`) or in exactly the user's projects `scope`. `shared` (the CLI's `--shared`,
-/// one project only) installs it in the form the project commits, for the whole team. Its
-/// keys, and what the user should know.
+/// Save plain library content. No adapter or CLI command is run.
 pub(crate) fn add(
     ctx: &Ctx<'_>,
     text: &str,
@@ -1114,80 +1082,194 @@ pub(crate) fn add(
     scope: Option<&[PathBuf]>,
     shared: bool,
     options: &AddOptions,
-    run: Runner<'_>,
+    _run: Runner<'_>,
 ) -> Result<(Vec<String>, Option<String>), String> {
-    if scope.is_some_and(<[PathBuf]>::is_empty) {
-        return Err("Pick a project, or All projects.".to_owned());
+    if shared {
+        return Err(
+            "Library items are used by Brigadier sessions; --shared is no longer supported.".into(),
+        );
     }
     let mut items = add_parse::parse(text, name, &ctx.roots.home).map_err(|err| err.to_string())?;
     give_values(&mut items, &options.values)?;
+    add_plain(ctx.library.root(), &items, scope).map(|keys| (keys, None))
+}
+
+fn valid_library_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Use letters, digits, - or _ for a library name.".into());
+    }
+    Ok(())
+}
+
+fn write_private(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::create_dir_all(path.parent().ok_or("Missing library folder")?)
+        .map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())
+}
+
+fn server_value(spec: &ServerSpec) -> serde_json::Value {
+    use serde_json::json;
+    let values = |pairs: &[(String, Secret)]| {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.clone(), json!(value.expose())))
+            .collect::<serde_json::Map<_, _>>()
+    };
+    let mut value = match &spec.transport {
+        TransportSpec::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+        } => json!({"command":command,"args":args,"env":values(env),"cwd":cwd}),
+        TransportSpec::Http { url, headers } => {
+            json!({"type":"http","url":url,"headers":values(headers)})
+        }
+    };
+    if let Some(oauth) = &spec.oauth {
+        value["oauth"] = json!({"clientId":oauth.client_id});
+    }
+    json!({"mcpServers": { &spec.name: value }})
+}
+
+fn copy_skill(from: &Path, to: &Path, ancestors: &mut Vec<PathBuf>) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(from).map_err(|e| e.to_string())?;
+    if ancestors.contains(&canonical) {
+        return Err("The skill contains a cyclic link.".into());
+    }
+    if from.is_dir() {
+        ancestors.push(canonical);
+        std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(from).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            copy_skill(&entry.path(), &to.join(entry.file_name()), ancestors)?;
+        }
+        ancestors.pop();
+    } else {
+        std::fs::copy(from, to).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn add_plain(
+    root: &Path,
+    items: &[Item],
+    scope: Option<&[PathBuf]>,
+) -> Result<Vec<String>, String> {
+    if scope.is_some_and(<[PathBuf]>::is_empty) {
+        return Err("Pick a project, or All projects.".into());
+    }
     let mut keys = Vec::new();
-    let mut warning = None;
-    let mut failed = None;
-    for item in &items {
+    for item in items {
         let scratch = Scratch::new()?;
         let (skill_dir, origin) = fetch(item, &scratch)?;
-        let name = match (item, &skill_dir) {
-            (Item::Server(spec), _) => name.map_or_else(|| spec.name.clone(), str::to_owned),
+        let name = match (item, skill_dir.as_deref()) {
+            (Item::Server(spec), _) => spec.name.clone(),
             (Item::Skill(spec), Some(dir)) => skill_name(spec, dir),
-            (Item::Skill(_), None) => return Err("The skill's files weren't fetched.".to_owned()),
+            _ => return Err("The skill's files weren't fetched.".into()),
         };
-        let packed = ctx
-            .library
-            .pack(
-                &name,
-                item,
-                skill_dir.as_deref(),
-                &server_names(ctx, None),
-                false,
-                ctx.secrets,
-            )
-            .map_err(|err| err.to_string())?;
-        if origin.is_some() {
-            ctx.library
-                .set_origin(&name, origin.as_ref())
-                .map_err(|err| err.to_string())?;
-        }
-        let entry = packed.entry;
-        let given = match (shared, scope) {
-            (true, Some([project])) => {
-                let place = Place::Project {
-                    path: project.clone(),
-                    shared: true,
-                };
-                adapters().into_iter().all(|adapter| {
-                    ctx.library
-                        .sync(adapter, &entry, &place, false)
-                        .map_err(|err| err.0)
-                        .and_then(|steps| run(adapter, &steps))
-                        .is_ok()
-                })
-            }
-            (true, _) => {
-                return Err(
-                    "Shared with the team goes to one project: pick just that one.".to_owned(),
-                );
-            }
-            (false, _) => {
-                let want = Placed::at(scope, ctx.projects);
-                let wants: Vec<(Agent, Placed)> = adapters()
-                    .into_iter()
-                    .map(|adapter| (adapter.agent(), want.clone()))
-                    .collect();
-                change(ctx, &entry.id(), &wants, run).is_ok()
-            }
+        valid_library_name(&name)?;
+        let target = match item {
+            Item::Server(_) => root.join("servers").join(format!("{name}.json")),
+            Item::Skill(_) => root.join("skills").join(&name),
         };
-        if !given {
-            failed = Some(format!("Not every agent could add {name}."));
+        if target.exists() {
+            return Err(format!("Your Library already has something called {name}."));
         }
-        if packed.server.is_some()
-            && let Some(why) = check_started(ctx, &entry)
-        {
-            warning = Some(format!("{name} is added, but it didn't start: {why}"));
+        for path in [root.to_owned(), target.parent().unwrap().to_owned()] {
+            if path
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Err("The library folder cannot be a symbolic link.".into());
+            }
+        }
+        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        match item {
+            Item::Server(spec) => write_private(&target, &server_value(spec))?,
+            Item::Skill(_) => {
+                let dir = skill_dir.as_deref().ok_or("Missing skill files")?;
+                if !dir.join("SKILL.md").is_file() {
+                    return Err("The folder has no SKILL.md.".into());
+                }
+                let staging = root.join(format!(".add-{}", uuid::Uuid::new_v4()));
+                copy_skill(dir, &staging, &mut Vec::new())?;
+                std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+                std::fs::rename(staging, &target).map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(origin) = origin {
+            write_private(&root.join("origins").join(format!("{name}.json")), &origin)?;
         }
         keys.push(format!("lib:{name}"));
     }
-    Ok((keys, failed.or(warning)))
+    Ok(keys)
+}
+
+fn remove_plain(root: &Path, name: &str) -> Result<(), String> {
+    valid_library_name(name)?;
+    if root
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err("The library folder cannot be a symbolic link.".into());
+    }
+    let skill = root.join("skills").join(name);
+    let server = root.join("servers").join(format!("{name}.json"));
+    let legacy = root.join("plugins").join(name);
+    if !skill.exists() && !server.exists() && !legacy.exists() {
+        return Err(format!(
+            "{name} isn't in your Library; detected items can only be turned off."
+        ));
+    }
+    for path in [&skill, &server, &legacy] {
+        if !path.exists() {
+            continue;
+        }
+        let actual = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+        let library = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+        if !actual.starts_with(&library)
+            || path
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+        {
+            return Err("The library item points outside the library.".into());
+        }
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    let origin = root.join("origins").join(format!("{name}.json"));
+    if origin.is_file() {
+        let actual = std::fs::canonicalize(&origin).map_err(|e| e.to_string())?;
+        if !actual.starts_with(std::fs::canonicalize(root).map_err(|e| e.to_string())?) {
+            return Err("The library origin points outside the library.".into());
+        }
+        std::fs::remove_file(origin).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// What the old Use everywhere moved: the user's originals, which Remove puts back.
@@ -1458,63 +1540,17 @@ pub(super) fn removal(ctx: &Ctx<'_>, adapter: &dyn AgentAdapter, id: &str) -> Ve
     steps
 }
 
-/// Takes Library item `name` from every agent and out of the Library, with its values.
+/// Takes only the plain library item out; never changes any CLI setup.
 pub(super) fn remove_library_with(
     ctx: &Ctx<'_>,
     name: &str,
     run: Runner<'_>,
 ) -> Result<(), String> {
-    let id = plugin_id(name);
-    let mut failed = Vec::new();
-    for adapter in adapters() {
-        let steps = removal(ctx, adapter, &id);
-        if steps.is_empty() {
-            continue;
-        }
-        (ctx.report)(adapter.agent(), PluginStep::Working);
-        match run(adapter, &steps) {
-            Ok(()) => (ctx.report)(adapter.agent(), PluginStep::Done),
-            Err(reason) => {
-                (ctx.report)(adapter.agent(), PluginStep::Failed { reason });
-                failed.push(adapter.label());
-            }
-        }
-    }
-    if !failed.is_empty() {
-        return Err(format!(
-            "{} didn't let go of {name}; it stays in your Library.",
-            failed.join(" and ")
-        ));
-    }
-    let servers = server_names_of(ctx, name);
-    for server in servers {
-        ctx.secrets.forget(&format!("{name}/{server}"))?;
-    }
-    ctx.library.remove(name).map_err(|err| err.to_string())?;
-    ctx.library
-        .set_origin(name, None)
-        .map_err(|err| err.to_string())?;
-    Ok(())
+    let _ = run;
+    remove_plain(ctx.library.root(), name)
 }
 
-/// The servers Library item `name` packs.
-fn server_names_of(ctx: &Ctx<'_>, name: &str) -> Vec<String> {
-    let Some(entry) = ctx.library.entry(name) else {
-        return Vec::new();
-    };
-    std::fs::read_to_string(entry.dir.join(".mcp.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| {
-            value
-                .get("mcpServers")?
-                .as_object()
-                .map(|servers| servers.keys().cloned().collect())
-        })
-        .unwrap_or_default()
-}
-
-/// Fetches Library item `name`'s source again and brings every agent's copy up to date.
+/// Refresh legacy library content until the old updater is retired.
 pub(crate) fn update(ctx: &Ctx<'_>, name: &str) -> Result<(), String> {
     let origin = ctx
         .library
@@ -1621,3 +1657,417 @@ pub(crate) fn waiting() -> Vec<PluginJobAgent> {
 #[cfg(test)]
 #[path = "ops_tests.rs"]
 mod tests;
+
+// The page/CLI path serializes durable choices independently of legacy sync jobs.
+static CATALOG_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+impl crate::manager::SessionManager {
+    /// The page and launches must read this same provenance-preserving source.
+    pub fn plugin_catalog_rows(&self) -> Vec<brigadier_registry::catalog::Row> {
+        let projects: Vec<_> = self
+            .plugin_projects()
+            .into_iter()
+            .map(|(_, _, path)| path)
+            .collect();
+        Catalog::read_rows_with_library(self.registry().roots(), &projects, &self.data_dir)
+    }
+
+    pub fn plugin_catalog(&self) -> crate::Result<super::CatalogView> {
+        let rows = self.plugin_catalog_rows();
+        let choices =
+            super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+        let mut view = super::CatalogView::new(&rows, &choices);
+        // Commands are display data only; env/header values never enter the page model.
+        for (row, source) in view.rows.iter_mut().zip(&rows) {
+            for (definition, source) in row.definitions.iter_mut().zip(&source.definitions) {
+                if let brigadier_registry::catalog::Content::Server(server) = &source.content
+                    && let Some(command) = &server.written.command
+                {
+                    definition.endpoint = Some(
+                        std::iter::once(command.as_str())
+                            .chain(server.written.args.iter().map(String::as_str))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+            }
+        }
+        Ok(view)
+    }
+
+    pub fn set_plugin_choice(&self, row_id: &str, on: bool) -> crate::Result<()> {
+        self.edit_plugin_choice(row_id, Some(on), None)
+    }
+
+    pub fn set_plugin_choice_scope(
+        &self,
+        row_id: &str,
+        scope: super::choices::Scope,
+    ) -> crate::Result<()> {
+        if let super::choices::Scope::Projects(paths) = &scope {
+            let projects = self.plugin_projects();
+            if paths.is_empty()
+                || paths
+                    .iter()
+                    .any(|path| !projects.iter().any(|(_, _, known)| known == path))
+            {
+                return Err(crate::Error::Invalid(
+                    "Pick registered, trusted projects, or All projects.".into(),
+                ));
+            }
+        }
+        self.edit_plugin_choice(row_id, None, Some(scope))
+    }
+
+    fn edit_plugin_choice(
+        &self,
+        row_id: &str,
+        on: Option<bool>,
+        scope: Option<super::choices::Scope>,
+    ) -> crate::Result<()> {
+        let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+        let rows = self.plugin_catalog_rows();
+        let row = rows
+            .iter()
+            .find(|row| row.id == row_id)
+            .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
+        let mut choices =
+            super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+        let mut choice = choices.choice(row);
+        if let Some(on) = on {
+            choice.on = on;
+        }
+        if let Some(mut scope) = scope {
+            if let super::choices::Scope::Projects(paths) = &mut scope {
+                paths.sort();
+                paths.dedup();
+            }
+            choice.scope = scope;
+        }
+        choices.0.insert(row_id.to_owned(), choice);
+        choices.save(&self.data_dir).map_err(crate::Error::Invalid)
+    }
+
+    /// Completes before replying: Add/Import/Remove need no frontend job runner.
+    pub async fn add_library_item(
+        &self,
+        text: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+        values: Option<BTreeMap<String, String>>,
+    ) -> crate::Result<()> {
+        let projects = self.library_scope_paths(project_ids)?;
+        let root = self.data_dir.join("library");
+        let data_dir = self.data_dir.clone();
+        let home = self.registry().roots().home.clone();
+        let registry = self.registry();
+        super::super::blocking(move || {
+            let mut items = add_parse::parse(&text, name.as_deref(), &home)
+                .map_err(|e| crate::Error::Invalid(e.to_string()))?;
+            give_values(&mut items, &values.unwrap_or_default()).map_err(crate::Error::Invalid)?;
+            if root
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Err(crate::Error::Invalid(
+                    "The library folder cannot be a symbolic link.".into(),
+                ));
+            }
+            let staging = root.join(format!(".pending-{}", uuid::Uuid::new_v4()));
+            let staged_library = staging.join("library");
+            let keys = add_plain(&staged_library, &items, projects.as_deref())
+                .map_err(crate::Error::Invalid)?;
+            let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+            let rows = Catalog::rows(&[brigadier_registry::catalog::library(&staging)]);
+            let mut choices =
+                super::choices::Choices::load(&data_dir).map_err(crate::Error::Invalid)?;
+            for row in &rows {
+                // Validate all destinations before publishing any item.
+                let file = &row.definitions[0].provenance.file;
+                let relative = file
+                    .strip_prefix(&staged_library)
+                    .map_err(|e| crate::Error::Invalid(e.to_string()))?;
+                let destination = root.join(relative);
+                if destination.exists() {
+                    return Err(crate::Error::Invalid(format!(
+                        "Your Library already has something called {}.",
+                        row.name
+                    )));
+                }
+                if keys.contains(&format!("lib:{}", row.name)) {
+                    choices.0.insert(
+                        row.id.clone(),
+                        super::choices::Choice {
+                            on: true,
+                            scope: projects.clone().map_or(
+                                super::choices::Scope::Global(super::choices::Global::Global),
+                                super::choices::Scope::Projects,
+                            ),
+                        },
+                    );
+                }
+            }
+            choices.save(&data_dir).map_err(crate::Error::Invalid)?;
+            for folder in ["skills", "servers", "origins"] {
+                let from = staged_library.join(folder);
+                if !from.is_dir() {
+                    continue;
+                }
+                let to = root.join(folder);
+                if to
+                    .symlink_metadata()
+                    .is_ok_and(|meta| meta.file_type().is_symlink())
+                {
+                    return Err(crate::Error::Invalid(
+                        "The library folder cannot be a symbolic link.".into(),
+                    ));
+                }
+                std::fs::create_dir_all(&to).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+                for entry in
+                    std::fs::read_dir(from).map_err(|e| crate::Error::Invalid(e.to_string()))?
+                {
+                    let entry = entry.map_err(|e| crate::Error::Invalid(e.to_string()))?;
+                    let destination = to.join(entry.file_name());
+                    if destination.exists() {
+                        return Err(crate::Error::Invalid(
+                            "The library item already exists.".into(),
+                        ));
+                    }
+                    std::fs::rename(entry.path(), destination)
+                        .map_err(|e| crate::Error::Invalid(e.to_string()))?;
+                }
+            }
+            std::fs::remove_dir_all(staging).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+            registry.refresh();
+            Ok(())
+        })
+        .await
+    }
+
+    fn library_scope_paths(&self, ids: Option<Vec<String>>) -> crate::Result<Option<Vec<PathBuf>>> {
+        let Some(ids) = ids else {
+            return Ok(None);
+        };
+        let projects = self.plugin_projects();
+        let mut paths = Vec::new();
+        for id in ids {
+            let found: Vec<_> = projects
+                .iter()
+                .filter(|(known, _, path)| known == &id || path.to_string_lossy() == id)
+                .map(|(_, _, path)| path.clone())
+                .collect();
+            if found.is_empty() {
+                return Err(crate::Error::Invalid(format!("No trusted project {id}")));
+            }
+            paths.extend(found);
+        }
+        if paths.is_empty() {
+            return Err(crate::Error::Invalid(
+                "Pick a project, or All projects.".into(),
+            ));
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(Some(paths))
+    }
+
+    pub async fn import_library_item(
+        &self,
+        row_id: String,
+        name: Option<String>,
+        project_ids: Option<Vec<String>>,
+    ) -> crate::Result<()> {
+        let rows = self.plugin_catalog_rows();
+        let row = rows
+            .iter()
+            .find(|row| row.id == row_id)
+            .ok_or_else(|| crate::Error::Invalid("No import offer".into()))?;
+        let definition = row
+            .definitions
+            .iter()
+            .find(|definition| definition.provenance.agent.is_none())
+            .ok_or_else(|| {
+                crate::Error::Invalid("This item is already detected in a CLI.".into())
+            })?;
+        let brigadier_registry::catalog::Content::Server(server) = &definition.content else {
+            return Err(crate::Error::Invalid(
+                "Only server imports are supported.".into(),
+            ));
+        };
+        let transport = match &server.transport {
+            brigadier_registry::Transport::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+                ..
+            } => TransportSpec::Stdio {
+                command: command.clone(),
+                args: args.clone(),
+                env: env.clone(),
+                cwd: cwd.clone(),
+            },
+            brigadier_registry::Transport::Http { url, headers } => TransportSpec::Http {
+                url: url.clone(),
+                headers: headers.clone(),
+            },
+        };
+        let spec = ServerSpec {
+            name: name.unwrap_or_else(|| server.name.clone()),
+            transport,
+            oauth: server
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.as_ref())
+                .map(|id| brigadier_registry::item::OAuthSpec {
+                    client_id: id.clone(),
+                }),
+        };
+        self.add_library_item(server_value(&spec).to_string(), None, project_ids, None)
+            .await
+    }
+
+    pub async fn remove_library_item(&self, key: String) -> crate::Result<()> {
+        let root = self.data_dir.join("library");
+        let name = if let Some(name) = key.strip_prefix("lib:") {
+            name.to_owned()
+        } else {
+            let rows = self.plugin_catalog_rows();
+            let row = rows
+                .iter()
+                .find(|row| row.id == key)
+                .ok_or_else(|| crate::Error::Invalid("No library item".into()))?;
+            if !row
+                .definitions
+                .iter()
+                .any(|definition| definition.provenance.file.starts_with(&root))
+            {
+                return Err(crate::Error::Invalid(
+                    "Detected items can only be turned off, never deleted.".into(),
+                ));
+            }
+            row.definitions
+                .iter()
+                .find_map(|definition| {
+                    definition
+                        .provenance
+                        .file
+                        .strip_prefix(root.join("plugins"))
+                        .ok()
+                        .and_then(|path| path.components().next())
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| row.name.clone())
+        };
+        let registry = self.registry();
+        super::super::blocking(move || {
+            remove_plain(&root, &name).map_err(crate::Error::Invalid)?;
+            registry.refresh();
+            Ok(())
+        })
+        .await
+    }
+
+    pub fn catalog_item_details(&self, key: String) -> crate::Result<super::PluginItemDetails> {
+        use brigadier_registry::catalog::Content;
+        let rows = self.plugin_catalog_rows();
+        let row = rows
+            .iter()
+            .find(|row| row.id == key)
+            .ok_or_else(|| crate::Error::Invalid("No plugin".into()))?;
+        let mut skills = Vec::new();
+        let mut server = None;
+        for definition in &row.definitions {
+            match &definition.content {
+                Content::Skill { .. } => {
+                    let file = &definition.provenance.file;
+                    let path = file.to_string_lossy().into_owned();
+                    if skills
+                        .iter()
+                        .any(|skill: &super::PluginSkillFile| skill.path == path)
+                    {
+                        continue;
+                    }
+                    skills.push(super::PluginSkillFile {
+                        name: row.name.clone(),
+                        path,
+                        contents: std::fs::read_to_string(file)
+                            .map_err(|e| crate::Error::Invalid(e.to_string()))?,
+                        read_only: (!file.starts_with(self.data_dir.join("library/skills"))).then(
+                            || "Open this file in your editor to change its instructions.".into(),
+                        ),
+                    });
+                }
+                Content::Server(item) if server.is_none() => {
+                    server = Some(match &item.transport {
+                        brigadier_registry::Transport::Stdio { env, .. } => {
+                            super::PluginServerSettings::Stdio {
+                                command: item.written.command.clone().unwrap_or_default(),
+                                args: item.written.args.clone(),
+                                cwd: item.written.cwd.clone(),
+                                env_names: env.iter().map(|(name, _)| name.clone()).collect(),
+                            }
+                        }
+                        brigadier_registry::Transport::Http { headers, .. } => {
+                            super::PluginServerSettings::Http {
+                                url: item.written.url.clone().unwrap_or_default(),
+                                header_names: headers
+                                    .iter()
+                                    .map(|(name, _)| name.clone())
+                                    .collect(),
+                            }
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(super::PluginItemDetails {
+            key,
+            kind: if row.kind == brigadier_registry::catalog::Kind::Skill {
+                PluginKind::Skill
+            } else {
+                PluginKind::Server
+            },
+            skills,
+            server,
+        })
+    }
+    pub fn save_catalog_skill(
+        &self,
+        key: String,
+        path: String,
+        contents: String,
+        expected: String,
+    ) -> crate::Result<super::PluginSkillSave> {
+        let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+        let row = self.catalog_item_details(key)?;
+        let skill = row
+            .skills
+            .iter()
+            .find(|skill| skill.path == path && skill.read_only.is_none())
+            .ok_or_else(|| {
+                crate::Error::Invalid("Only library skill files can be saved here.".into())
+            })?;
+        let file = Path::new(&skill.path);
+        let canonical =
+            std::fs::canonicalize(file).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        let root = std::fs::canonicalize(self.data_dir.join("library/skills"))
+            .map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        if !canonical.starts_with(root) {
+            return Err(crate::Error::Invalid(
+                "The skill points outside the library.".into(),
+            ));
+        }
+        if skill.contents != expected {
+            return Ok(super::PluginSkillSave::ChangedSinceOpened {
+                current: skill.contents.clone(),
+            });
+        }
+        let staging = file.with_file_name(format!(".skill-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&staging, contents).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        std::fs::rename(staging, file).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        self.registry().refresh();
+        Ok(super::PluginSkillSave::Saved { job: String::new() })
+    }
+}

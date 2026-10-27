@@ -3,7 +3,7 @@ import { Button } from "@/components/controls";
 import { Folder } from "@/components/icons";
 import { Banner, CopyButton, SettingsCard } from "@/components/shared";
 import { shortPath } from "@/lib/format";
-import { folderName, KIND_LABEL, shownDetail, wontStartReason } from "./model";
+import { folderName, KIND_LABEL, shownDetail, signInLine } from "./model";
 import { FoldCard, PluginMark, RadioRow } from "./parts";
 import type { PluginItemView, PluginsView } from "./types";
 
@@ -15,7 +15,6 @@ type DetailsActions = {
   onScope: (projectIds: string[] | null) => void;
   /** Absent while it can't be signed in from here. */
   onSignIn?: (() => void) | undefined;
-  onShare: () => void;
   onRemove: () => void;
   onRetry: () => void;
   onUpdate: () => void;
@@ -27,7 +26,6 @@ type DetailsActions = {
 export function DetailsPage({ view, item, actions }: { view: PluginsView; item: PluginItemView; actions: DetailsActions }) {
   const some = item.scope.type === "someProjects" ? item.scope : null;
   const on = some?.projectIds ?? [];
-  const locked = !!item.locked;
   const scope = (projectId: string, next: boolean) => actions.onScope(next ? [...on, projectId] : on.filter((id) => id !== projectId));
   const first = item.kind === "skill" ? "Folder" : item.url ? "Address" : "Command";
   return (
@@ -38,22 +36,23 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
       back={{ label: "Plugins", onBack: actions.onBack }}
       sectionsClassName="gap-9 pt-4"
     >
+      {item.differentPerAgent && <p data-slot="different-per-agent" className="text-foreground/65 text-xs">Different per agent</p>}
       <Banners item={item} actions={actions} />
       <SettingsSection
         title="Projects"
-        description={item.locked ?? "Where it's on. New sessions pick up changes."}
+        description="Where it's on. New sessions pick up changes."
         className="[&>div:first-child]:min-h-0"
         setting="Projects"
       >
         <SettingsCard role="radiogroup" aria-label="Where it's on">
           <div className="px-4 py-3">
-            <RadioRow checked={!some} disabled={locked || actions.busy} title="All projects" line="On in every project, and in new ones you add." onSelect={() => some && actions.onScope(null)} />
+            <RadioRow checked={!some} disabled={actions.busy} title="All projects" line="On in every project, and in new ones you add." onSelect={() => some && actions.onScope(null)} />
           </div>
           <div className="px-4 py-3">
             {/* From All projects, it starts on in each project: nothing changes until one is turned off. */}
             <RadioRow
               checked={!!some}
-              disabled={locked || actions.busy || view.projects.length === 0}
+              disabled={actions.busy || view.projects.length === 0}
               title="Only some projects"
               line="On only in the projects you pick."
               onSelect={() => !some && view.projects.length > 0 && actions.onScope(view.projects.map((project) => project.id))}
@@ -78,7 +77,7 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
                     )}
                   </span>
                   {/* It stays on somewhere: the last project on can't be turned off. */}
-                  <SettingsSwitch label={project.name} checked={checked} disabled={locked || actions.busy || (checked && on.length === 1)} onCheckedChange={(next) => scope(project.id, next)} />
+                  <SettingsSwitch label={project.name} checked={checked} disabled={actions.busy || (checked && on.length === 1)} onCheckedChange={(next) => scope(project.id, next)} />
                 </div>
               );
             })}
@@ -103,7 +102,7 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
             <span className="flex min-w-0 flex-1 flex-col gap-1">
               <span className="text-label font-medium">{item.kind === "skill" ? "SKILL.md" : "Settings"}</span>
               <span className="text-foreground/65 text-xs">
-                {item.kind === "skill" ? "Read or edit the skill's instructions." : item.url ? "Its address and header names. Secret values stay hidden." : "Its command, arguments and env variable names. Secret values stay hidden."}
+                {item.kind === "skill" ? "Read the skill's instructions." : item.url ? "Its address and header names. Secret values stay hidden." : "Its command, arguments and env variable names. Secret values stay hidden."}
               </span>
             </span>
             <Button variant="soft" size="sm" onClick={actions.onOpen}>Open</Button>
@@ -114,7 +113,7 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
         <div data-slot="remove-row" className="flex items-center gap-4">
           <Button variant="soft-destructive" size="sm" disabled={actions.busy} onClick={actions.onRemove}>Remove {item.name}</Button>
           <span className="text-foreground/50 text-xs">
-            {item.removal === "copies" ? "Takes out only what Brigadier added. Your own original stays as it is." : "Takes out what Brigadier added, from every agent and project."}
+            Removes it from Brigadier's library. New sessions pick up changes.
           </span>
         </div>
       )}
@@ -124,31 +123,12 @@ export function DetailsPage({ view, item, actions }: { view: PluginsView; item: 
 
 /** What needs the user, over everything else: it won't start, a sign-in, an update, only some agents have it. */
 function Banners({ item, actions }: { item: PluginItemView; actions: DetailsActions }) {
-  const problem = item.problem;
-  if (!problem && !item.canShare) return null;
+  if (!item.signIn || item.signIn.type === "notRequired") return null;
   return (
     <div data-slot="banners" className="flex flex-col gap-2">
-      {problem?.type === "wontStart" && (
-        <Banner tone="error" text={`${item.name} won't start: ${wontStartReason(problem.message)}. Sessions can't use it until its setup is fixed.`} className="rounded-control border-b-0">
-          <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onRetry}>Try again</Button>
-        </Banner>
-      )}
-      {problem?.type === "needsSignIn" && (
-        <Banner tone="warning" text={`${item.name} needs you to sign in. Until then, sessions can't use it.`} className="rounded-control border-b-0">
-          {actions.onSignIn && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
-        </Banner>
-      )}
-      {problem?.type === "conflict" && <Banner tone="warning" text={problem.message} className="rounded-control border-b-0" />}
-      {problem?.type === "updateReady" && (
-        <Banner tone="info" text={`A newer version of ${item.name} is ready.`} className="rounded-control border-b-0">
-          <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onUpdate}>Update</Button>
-        </Banner>
-      )}
-      {(problem?.type === "onlyIn" || item.canShare) && (
-        <Banner tone="info" text={problem?.type === "onlyIn" ? problem.message : `Not every agent has ${item.name} yet.`} className="rounded-control border-b-0">
-          {item.canShare && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onShare}>Share with every agent</Button>}
-        </Banner>
-      )}
+      <Banner tone="info" text={signInLine(item.signIn)} className="rounded-control border-b-0">
+        {actions.onSignIn && item.signIn.type !== "signedIn" && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
+      </Banner>
     </div>
   );
 }

@@ -218,94 +218,6 @@ fn a_paste_is_read_before_anything_is_added() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// Every file under `dir`, read as text.
-fn texts(dir: &Path) -> Vec<(PathBuf, String)> {
-    let mut found = Vec::new();
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(texts(&path));
-        } else if let Ok(text) = std::fs::read_to_string(&path) {
-            found.push((path, text));
-        }
-    }
-    found
-}
-
-#[test]
-fn add_goes_to_every_agent_and_its_values_only_to_the_keychain() {
-    let home = home("add-picked");
-    let roots = roots(&home);
-    // No CLI runs: each agent's part is planned, and nothing reads as changed after.
-    let env = [("PATH".to_owned(), home.join("no-bin").display().to_string())];
-    let library = Library::in_home(&home, PathBuf::from("/bin/brigadier"));
-    let secrets = Kept::default();
-    let reported = std::sync::Mutex::new(Vec::new());
-    let report = |_: Agent, _: PluginStep| {};
-    let run = |adapter: &dyn AgentAdapter, _: &[Step]| -> Result<(), String> {
-        reported.lock().unwrap().push(adapter.agent());
-        Ok(())
-    };
-    let missing = home.join("no-bin/agent");
-    let binary = |_: Agent| Some(missing.clone());
-    let ctx = Ctx {
-        roots: &roots,
-        env: &env,
-        library: &library,
-        secrets: &secrets,
-        projects: &[],
-        claude_configs: &[],
-        report: &report,
-        binary: &binary,
-    };
-    let paste = r#"{"mcpServers": {"docs": {"command": "/nowhere/docs-mcp", "env": {"TOKEN": "pasted-token"}}}}"#;
-    let options = AddOptions {
-        values: BTreeMap::from([
-            ("TOKEN".to_owned(), "typed-token".to_owned()),
-            ("REGION".to_owned(), "region-eu-west".to_owned()),
-        ]),
-    };
-    let (keys, _) = add(&ctx, paste, None, None, false, &options, &run).unwrap();
-    assert_eq!(keys, ["lib:docs"]);
-    let mut agents = reported.lock().unwrap().clone();
-    agents.sort_by_key(|agent| format!("{agent:?}"));
-    agents.dedup();
-    assert_eq!(
-        agents,
-        [Agent::Claude, Agent::Codex],
-        "every agent's part is planned"
-    );
-    assert_eq!(
-        secrets.load("docs/docs").unwrap(),
-        BTreeMap::from([
-            ("REGION".to_owned(), "region-eu-west".to_owned()),
-            ("TOKEN".to_owned(), "typed-token".to_owned()),
-        ])
-    );
-    for (path, text) in texts(&home) {
-        for value in ["typed-token", "pasted-token", "region-eu-west"] {
-            assert!(!text.contains(value), "{value} in {}", path.display());
-        }
-    }
-
-    // Values go with one server; a scope names at least one project.
-    let two = r#"{"mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}}}"#;
-    assert!(add(&ctx, two, None, None, false, &options, &run).is_err());
-    assert!(
-        add(
-            &ctx,
-            paste,
-            Some("other"),
-            Some(&[]),
-            false,
-            &AddOptions::default(),
-            &run
-        )
-        .is_err()
-    );
-    let _ = std::fs::remove_dir_all(home);
-}
-
 #[test]
 fn an_original_server_is_saved_without_its_values_and_put_back_with_them() {
     let fx = Fixture::new("saved", None, None);
@@ -1020,59 +932,6 @@ fn add_to_every_agent_installs_an_item_on_nowhere_switched_off() {
     );
 }
 
-/// `brigadier library add --shared` in one project: installed in the form the project commits
-/// (Claude Code's `--scope project`, Codex's shared project file), for every agent.
-#[test]
-fn add_shared_installs_in_the_form_the_project_commits() {
-    let fx = Fixture::new("add-shared", None, None);
-    let projects = [fx.project.clone()];
-    let ctx = places_ctx(&fx, &projects);
-    let ran = std::sync::Mutex::new(Vec::new());
-    let run = |_: &dyn AgentAdapter, steps: &[Step]| -> Result<(), String> {
-        ran.lock().unwrap().extend(lines(steps));
-        for step in steps {
-            if let Step::ProjectFile { shared, .. } = step {
-                assert!(*shared, "a just-me project file for a shared add");
-            }
-        }
-        Ok(())
-    };
-    let skill = fx.home.join("src/shared-skill");
-    write(&skill.join("SKILL.md"), "---\nname: shared-skill\n---\n");
-    let (keys, _) = add(
-        &ctx,
-        &skill.display().to_string(),
-        None,
-        Some(&projects),
-        true,
-        &AddOptions::default(),
-        &run,
-    )
-    .unwrap();
-    assert_eq!(keys, ["lib:shared-skill"]);
-    let ran = ran.lock().unwrap();
-    assert!(
-        ran.iter()
-            .any(|line| line
-                .starts_with("claude plugin install shared-skill@brigadier --scope project")),
-        "{ran:?}"
-    );
-    // Shared goes to one project only.
-    let two = [fx.project.clone(), fx.home.clone()];
-    assert!(
-        add(
-            &ctx,
-            &skill.display().to_string(),
-            Some("again"),
-            Some(&two),
-            true,
-            &AddOptions::default(),
-            &run
-        )
-        .is_err()
-    );
-}
-
 #[test]
 fn review_legacy_server_restore_is_idempotent_and_retains_secrets() {
     let fx = Fixture::new("review-restored-server", None, None);
@@ -1164,4 +1023,271 @@ fn the_plugins_alone_read_as_the_whole_catalog_lists_them() {
             "{project:?}"
         );
     }
+}
+fn bytes_under(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = BTreeMap::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(bytes_under(&path));
+        } else {
+            found.insert(path, std::fs::read(entry.path()).unwrap());
+        }
+    }
+    found
+}
+
+#[test]
+fn add_remove_only_write_the_data_dir_library_and_catalog_resolves_both_agents() {
+    let home = home("plain-library");
+    let roots = roots(&home);
+    write(&home.join(".claude/settings.json"), "{\"user\":true}\n");
+    write(
+        &home.join(".claude/skills/native/SKILL.md"),
+        "native user skill\n",
+    );
+    write(&home.join(".codex/config.toml"), "# user config\n");
+    std::fs::write(home.join(".codex/binary"), [0, 255, 1, 13, 10]).unwrap();
+    write(
+        &home.join(".agents/skills/own/SKILL.md"),
+        "own shared skill",
+    );
+    let before_claude = bytes_under(&home.join(".claude"));
+    let before_codex = bytes_under(&home.join(".codex"));
+    let before_agents = bytes_under(&home.join(".agents"));
+    let data_dir = home.join("data");
+    let root = data_dir.join("library");
+    let library = Library::at(root.clone(), PathBuf::from("/not-a-cli"));
+    let secrets = Kept::default();
+    let ctx = Ctx {
+        roots: &roots,
+        env: &[],
+        library: &library,
+        secrets: &secrets,
+        projects: &[],
+        claude_configs: &[],
+        report: &|_, _| panic!("no CLI work"),
+        binary: &|_| panic!("no CLI executable"),
+    };
+    let no_cli =
+        |_: &dyn AgentAdapter, _: &[Step]| -> Result<(), String> { panic!("no adapter steps") };
+    let paste = r#"{"mcpServers":{"docs":{"command":"/not-started","env":{"TOKEN":"pasted"}}}}"#;
+    let options = AddOptions {
+        values: BTreeMap::from([("TOKEN".into(), "typed".into())]),
+    };
+    let (keys, warning) = add(&ctx, paste, None, None, false, &options, &no_cli).unwrap();
+    assert_eq!(keys, ["lib:docs"]);
+    assert!(warning.is_none());
+    let file = root.join("servers/docs.json");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved["mcpServers"]["docs"]["env"]["TOKEN"], "typed");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let source = home.join("src/tidy");
+    write(
+        &source.join("SKILL.md"),
+        "---\nname: tidy\n---\nDo tidy work.\n",
+    );
+    write(&source.join("reference.bin"), "supporting content");
+    add(
+        &ctx,
+        &source.to_string_lossy(),
+        None,
+        None,
+        false,
+        &AddOptions::default(),
+        &no_cli,
+    )
+    .unwrap();
+    assert!(root.join("skills/tidy/SKILL.md").is_file());
+    assert!(root.join("skills/tidy/reference.bin").is_file());
+    assert!(!root.join(".claude-plugin").exists());
+    assert!(!root.join("plugins").exists());
+    let rows = Catalog::read_rows_with_library(&roots, &[], &data_dir);
+    for agent in [Agent::Claude, Agent::Codex] {
+        let resolved = super::super::resolve::resolve(super::super::resolve::Context {
+            agent,
+            account_home: &roots,
+            project_root: None,
+            cwd: &home,
+            trusted: true,
+            role: super::super::resolve::Role::Thread,
+            rows: &rows,
+            choices: &super::super::choices::Choices::default(),
+            gateway: None,
+        });
+        assert!(resolved.servers.iter().any(|server| server.name == "docs"));
+        assert!(
+            resolved
+                .skills
+                .iter()
+                .any(|skill| skill.display == "tidy" && !skill.native)
+        );
+    }
+    remove_library_with(&ctx, "docs", &no_cli).unwrap();
+    remove_library_with(&ctx, "tidy", &no_cli).unwrap();
+    assert!(!root.join("servers/docs.json").exists());
+    assert!(!root.join("skills/tidy").exists());
+    assert!(
+        remove_library_with(&ctx, "native", &no_cli)
+            .unwrap_err()
+            .contains("only be turned off")
+    );
+    assert_eq!(bytes_under(&home.join(".claude")), before_claude);
+    assert_eq!(bytes_under(&home.join(".codex")), before_codex);
+    assert_eq!(bytes_under(&home.join(".agents")), before_agents);
+    assert!(!home.join(".brigadier").exists());
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn choices_for_a_plain_library_row_survive_a_fresh_read() {
+    use super::super::choices::{Choice, Choices, Scope};
+    let home = home("plain-choices");
+    let roots = roots(&home);
+    let data = home.join("data");
+    write(&data.join("library/skills/tidy/SKILL.md"), "tidy");
+    let rows = Catalog::read_rows_with_library(&roots, &[], &data);
+    let row = rows.iter().find(|row| row.name == "tidy").unwrap();
+    let scope = Scope::Projects(vec![home.join("project-a"), home.join("project-b")]);
+    let choice = Choice { on: false, scope };
+    Choices(BTreeMap::from([(row.id.clone(), choice.clone())]))
+        .save(&data)
+        .unwrap();
+    let rows = Catalog::read_rows_with_library(&roots, &[], &data);
+    let row = rows.iter().find(|row| row.name == "tidy").unwrap();
+    assert_eq!(Choices::load(&data).unwrap().choice(row), choice);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn add_shared_refuses_without_changing_project_or_cli_files() {
+    let fx = Fixture::new("add-shared-refused", None, None);
+    let before = bytes_under(&fx.home);
+    let projects = [fx.project.clone()];
+    let ctx = places_ctx(&fx, &projects);
+    assert!(
+        add(
+            &ctx,
+            "https://example.test/mcp",
+            Some("example"),
+            Some(&projects),
+            true,
+            &AddOptions::default(),
+            &|_, _| panic!("no CLI")
+        )
+        .unwrap_err()
+        .contains("no longer supported")
+    );
+    assert_eq!(bytes_under(&fx.home), before);
+}
+
+#[test]
+fn git_add_copies_plain_skill_without_cli_configuration_changes() {
+    let home = home("plain-git");
+    write(&home.join(".claude/settings.json"), "{\"untouched\":true}");
+    write(&home.join(".codex/config.toml"), "# untouched\n");
+    let before_claude = bytes_under(&home.join(".claude"));
+    let before_codex = bytes_under(&home.join(".codex"));
+    let repo = home.join("remote");
+    write(
+        &repo.join("SKILL.md"),
+        "---\nname: git-skill\n---\nGit instructions\n",
+    );
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    ] {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let root = home.join("data/library");
+    let item = Item::Skill(SkillSpec {
+        name: None,
+        source: SkillSource::Git {
+            url: repo.to_string_lossy().into_owned(),
+            rev: None,
+            subdir: None,
+        },
+    });
+    assert_eq!(add_plain(&root, &[item], None).unwrap(), ["lib:git-skill"]);
+    assert_eq!(
+        std::fs::read(root.join("skills/git-skill/SKILL.md")).unwrap(),
+        std::fs::read(repo.join("SKILL.md")).unwrap()
+    );
+    assert!(root.join("origins/git-skill.json").is_file());
+    assert!(!root.join("skills/git-skill/.git").exists());
+    remove_plain(&root, "git-skill").unwrap();
+    assert!(repo.join("SKILL.md").exists());
+    assert_eq!(bytes_under(&home.join(".claude")), before_claude);
+    assert_eq!(bytes_under(&home.join(".codex")), before_codex);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn migrated_library_packages_are_catalog_sources_and_only_their_library_copy_is_removed() {
+    let home = home("plain-migrated");
+    let data = home.join("data");
+    let root = data.join("library");
+    let library = Library::at(root.clone(), PathBuf::from("/not-a-cli"));
+    let source = home.join("original");
+    write(
+        &source.join("SKILL.md"),
+        "---\nname: migrated\n---\nOriginal instructions\n",
+    );
+    let source_bytes = bytes_under(&source);
+    let item = Item::Skill(SkillSpec {
+        name: Some("migrated".into()),
+        source: SkillSource::Folder(source.clone()),
+    });
+    library
+        .pack(
+            "migrated",
+            &item,
+            Some(&source),
+            &[],
+            false,
+            &Kept::default(),
+        )
+        .unwrap();
+    let rows = Catalog::read_rows_with_library(&roots(&home), &[], &data);
+    let row = rows.iter().find(|row| row.name == "migrated").unwrap();
+    assert!(
+        row.definitions
+            .iter()
+            .any(|definition| definition.provenance.file.starts_with(&root))
+    );
+    remove_plain(&root, "migrated").unwrap();
+    assert!(
+        !Catalog::read_rows_with_library(&roots(&home), &[], &data)
+            .iter()
+            .any(|row| row.name == "migrated")
+    );
+    assert_eq!(bytes_under(&source), source_bytes);
+    let _ = std::fs::remove_dir_all(home);
 }

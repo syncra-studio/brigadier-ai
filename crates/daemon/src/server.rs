@@ -2542,10 +2542,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
         },
-        Request::GetPluginCatalog
-        | Request::SetPluginChoice { .. }
-        | Request::SetPluginChoiceScope { .. } => {
-            return Err(brigadier_core::Error::Invalid("not yet".into()).into());
+        Request::GetPluginCatalog => Response::GetPluginCatalog {
+            catalog: daemon.sessions.plugin_catalog()?,
+        },
+        Request::SetPluginChoice { row_id, on } => {
+            daemon.sessions.set_plugin_choice(&row_id, on)?;
+            Response::SetPluginChoice
+        }
+        Request::SetPluginChoiceScope { row_id, scope } => {
+            daemon.sessions.set_plugin_choice_scope(&row_id, scope)?;
+            Response::SetPluginChoiceScope
         }
         Request::StartPluginSignIn { row_id } => Response::StartPluginSignIn {
             state: heap(|| daemon.sessions.start_plugin_sign_in(&row_id)).await?,
@@ -2579,26 +2585,33 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             name,
             project_ids,
             values,
-        } => Response::AddPlugin {
-            job: daemon
+        } => {
+            daemon
                 .sessions
-                .add_plugin(text, name, project_ids, values)?,
-        },
+                .add_library_item(text, name, project_ids, values)
+                .await?;
+            Response::AddPlugin { job: String::new() }
+        }
         Request::ImportPlugin {
             key,
             name,
             project_ids,
-        } => Response::ImportPlugin {
-            job: daemon.sessions.import_plugin(key, name, project_ids)?,
-        },
-        Request::RemovePlugin { key } => Response::RemovePlugin {
-            job: daemon.sessions.remove_plugin(key),
-        },
+        } => {
+            daemon
+                .sessions
+                .import_library_item(key, name, project_ids)
+                .await?;
+            Response::ImportPlugin { job: String::new() }
+        }
+        Request::RemovePlugin { key } => {
+            daemon.sessions.remove_library_item(key).await?;
+            Response::RemovePlugin { job: String::new() }
+        }
         Request::UpdatePlugin { key } => Response::UpdatePlugin {
             job: daemon.sessions.update_plugin(key),
         },
         Request::GetPluginItem { key } => Response::GetPluginItem {
-            item: daemon.sessions.plugin_item(key).await?,
+            item: daemon.sessions.catalog_item_details(key)?,
         },
         Request::SavePluginSkill {
             key,
@@ -2608,8 +2621,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::SavePluginSkill {
             outcome: daemon
                 .sessions
-                .save_plugin_skill(key, path, contents, expected)
-                .await?,
+                .save_catalog_skill(key, path, contents, expected)?,
         },
         Request::GetPluginJob { id } => Response::GetPluginJob {
             job: daemon.sessions.plugin_job_view(&id)?,

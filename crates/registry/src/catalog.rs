@@ -159,6 +159,23 @@ impl Catalog {
     /// Complete page catalog, including disabled project-only plugin definitions. Unlike
     /// `Catalog::read`, presence here does not imply native availability in a session.
     pub fn read_rows(roots: &crate::Roots, projects: &[PathBuf]) -> Vec<Row> {
+        let data_dir = roots.vars.get("BRIGADIER_DATA_DIR").map(PathBuf::from);
+        Self::read_row_sources(roots, projects, data_dir.as_deref())
+    }
+
+    pub fn read_rows_with_library(
+        roots: &crate::Roots,
+        projects: &[PathBuf],
+        data_dir: &Path,
+    ) -> Vec<Row> {
+        Self::read_row_sources(roots, projects, Some(data_dir))
+    }
+
+    fn read_row_sources(
+        roots: &crate::Roots,
+        projects: &[PathBuf],
+        data_dir: Option<&Path>,
+    ) -> Vec<Row> {
         let mut catalogs = Vec::new();
         for project in std::iter::once(None).chain(projects.iter().map(|path| Some(path.as_path())))
         {
@@ -191,6 +208,9 @@ impl Catalog {
                 catalog.off.plugins.push(plugin);
             }
             catalogs.push(catalog);
+        }
+        if let Some(data_dir) = data_dir {
+            catalogs.push(library(data_dir));
         }
         Self::rows(&catalogs)
     }
@@ -346,4 +366,142 @@ impl Catalog {
         rows.sort_by(|a, b| a.id.cmp(&b.id));
         rows
     }
+}
+
+/// Brigadier's own plain folders and server entries. These are launch sources, never
+/// native CLI plugins. A synthetic Claude origin makes them resolver candidates for either
+/// agent, while native availability is still read exclusively from each CLI's actual roots.
+pub fn library(data_dir: &Path) -> Catalog {
+    let root = data_dir.join("library");
+    let mut catalog = Catalog::default();
+    if let Ok(entries) = std::fs::read_dir(root.join("skills")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || !path.join("SKILL.md").is_file() {
+                continue;
+            }
+            let name = name.to_owned();
+            catalog.skills.push(crate::Skill {
+                id: format!("library:skill:{name}"),
+                name,
+                description: String::new(),
+                dir: path.clone(),
+                roots: vec![SkillRoot::ClaudeUser],
+                entries: vec![(SkillRoot::ClaudeUser, path)],
+            });
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("servers")) {
+        for entry in entries.flatten() {
+            let file = entry.path();
+            if file.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let Ok(items) = crate::add_parse::parse(&text, None, data_dir) else {
+                continue;
+            };
+            for item in items {
+                let crate::item::Item::Server(spec) = item else {
+                    continue;
+                };
+                let (transport, written, signs_in) = match spec.transport {
+                    crate::item::TransportSpec::Stdio {
+                        command,
+                        args,
+                        env,
+                        cwd,
+                    } => (
+                        Transport::Stdio {
+                            command: command.clone(),
+                            args: args.clone(),
+                            env,
+                            cwd: cwd.clone(),
+                            base: None,
+                        },
+                        crate::AsWritten {
+                            command: Some(command),
+                            args,
+                            cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+                            ..Default::default()
+                        },
+                        false,
+                    ),
+                    crate::item::TransportSpec::Http { url, headers } => {
+                        let signs_in = headers.is_empty();
+                        (
+                            Transport::Http {
+                                url: url.clone(),
+                                headers,
+                            },
+                            crate::AsWritten {
+                                url: Some(url),
+                                ..Default::default()
+                            },
+                            signs_in,
+                        )
+                    }
+                };
+                catalog.servers.push(Server {
+                    id: format!("library:server:{}", spec.name),
+                    name: spec.name,
+                    source: Source::ClaudeUser,
+                    project: None,
+                    transport,
+                    signs_in,
+                    plugin: None,
+                    file: file.clone(),
+                    oauth: spec.oauth.map(|oauth| crate::OAuthClient {
+                        client_id: Some(oauth.client_id),
+                        client_secret: None,
+                    }),
+                    disabled: false,
+                    written,
+                    templated: false,
+                    overrides_user: false,
+                });
+            }
+        }
+    }
+    // Cleanup preserves old library-only packages before removing CLI installs. Read
+    // their content as library sources too; never register or install their marketplace.
+    let saved = crate::library::Library::at(root.clone(), PathBuf::from("brigadier"));
+    let roots =
+        crate::Roots::from_vars([("HOME".to_owned(), data_dir.to_string_lossy().into_owned())]);
+    if let Some(roots) = roots {
+        for entry in saved.entries() {
+            if !entry.dir.is_dir() {
+                continue;
+            }
+            let plugin = crate::Plugin {
+                agent: Agent::Claude,
+                id: entry.id(),
+                name: entry.name,
+                root: entry.dir,
+                project: None,
+            };
+            let mut skills = Vec::new();
+            crate::skills::add_plugin(&mut skills, &plugin);
+            for mut skill in skills {
+                skill.roots = vec![SkillRoot::ClaudeUser];
+                skill.entries = skill
+                    .entries
+                    .into_iter()
+                    .map(|(_, path)| (SkillRoot::ClaudeUser, path))
+                    .collect();
+                catalog.skills.push(skill);
+            }
+            for mut server in crate::servers::plugin(&roots, &plugin, None, &mut catalog.problems) {
+                server.source = Source::ClaudeUser;
+                server.plugin = None;
+                catalog.servers.push(server);
+            }
+        }
+    }
+    catalog
 }
