@@ -8,7 +8,7 @@ export function statusWords({ state, reason }: SessionStatus): string {
   return reason ? `${words} · ${reason}` : words;
 }
 
-/** A sidebar row's state word with its activity or unread mark beside it; the tab shows only the marks. */
+/** A sidebar row's state word (none once finished) with its activity or unread mark beside it; the tab shows only the marks. */
 export function SessionStatusLabel({
   conversationId,
   className,
@@ -19,16 +19,14 @@ export function SessionStatusLabel({
   rowIndicator?: React.ReactNode;
 }) {
   const status = useSessionStatus(conversationId);
-  if (!status) return null;
-  const { state } = status;
   return (
     <span
       data-slot="row-status"
-      data-status={state}
-      title={statusWords(status)}
-      className={cn("text-muted-foreground flex max-w-2/5 min-w-0 shrink items-center gap-1 overflow-hidden text-2xs whitespace-nowrap", className)}
+      data-status={status?.state}
+      title={status ? statusWords(status) : undefined}
+      className={cn("text-muted-foreground empty:hidden flex max-w-2/5 min-w-0 shrink items-center gap-1 overflow-hidden text-2xs whitespace-nowrap", className)}
     >
-      <span data-slot="status-word" className="shrink-0">{SESSION_STATUS_WORDS[state]}</span>
+      {status && <span data-slot="status-word" className="shrink-0">{SESSION_STATUS_WORDS[status.state]}</span>}
       {rowIndicator}
     </span>
   );
@@ -43,7 +41,7 @@ export function SidebarError({ conversationId }: { conversationId: string }) {
   </span>;
 }
 
-/** The trailing 20-unit slot contains a spinner or a blue dot for Needs you or unread Done. */
+/** The trailing 20-unit slot contains a spinner or a blue dot for Needs you or a finished, unopened session. */
 export function SidebarActivityMark({ conversationId, unread }: { conversationId: string; unread: boolean }) {
   const mark = useSidebarIndicators(conversationId, unread);
   const needsYou = useSessionStatus(conversationId)?.state === "needsYou";

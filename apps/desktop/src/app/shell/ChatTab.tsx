@@ -33,7 +33,7 @@ export function ChatTab({
 }) {
   const id = conversation.id;
   const archived = conversation.lifecycle === "archived";
-  // An open session keeps a waiting-card dot; Done has already been read.
+  // An open session keeps a waiting-card dot; a finished turn has already been read.
   const mark = useSidebarIndicators(id);
   const showingMark = (mark.working || mark.unread) && !archived;
   return (

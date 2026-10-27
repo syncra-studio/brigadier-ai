@@ -77,19 +77,18 @@ export type SessionState = "needsYou" | "failed" | "working" | "stopped" | "done
 export const TAB_STATES: readonly SessionState[] = ["needsYou", "failed", "working", "stopped", "done"];
 
 /** A state's words alone, and after a count of sessions. */
-export const TAB_STATE_WORDS: Record<SessionState, { one: string; many: string }> = {
+export const TAB_STATE_WORDS: Record<Exclude<SessionState, "done">, { one: string; many: string }> = {
   needsYou: { one: "Needs you", many: "need you" },
   failed: { one: "Failed", many: "failed" },
   working: { one: "Working", many: "working" },
   stopped: { one: "Stopped", many: "stopped" },
-  done: { one: "Done", many: "done" },
 };
 
 export const SESSION_STATUS_WORDS = Object.fromEntries(
   Object.entries(TAB_STATE_WORDS).map(([state, words]) => [state, words.one]),
-) as Record<SessionState, string>;
+) as Record<Exclude<SessionState, "done">, string>;
 
-export type SessionStatus = { state: SessionState; reason: string | null };
+export type SessionStatus = { state: Exclude<SessionState, "done">; reason: string | null };
 
 /**
  * A waiting card wins over failures, live work, a stop and a recorded turn's end; a sign-in only
@@ -109,7 +108,7 @@ function needsYou({ awaiting, running }: RowActivity, viewing: boolean): boolean
   return awaiting !== "signIn" || !running;
 }
 
-/** The displayed state with the waiting card or quota reset named on hover. */
+/** The displayed state word (never Done: a finished session shows only its unread dot) with the waiting card or quota reset named on hover. */
 export function sessionStatus(
   activity: RowActivity,
   quotaWait: { resetsAtMs: number | null } | null,
@@ -118,7 +117,7 @@ export function sessionStatus(
   viewing = false,
 ): SessionStatus | null {
   const state = tabState(activity, quotaWait !== null, stopped, turnEnded, viewing);
-  if (!state) return null;
+  if (!state || state === "done") return null;
   let reason: string | null = null;
   if (state === "needsYou") {
     reason = activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in";
@@ -129,7 +128,7 @@ export function sessionStatus(
   return { state, reason };
 }
 
-/** Needs you has its dot until it's looked at; Done uses the unread dot, failures their own red mark. */
+/** Needs you has its dot until it's looked at; a finished session uses the unread dot, failures their own red mark. */
 export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean, stopped = false, turnEnded = false, viewing = false) {
   const state = tabState(activity, quotaWait, stopped, turnEnded, viewing);
   return { working: state === "working", error: state === "failed", unread: state === "needsYou" || (state === "done" && unread) };

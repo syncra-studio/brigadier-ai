@@ -11,6 +11,7 @@ const quiet = { running: false, awaiting: null, workers: 0 } as const;
 test("session states use only activity, in the requested precedence order", () => {
   const complete = true;
   assert.equal(tabState(quiet, false), null);
+  assert.equal(sessionStatus(quiet, null, false, true), null, "no Done word on a finished row or tab");
   assert.equal(tabState(quiet, false, false, complete), "done");
   assert.equal(tabState(quiet, false, true, complete), "stopped");
   assert.equal(tabState({ ...quiet, running: true }, false, true, complete), "working");
@@ -21,8 +22,8 @@ test("session states use only activity, in the requested precedence order", () =
   }
   assert.equal(tabState({ ...quiet, awaiting: "signIn" }, false, false, complete), "needsYou");
   assert.deepEqual(TAB_STATES, ["needsYou", "failed", "working", "stopped", "done"]);
-  assert.deepEqual(Object.values(SESSION_STATUS_WORDS), ["Needs you", "Failed", "Working", "Stopped", "Done"]);
-  assert.deepEqual(TAB_STATE_WORDS.done, { one: "Done", many: "done" });
+  assert.deepEqual(Object.values(SESSION_STATUS_WORDS), ["Needs you", "Failed", "Working", "Stopped"]);
+  assert.equal("done" in TAB_STATE_WORDS, false, "a finished session has no state word");
 });
 
 test("the tooltip retains question, approval, sign-in and usage-limit reasons", () => {
@@ -32,7 +33,7 @@ test("the tooltip retains question, approval, sign-in and usage-limit reasons", 
   const reset = new Date(2026, 9, 18, 14, 5).getTime();
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: reset }), { state: "working", reason: "waiting for reset 14:05" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, { resetsAtMs: reset }), { state: "failed", reason: null });
-  assert.deepEqual(sessionStatus(quiet, null, false, true), { state: "done", reason: null });
+  assert.equal(sessionStatus(quiet, null, false, true), null, "a finished session shows no word, only its unread dot");
 });
 
 test("git marks still refresh the context card but never choose a row word", () => {
@@ -41,7 +42,7 @@ test("git marks still refresh the context card but never choose a row word", () 
   applySettledTabEvents([{ stream: "conversation:s", event: { type: "requestReady", conversationId: "s", requestId: "r", head: "abc" } } as EventEnvelope]);
   assert.deepEqual(useSettledTabs.getState().byTab.s, { state: "ready" });
   assert.equal(sessionStatus(quiet, null), null);
-  assert.deepEqual(sessionStatus(quiet, null, false, true), { state: "done", reason: null });
+  assert.equal(sessionStatus(quiet, null, false, true), null, "a finished session shows no word, only its unread dot");
 });
 
 test("D61: a session's turn end looks at git again, and only work all on the base leaves nothing to merge", () => {
