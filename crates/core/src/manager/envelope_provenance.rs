@@ -4,12 +4,26 @@ use crate::{Error, InjectionKind, Result};
 use brigadier_providers::session_file::Said;
 use brigadier_providers::{InputPart, TurnInput};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 pub(crate) const MARK: &str = "[Brigadier internal input ";
-static DISK: Mutex<()> = Mutex::new(());
+type RecordLocks = HashMap<PathBuf, Weak<Mutex<()>>>;
+static DISK: LazyLock<Mutex<RecordLocks>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// A record's read/modify/write operations serialize only with that record: a busy session's
+/// provenance must not stall another session's send or its time-sensitive turn boundary.
+fn disk(record: &Path) -> Arc<Mutex<()>> {
+    let mut locks = DISK.lock().unwrap();
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(record).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(record.to_path_buf(), Arc::downgrade(&lock));
+    lock
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct Registration {
     nonce: String,
@@ -69,7 +83,8 @@ pub(super) fn register(
     };
     let nonce = uuid::Uuid::now_v7().to_string();
     let wire = format!("{MARK}{nonce}]\n{text}");
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
     registrations.push(Registration {
         nonce,
@@ -90,7 +105,8 @@ pub(super) fn bind(record: &Path, text: &str, native: &str) -> Result<bool> {
     let Some((nonce, _)) = text.strip_prefix(MARK).and_then(|s| s.split_once("]\n")) else {
         return Ok(false);
     };
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
     let Some(registered) = registrations
         .iter_mut()
@@ -120,7 +136,8 @@ pub(super) fn bind_legacy(
     if !internal(&[kind]) {
         return Ok(false);
     }
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
     let nonce = format!("legacy-{seq}");
     if let Some(registered) = registrations.iter().find(|r| r.nonce == nonce) {
@@ -178,7 +195,8 @@ pub(super) fn note_sent(record: &Path, text: &str, user: &[(usize, usize)], at: 
     if solid.is_empty() {
         return Ok(());
     }
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
     registrations.push(Registration {
         nonce: uuid::Uuid::now_v7().to_string(),
@@ -201,7 +219,8 @@ pub(super) fn bind_sent(
     native: &str,
     at: i64,
 ) -> Result<Option<Vec<(usize, usize)>>> {
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
     if let Some(user) = registrations
         .iter()
@@ -230,7 +249,8 @@ pub(super) fn bind_sent(
 /// The CLI's messages bound to sends Brigadier noted, by `<session>:<item>`: the user's words
 /// in each.
 pub(super) fn sent_ids(record: &Path) -> std::collections::HashMap<String, Vec<(usize, usize)>> {
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     read(record)
         .unwrap_or_default()
         .into_iter()
@@ -240,7 +260,8 @@ pub(super) fn sent_ids(record: &Path) -> std::collections::HashMap<String, Vec<(
 
 /// Whether a send Brigadier noted since `since` is bound to no message of the CLI's yet.
 pub(super) fn unbound_since(record: &Path, since: i64) -> bool {
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     read(record)
         .unwrap_or_default()
         .iter()
@@ -283,7 +304,8 @@ pub(crate) fn said(text: &str, user: &[(usize, usize)]) -> Said {
 pub(super) fn noted(record: &Path, text: &str) -> Option<Vec<(usize, usize)>> {
     let solid = solid(text);
     let hash = blake3::hash(solid.as_bytes()).to_hex().to_string();
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     read(record)
         .unwrap_or_default()
         .into_iter()
@@ -292,7 +314,8 @@ pub(super) fn noted(record: &Path, text: &str) -> Option<Vec<(usize, usize)>> {
 }
 
 pub(super) fn ids(record: &Path) -> HashSet<String> {
-    let _guard = DISK.lock().unwrap();
+    let disk = disk(record);
+    let _guard = disk.lock().unwrap();
     read(record)
         .unwrap_or_default()
         .into_iter()
@@ -304,6 +327,48 @@ pub(super) fn ids(record: &Path) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unrelated_sessions_provenance_write_does_not_wait_for_another_record() {
+        let dir = std::env::temp_dir().join(format!("independent-sends-{}", uuid::Uuid::now_v7()));
+        let first = dir.join("first");
+        let second = dir.join("second");
+        let first_disk = disk(&first);
+        let guard = first_disk.lock().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            note_sent(&second, "Another session's input.", &[], 1_000).unwrap();
+            sent.send(()).unwrap();
+        });
+        let finished = received.recv_timeout(std::time::Duration::from_secs(2));
+        drop(guard);
+        writer.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(finished.is_ok(), "another record blocked an unrelated send");
+    }
+
+    #[test]
+    fn concurrent_sends_to_one_record_are_all_kept_and_bound_once() {
+        let dir = std::env::temp_dir().join(format!("concurrent-sends-{}", uuid::Uuid::now_v7()));
+        std::thread::scope(|scope| {
+            for n in 0..8 {
+                let dir = &dir;
+                scope.spawn(move || note_sent(dir, &format!("Input {n}."), &[], 1_000).unwrap());
+            }
+        });
+        for n in 0..8 {
+            assert_eq!(
+                bind_sent(&dir, &format!("Input {n}."), &format!("s:{n}"), 1_001).unwrap(),
+                Some(vec![])
+            );
+            assert_eq!(
+                bind_sent(&dir, &format!("Input {n}."), &format!("s:copy-{n}"), 1_001).unwrap(),
+                None
+            );
+        }
+        assert_eq!(sent_ids(&dir).len(), 8);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn generic_reminder_and_background_provenance_binds_once_and_survives_replay() {
         let dir =
