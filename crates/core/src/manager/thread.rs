@@ -1,11 +1,11 @@
 //! The session's thread (THREAD-PLAN.md Q1, Q6): the CLI session that talks with the user,
 //! reads, runs and makes tiny edits itself, and runs the workers.
 //!
-//! Its working directory stays its own scratch folder (`orch/<id>`), which keeps `--resume`
-//! working. The code it works on is its *workspace*, given to the CLI as an extra folder: the
-//! session's checkout. The workspace
-//! is never recorded under the thread's cleanup-ledger owner, so ending the thread's processes
-//! (hibernation, a seam, an account switch) never reaches what runs there.
+//! It runs in its *workspace*, the session's checkout (#523), so its plain commands and its CLI's
+//! own instruction discovery see the repository; its scratch folder (`orch/<id>`) stays its
+//! sweep folder. The workspace is never recorded under the thread's cleanup-ledger owner, so
+//! ending the thread's processes (hibernation, a seam, an account switch) never reaches what
+//! runs there.
 //!
 //! The thread's CLI runs at the session's permission level, passed straight through as its
 //! CLI's own permission mode, as a worker's is (G5). What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or

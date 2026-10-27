@@ -57,6 +57,7 @@ mod find_repos;
 mod flow;
 mod fork;
 mod fresh_base;
+mod fusion_offer;
 mod gh;
 mod git_actions;
 mod inbox_store;
@@ -113,6 +114,7 @@ pub(super) mod upgrade;
 mod usage;
 mod usage_view;
 mod user_rebase;
+mod visuals;
 mod waiting;
 pub mod warm;
 mod watchdog;
@@ -1025,6 +1027,18 @@ impl ToolHost for SessionManager {
                     ToolCall::Browser(call),
                 ) => {
                     crate::heap(|| manager.browser_tool(conversation_id, Some(task_id), call)).await
+                }
+                (
+                    Role::Chat { conversation_id },
+                    ToolCall::Orchestrator(crate::tools::OrchestratorCall::OfferFusion(args)),
+                ) => {
+                    crate::heap(|| {
+                        manager.orchestrator_call(
+                            conversation_id,
+                            crate::tools::OrchestratorCall::OfferFusion(args),
+                        )
+                    })
+                    .await
                 }
                 (Role::Chat { .. }, ToolCall::Chat(call)) => manager.chat_call(call).await,
                 (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {

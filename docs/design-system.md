@@ -440,6 +440,31 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer menus, rail & queue | `Rail item/Card` | `app/conversation/Notices.tsx` | `Notices` | look of `Rail item/Card` (the tray); its notice rows are code only |
 | — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
+Top-level Chat composers, including new-chat drafts, always show the Fusion pill after the
+permission picker and a vertical divider. It toggles between unpressed and pressed and stays
+on for that Chat until turned off, including when a draft becomes a Chat. With fewer than two
+ready CLIs it is disabled with the “Needs two ready CLIs” tooltip. Sessions, side chats and
+tab chats have no Fusion toggle; the + menu has no Fusion entry. Typed `/fusion` still works.
+
+## Inline visuals
+
+Top-level Chats draw `brigadier-table`, `brigadier-chart` and `brigadier-html` fences inline.
+Sessions, workers, side chats and tab chats keep the code card. Tables reuse the Markdown
+table's scrolling, copy and expand controls. Charts use the app's colour tokens, a bounded
+container and a text description of the values. Invalid data shows a plain error; open table
+and chart fences show “Drawing…”.
+
+The shell seals network APIs and native IPC lookups before model scripts run. The native
+startup hook applies the same restrictions to child realms; the shell CSP denies child loads.
+On macOS a WebKit content rule blocks network resources and connection hints from visual
+frames. The frame response waits for that rule to be installed, and fails closed if it cannot
+be installed. The parent frame policy is also applied when developing through Vite.
+
+HTML previews update at most once a second with scripts removed. A closed fence gets a fresh,
+offline frame with the app's text, surface, border, spacing and control tokens. The frame can
+resize from 50 to 4000 pixels. A follow-up click puts text in the composer for the user to send;
+it is ignored while a turn runs. HTTPS links follow the app's existing link path.
+
 ## Icons
 
 Every icon the app draws lives in `apps/desktop/src/components/icons/`, one folder per set, and

@@ -1937,6 +1937,10 @@ pub enum OrchestratorStepKind {
     },
     /// The user started the offer `id` as the session `session`.
     SessionOfferTaken { id: String, session: ConversationId },
+    /// Fusion offered in a top-level Chat; nothing starts until the user clicks Ask.
+    FusionOffered { id: String, question: String },
+    /// The user clicked Ask on the Fusion offer `id`.
+    FusionOfferTaken { id: String },
     /// An older Brigadier's merge, held until no worker wrote ("Merging after N workers
     /// finish"). Nothing holds a merge now; stored ones are read.
     MergeHeld {

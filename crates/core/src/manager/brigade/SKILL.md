@@ -33,7 +33,7 @@ Every new job (build, change, fix, design, research) opens with a grilling round
 
 Questions go in the question tool or on a card, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown.
 
-Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction. The user unsure which way: run the fusion skill and answer from it.
+Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction. The user unsure which way: a top-level Chat may offer Fusion with `brigadier fusion offer "<question>"`; a session never starts or offers Fusion. Run the fusion skill only when the user starts it in a top-level Chat.
 
 Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.
 
@@ -50,6 +50,7 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one. |
 | `brigadier sessions [--all]` | Other sessions; message one if asked. |
+| `brigadier fusion offer "<question>"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |
 | `brigadier session propose --title "2-4 words" "<self-contained brief>"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |
 | `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |
 | `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |

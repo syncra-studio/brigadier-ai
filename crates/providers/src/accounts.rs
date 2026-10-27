@@ -1121,31 +1121,47 @@ mod tests {
         let read = |path: &Path| -> Value {
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
         };
-        // Like Claude Code's unlocked writes in the account's session: read, change, write.
-        let session = {
-            let config = config.clone();
-            std::thread::spawn(move || {
-                for n in 0..40 {
+        for n in 0..8 {
+            // Like Claude Code's unlocked writes: read, change, rename. Make its stale
+            // read precede the carry and its write happen during settle. Wall-clock
+            // sleeps could instead let a stale write land after reconciliation ended,
+            // where an old server is indistinguishable from an account-local addition.
+            let (read_tx, read_rx) = std::sync::mpsc::channel();
+            let (write_tx, write_rx) = std::sync::mpsc::channel();
+            let session = {
+                let config = config.clone();
+                std::thread::spawn(move || {
                     let mut value: Value =
                         serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
-                    value["numStartups"] = json!(n);
-                    let temp = config.with_extension("claude-tmp");
-                    std::fs::write(&temp, serde_json::to_string(&value).unwrap()).unwrap();
-                    std::fs::rename(&temp, &config).unwrap();
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-            })
-        };
-        for n in 0..8 {
+                    read_tx.send(()).unwrap();
+                    write_rx.recv().unwrap();
+                    for startup in n * 5..(n + 1) * 5 {
+                        value["numStartups"] = json!(startup);
+                        let temp = config.with_extension("claude-tmp");
+                        std::fs::write(&temp, serde_json::to_string(&value).unwrap()).unwrap();
+                        std::fs::rename(&temp, &config).unwrap();
+                    }
+                })
+            };
+            read_rx.recv().unwrap();
             std::fs::write(
                 &main,
                 json!({ "mcpServers": { format!("s{n}"): { "command": "x" } } }).to_string(),
             )
             .unwrap();
-            carry_servers(&main, &home).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(30));
+            let mut session = Some(session);
+            carry_servers_with_settle(&main, &home, || {
+                if let Some(session) = session.take() {
+                    write_tx.send(()).unwrap();
+                    session.join().unwrap();
+                }
+            })
+            .unwrap();
+            assert!(
+                session.is_none(),
+                "the carry reconciled the session's stale write"
+            );
         }
-        session.join().unwrap();
         carry_servers(&main, &home).unwrap();
         let got = read(&config);
         assert_eq!(got["numStartups"], json!(39));

@@ -2489,6 +2489,8 @@ mod feedback_tests;
 #[cfg(unix)]
 mod fresh_base_tests;
 #[cfg(unix)]
+mod fusion_offer_tests;
+#[cfg(unix)]
 #[cfg(unix)]
 mod git_writing_tests;
 #[cfg(unix)]
@@ -2600,3 +2602,6 @@ mod archive_delete_tests;
 
 #[cfg(unix)]
 mod delete_leak_tests;
+
+#[cfg(unix)]
+mod visuals_tests;

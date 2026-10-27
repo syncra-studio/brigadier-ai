@@ -1,0 +1,104 @@
+<!doctype html><html><head><meta charset="utf-8"><script>
+(() => {
+  if (Object.hasOwn(window, '__brigadierVisualsLocked')) return;
+  // CSP does not cover WebRTC. Remove every entry point before receiving model content.
+  // Seal the prototypes too, so a saved native getter cannot recover a hidden handle.
+  const lock = (object, name) => {
+    for (let target = object; target; target = Object.getPrototypeOf(target)) {
+      if (target === object || Object.hasOwn(target, name)) {
+        Object.defineProperty(target, name, {value:undefined, writable:false, configurable:false});
+      }
+    }
+  };
+  try {
+    const names = new Set([
+      'RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection',
+      'RTCIceGatherer', 'RTCIceTransport', 'RTCDtlsTransport',
+      'fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'WebTransport',
+      'Worker', 'SharedWorker', 'ipc',
+      '__TAURI__', '__TAURI_INTERNALS__', '__TAURI_IPC__'
+    ]);
+    for (let target = window; target; target = Object.getPrototypeOf(target)) {
+      for (const name of Object.getOwnPropertyNames(target)) {
+        if (/^(RTC|webkitRTC|mozRTC|__TAURI)/.test(name)) names.add(name);
+      }
+    }
+    // WebKit's namespace is read-only, but its transport lookup can be shadowed and sealed.
+    if (window.webkit) lock(window.webkit, 'messageHandlers');
+    if (window.chrome) lock(window.chrome, 'webview');
+    if (window.external) lock(window.external, 'invoke');
+    for (const name of names) lock(window, name);
+    for (const name of ['sendBeacon', 'serviceWorker']) lock(navigator, name);
+  } catch {
+    // Fail closed on a webview where a native property cannot be sealed.
+    Object.defineProperty(window, '__brigadierVisualsLocked', {value:false});
+    return;
+  }
+  Object.defineProperty(window, '__brigadierVisualsLocked', {value:true});
+})();
+</script><style>
+html,body { margin:0; height:auto !important; min-height:0 !important; overflow:hidden; }
+body { color:var(--foreground); background:var(--background); font-family:var(--font-sans); font-size:var(--text-sm); }
+*,*::before,*::after { box-sizing:border-box; }
+button,input,select,textarea { font:inherit; color:inherit; }
+button { border:1px solid var(--border); border-radius:var(--radius-capsule); background:var(--secondary); padding:var(--spacing-2) var(--spacing-3); cursor:pointer; }
+a { color:var(--link); }
+</style><style id="theme"></style><style id="content-style"></style></head><body><main id="content"></main><script>
+(() => {
+  if (window.__brigadierVisualsLocked !== true) {
+    document.body.textContent = 'This visual cannot run in this webview.';
+    return;
+  }
+  let port;
+  let finished = false;
+  const content = document.getElementById('content');
+  const send = (message) => port && port.postMessage(message);
+  const report = () => send({type:'resize', height:Math.ceil(document.body.scrollHeight)});
+  window.sendPrompt = ({text}) => send({type:'sendPrompt', text});
+  window.openLink = ({url}) => send({type:'openLink', url});
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest && event.target.closest('a');
+    if (link) { event.preventDefault(); window.openLink({url:link.href}); }
+  });
+  document.addEventListener('submit', (event) => event.preventDefault());
+  window.addEventListener('message', (event) => {
+    if (port || event.source !== parent || event.data !== 'brigadier-visual' || event.ports.length !== 1) return;
+    port = event.ports[0];
+    port.onmessage = ({data}) => {
+      if (finished || !data || data.type !== 'render' || typeof data.html !== 'string') return;
+      document.getElementById('theme').textContent = typeof data.theme === 'string' ? data.theme : '';
+      if (!data.final && !window.Idiomorph && typeof data.morph === 'string') {
+        const morph = document.createElement('script'); morph.textContent = data.morph; document.head.appendChild(morph);
+      }
+      const parsed = new DOMParser().parseFromString(data.html, 'text/html');
+      const scripts = [...parsed.querySelectorAll('script')].map((script) => ({text:script.textContent, type:script.type, external:script.hasAttribute('src')}));
+      document.getElementById('content-style').textContent = [...parsed.querySelectorAll('style')].map((style) => style.textContent).join('\n');
+      parsed.querySelectorAll('script,style,meta,link,base,iframe,object,embed').forEach((node) => node.remove());
+      for (const node of parsed.querySelectorAll('*')) {
+        for (const attr of [...node.attributes]) {
+          if (attr.name.toLowerCase().startsWith('on') || /^(href|src|action|formaction|xlink:href)$/i.test(attr.name) && /^\s*javascript:/i.test(attr.value)) node.removeAttribute(attr.name);
+        }
+      }
+      if (!data.final && window.Idiomorph) {
+        try { window.Idiomorph.morph(content, parsed.body.innerHTML, {morphStyle:'innerHTML'}); }
+        catch { content.innerHTML = parsed.body.innerHTML; }
+      } else content.innerHTML = parsed.body.innerHTML;
+      if (data.final) {
+        finished = true;
+        for (const script of scripts) {
+          if (script.external) continue;
+          const node = document.createElement('script');
+          node.textContent = script.text;
+          if (script.type) node.type = script.type;
+          content.appendChild(node);
+        }
+      }
+      report();
+    };
+    port.start();
+    send({type:'ready'});
+  });
+  new ResizeObserver(report).observe(content);
+  window.addEventListener('resize', report);
+})();
+</script></body></html>

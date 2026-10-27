@@ -20,5 +20,24 @@ test("the @ menu has a heading per kind before a query and one ranked list with 
     // A new chat mentions the other conversations; a new session its project's files.
     assert.deepEqual(run.newChat, ["# Chats", "Menus", "Release notes"], mode);
     assert.equal(run.newSession, true, mode);
+    assert.equal(run.sessionFusion, false, mode);
+    assert.equal(run.sessionDraftChip, false, mode);
+    assert.equal(run.sessionDraftFusion, false, mode);
+    assert.equal(run.draftFusionVisible, true, mode);
+    assert.equal(run.draftFusionCarry, true, mode);
+    assert.equal(run.draftFusionSticky, true, mode);
+    assert.equal(run.freshDraftFusionOff, true, mode);
+    assert.equal(run.fusionVisible, true, mode);
+    assert.equal(run.fusionMenuEntry, false, mode);
+    assert.equal(run.fusionDisabled, true, mode);
+    assert.equal(run.fusionHint, true, mode);
+    assert.equal(run.fusionOff, true, mode);
+    assert.equal(run.fusionSticky, true, mode);
+    assert.equal(run.normalAfterFusion, true, mode);
+    assert.equal(run.typedFusion, "/fusion A typed question.", mode);
+    assert.deepEqual(run.fusionSend, { fusion: true, text: "Compare the options." }, mode);
+    assert.equal(run.fusionPill, "Fusion", mode);
+    assert.equal(run.rawFusion, false, mode);
+    assert.equal(run.fusionSlashRow, false, mode);
   }
 });

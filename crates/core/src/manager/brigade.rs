@@ -13,7 +13,7 @@ use crate::{Error, Result};
 pub(crate) const SKILL: &str = include_str!("brigade/SKILL.md");
 
 /// The `/fusion` skill (S36), shipped beside it in the same plugin: one consult per CLI when
-/// the user is uncertain, then one merged answer.
+/// the user starts it in a top-level Chat, then one merged answer.
 pub(crate) const FUSION: &str = include_str!("fusion/SKILL.md");
 
 /// Whether the user's copy overrides the shipped skill, and where it is.
@@ -144,7 +144,8 @@ mod tests {
         // call on one card, 0.28 KB (harness D36); workers' disposable output in their $TMPDIR,
         // results inline instead of links, and new sessions proposed on a card, 0.48 KB (the
         // 10-26 artifact rule; proposed).
-        assert!(SKILL.len() <= 11_320, "{} bytes", SKILL.len());
+        // Chat-only, user-started Fusion and its offer command add 0.30 KB (L7, L9).
+        assert!(SKILL.len() <= 11_650, "{} bytes", SKILL.len());
         for line in [
             "Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.",
             "with the results themselves, research findings too; never a record or skill file link, and a report, plan or page only when the user asks for that document or to save it",
@@ -198,7 +199,8 @@ mod tests {
         ] {
             assert!(SKILL.contains(line), "{line}");
         }
-        assert!(SKILL.contains("the fusion skill"));
+        assert!(SKILL.contains("brigadier fusion offer"));
+        assert!(SKILL.contains("a session never starts or offers Fusion"));
         // Deciding (run2-D40): the session judges a message queued while it works.
         assert!(SKILL.contains("judge it soon with `brigadier queue <id>`"));
         // Reviews in proportion (the w123 bench: a two-file job tripled in time under them),
@@ -328,6 +330,9 @@ mod tests {
         ] {
             assert!(FUSION.contains(line), "{line}");
         }
+        assert!(FUSION.contains("Never on your own."));
+        assert!(FUSION.contains("With only one CLI ready, run one consult and no cross round"));
+        assert!(!FUSION.contains("when they are uncertain"));
         assert!(!FUSION.contains("with `--model`"));
         assert!(!FUSION.contains("lean"));
     }

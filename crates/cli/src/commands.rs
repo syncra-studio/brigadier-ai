@@ -640,7 +640,7 @@ pub const COMMANDS: &[Command] = &[
                   <path>`, `diff last-turn|branch|uncommitted`, `output <id>`, `url <url>`, \
                   `worker <id>` or `page <id>`; `terminal-run \
                   <command…>` types a command in a terminal tab; `show-session <id>` shows \
-                  another session; `close-tab <tab>` closes a tab.",
+                  another session; `close-tab <tab>` closes a tab; `visuals` reads the Chat drawing guide.",
         args: &[
             action(
                 &[
@@ -650,6 +650,7 @@ pub const COMMANDS: &[Command] = &[
                     "terminal-run",
                     "show-session",
                     "close-tab",
+                    "visuals",
                 ],
                 "What to do.",
             ),
@@ -974,6 +975,21 @@ pub const COMMANDS: &[Command] = &[
         ],
         available: true,
         schema: include_str!("../schemas/feedback.schema.json"),
+    },
+    Command {
+        name: "fusion",
+        summary: "Offer Fusion in a top-level Chat; only the user starts it.",
+        details: "`offer <question>`: offer one answer from every installed CLI, merged into one reply. Nothing starts until the user clicks Ask. Only top-level Chats; refused in sessions, side chats, tab chats and workers. The question may come from standard input.",
+        args: &[
+            action(&["offer"], "What to do."),
+            rest(
+                "question",
+                "The question to ask every installed CLI.",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/fusion.schema.json"),
     },
     Command {
         name: "session",

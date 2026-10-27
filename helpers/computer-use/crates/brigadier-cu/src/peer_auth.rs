@@ -61,6 +61,14 @@ mod tests {
             .arg("5")
             .spawn()
             .unwrap();
+        // A vfork spawn can return while the child still shows this test's
+        // executable; wait until it runs `sleep`.
+        let own = crate::process::executable(std::process::id());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::process::executable(child.id()) == own && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let verdict = super::validate(Some(child.id()));
         let _ = child.kill();
         let _ = child.wait();

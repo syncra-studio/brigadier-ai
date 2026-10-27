@@ -55,6 +55,9 @@ impl SessionManager {
             OrchestratorCall::OfferSession(args) => {
                 crate::heap(|| self.offer_session(id, args)).await
             }
+            OrchestratorCall::OfferFusion(args) => {
+                crate::heap(|| self.offer_fusion(id, args)).await
+            }
             // What the thread finds in the index counts as its own search (`super::reads`).
             OrchestratorCall::CodeSearch(args) => {
                 let search = FileSearch {

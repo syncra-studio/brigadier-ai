@@ -10,10 +10,12 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
+import { fusionProviders } from "@/fixtures/fusionProviders";
 import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationView as View, Mention, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { setRichComposer } from "@/state/composerMode";
+import { armFusionSend } from "@/state/fusionSend";
 import { type Selection, useApp } from "@/state/store";
 
 const id = "menus-session";
@@ -31,11 +33,16 @@ const project = { id: "p1", name: "menus", createdAtMs: start, repos: [{ path: "
 
 const sends: { text: string; mentions: Mention[] }[] = [];
 const listings: string[] = [];
+const fusionSends: { fusion: boolean; text: string }[] = [];
 let sequence = 10;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "getRepoInfo":
+      return { method: req.method, repo: { path: req.path, name: "menus", currentBranch: "main", dirty: false, branches: [{ name: "main", commit: "a1", checkedOutAt: req.path }] } };
+    case "createConversation":
+      return { method: req.method, conversation: conversation(`draft-${sequence++}`, "Draft", req.kind, 0) };
     case "getConversation":
       return {
         method: req.method,
@@ -53,14 +60,15 @@ mockIPC((command, payload) => {
       return { method: req.method, files: FILES, truncated: false };
     case "listCliCommands":
       // As the session's CLI reports them: one of the user's skills.
-      return { method: req.method, commands: [{ name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
+      return { method: req.method, commands: [{ name: "fusion", text: "/fusion", description: "Fusion", argumentHint: null }, { name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
     case "listProjectFiles":
       listings.push(`project:${req.projectId}`);
       return { method: req.method, files: FILES, truncated: false };
     case "sendMessage": {
       sends.push({ text: req.text, mentions: req.mentions });
+      if (req.fusion) fusionSends.push({ fusion: req.fusion, text: req.text });
       const message = {
-        id: `sent-${sequence}`, conversationId: req.conversationId, seq: sequence++, role: "user", text: req.text, blob: null,
+        id: `sent-${sequence}`, conversationId: req.conversationId, seq: sequence++, role: "user", text: req.fusion ? `$fusion ${req.text}` : req.text, blob: null,
         attachments: req.attachments, mentions: req.mentions, createdAtMs: Date.now(), model: null,
         requestId: `sent-request-${sequence}`, parentId: null,
       };
@@ -119,11 +127,23 @@ function show(selection: Selection, mode: string) {
   );
 }
 
+const plus = () => document.querySelector<HTMLButtonElement>('[data-slot="plus-trigger"]');
+const plusRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="plus-menu"] [role=menuitem]')];
+
+const fusionRow = () => plusRows().find((row) => row.textContent?.includes("Fusion"));
+const fusionChip = () => document.querySelector<HTMLButtonElement>('[data-slot="fusion-chip"]');
+const fusionOn = () => fusionChip()?.getAttribute("aria-pressed") === "true";
+const openPlus = async () => { plus()!.click(); await until("the + menu", () => plusRows().length > 0); };
+
 async function exercise(mode: "rich" | "plain") {
+  armFusionSend("new", false);
+  armFusionSend(other.id, false);
+  useApp.setState({ conversations: { [id]: session, [other.id]: other } });
   const seen: Record<string, unknown> = {};
   setRichComposer(mode === "rich");
   show({ type: "conversation", id }, mode);
   await until("the field", () => field() !== null);
+  seen.sessionFusion = !!fusionChip();
   field()!.focus();
   await until("the files listed", () => listings.includes(`session:${id}`));
 
@@ -180,12 +200,19 @@ async function exercise(mode: "rich" | "plain") {
   show({ type: "draft", kind: "chat" }, mode);
   // Its own field: the one shown before stays until the new view renders.
   await until("the new chat's field", () => field() !== null && field() !== beforeChat);
+  seen.draftFusionVisible = fusionChip()?.getAttribute("aria-pressed") === "false";
   field()!.focus();
   await type("@");
   await until("the new chat's @ menu", () => menu().includes("# Chats"));
   seen.newChat = menu();
   await key("Escape");
   await clear();
+
+  // An armed Chat draft must not turn a subsequent session draft's send into Fusion.
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
+  await until("the draft's Fusion toggle ready", () => fusionChip()?.disabled === false);
+  fusionChip()!.click();
+  await until("the draft's Fusion toggle on", fusionOn);
 
   // A new session: its project's files.
   const beforeSession = field();
@@ -198,6 +225,97 @@ async function exercise(mode: "rich" | "plain") {
   seen.newSession = listings.includes("project:p1");
   await key("Escape");
   await clear();
+  // Fusion is absent in sessions, including their drafts.
+  seen.sessionDraftChip = !!fusionChip();
+  const beforeDraftSend = sends.length;
+  field()!.focus();
+  await type("Keep this a session.");
+  await key("Enter");
+  await until("the session draft's send", () => sends.length > beforeDraftSend);
+  seen.sessionDraftFusion = fusionSends.at(-1)?.text === "Keep this a session.";
+
+  // The Chat draft kept its toggle while visiting a session. Its created Chat inherits it.
+  const beforeReturn = field();
+  show({ type: "draft", kind: "chat" }, mode);
+  await until("the Chat draft again", () => field() !== null && field() !== beforeReturn);
+  await until("the draft still on", fusionOn);
+  const beforeDraftFusion = fusionSends.length;
+  field()!.focus();
+  await type("Compare draft options.");
+  await key("Enter");
+  await until("the Chat draft sent", () => fusionSends.length > beforeDraftFusion);
+  const created = useApp.getState().selection;
+  if (created.type !== "conversation") throw new Error("The Chat draft did not become a conversation");
+  const beforeCreated = field();
+  show(created, mode);
+  await until("the created Chat", () => field() !== null && field() !== beforeCreated && fusionOn());
+  seen.draftFusionCarry = true;
+  field()!.focus();
+  await type("Compare once more.");
+  await key("Enter");
+  await until("the created Chat's next Fusion send", () => fusionSends.length === beforeDraftFusion + 2);
+  seen.draftFusionSticky = fusionOn();
+  const beforeFresh = field();
+  show({ type: "draft", kind: "chat" }, mode);
+  await until("a fresh draft", () => field() !== null && field() !== beforeFresh);
+  seen.freshDraftFusionOff = fusionChip()?.getAttribute("aria-pressed") === "false";
+
+  const old = field();
+  show({ type: "conversation", id: other.id }, mode);
+  await until("the Chat field", () => field() !== null && field() !== old);
+  seen.fusionVisible = fusionChip()?.getAttribute("aria-pressed") === "false";
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders.slice(0, 1), sessions: [], fixtures: [] } } }));
+  await until("the disabled Fusion toggle", () => fusionChip()?.disabled === true);
+  seen.fusionDisabled = fusionChip()!.disabled;
+  const disabledChip = fusionChip()!.getBoundingClientRect();
+  await fixtureInput({ type: "pointer", x: disabledChip.x + disabledChip.width / 2, y: disabledChip.y + disabledChip.height / 2 });
+  await until("the disabled Fusion hint", () => document.querySelector('[role="tooltip"]')?.textContent === "Needs two ready CLIs");
+  seen.fusionHint = true;
+  await fixtureInput({ type: "pointer", x: 0, y: 0 });
+  field()!.focus();
+  useApp.setState((state) => ({ providers: { ...state.providers, view: { providers: fusionProviders, sessions: [], fixtures: [] } } }));
+  await until("the Fusion toggle ready", () => fusionChip()?.disabled === false);
+  await openPlus();
+  seen.fusionMenuEntry = !!fusionRow();
+  await key("Escape");
+  fusionChip()!.click();
+  await until("Fusion turned on", fusionOn);
+  fusionChip()!.click();
+  await until("Fusion turned off", () => fusionChip()?.getAttribute("aria-pressed") === "false");
+  seen.fusionOff = !!fusionChip();
+  fusionChip()!.click();
+  await until("Fusion turned on again", fusionOn);
+  const beforeFusion = fusionSends.length;
+  field()!.focus();
+  await type("Compare the options.");
+  await key("Enter");
+  await until("the Fusion send", () => fusionSends.length > beforeFusion);
+  seen.fusionSend = fusionSends.at(-1);
+  await until("the Fusion pill", () => document.querySelector('[data-slot="fusion-message-pill"]') !== null);
+  seen.fusionPill = document.querySelector('[data-slot="fusion-message-pill"]')?.textContent;
+  seen.rawFusion = document.querySelector('[data-role="user"]')?.textContent?.includes("$fusion");
+  await until("an empty field after Fusion", () => typed() === "");
+  await type("Compare sync safety.");
+  await key("Enter");
+  await until("the next Fusion send", () => fusionSends.length === beforeFusion + 2 && typed() === "");
+  seen.fusionSticky = fusionOn();
+  fusionChip()!.click();
+  await until("Fusion off after sending", () => !fusionOn());
+  await type("A normal message.");
+  const beforeNormal = sends.length;
+  await key("Enter");
+  await until("a normal send", () => sends.length > beforeNormal && typed() === "");
+  seen.normalAfterFusion = fusionSends.length === beforeFusion + 2;
+  await type("/");
+  await until("the Chat / menu", () => commands() !== null);
+  seen.fusionSlashRow = commands()?.textContent?.includes("Fusion");
+  await key("Escape");
+  await clear();
+  await type("/fusion A typed question.");
+  const beforeTyped = sends.length;
+  await key("Enter");
+  await until("a typed Fusion invocation", () => sends.length > beforeTyped && typed() === "");
+  seen.typedFusion = sends.at(-1)?.text;
   return seen;
 }
 

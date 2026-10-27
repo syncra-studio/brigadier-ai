@@ -47,6 +47,8 @@ import {
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
+import { canDrawVisuals, VisualsContext } from "@/components/conversation/visuals";
+import { openLink as openVisualLink } from "@/state/links";
 import { putBack, restoreDraft } from "@/app/conversation/composerDraft";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { workerName } from "@/app/conversation/rowWords";
@@ -98,6 +100,7 @@ import {
   sendToWorker,
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
+import { isFusionArmed, isFusionChat, moveFusionSend } from "@/state/fusionSend";
 import { takeBackgroundSend } from "@/state/backgroundSend";
 import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
 import { holdDirect } from "@/state/heldDirect";
@@ -836,10 +839,11 @@ export function ConversationView({
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
       const slot = pulled.take(conversationId);
       if (!text && refs.length === 0) return;
+      const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
+      const fusion = (source ? isFusionChat(source) : draftTarget?.kind === "chat") && isFusionArmed(conversationId ?? NEW_CHAT_SCOPE);
       setError(null);
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
-      const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
       // What wasn't sent goes back into the composer, its pasted texts and images too: a refusal
       // never takes the typed message. A draft's goes to the conversation made for it, which
       // shows by then.
@@ -860,9 +864,11 @@ export function ConversationView({
         draftTarget ?? undefined,
         {
           lane: into,
+          fusion,
           queueIndex: into === "steer" ? null : (slot?.index ?? null),
           to: conversationId,
           onTarget: (id) => {
+            if (!conversationId && draftTarget?.kind === "chat") moveFusionSend(NEW_CHAT_SCOPE, id);
             target = id;
           },
         },
@@ -1073,6 +1079,11 @@ export function ConversationView({
     },
     [checkout, conversationId],
   );
+  const visuals = useMemo(() => canDrawVisuals(conversation, embedded) && conversationId ? {
+    running,
+    prefill: (text: string) => putBack(conversationId, { text, attachments: [], mentions: [] }),
+    openLink: (url: string) => { void openVisualLink(url, { agent: true }).catch(fail); },
+  } : null, [conversation, embedded, conversationId, running, fail]);
   return (
     <ViewContext.Provider value={view}>
       <ThreadHistoryContext.Provider value={earlier}>
@@ -1125,12 +1136,14 @@ export function ConversationView({
                             >
                               <SummaryPane summary={summary}>
                                 {summary && <SessionSummary conversation={conversation} />}
+                                <VisualsContext.Provider value={visuals}>
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
                                   scrollKey={conversation?.id}
                                 />
+                                </VisualsContext.Provider>
                               </SummaryPane>
                             </div>
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}

@@ -656,17 +656,16 @@ impl SessionManager {
 
     /// Before the next turn: a closed seam's predecessor CLI, still up (a limit kept it), goes.
     pub(super) async fn seam_retire(&self, conv: &Arc<ConvLive>) {
-        let open = {
-            let state = conv.state.lock().await;
-            state.cli.is_some() && !state.busy && !state.closing
-        };
-        if open
+        let cli = conv.idle_cli().await;
+        if let Some(cli) = cli
             && matches!(
                 self.read_seam_of(&conv.id).await.phase,
                 Phase::Closed { .. }
             )
         {
-            conv.close_cli().await;
+            // Several kicks can read Closed before either retires the predecessor. Claim
+            // that CLI under the state lock so only its owner may clear closing again.
+            conv.retire_cli_for(&cli, None).await;
         }
     }
 

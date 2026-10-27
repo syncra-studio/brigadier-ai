@@ -77,6 +77,7 @@ import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
+import { forgetFusionSend } from "@/state/fusionSend";
 import { forgetHeldDirect } from "@/state/heldDirect";
 import { reopenable, rememberSelection, savedSelection } from "@/state/lastSelection";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
@@ -606,11 +607,13 @@ export async function send(
   draft?: DraftTarget,
   {
     lane = "auto",
+    fusion = false,
     queueIndex = null,
     to = null,
     onTarget,
   }: {
     lane?: SendLane;
+    fusion?: boolean;
     queueIndex?: number | null;
     /** The conversation it goes to, when not the selected one (a side chat's). */
     to?: string | null;
@@ -708,6 +711,7 @@ export async function send(
       attachments: outgoing.attachments,
       mentions: outgoing.mentions,
       steer,
+      fusion,
       queueIndex: slot,
     });
     if (outcome.type === "sent") {
@@ -992,10 +996,12 @@ export async function startSessionFrom(source: Conversation, outgoing: Outgoing)
   return conversation;
 }
 
-/**
- * "Start as session" on the thread's offer `offerId`: the daemon starts its task as a new
- * background session of `conversationId`'s project, on its own worktree; the user stays here.
- */
+/** Ask on a Fusion card: send its question in this Chat. */
+export async function startOfferedFusion(conversationId: string, offerId: string): Promise<void> {
+  await request({ method: "startOfferedFusion", conversationId, offerId });
+}
+
+/** Start the offered work as a new background session on its own worktree. */
 export async function startOfferedSession(conversationId: string, offerId: string): Promise<Conversation> {
   const { conversation } = await request({ method: "startOfferedSession", conversationId, offerId });
   storeConversation(conversation);
@@ -1525,7 +1531,10 @@ export async function deleteAll(ids: string[]): Promise<void> {
   }
   const deleted = before.filter((c) => !failed.some((entry) => entry.conversation.id === c.id));
   // Their unsent drafts go only once they are surely going.
-  for (const { id } of deleted) forgetDraft(id);
+  for (const { id } of deleted) {
+    forgetDraft(id);
+    forgetFusionSend(id);
+  }
   forgetHeldDirect(deleted.map((conversation) => conversation.id));
   forgetRightSidebarTabs(deleted.map((conversation) => conversation.id));
 }
@@ -1559,7 +1568,10 @@ export async function removeProject(
     .filter((conversation) => conversation.projectId === id)
     .map((conversation) => conversation.id);
   const { report } = await request({ method: "removeProject", id, deleteBranches, keepBrain });
-  for (const conversation of gone) forgetDraft(conversation);
+  for (const conversation of gone) {
+    forgetDraft(conversation);
+    forgetFusionSend(conversation);
+  }
   forgetHeldDirect(gone);
   forgetRightSidebarTabs(gone);
   const { selection } = useApp.getState();

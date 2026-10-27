@@ -2,6 +2,8 @@ import { type ChipMention, ComposerMentions, InlineImageContext, InlinePasteCont
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { FusionMessagePill } from "@/app/conversation/FusionChip";
+import { fusionQuestion } from "@/state/fusionSend";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { Chat, File, Folder, Globe } from "@/components/icons";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
@@ -51,7 +53,9 @@ const taskChip = (number: number) => <TaskByNumber number={number} />;
  * and the images and texts they pasted as chips where they pasted them, never inside code.
  */
 export const UserMarkdownText: FC<{ text: string; attachments: readonly AttachmentRef[] }> = ({ text, attachments }) => {
-  const normalized = useMemo(() => normalizedImages(text, attachments), [text, attachments]);
+  const question = fusionQuestion(text);
+  const shown = question ?? text;
+  const normalized = useMemo(() => normalizedImages(shown, attachments), [shown, attachments]);
   const imageChip = useCallback((n: number) => (
     <MessageInlineImage image={normalized.attachments.find((ref) => ref.inline === n && !ref.pasted)} n={n} />
   ), [normalized]);
@@ -62,6 +66,7 @@ export const UserMarkdownText: FC<{ text: string; attachments: readonly Attachme
     <TaskMentionContext.Provider value={taskChip}>
       <InlineImageContext.Provider value={imageChip}>
         <InlinePasteContext.Provider value={pasteChip}>
+          {question !== null && <FusionMessagePill />}
           <MarkdownBlock text={normalized.text} breaks />
         </InlinePasteContext.Provider>
       </InlineImageContext.Provider>

@@ -6,3 +6,5 @@ styles/onboarding.css #fff  # the welcome's mark and title are pure white; the o
 app/side-panel/NewTabTools.css 1.160714rem 28rem  # the New tab page's line height has no text token; 28rem is a container query, where var() can't go
 app/side-panel/pages/PageTab.css 2.1rem .5px 1.7875rem .9375rem 1.875rem 1rem 3px .21875rem .34375rem .15em .3125rem  # the page editor's own type (title line, heading sizes and lines), menu row and radii, quote rule, checkbox tick and hairline rings: off the text, radius and spacing scales
 components/conversation/context-ring.tsx <svg  # the context ring is drawn from the share used, not an icon
+components/conversation/visuals/idiomorph.ts <svg  # vendored DOM morph parser recognizes SVG fragments; no icon artwork
+app/conversation/ConversationView.tsx @/components/conversation/visuals  # nested visuals folder index, alongside the conversation kit

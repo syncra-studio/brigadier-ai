@@ -31,6 +31,8 @@ mod shell;
 mod simulator;
 mod smoke;
 mod updates;
+#[allow(unsafe_code)]
+mod visuals;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -707,7 +709,23 @@ fn main() {
         smoke,
     );
     tracing::info!(on = check_updates, "nightly updates");
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .plugin(tauri::plugin::Builder::<tauri::Wry>::new("visuals")
+            .js_init_script_on_all_frames(visuals::initialization_script())
+            .build())
+        .register_asynchronous_uri_scheme_protocol("brigadier-ui", |context, request, responder| {
+            let found = request.uri().path() == "/frame" && context.webview_label() == shell::MAIN_WINDOW;
+            visuals::when_ready(move |ready| {
+                let response = tauri::http::Response::builder()
+                    .status(if !found { 404 } else if ready { 200 } else { 503 })
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("X-DNS-Prefetch-Control", "off")
+                    .header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'")
+                    .body(if found && ready { include_bytes!("visuals_frame.html").to_vec() } else { b"This visual cannot run in this webview.".to_vec() })
+                    .expect("fixed visual frame response");
+                responder.respond(response);
+            });
+        });
     let builder = if check_updates {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     } else {
@@ -725,6 +743,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            visuals::install(app.handle());
             browser::set_data_dir(&platform.paths().data_dir);
             let launcher = Launcher::new(platform.clone(), daemon_env);
             let bridge = Bridge::start(

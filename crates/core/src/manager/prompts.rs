@@ -45,7 +45,7 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
 /// user (G19.Q6), and it keeps full reports (run2-D27). Its replies carry results, not links to
 /// the session's own files, and it offers feedback and proposes new sessions on cards (the
 /// 10-26 artifact rule).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler. Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.\nUser annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click. In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.";
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler. Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.\nUser annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click. In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.\nOnly in a top-level Chat, when a second opinion would help: `brigadier fusion offer \"<question>\"`. Fusion runs only when the user starts it (typed /fusion, the Fusion button, or Ask on its card), never on your own. Sessions never start or offer Fusion.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -72,7 +72,8 @@ How to write:
 /// work, with sources inline and no layout of the model's own; the app draws cards only for
 /// real things (files, images, the edited files, a running local page).
 macro_rules! answer_style {
-    () => {
+    () => { answer_style!("") };
+    ($visuals:literal) => {
         concat!(
             "
 
@@ -86,7 +87,8 @@ How a final answer looks:
 - Cite a web source as a link on the words of the claim it supports, right where it stands ([the 2026 price list](https://…)): never numbered marks like [1], and never a list of sources at the end.
 - A comparison may be one plain Markdown table of at most 3 columns, with your pick said in the sentence before it.
 - Never leave out a warning, or anything the reader must know to stay safe. Write numbers as \"7 out of 10\", not percentages, and explain each term once, in passing.
-- Brigadier draws real things as cards of its own (a file or image you link, the files you edited, a local page you started): never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section."
+- Brigadier draws real things as cards of its own (a file or image you link, the files you edited, a local page you started): never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section.",
+            $visuals
         )
     };
 }
@@ -178,7 +180,8 @@ macro_rules! chat_thread {
 - With the browser tools listed, read or use pages yourself.
 - ",
             chat_app_rule!(),
-            " `brigadier --help` lists the rest."
+            " `brigadier --help` lists the rest.
+- Draw inline when a table, chart, diagram or interactive tool helps. First read `brigadier app visuals`; use its brigadier-table, brigadier-chart or brigadier-html fences."
         )
     };
 }
@@ -259,6 +262,13 @@ const SIDE_CHAT_THREAD: &str = side_chat_thread!();
 
 /// How a Chat writes, and shapes an answer with its report (Q79, Q87).
 const CHAT_VOICE: &str = concat!(
+    voice_core!(),
+    answer_style!(
+        " In this top-level Chat, the drawing guide's visual fences are an exception: use them when they help explain the answer."
+    ),
+    research_report!("`brigadier report save`")
+);
+const SIDE_CHAT_VOICE: &str = concat!(
     voice_core!(),
     answer_style!(),
     research_report!("`brigadier report save`")
@@ -399,8 +409,9 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
 /// A Chat's instructions, or a side chat's (`side`).
 pub(crate) fn chat(side: bool) -> String {
     let thread = if side { SIDE_CHAT_THREAD } else { CHAT_THREAD };
+    let voice = if side { SIDE_CHAT_VOICE } else { CHAT_VOICE };
     format!(
-        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{thread}\n- {CHAT_GRILLING}{CHAT_VOICE}",
+        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{thread}\n- {CHAT_GRILLING}{voice}",
         STANDING_INSTRUCTIONS.trim_end(),
         today()
     )
@@ -409,6 +420,21 @@ pub(crate) fn chat(side: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawing_is_offered_only_in_top_level_chats() {
+        assert!(chat(false).contains("brigadier app visuals"));
+        assert!(chat(false).contains("visual fences are an exception"));
+        for text in [
+            chat(true),
+            STANDING_INSTRUCTIONS.to_owned(),
+            TAB_CHAT_VOICE.to_owned(),
+            worker_instructions(&Settings::default(), ProviderKind::Claude),
+        ] {
+            assert!(!text.contains("brigadier app visuals"));
+            assert!(!text.contains("visual fences are an exception"));
+        }
+    }
 
     /// §6: the file stays short (S17's byte test). The `brigadier context` pointer (D13) took
     /// its lines from tightening the rest and 50 bytes more: 2,050 (proposed). The orchestrator's
@@ -419,15 +445,15 @@ mod tests {
     /// bench or a parser pins (the ledger's kinds, one entry per thing settled) stay whole.
     /// Disposable output in $TMPDIR, results inline instead of links to the session's files, and
     /// the feedback and new-session cards took 800 more and a line: 3,300 (the 10-26 artifact
-    /// rule; proposed).
+    /// rule; proposed). Chat-only, user-started Fusion adds 253 bytes and one line (L7, L9).
     #[test]
-    fn the_standing_instructions_stay_under_3300_bytes_and_seventeen_lines() {
+    fn the_standing_instructions_stay_under_3600_bytes_and_eighteen_lines() {
         assert!(
-            STANDING_INSTRUCTIONS.len() < 3_300,
+            STANDING_INSTRUCTIONS.len() < 3_600,
             "{}",
             STANDING_INSTRUCTIONS.len()
         );
-        assert!(STANDING_INSTRUCTIONS.lines().count() < 17);
+        assert!(STANDING_INSTRUCTIONS.lines().count() < 18);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
             "$BRIGADIER_SESSION_DIR",
@@ -455,6 +481,13 @@ mod tests {
             "Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.",
             "User annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click.",
             "In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.",
+        ] {
+            assert!(WORKERS_LINE.contains(words), "{words}");
+        }
+        for words in [
+            "brigadier fusion offer",
+            "Sessions never start or offer Fusion",
+            "never on your own",
         ] {
             assert!(WORKERS_LINE.contains(words), "{words}");
         }

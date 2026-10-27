@@ -1204,8 +1204,8 @@ and `run`.
   - Research and review guidance (G23, as amended by run2-D32…D43). All of it is guidance; nothing is a gate:
     - Research goes to workers (naked, harness D13; `--lean` is gone) on the routing's search row; the session
       and its own subagents make only quick look-ups (harness D3).
-    - When the user is uncertain, help them: a model fusion gives the best advice or answer, through `/fusion`
-      or the thread's own judgement (S36) (user, 2026-10-23: "if the user is uncertain - we help him").
+    - When the user is uncertain, help them: a top-level Chat may offer Fusion with `brigadier fusion offer`;
+      only the user starts it, with `/fusion`, the Fusion button or Ask on the card (S36, L7/L9) (user, 2026-10-23: "if the user is uncertain - we help him").
       One lean researcher when the options need evidence. Builders only when prototypes must be compared,
       never by default.
     - Adversarial reviews, like the Delegator's: a big job's first plan gets a plan review before it goes to
@@ -1764,46 +1764,29 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
   - A live check drives a background app through them.
 - **Closes:** #529. After S28 (shared launch code in the providers).
 
-**S36. Model fusion when the user is uncertain (w95 item 3).** Opus.
-(user, 2026-10-23: "we do a model fusion and give the best advice/answer")
-- **Scope** (the design is proposed):
-  - **When:** the user types `/fusion <question>`, or the thread judges the user uncertain (they say they are
-    unsure, or ask which of several ways to take). Not for every reply.
-  - **Which models:** one consult per installed CLI (Claude Code and Codex today, more CLIs later), each on the
-    strongest model and effort the user's rules allow and with quota left, read from `brigadier models`. A
-    `fusion` row in the rules file (S32) can name them.
-  - **How:** the thread starts them as lean workers (`brigadier start --lean`) with the same brief: the
-    question, the context it gathered (file:line, the ledger's rules and decisions that bear on it), and
-    "answer only; change no file". Each answers alone: a recommendation, its reasons, risks and confidence.
-    Then one cross round: each reads the other's answer and says what it would change (adversarial, G23). No
-    further rounds.
-  - **Merge:** the thread writes one answer: the recommendation; where the models agreed; where they differed,
-    which side it takes and why; what would change the call. The thread judges; it never counts votes.
-  - **Where it shows:** the answer is the thread's own reply, naming the models consulted. The consults show as
-    the thread's workers ("Fusion · *model*"), readable like any worker. No new card.
-  - `/fusion` ships as a second skill, `fusion`, beside `/brigade`, through the same plugin folder on both CLIs
-    (Q13), so S15's "the one skill Brigadier ships" becomes two. The old review `M/fusion.rs` (gone in S5) is
-    not revived.
-- **Files:** a new `crates/core/src/manager/fusion/SKILL.md`, the skill installer (`brigade.rs`),
-  `M/brigade/SKILL.md` (the uncertain-user line, S15), the S13b guidance file (a `fusion` row).
-- **Done when:**
-  - A provider test: every new session and Chat, on both CLIs, has the `fusion` skill in its skills folder.
-  - A live dev run: `/fusion` on a real two-way question starts one Claude and one Codex consult, and the reply
-    names both models, what they agreed on, where they differed and the pick.
-  - A live dev run: "I'm not sure whether A or B" without `/fusion` leads the thread to a fusion. Judgement,
-    so it is a report, never a gate.
-- After S30 (shared skill file).
-- **As built:** the rows are per CLI, since a rules row holds one Agent/Model/Effort and is keyed by its Work:
-  the shipped guidance has `fusion-claude` (claude · opus · high) and `fusion-codex` (codex · default · high); the
-  user's rows of the same Work replace them, and another CLI gets `fusion-<agent>`. The skill starts each consult
-  with `brigadier start --lean --work fusion-<agent> --title "Fusion · <model>"`, overriding `--model` only when
-  that model is out of quota or refused. `fusion/SKILL.md` ships in the brigade plugin folder beside `brigade`
-  (`skills/fusion/SKILL.md`): Claude loads both from the plugin, Codex adds the plugin's skills folder as a per-app-server skills root. It
-  has no user copy of its own. `brigade/SKILL.md` sends an uncertain user to it. Live dev runs (10-23, an Opus parent): `/fusion` on a two-way question started a lean Claude consult (opus) and a
-  lean Codex consult (its default model), ran the cross round, and replied with the pick, what they agreed on,
-  where they differed and the models consulted. "I'm not sure whether A or B" without `/fusion` led the thread to
-  the same fusion. With `brigadier` unusable (an older CLI on `PATH`), the thread ran the two CLIs' one-off modes
-  itself and still merged.
+**S36. Fusion only when the user starts it (L4, L7, L9).**
+- **Where:** top-level Chats only (`ConversationKind::Chat`, no side or tab chat). Sessions and workers
+  never start or offer Fusion. A session can mention a Chat when its transcript helps.
+- **When:** the user types `/fusion <question>`, arms Fusion in the + menu and sends, or clicks Ask on
+  an offer. Uncertainty never starts Fusion. A Chat may offer it through `brigadier fusion offer "<question>"`;
+  the card starts nothing until clicked. The command is refused in every other conversation.
+- **Controls:** one Fusion row in the + menu and a removable chip beside Plan. With one ready CLI, the row
+  stays disabled with “Needs two ready CLIs”. No extra slash-menu row; `/fusion` remains typeable. Sent
+  messages show a Fusion pill and the question, independent of the selected CLI's skill syntax.
+- **Consult:** one worker per installed CLI with quota left, on the `fusion-<agent>` routing row from
+  `brigadier models`. Every consult gets the same question, context and rules, and changes no files.
+  One cross round, then close every consult. With only one CLI ready, run one consult, skip the cross
+  round and say so. Consult failures and quota skips are named in the answer.
+- **Answer:** the Chat judges and writes one merged reply, naming the models and explaining agreement,
+  differences, its call and what would change it. It never counts votes.
+- **Implementation:** `fusion/SKILL.md` ships beside brigade. Offers use the existing OfferCard components,
+  remain in view when work folds, and are taken once under a conversation lock. Stale or edited-away
+  offers start nothing. Button, card and typed messages all use the normal send queue and lanes, with
+  `/fusion` for Claude and `$fusion` for Codex through `ProviderKind::skill_invocation`.
+- **Done when:** skill and prompt tests forbid self-start; core tests cover top-level Chat scope, one offer
+  per request, concurrent clicks, stale offers and each CLI's syntax; UI tests cover the card, disabled
+  control, chip, Fusion pill and folded work; CLI tests cover arguments, stdin and JSON schema. Bindings
+  are regenerated with the repo's gen-ts.
 
 **S37. Hooks parity (w95 item 15).** Codex.
 (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
@@ -2400,7 +2383,7 @@ sessions with token economy. Each has a measurable bar against the best rival to
    S15, S28) (user: "a chat is always a brigade").
 2. (D2) Workers can't start workers → stays: they use their CLI's own subagents (§1, S13, S15, §8 item 13) (user:
    "workers cant start other workers").
-3. (D3) Unclear asks → when the user is uncertain, a model fusion gives the best answer (S15, S36) (user: "if the
+3. (D3, amended L4/L7/L9) Unclear asks → a top-level Chat may offer Fusion; only the user starts it (S15, S36) (user: "if the
    user is uncertain - we help him").
 4. (D4) The context ring in Chats → stays as it is (§1 Context card) (user: "ok").
 5. (D5) Computer use reaches no session → fixed (§1, S13, S35; #529) (user: "fix this!").

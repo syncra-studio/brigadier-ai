@@ -43,6 +43,7 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
+import { FusionChip } from "@/app/conversation/FusionChip";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ToWorkerChip } from "@/app/conversation/ToWorkerChip";
 import { HeldDirectMessages } from "@/app/conversation/HeldDirect";
@@ -214,6 +215,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
                   />
                 )}
                 <PlanChip />
+                <FusionChip />
                 <NewSessionChip />
                 <ToWorkerChip />
               </div>

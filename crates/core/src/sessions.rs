@@ -2901,8 +2901,20 @@ fn title_from(text: &str) -> String {
     }
 }
 
-/// First-message text without actual attachment chips; literal, unmatched markers stay text.
+/// The question of a whole Fusion invocation, in either CLI's syntax.
+pub(crate) fn fusion_question(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    ["/fusion", "$fusion"].into_iter().find_map(|prefix| {
+        text.strip_prefix(prefix)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            .map(str::trim)
+    })
+}
+
+/// First-message text without a Fusion prefix or actual attachment chips;
+/// literal, unmatched markers stay text. Used for both local and generated titles.
 pub(crate) fn title_text(text: &str, attachments: &[AttachmentRef]) -> String {
+    let text = fusion_question(text).unwrap_or(text);
     let mut plain = String::with_capacity(text.len());
     let mut cursor = 0;
     for (range, _) in inline_image_tokens(text, attachments) {

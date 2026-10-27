@@ -635,7 +635,7 @@ mod tests {
     /// 102 = TextEdit, 103 = Terminal, 104 = Brigadier NIGHTLY, 105 = Keychain
     /// Access, 106 = System Settings, 107 = a bare `brigadier` binary started
     /// with `tauri dev`. Window 9000 belongs to the user's Brigadier, 9001 to
-    /// TextEdit.
+    /// TextEdit, 9002 to System Settings.
     fn with_fake_apps<T>(body: impl FnOnce(&TargetResolver<'_>) -> T) -> T {
         let app_for_pid = |pid: i64| match pid {
             100 => Some(app("Brigadier", "ai.brigadier.app", 100)),
@@ -655,6 +655,7 @@ mod tests {
         let pid_for_window = |window: u64| match window {
             9000 => Some(100),
             9001 => Some(102),
+            9002 => Some(106),
             _ => None,
         };
         body(&TargetResolver {
@@ -797,7 +798,7 @@ mod tests {
                     json!({"bundle_id": "com.apple.systempreferences"}),
                 ),
                 ("launch_app", json!({"name": "System Settings"})),
-                ("get_window_state", json!({"pid": 106, "window_id": 1})),
+                ("get_window_state", json!({"pid": 106, "window_id": 9002})),
                 ("zoom", json!({"pid": 106})),
             ] {
                 assert_eq!(
@@ -821,8 +822,14 @@ mod tests {
                     Some("security_surface"),
                     "{tool}"
                 );
+                #[cfg(target_os = "macos")]
+                let how_to_open = "x-apple.systempreferences:";
+                #[cfg(target_os = "windows")]
+                let how_to_open = "ms-settings:";
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                let how_to_open = "open them with launch_app";
                 assert!(
-                    text.contains("x-apple.systempreferences:"),
+                    text.contains(how_to_open),
                     "{tool}: the refusal shows how to open a pane"
                 );
             }
