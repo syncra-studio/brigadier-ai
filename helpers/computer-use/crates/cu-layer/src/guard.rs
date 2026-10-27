@@ -115,7 +115,7 @@ impl Tool for GuardedTool {
         #[cfg(not(target_os = "macos"))]
         let result = crate::platform::explain(result);
         tokens::record(&result);
-        text::result(result)
+        text::result_for_tool(&tool, result)
     }
 }
 

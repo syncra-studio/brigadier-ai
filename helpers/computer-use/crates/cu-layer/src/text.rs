@@ -207,9 +207,87 @@ const FILE_NAME_ROUTE: &str = "Writing a file's name in Finder changes only what
     window_id (no element), then press_key return. Then check the new name in a fresh \
     get_window_state.";
 
+const SENT_NOT_CONFIRMED: &str = "sent, not confirmed: check before calling it done";
+
+fn unconfirmed(value: &Value) -> bool {
+    value.as_object().is_some_and(unconfirmed_fields)
+}
+
+fn unconfirmed_fields(object: &Map<String, Value>) -> bool {
+    let effect = object.get("effect").and_then(Value::as_str);
+    if matches!(effect, Some("confirmed" | "failed" | "refused")) {
+        return false;
+    }
+    matches!(
+        effect,
+        Some(
+            "unverifiable"
+                | "unknown"
+                | "unconfirmed"
+                | "not_confirmed"
+                | "partial"
+                | "suspected_noop"
+        )
+    ) || object.get("verified") == Some(&Value::Bool(false))
+        || object.get("confirmed") == Some(&Value::Bool(false))
+}
+
+fn honest_message(text: &str, uncertain: bool) -> String {
+    let mut first = true;
+    text.lines()
+        .map(|line| {
+            if is_tree_row(line) {
+                return line.to_owned();
+            }
+            let lower = line.trim_start().to_ascii_lowercase();
+            let posted = (lower.starts_with("✅")
+                && (lower.contains("posted click") || lower.contains("postmessage click")))
+                || lower.starts_with("posted click ")
+                || lower.starts_with("📨 sent (unverified)");
+            let summary = lower.starts_with("✅")
+                || lower.starts_with("📨")
+                || lower.starts_with("performed ")
+                || lower.starts_with("posted ")
+                || lower.starts_with("sent ");
+            let primary = first && !line.trim().is_empty();
+            if primary {
+                first = false;
+            }
+            if posted || (uncertain && (summary || primary)) {
+                SENT_NOT_CONFIRMED.to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Rewrite one tool result for agents.
 pub fn result(
+    result: cua_driver_core::protocol::ToolResult,
+) -> cua_driver_core::protocol::ToolResult {
+    result_with_uncertainty(result, false)
+}
+
+/// The guard knows which replies are action acknowledgements. Legacy text-only
+/// actions acquire their effect later, when the registry publishes its result.
+pub fn result_for_tool(
+    tool: &str,
+    result: cua_driver_core::protocol::ToolResult,
+) -> cua_driver_core::protocol::ToolResult {
+    let unknown_action = cua_driver_core::action_record::is_action_tool(tool)
+        && result.action_record.is_none()
+        && result
+            .structured_content
+            .as_ref()
+            .is_none_or(|state| state.get("effect").is_none());
+    result_with_uncertainty(result, unknown_action)
+}
+
+fn result_with_uncertainty(
     mut result: cua_driver_core::protocol::ToolResult,
+    unknown_action: bool,
 ) -> cua_driver_core::protocol::ToolResult {
     use cua_driver_core::protocol::Content;
     let code = result
@@ -227,9 +305,35 @@ pub fn result(
             structured.insert("reason".into(), FILE_NAME_ROUTE.into());
         }
     }
+    use cua_driver_core::action_record::ActionEffect;
+    let uncertain = result.is_error != Some(true)
+        && (unknown_action
+            || result.structured_content.as_ref().is_some_and(unconfirmed)
+            || result.action_record.as_ref().is_some_and(|record| {
+                matches!(
+                    record.effect,
+                    ActionEffect::Unverifiable
+                        | ActionEffect::Partial
+                        | ActionEffect::SuspectedNoop
+                )
+            }));
+    let confirmed = !uncertain
+        && (result
+            .structured_content
+            .as_ref()
+            .is_some_and(|v| v["effect"] == "confirmed")
+            || result
+                .action_record
+                .as_ref()
+                .is_some_and(|record| record.effect == ActionEffect::Confirmed));
     for item in &mut result.content {
         if let Content::Text { text, .. } = item {
-            *text = prose(text);
+            let honest = if confirmed || result.is_error == Some(true) {
+                text.clone()
+            } else {
+                honest_message(text, uncertain)
+            };
+            *text = prose(&honest);
         }
     }
     result.content.retain(|item| match item {
@@ -237,26 +341,47 @@ pub fn result(
         _ => true,
     });
     if let Some(structured) = result.structured_content.as_mut() {
-        structured_prose(structured);
+        if uncertain {
+            for key in ["message", "detail", "summary"] {
+                if let Some(Value::String(message)) = structured.get_mut(key) {
+                    *message = SENT_NOT_CONFIRMED.into();
+                }
+            }
+        }
+        structured_prose(structured, result.is_error == Some(true));
     }
     result
 }
 
-fn structured_prose(value: &mut Value) {
+fn structured_prose(value: &mut Value, failed: bool) {
     match value {
         Value::Object(object) => {
+            let failed = failed || object.get("isError") == Some(&Value::Bool(true));
+            let uncertain = !failed && unconfirmed_fields(object);
+            let confirmed = object
+                .get("effect")
+                .is_some_and(|effect| effect == "confirmed");
+            for key in ["message", "detail", "summary"] {
+                if let Some(Value::String(message)) = object.get_mut(key) {
+                    if uncertain {
+                        *message = SENT_NOT_CONFIRMED.into();
+                    } else if !failed && !confirmed {
+                        *message = honest_message(message, false);
+                    }
+                }
+            }
             object.retain(|key, value| !is_front_field(key, value));
             for (key, value) in object.iter_mut() {
                 if DATA_KEYS.contains(&key.as_str()) {
                     continue;
                 }
-                structured_prose(value);
+                structured_prose(value, failed);
             }
             object.retain(|_, value| !matches!(value, Value::String(text) if text.is_empty()));
         }
         Value::Array(items) => {
             for item in items.iter_mut() {
-                structured_prose(item);
+                structured_prose(item, failed);
             }
             items.retain(|item| !matches!(item, Value::String(text) if text.is_empty()));
         }
@@ -395,6 +520,105 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn uncertain_actions_never_claim_success_on_any_platform() {
+        for summary in [
+            "✅ Performed PostMessage click on [31] (screen (2,3)).",
+            "✅ Posted click to pid 42 (background CGEvent).",
+            "✅ Typed 3 characters.",
+            "Typed 3 characters.",
+            "Performed click on [3].",
+            "📨 Sent (unverified) AXValue on [4].",
+        ] {
+            for state in [
+                json!({"effect":"unverifiable"}),
+                json!({"verified":false}),
+                json!({"effect":"unknown"}),
+                json!({"effect":"partial"}),
+                json!({"effect":"suspected_noop"}),
+            ] {
+                let mut state = state;
+                state["message"] = summary.into();
+                let out = result(ToolResult::text(summary).with_structured(state));
+                let Content::Text { text, .. } = &out.content[0] else {
+                    panic!("text")
+                };
+                assert_eq!(text, SENT_NOT_CONFIRMED);
+                assert_eq!(
+                    out.structured_content.unwrap()["message"],
+                    SENT_NOT_CONFIRMED
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_posted_clicks_are_unconfirmed_without_effect_metadata() {
+        let out = result(ToolResult::text(
+            "✅ Posted click to pid 42 (background CGEvent).",
+        ));
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, SENT_NOT_CONFIRMED);
+        let confirmed = "✅ Click confirmed by readback.";
+        let out = result(
+            ToolResult::text(confirmed)
+                .with_structured(json!({"effect":"confirmed", "verified":true})),
+        );
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, confirmed);
+        let error = "PostMessage click refused: target is elevated.";
+        let out = result(ToolResult::error(error));
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, error);
+    }
+
+    #[test]
+    fn private_action_facts_and_error_reasons_survive_projection() {
+        use cua_driver_core::action_record::{
+            ActionEffect, ActionExecutionRecord, ActionTransport, RequestedDelivery,
+        };
+        let out = result(ToolResult::text("✅ Clicked.").with_action_record(
+            ActionExecutionRecord::new(
+                ActionEffect::Unverifiable,
+                ActionTransport::MacosCgEventPid,
+                RequestedDelivery::Background,
+            ),
+        ));
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, SENT_NOT_CONFIRMED);
+        let reason = "PostMessage click refused: target is elevated.";
+        let out = result(
+            ToolResult::error(reason).with_structured(json!({"message":reason,"verified":false})),
+        );
+        assert_eq!(out.structured_content.unwrap()["message"], reason);
+    }
+
+    #[test]
+    fn text_only_actions_are_unconfirmed_before_registry_projection() {
+        let out = result_for_tool(
+            "click",
+            ToolResult::text("✅ Performed native action on [3]."),
+        );
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, SENT_NOT_CONFIRMED);
+        let read = "Read 3 elements.";
+        let out = result_for_tool("get_window_state", ToolResult::text(read));
+        let Content::Text { text, .. } = &out.content[0] else {
+            panic!("text")
+        };
+        assert_eq!(text, read);
+    }
+
+    #[test]
     fn a_file_name_refusal_gives_the_background_rename_route() {
         let driver = ToolResult::error(
             "set_value refused (file_name_needs_rename): This is a file's name as the list \
@@ -459,7 +683,7 @@ mod tests {
             "advice": "foreground",
             "message": "Cua Driver refused it.",
         });
-        structured_prose(&mut structured);
+        structured_prose(&mut structured, false);
         assert_eq!(structured["tree_markdown"], "Foreground. delivery_mode");
         assert_eq!(structured["elements"][0]["label"], "Foreground");
         assert_eq!(structured["hint"], "Or read again.");
