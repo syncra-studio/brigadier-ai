@@ -1,0 +1,211 @@
+Why: Bound browser URL verification and targeted page reads with the shared UIA single-flight gate and a request-wide launch budget; balance COM initialization.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 0fb9079ec..b8c27b2bf 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2862,10 +2862,21 @@ impl Tool for LaunchAppTool {
+         if web_launch {
+             let executable = target_file_opt.as_deref().unwrap_or("");
+             let mut confirmed = Vec::new();
++            // One budget for the whole request, including every URL/provider.
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+             for url in &urls {
+                 let mut found = None;
+                 for _ in 0..30 {
+-                    found = super::launch_browser::window_showing_url(executable, url).await;
++                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
++                    if remaining.is_zero() {
++                        break;
++                    }
++                    found = match super::launch_browser::window_showing_url(executable, url, remaining).await {
++                        Ok(window) => window,
++                        Err(error) => return ToolResult::error(format!(
++                            "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
++                        )).with_structured(json!({"code": "browser_url_unconfirmed", "launched_pid": pid})),
++                    };
+                     if found.is_some() {
+                         break;
+                     }
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 39bf4814b..e1923da36 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -2,7 +2,7 @@
+ use windows::core::Interface;
+ use windows::Win32::Foundation::HWND;
+ use windows::Win32::System::Com::{
+-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
++    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+ };
+ use windows::Win32::UI::Accessibility::{
+     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
+@@ -10,6 +10,20 @@ use windows::Win32::UI::Accessibility::{
+     UIA_LegacyIAccessiblePatternId, UIA_ValueValuePropertyId,
+ };
+ 
++pub(super) struct Apartment(bool);
++impl Apartment {
++    pub(super) fn new() -> Self {
++        Self(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok())
++    }
++}
++impl Drop for Apartment {
++    fn drop(&mut self) {
++        if self.0 {
++            unsafe { CoUninitialize() };
++        }
++    }
++}
++
+ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<String> {
+     let value = document
+         .GetCurrentPropertyValue(UIA_ValueValuePropertyId)
+@@ -37,7 +51,6 @@ pub(super) unsafe fn matching_document(
+     requested: &str,
+     exact: bool,
+ ) -> anyhow::Result<(IUIAutomation, IUIAutomationElement)> {
+-    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+     let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+     let root = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
+     let condition = automation.CreatePropertyCondition(
+@@ -72,25 +85,41 @@ pub(super) unsafe fn matching_document(
+ pub(super) async fn window_showing_url(
+     executable: &str,
+     url: &str,
+-) -> Option<crate::win32::WindowInfo> {
++    timeout: std::time::Duration,
++) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+     let executable = super::launch_policy::executable_name(executable);
+     let url = url.to_owned();
+     tokio::task::spawn_blocking(move || {
+-        for process in crate::win32::list_processes() {
+-            if super::launch_policy::executable_name(&process.name) != executable {
+-                continue;
+-            }
+-            for window in crate::win32::list_windows_win32_first(process.pid) {
+-                if unsafe { matching_document(window.hwnd, &url, true) }.is_ok() {
+-                    return Some(window);
++        crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            "browser URL verification",
++            timeout,
++            "no unverified browser window",
++            move |cancelled| {
++                let _com = Apartment::new();
++                for process in crate::win32::list_processes() {
++                    if super::launch_policy::executable_name(&process.name) != executable {
++                        continue;
++                    }
++                    for window in crate::win32::list_windows_win32_first(process.pid) {
++                        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
++                            return None;
++                        }
++                        if unsafe { matching_document(window.hwnd, &url, true) }.is_ok() {
++                            return Some(window);
++                        }
++                    }
+                 }
+-            }
+-        }
+-        None
++                None
++            },
++        )
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "Browser URL verification stopped because {}",
++                crate::uia::click::deadline_reason(error)
++            )
++        })
+     })
+-    .await
+-    .ok()
+-    .flatten()
++    .await?
+ }
+ 
+ #[cfg(test)]
+@@ -98,6 +127,7 @@ mod tests {
+     use super::*;
+     #[test]
+     fn missing_window_is_not_a_verified_browser_page() {
++        let _com = Apartment::new();
+         assert!(unsafe { matching_document(0, "example.com", false) }.is_err());
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+index 6f58a0418..81f600fdb 100644
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -132,25 +132,41 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
+             })
+             .unwrap_or_default();
+         let query = action == "query_dom";
+-        let result = tokio::task::spawn_blocking(move || unsafe {
+-            let (automation, document) =
+-                super::launch_browser::matching_document(hwnd, &hint, false)?;
+-            let before = super::launch_browser::document_url(&document);
+-            let text = if query {
+-                query_dom_document(&automation, &document, &selector, &attributes)?
+-            } else {
+-                text_pattern_dump(&document).unwrap_or_else(|_| walk_text_blocking(&document))
+-            };
+-            let (_, current) = super::launch_browser::matching_document(hwnd, &hint, false)?;
+-            if crate::win32::window_owner_pid(hwnd) != Some(pid)
+-                || super::launch_browser::document_url(&document) != before
+-                || !automation.CompareElements(&document, &current)?.as_bool()
+-            {
+-                anyhow::bail!(
++        let result = tokio::task::spawn_blocking(move || {
++            crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++                "targeted page read",
++                std::time::Duration::from_secs(4),
++                "no page text",
++                move |_| unsafe {
++                    let _com = super::launch_browser::Apartment::new();
++                    let (automation, document) =
++                        super::launch_browser::matching_document(hwnd, &hint, false)?;
++                    let before = super::launch_browser::document_url(&document);
++                    let text = if query {
++                        query_dom_document(&automation, &document, &selector, &attributes)?
++                    } else {
++                        text_pattern_dump(&document)
++                            .unwrap_or_else(|_| walk_text_blocking(&document))
++                    };
++                    let (_, current) =
++                        super::launch_browser::matching_document(hwnd, &hint, false)?;
++                    if crate::win32::window_owner_pid(hwnd) != Some(pid)
++                        || super::launch_browser::document_url(&document) != before
++                        || !automation.CompareElements(&document, &current)?.as_bool()
++                    {
++                        anyhow::bail!(
+                     "The matching tab changed during the read. Its text was discarded; retry."
+                 );
+-            }
+-            Ok::<_, anyhow::Error>(text)
++                    }
++                    Ok::<_, anyhow::Error>(text)
++                },
++            )
++            .map_err(|error| {
++                anyhow::anyhow!(
++                    "Page read stopped because {}; no page text was returned",
++                    crate::uia::click::deadline_reason(error)
++                )
++            })?
+         })
+         .await;
+         match result {
+diff --git a/crates/platform-windows/src/uia/windows_enum.rs b/crates/platform-windows/src/uia/windows_enum.rs
+index 881d1ae78..840dd0d4c 100644
+--- a/crates/platform-windows/src/uia/windows_enum.rs
++++ b/crates/platform-windows/src/uia/windows_enum.rs
+@@ -151,7 +151,7 @@ where
+     run_uia_with_deadline_cancelable(stage, timeout, fallback, |_| f())
+ }
+ 
+-pub(super) fn run_uia_with_deadline_cancelable<T, F>(
++pub(crate) fn run_uia_with_deadline_cancelable<T, F>(
+     stage: &'static str,
+     timeout: Duration,
+     fallback: &'static str,

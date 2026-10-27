@@ -151,7 +151,7 @@ where
     run_uia_with_deadline_cancelable(stage, timeout, fallback, |_| f())
 }
 
-pub(super) fn run_uia_with_deadline_cancelable<T, F>(
+pub(crate) fn run_uia_with_deadline_cancelable<T, F>(
     stage: &'static str,
     timeout: Duration,
     fallback: &'static str,

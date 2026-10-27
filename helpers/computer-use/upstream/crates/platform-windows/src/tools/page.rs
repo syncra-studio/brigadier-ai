@@ -132,25 +132,41 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
             })
             .unwrap_or_default();
         let query = action == "query_dom";
-        let result = tokio::task::spawn_blocking(move || unsafe {
-            let (automation, document) =
-                super::launch_browser::matching_document(hwnd, &hint, false)?;
-            let before = super::launch_browser::document_url(&document);
-            let text = if query {
-                query_dom_document(&automation, &document, &selector, &attributes)?
-            } else {
-                text_pattern_dump(&document).unwrap_or_else(|_| walk_text_blocking(&document))
-            };
-            let (_, current) = super::launch_browser::matching_document(hwnd, &hint, false)?;
-            if crate::win32::window_owner_pid(hwnd) != Some(pid)
-                || super::launch_browser::document_url(&document) != before
-                || !automation.CompareElements(&document, &current)?.as_bool()
-            {
-                anyhow::bail!(
+        let result = tokio::task::spawn_blocking(move || {
+            crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                "targeted page read",
+                std::time::Duration::from_secs(4),
+                "no page text",
+                move |_| unsafe {
+                    let _com = super::launch_browser::Apartment::new();
+                    let (automation, document) =
+                        super::launch_browser::matching_document(hwnd, &hint, false)?;
+                    let before = super::launch_browser::document_url(&document);
+                    let text = if query {
+                        query_dom_document(&automation, &document, &selector, &attributes)?
+                    } else {
+                        text_pattern_dump(&document)
+                            .unwrap_or_else(|_| walk_text_blocking(&document))
+                    };
+                    let (_, current) =
+                        super::launch_browser::matching_document(hwnd, &hint, false)?;
+                    if crate::win32::window_owner_pid(hwnd) != Some(pid)
+                        || super::launch_browser::document_url(&document) != before
+                        || !automation.CompareElements(&document, &current)?.as_bool()
+                    {
+                        anyhow::bail!(
                     "The matching tab changed during the read. Its text was discarded; retry."
                 );
-            }
-            Ok::<_, anyhow::Error>(text)
+                    }
+                    Ok::<_, anyhow::Error>(text)
+                },
+            )
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Page read stopped because {}; no page text was returned",
+                    crate::uia::click::deadline_reason(error)
+                )
+            })?
         })
         .await;
         match result {

@@ -2862,10 +2862,21 @@ impl Tool for LaunchAppTool {
         if web_launch {
             let executable = target_file_opt.as_deref().unwrap_or("");
             let mut confirmed = Vec::new();
+            // One budget for the whole request, including every URL/provider.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
             for url in &urls {
                 let mut found = None;
                 for _ in 0..30 {
-                    found = super::launch_browser::window_showing_url(executable, url).await;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    found = match super::launch_browser::window_showing_url(executable, url, remaining).await {
+                        Ok(window) => window,
+                        Err(error) => return ToolResult::error(format!(
+                            "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
+                        )).with_structured(json!({"code": "browser_url_unconfirmed", "launched_pid": pid})),
+                    };
                     if found.is_some() {
                         break;
                     }

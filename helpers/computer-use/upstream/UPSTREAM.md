@@ -82,6 +82,7 @@ Patches applied, in order:
 - `patches/0051-window-scoped-pixel-press.diff`: resolve background pixel presses within the exact AX window, including off-Space controls and actionable ancestors; only advertised AXPress is attempted, and acceptance remains explicitly unconfirmed.
 - `patches/0052-remote-open-save-panel.diff`: resolve unlisted Open/Save AX windows through client descendants and the AppKit panel service by exact CGWindowID on every Space; route panel key equivalents to their AX server without Chromium authentication and exclude client app menus.
 - `patches/0053-preserve-off-space-window-commands.diff`: limit the off-Space Window menu refusal to selecting a named application window; preserve background window commands such as Zoom and tab navigation.
+- `patches/0070-windows-browser-read-deadlines.diff`: bound browser verification and targeted page reads, share the UIA single-flight gate, and balance COM apartments.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
