@@ -1,0 +1,462 @@
+diff --git a/crates/cua-driver-core/src/window_state_view.rs b/crates/cua-driver-core/src/window_state_view.rs
+index 0636fe947..2e7652a07 100644
+--- a/crates/cua-driver-core/src/window_state_view.rs
++++ b/crates/cua-driver-core/src/window_state_view.rs
+@@ -1599,3 +1599,147 @@ mod windows_integrity_tests {
+         assert!(!restricted.contains("administrator"));
+     }
+ }
++
++/// A tree node must occupy one Markdown line, even when a provider publishes
++/// multiline names, values or help. Keep the native node/cache unchanged.
++/// Ordinary rows borrow their text; only rows containing separators allocate.
++pub fn single_line_row(text: &str) -> std::borrow::Cow<'_, str> {
++    let separator = |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}');
++    if !text.chars().any(separator) {
++        return std::borrow::Cow::Borrowed(text);
++    }
++    let mut flat = String::with_capacity(text.len());
++    let mut chars = text.chars().peekable();
++    while let Some(ch) = chars.next() {
++        if ch == '\r' && chars.peek() == Some(&'\n') {
++            chars.next();
++        }
++        flat.push(if separator(ch) { ' ' } else { ch });
++    }
++    std::borrow::Cow::Owned(flat)
++}
++
++/// Consume an already-built row without copying its allocation when it is
++/// single-line, the common case for native formatters.
++pub fn into_single_line_row(row: String) -> String {
++    match single_line_row(&row) {
++        std::borrow::Cow::Borrowed(_) => row,
++        std::borrow::Cow::Owned(flat) => flat,
++    }
++}
++
++/// Project one-line Markdown rows to query matches and their actual ancestors.
++/// Parent row positions, rather than labels or stale depth slots, keep sibling
++/// branches distinct and let omitted layout containers leave depth gaps safely.
++pub fn filter_tree_markdown(markdown: &str, query: &str) -> String {
++    let needle = single_line_row(query).to_lowercase();
++    let lines: Vec<&str> = markdown.lines().collect();
++    let mut ancestors: Vec<(usize, usize)> = Vec::new();
++    let mut parents = Vec::with_capacity(lines.len());
++    let mut keep = Vec::with_capacity(lines.len());
++    for (index, line) in lines.iter().enumerate() {
++        let indent = line.len() - line.trim_start_matches(' ').len();
++        while ancestors.last().is_some_and(|(depth, _)| *depth >= indent) {
++            ancestors.pop();
++        }
++        parents.push(ancestors.last().map(|(_, index)| *index));
++        keep.push(line.to_lowercase().contains(&needle));
++        ancestors.push((indent, index));
++    }
++    // Descendants occur after their parents. Marking in reverse propagates
++    // every match up its own branch, and each kept row is emitted only once.
++    for index in (0..lines.len()).rev() {
++        if keep[index] {
++            if let Some(parent) = parents[index] {
++                keep[parent] = true;
++            }
++        }
++    }
++    let mut result = String::new();
++    for (index, line) in lines.iter().enumerate() {
++        if keep[index] {
++            result.push_str(line);
++            result.push('\n');
++        }
++    }
++    result
++}
++
++#[cfg(test)]
++mod query_row_tests {
++    use super::{filter_tree_markdown, into_single_line_row, single_line_row};
++    use serde_json::json;
++
++    #[test]
++    fn row_separators_are_flattened_and_ordinary_rows_do_not_allocate() {
++        assert!(matches!(
++            single_line_row("plain row"),
++            std::borrow::Cow::Borrowed(_)
++        ));
++        assert_eq!(
++            single_line_row("a\r\nb\nc\rd\te\u{0085}f\u{2028}g\u{2029}h"),
++            "a b c d e f g h"
++        );
++        assert_eq!(
++            single_line_row("literal \\n and  spaces"),
++            "literal \\n and  spaces"
++        );
++    }
++
++    #[test]
++    fn native_formatters_keep_the_ordinary_rows_allocation() {
++        let row = String::from("- [0] Button");
++        let allocation = row.as_ptr();
++        assert_eq!(into_single_line_row(row).as_ptr(), allocation);
++    }
++
++    #[test]
++    fn multiline_names_stay_in_their_original_rows_and_element_projection() {
++        for role in ["AXButton", "Button", "push button"] {
++            let row = single_line_row(&format!(
++                "- [2] {role} \"First\n- [999] Second\" [actions=[press]]"
++            ))
++            .into_owned();
++            let markdown = format!(
++                "- [0] Window\n  - [1] Group\n    {row}\n    - [3] {role} \"Second match\"\n"
++            );
++            let result = filter_tree_markdown(&markdown, "second");
++            assert_eq!(result.lines().count(), 4);
++            assert_eq!(result.matches("- [0]").count(), 1);
++            assert_eq!(result.matches("- [1]").count(), 1);
++            let elements = [0, 1, 2, 3, 999]
++                .into_iter()
++                .map(|i| json!({"element_index": i}))
++                .collect();
++            let projected =
++                crate::element_query::project_elements_for_query(elements, Some("second"), &result);
++            assert_eq!(
++                projected
++                    .iter()
++                    .map(|e| e["element_index"].as_u64().unwrap())
++                    .collect::<Vec<_>>(),
++                [0, 1, 2, 3]
++            );
++        }
++    }
++
++    #[test]
++    fn a_depth_gap_does_not_reuse_an_earlier_siblings_ancestors() {
++        let markdown = "- [0] Root\n  - [1] Old branch\n    - [2] Old parent\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n";
++        assert_eq!(
++            filter_tree_markdown(markdown, "needle"),
++            "- [0] Root\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n"
++        );
++        assert_eq!(filter_tree_markdown(markdown, "absent"), "");
++    }
++
++    #[test]
++    fn identical_parent_labels_in_different_branches_keep_both_ancestors() {
++        let markdown = "- [0] Root\n  - Group\n    - [1] Needle\n  - Group\n    - [2] Needle\n";
++        assert_eq!(filter_tree_markdown(markdown, "needle"), markdown);
++        assert_eq!(
++            filter_tree_markdown("- [0] Root\n  - Text \"First Second\"\n", "First\r\nSecond"),
++            "- [0] Root\n  - Text \"First Second\"\n"
++        );
++    }
++}
+diff --git a/crates/platform-linux/src/atspi/mod.rs b/crates/platform-linux/src/atspi/mod.rs
+index 77c5608cf..986c8d483 100644
+--- a/crates/platform-linux/src/atspi/mod.rs
++++ b/crates/platform-linux/src/atspi/mod.rs
+@@ -688,7 +688,7 @@ fn walk_via_x11_properties(xid: u64, query: Option<&str>) -> AtspiTreeResult {
+     };
+     md.push_str(&format!(
+         "- [0] window \"{}\" [actions=[activate]]\n",
+-        title
++        cua_driver_core::window_state_view::single_line_row(&title)
+     ));
+     nodes.push(root_node);
+ 
+@@ -763,41 +763,7 @@ fn get_x11_wm_class(conn: &x11rb::rust_connection::RustConnection, window: u32)
+ }
+ 
+ fn filter_tree(markdown: &str, query: &str) -> String {
+-    let needle = query.to_lowercase();
+-    let lines: Vec<&str> = markdown.lines().collect();
+-    let mut ancestors: Vec<&str> = Vec::new();
+-    let mut last_emitted: Vec<Option<&str>> = Vec::new();
+-    let mut output: Vec<&str> = Vec::new();
+-
+-    for line in &lines {
+-        let depth = line.chars().take_while(|c| *c == ' ').count() / 2;
+-        while ancestors.len() <= depth {
+-            ancestors.push("");
+-            last_emitted.push(None);
+-        }
+-        last_emitted[depth + 1..ancestors.len()].fill(None);
+-        ancestors[depth] = line;
+-        if line.to_lowercase().contains(&needle) {
+-            for d in 0..depth {
+-                if ancestors[d].is_empty() {
+-                    continue;
+-                }
+-                if last_emitted[d] == Some(ancestors[d]) {
+-                    continue;
+-                }
+-                last_emitted[d] = Some(ancestors[d]);
+-                output.push(ancestors[d]);
+-            }
+-            last_emitted[depth] = Some(line);
+-            output.push(line);
+-        }
+-    }
+-    if output.is_empty() {
+-        return String::new();
+-    }
+-    let mut r = output.join("\n");
+-    r.push('\n');
+-    r
++    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/platform-linux/src/atspi/native.rs b/crates/platform-linux/src/atspi/native.rs
+index 36451e533..bc646a59a 100644
+--- a/crates/platform-linux/src/atspi/native.rs
++++ b/crates/platform-linux/src/atspi/native.rs
+@@ -2141,12 +2141,13 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
+                 .as_ref()
+                 .map(|note| format!(" ({note})"))
+                 .unwrap_or_default();
+-            md.push_str(&format!(
+-                "{indent}- [{idx}] {role} \"{name}\"{desc}{val_part} [actions=[{act_str}]]{collapsed_note}{unlabelled_shown}
+-",
++            let row = format!(
++                "{indent}- [{idx}] {role} \"{name}\"{desc}{val_part} [actions=[{act_str}]]{collapsed_note}{unlabelled_shown}",
+                 role = v.role,
+                 desc = description_shown.as_deref().unwrap_or(""),
+-            ));
++            );
++            md.push_str(cua_driver_core::window_state_view::single_line_row(&row).as_ref());
++            md.push('\n');
+             let mut description_parts: Vec<String> = Vec::new();
+             if !v.description.is_empty() {
+                 description_parts.push(v.description.clone());
+@@ -2185,13 +2186,14 @@ fn render(visited: &[Visited<'_>], only_frame: Option<usize>) -> (String, Vec<At
+             });
+             idx += 1;
+         } else if emit && !v.name.is_empty() && v.showing {
+-            md.push_str(&format!(
+-                "{indent}- {role} = \"{name}\"{marker}
+-",
++            let row = format!(
++                "{indent}- {role} = \"{name}\"{marker}",
+                 role = v.role,
+                 name = v.name,
+                 marker = passive_marker(&v.role, !v.actions.is_empty(), v.has_component, v.enabled),
+-            ));
++            );
++            md.push_str(cua_driver_core::window_state_view::single_line_row(&row).as_ref());
++            md.push('\n');
+         }
+     }
+ 
+diff --git a/crates/platform-macos/src/ax/tree.rs b/crates/platform-macos/src/ax/tree.rs
+index 8969895c8..d22c38d83 100644
+--- a/crates/platform-macos/src/ax/tree.rs
++++ b/crates/platform-macos/src/ax/tree.rs
+@@ -775,7 +775,7 @@ fn format_node_line(node: &AXNode) -> String {
+         }
+     }
+ 
+-    parts
++    cua_driver_core::window_state_view::into_single_line_row(parts)
+ }
+ 
+ thread_local! {
+@@ -863,60 +863,7 @@ fn render_lines(lines: &[(usize, String)]) -> String {
+ 
+ /// Filter the tree markdown to lines matching `query` plus their ancestor chain.
+ fn filter_tree(markdown: &str, query: &str) -> String {
+-    let needle = query.to_lowercase();
+-    let lines: Vec<&str> = markdown.lines().collect();
+-
+-    let mut current_ancestor: Vec<&str> = Vec::new();
+-    let mut last_emitted_at: Vec<Option<&str>> = Vec::new();
+-    let mut output: Vec<&str> = Vec::new();
+-
+-    for line in &lines {
+-        let depth = leading_indent_depth(line);
+-
+-        while current_ancestor.len() <= depth {
+-            current_ancestor.push("");
+-            last_emitted_at.push(None);
+-        }
+-        for emitted_at in last_emitted_at.iter_mut().skip(depth + 1) {
+-            *emitted_at = None;
+-        }
+-        current_ancestor[depth] = line;
+-
+-        if line.to_lowercase().contains(&needle) {
+-            for ancestor_depth in 0..depth {
+-                let ancestor = current_ancestor[ancestor_depth];
+-                if ancestor.is_empty() {
+-                    continue;
+-                }
+-                if last_emitted_at[ancestor_depth] == Some(ancestor) {
+-                    continue;
+-                }
+-                last_emitted_at[ancestor_depth] = Some(ancestor);
+-                output.push(ancestor);
+-            }
+-            last_emitted_at[depth] = Some(line);
+-            output.push(line);
+-        }
+-    }
+-
+-    if output.is_empty() {
+-        return String::new();
+-    }
+-    let mut result = output.join("\n");
+-    result.push('\n');
+-    result
+-}
+-
+-fn leading_indent_depth(line: &str) -> usize {
+-    let mut count = 0;
+-    for ch in line.chars() {
+-        if ch == ' ' {
+-            count += 1;
+-        } else {
+-            break;
+-        }
+-    }
+-    count / 2
++    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
+ }
+ 
+ #[cfg(test)]
+@@ -1033,3 +980,44 @@ mod lean_row_tests {
+         assert_eq!(echo_text_of("- [2] AXStaticText = \"\""), None);
+     }
+ }
++
++#[cfg(test)]
++mod multiline_query_tests {
++    use super::*;
++
++    #[test]
++    fn native_names_and_values_remain_intact_while_markdown_is_one_row() {
++        let mut node = AXNode {
++            element_index: Some(7),
++            role: "AXButton".into(),
++            title: Some("First\nSecond".into()),
++            value: Some("value\r\nnext".into()),
++            description: Some("desc\nnext".into()),
++            identifier: Some("id\nnext".into()),
++            help: Some("help\nnext".into()),
++            actions: vec!["AXPress".into()],
++            element_ptr: 0,
++            depth: 1,
++            parent_element_index: Some(0),
++            frame: None,
++            value_state: None,
++            value_description: None,
++            min_value: None,
++            max_value: None,
++            enabled: None,
++            selected: None,
++            in_web_content: false,
++        };
++        for index in [Some(7), None] {
++            node.element_index = index;
++            let line = format_node_line(&node);
++            assert_eq!(line.lines().count(), 1);
++            assert!(line.contains("First Second"));
++            assert!(line.contains("value next"));
++            let md = render_lines(&[(0, "- [0] AXWindow".into()), (1, line)]);
++            assert_eq!(filter_tree(&md, "second").lines().count(), 2);
++        }
++        assert_eq!(node.title.as_deref(), Some("First\nSecond"));
++        assert_eq!(node.value.as_deref(), Some("value\r\nnext"));
++    }
++}
+diff --git a/crates/platform-windows/src/uia/mod.rs b/crates/platform-windows/src/uia/mod.rs
+index 82689f1cc..8c37591e1 100644
+--- a/crates/platform-windows/src/uia/mod.rs
++++ b/crates/platform-windows/src/uia/mod.rs
+@@ -1018,7 +1018,7 @@ pub(crate) fn format_node_line(node: &UiaNode) -> String {
+             s.push_str(&format!(" = \"{}\"", v));
+         }
+     }
+-    s
++    cua_driver_core::window_state_view::into_single_line_row(s)
+ }
+ 
+ fn render_lines(lines: &[(usize, String)]) -> String {
+@@ -1034,43 +1034,44 @@ fn render_lines(lines: &[(usize, String)]) -> String {
+ }
+ 
+ fn filter_tree(markdown: &str, query: &str) -> String {
+-    let needle = query.to_lowercase();
+-    let lines: Vec<&str> = markdown.lines().collect();
+-    let mut ancestors: Vec<&str> = Vec::new();
+-    let mut last_emitted: Vec<Option<&str>> = Vec::new();
+-    let mut output: Vec<&str> = Vec::new();
++    cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
++}
+ 
+-    for line in &lines {
+-        let depth = line.chars().take_while(|c| *c == ' ').count() / 2;
+-        while ancestors.len() <= depth {
+-            ancestors.push("");
+-            last_emitted.push(None);
+-        }
+-        for d in (depth + 1)..ancestors.len() {
+-            last_emitted[d] = None;
+-        }
+-        ancestors[depth] = line;
++#[cfg(test)]
++mod multiline_query_tests {
++    use super::*;
+ 
+-        if line.to_lowercase().contains(&needle) {
+-            for d in 0..depth {
+-                if ancestors[d].is_empty() {
+-                    continue;
+-                }
+-                if last_emitted[d] == Some(ancestors[d]) {
+-                    continue;
+-                }
+-                last_emitted[d] = Some(ancestors[d]);
+-                output.push(ancestors[d]);
+-            }
+-            last_emitted[depth] = Some(line);
+-            output.push(line);
++    #[test]
++    fn native_names_and_values_remain_intact_while_markdown_is_one_row() {
++        let mut node = UiaNode {
++            element_index: Some(7),
++            control_type: "Button".into(),
++            name: Some("First\nSecond".into()),
++            value: Some("value\r\nnext".into()),
++            automation_id: Some("id\nnext".into()),
++            help_text: Some("help\nnext".into()),
++            actions: vec!["invoke".into()],
++            enabled: None,
++            selected: None,
++            element_ptr: 0,
++            center_x: 0,
++            center_y: 0,
++            rect: None,
++            msaa_role: None,
++            depth: 1,
++            parent_element_index: Some(0),
++            in_web_content: false,
++        };
++        for index in [Some(7), None] {
++            node.element_index = index;
++            let line = format_node_line(&node);
++            assert_eq!(line.lines().count(), 1);
++            assert!(line.contains("First Second"));
++            assert!(line.contains("value next"));
++            let md = render_lines(&[(0, "- [0] Window".into()), (1, line)]);
++            assert_eq!(filter_tree(&md, "second").lines().count(), 2);
+         }
++        assert_eq!(node.name.as_deref(), Some("First\nSecond"));
++        assert_eq!(node.value.as_deref(), Some("value\r\nnext"));
+     }
+-
+-    if output.is_empty() {
+-        return String::new();
+-    }
+-    let mut r = output.join("\n");
+-    r.push('\n');
+-    r
+ }
