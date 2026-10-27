@@ -32,7 +32,7 @@ export const PERMISSION_LABELS: Record<PermissionLevel, string> = {
 export const PERMISSION_DETAILS: Record<PermissionLevel, string> = {
   ask: "Asks before edits and commands",
   acceptEdits: "Edits files freely, asks before other commands",
-  full: "Never asks",
+  full: "Unrestricted access to the internet and all your files",
 };
 
 /** The permission menu's line in a folder the user doesn't trust. */

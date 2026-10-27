@@ -16,7 +16,7 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { AttachmentRef, Conversation, ConversationView as View, Message, QueuedMessage, Request, UserRequest } from "@/ipc/generated";
-import { select } from "@/state/actions";
+import { closeSettings, openSettings, select, stepHistory } from "@/state/actions";
 import { updateBoard } from "@/state/board";
 import { setRichComposer } from "@/state/composerMode";
 import { useApp } from "@/state/store";
@@ -69,6 +69,8 @@ localStorage.setItem("brigadier.drafts", JSON.stringify({
 
 const sends: { text: string; attachments: AttachmentRef[] }[] = [];
 let sequence = 10;
+/** The next send (or new chat) is refused, as by a rule. */
+let refuse = false;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -96,7 +98,13 @@ mockIPC((command, payload) => {
       return { method: req.method, data: blobs.get(req.id) ?? "" };
     case "deleteQueued":
       return { method: req.method, queue: { items: [], paused: false } };
+    case "createConversation":
     case "sendMessage": {
+      if (refuse) {
+        refuse = false;
+        throw new Error("Refused by a rule");
+      }
+      if (req.method === "createConversation") return { method: req.method };
       sends.push({ text: req.text, attachments: req.attachments });
       const message: Message = {
         id: `sent-${sequence}`, conversationId: id, seq: sequence++, role: "user", text: req.text, blob: null,
@@ -194,6 +202,56 @@ function pasteData(data: Record<string, string>) {
 
 const LIST_HTML = "<meta charset='utf-8'><h2>Title</h2><ul><li>a</li><li>b</li></ul>";
 
+/** A PNG of a few pixels, as a pasted file. */
+async function pngFile(): Promise<File> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 8;
+  canvas.height = 8;
+  const png = await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), "image/png"));
+  return new File([png], "image.png", { type: "image/png" });
+}
+
+/**
+ * Types `words`, pastes rich text copied from a page (a chip, between backticks with `ticks`)
+ * and an image, and waits until both are stored and the draft kept as typing rests.
+ */
+async function typeWithChips(words: string, ticks = false) {
+  await type(ticks ? `${words} \`` : `${words} `);
+  pasteData({ "text/html": LIST_HTML, "text/plain": "Title\na\nb" });
+  await until("the paste chip", () => pasteChip() !== null);
+  await type(ticks ? "` and " : "and ");
+  const files = new DataTransfer();
+  files.items.add(await pngFile());
+  field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: files, bubbles: true, cancelable: true }));
+  await until("the image chip", () => imageChip() !== null);
+  await sleep(1000);
+}
+
+/** The composer's text, and whether its pasted text #1 opens and its image #1 shows, once both are back (or not). */
+async function chipsShown(what: string) {
+  await until(what, () => pasteChip()?.matches(":enabled") === true && imageChip()?.querySelector("img") != null, 3000).catch(() => undefined);
+  return {
+    typed: typed(),
+    opens: pasteChip()?.matches(":enabled") ?? false,
+    thumbnail: imageChip()?.querySelector("img") != null,
+  };
+}
+
+/** A send's text, its attachments and its pasted text's content. */
+const sentOf = (sent: (typeof sends)[number]) => ({
+  text: sent.text,
+  kinds: kinds(sent.attachments),
+  content: content(sent.attachments.find((ref) => ref.pasted)),
+});
+
+/** The conversation's kept draft as a build before backticks around a chip went escaped kept it. */
+function unescapedDraft() {
+  const drafts = JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}") as Record<string, { text: string }>;
+  const draft = drafts[id];
+  if (draft) draft.text = draft.text.replaceAll("\\`", "`");
+  localStorage.setItem("brigadier.drafts", JSON.stringify(drafts));
+}
+
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
@@ -217,6 +275,50 @@ async function drive() {
     await until("the earlier prompt", () => imageChip() !== null && pasteChip() !== null);
     const recalled = await send();
     seen.recalled = { text: recalled.text, kinds: kinds(recalled.attachments) };
+
+    // The user's way (2026-10-26): rich text copied from a page pasted between backticks, then
+    // Settings › Providers and back with the title bar's back arrow. Its draft, kept as builds
+    // before the backticks went escaped kept it, comes back with both chips whole.
+    await typeWithChips("back", true);
+    openSettings("providers");
+    await until("the composer gone", () => field() === null);
+    unescapedDraft();
+    stepHistory(-1);
+    await until("the composer back", () => field() !== null && typed().startsWith("back"));
+    seen.returned = await chipsShown("the chips back");
+    await fixtureClick(field()!);
+    seen.returned = { ...(seen.returned as object), sent: sentOf(await send()) };
+
+    // A refused send puts the message back with its pasted text and image, which go with it once taken.
+    refuse = true;
+    await typeWithChips("refused");
+    await key("Enter");
+    await until("the refusal", () => !refuse);
+    await until("the message back", () => typed().startsWith("refused"));
+    seen.refused = await chipsShown("the refused message's chips");
+    await fixtureClick(field()!);
+    seen.refused = { ...(seen.refused as object), sent: sentOf(await send()) };
+
+    // A new chat's draft, left for Settings and back with Esc, then refused: both chips whole each time.
+    await select({ type: "draft", kind: "chat" });
+    await until("the new chat's field", () => field() !== null && typed() === "");
+    await fixtureClick(field()!);
+    await typeWithChips("new");
+    openSettings("providers");
+    await until("the composer gone", () => field() === null);
+    closeSettings();
+    await until("the new chat back", () => field() !== null && typed().startsWith("new"));
+    seen.newChat = await chipsShown("the new chat's chips");
+    refuse = true;
+    await fixtureClick(field()!);
+    await key("Enter");
+    await until("the new chat's refusal", () => !refuse);
+    await until("the new chat's message back", () => typed().startsWith("new"));
+    seen.newChatRefused = await chipsShown("the new chat's chips after the refusal");
+    await clear();
+    await select({ type: "conversation", id });
+    await until("the conversation's field", () => field() !== null);
+    await fixtureClick(field()!);
 
     // Rich text copied from a page, pasted into text: a chip, sent as Markdown in its place.
     await type("see ");
@@ -289,12 +391,8 @@ async function drive() {
     await send();
 
     // An image and a pasted text together: two chips of the same number, two attachments.
-    const canvas = document.createElement("canvas");
-    canvas.width = 8;
-    canvas.height = 8;
-    const png = await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), "image/png"));
     const files = new DataTransfer();
-    files.items.add(new File([png], "image.png", { type: "image/png" }));
+    files.items.add(await pngFile());
     field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: files, bubbles: true, cancelable: true }));
     await until("the image chip", () => imageChip() !== null);
     pasteData({ "text/html": LIST_HTML, "text/plain": "Title\na\nb" });
@@ -376,12 +474,20 @@ async function drive() {
   document.body.append(result);
 }
 
+/** The conversation, or (as the app shows Settings in its place) nothing while Settings is open. */
+function Shown() {
+  const selection = useApp((s) => s.selection);
+  if (selection.type === "settings") return <p>Settings</p>;
+  if (selection.type === "draft") return <ConversationView key="draft" selection={selection} />;
+  return <ConversationView key={id} selection={{ type: "conversation", id }} />;
+}
+
 await select({ type: "conversation", id });
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <SidebarProvider className="bg-background flex h-screen flex-col" defaultOpen={false}>
       <main className="relative flex min-h-0 w-full flex-1 flex-col">
-        <ConversationView key={id} selection={{ type: "conversation", id }} />
+        <Shown />
       </main>
     </SidebarProvider>
   </TooltipProvider>,

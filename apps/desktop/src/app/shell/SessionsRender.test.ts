@@ -7,6 +7,8 @@ type HoveredRow = {
   idle: { background: string; titleWidth: number; statusVisible: boolean; rowHeight: number; fontSize: number; actionWidth: number; iconWidth: number };
   hovered: { background: string; titleRight: number; titleWidth: number; actionsLeft: number; statusVisible: boolean; statusDisplay: string; overflowing: boolean };
   actions: { background: string; underPointer: boolean; tooltip: string; titleRight: number }[];
+  menu: string[];
+  copy: string[];
   navHoverBackground: string;
   after: { background: string; titleWidth: number };
 };
@@ -32,7 +34,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
     assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the state word regains its usual space after leaving");
   });
 
-  test(`${place}: pin and archive keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
+  test(`${place}: the ⋯ and pin keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
     assert.notEqual(seen.hovered.background, seen.idle.background, "the pointer gives an inactive row its hover fill");
     assert.equal(seen.hovered.background, seen.navHoverBackground, "the row uses NavRow's exact hover colour");
@@ -41,10 +43,37 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
       assert.equal(action.background, seen.navHoverBackground, `${action.tooltip}: the whole row keeps NavRow's hover colour`);
       assert.equal(action.titleRight, seen.hovered.titleRight, "moving onto actions does not shorten the title");
     }
-    assert.deepEqual(seen.actions.map((action) => action.tooltip), [`${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`, `Archive ${chat ? "chat" : "session"}`]);
+    assert.deepEqual(seen.actions.map((action) => action.tooltip), [chat ? "Chat actions" : "Session actions", `${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`]);
     assert.equal(seen.after.background, seen.idle.background, "leaving the row clears the hover fill");
   });
+
+  test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
+  });
 }
+
+test("a row's ⋯, its session not open, reads the thread to copy it as Markdown and fork its latest answer; with no answer there is nothing to fork; a session in its own worktree forks only into a new one", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "sessions.html?rowThread=1", "sessions-result", 30000)) as {
+    error?: string; open: string; menu: string[]; markdown: string; forks: unknown[]; read: string[]; toasts: string[]; forksAfter: number;
+    places: Record<string, string[]>;
+  };
+  assert.equal(seen.error, undefined);
+  assert.equal(seen.open, "none", "no session is open");
+  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+  assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
+  assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
+  // Read once, for Copy; Fork finds it held.
+  assert.deepEqual(seen.read, ["getConversation w2-a", "threadView w2-a"]);
+  assert.ok(seen.toasts.includes("Nothing to fork yet: the session has no answer."), JSON.stringify(seen.toasts));
+  assert.equal(seen.forksAfter, 1);
+  // #648: "the same folder" of a session in its own worktree is that worktree, which it keeps.
+  assert.deepEqual(seen.places, {
+    "Fix the login": ["Fork in a new worktree"],
+    "Tidy the docs": ["Fork in the same folder", "Fork in a new worktree"],
+  });
+});
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
 // with its own title and state, those that need the user first,

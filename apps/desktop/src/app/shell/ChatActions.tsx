@@ -1,8 +1,9 @@
 import { useAui, useThreadListSource } from "@/components/conversation";
-import { type FC, useEffect, useState } from "react";
+import { type FC, useEffect } from "react";
 
-import { FORK_PLACES } from "@/app/conversation/ForkMenu";
+import { forkPlaces } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
+import { branchMarkdown, latestAnswer, storedBranch } from "@/app/conversation/storedBranch";
 import { NameDialog } from "@/app/shell/NameDialog";
 import { TooltipIconButton } from "@/components/controls";
 import {
@@ -13,23 +14,19 @@ import {
   DotsHorizontal,
   Folder,
   Pencil,
-  Pin,
-  Plus,
   Trash,
-  Unpin,
 } from "@/components/icons";
-import { ConfirmDialog, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/overlays";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { RowAction } from "@/components/shared";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {
   archive,
-  closeWorkspace,
   forkConversation,
   renameConversation,
-  select,
   setPinned,
-  setProjectExpanded,
 } from "@/state/actions";
+import { askDelete } from "@/state/picking";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -40,37 +37,19 @@ function workingDirectory(conversation: Conversation): string | null {
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
 }
 
-/** A worktree session's own worktree: what "Remove worktree" removes, and where it merges. */
-interface SessionWorkspace {
-  path: string;
-  branch: string;
-  base: string;
-}
-
-function sessionWorkspace(conversation: Conversation): SessionWorkspace | null {
-  const setup = conversation.setup;
-  if (setup?.type !== "session" || setup.environment.type !== "newWorktree" || !setup.environment.path) return null;
-  return { path: setup.environment.path, branch: setup.environment.branch, base: setup.environment.base };
-}
-
 /** The thread on its shown branch as Markdown, for "Copy as Markdown". */
 function useThreadMarkdown(title: string): () => string {
   const aui = useAui();
   // The whole branch: assistant-ui holds only some of a long one.
   const list = useThreadListSource();
-  return () => {
-    const parts = [`# ${title}`];
-    for (const message of list?.get().messages ?? aui.thread().getState().messages) {
-      const text = message.content
-        .map((part) => (part.type === "text" ? part.text : ""))
-        .filter(Boolean)
-        .join("\n\n")
-        .trim();
-      if (!text) continue;
-      parts.push(`## ${message.role === "user" ? "User" : "Assistant"}`, text);
-    }
-    return `${parts.join("\n\n")}\n`;
-  };
+  return () =>
+    branchMarkdown(
+      title,
+      (list?.get().messages ?? aui.thread().getState().messages).map((message) => ({
+        role: message.role === "user" ? "user" : "assistant",
+        texts: message.content.map((part) => (part.type === "text" ? part.text : "")),
+      })),
+    );
 }
 
 function fail(cause: unknown) {
@@ -83,40 +62,39 @@ async function copy(text: string, done: string) {
 }
 
 /**
- * The header's ⋯ "Session actions" ("Chat actions" in a Chat): Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; a session's New session (in
- * its project) and, with a worktree of its own, Remove worktree…; Copy › (working directory,
- * Markdown); Fork ›; Open in › (a session's working directory). Share, side chats, scheduled
- * tasks and new windows need what Brigadier doesn't have, so they are not offered.
+ * The ⋯ "Session actions" ("Chat actions" in a Chat) of the header, the tab and the sidebar's
+ * rows: Rename ⌥⌘R; Copy › (a session's path, its id, Markdown); Fork ›; Open in › (a session's
+ * path); Archive ⇧⌘A and Permanently delete. ⌥⌘P pins it. Share, side chats, scheduled tasks and new windows need what Brigadier doesn't have,
+ * so they are not offered.
  */
 export const ChatActions: FC<{
   conversation: Conversation;
   onRename: () => void;
   /** Its ⋯ as a small button inside a tab. */
   compact?: boolean;
+  /**
+   * Its ⋯ as a sidebar row's hover action. No thread is around a row: its Fork and Copy as
+   * Markdown read the conversation's thread when chosen, and its shortcuts stay with its open view.
+   */
+  row?: boolean;
   className?: string;
-}> = ({ conversation, onRename, compact = false, className }) => {
+}> = ({ conversation, onRename, compact = false, row = false, className }) => {
   const id = conversation.id;
   const pinned = conversation.pinnedAtMs !== null;
   const archived = conversation.lifecycle === "archived";
   const directory = workingDirectory(conversation);
-  const workspace = sessionWorkspace(conversation);
-  const projectId = conversation.kind === "session" ? conversation.projectId : null;
-  const [closing, setClosing] = useState(false);
-  const answer = useLatestAnswer();
-  const markdown = useThreadMarkdown(conversation.title);
+  const noun = conversation.kind === "chat" ? "chat" : "session";
+  const actionsName = conversation.kind === "chat" ? "Chat actions" : "Session actions";
   const mac = useApp((s) => s.info?.platform === "macos");
 
   const togglePin = () => void setPinned(id, !pinned).catch(fail);
   // No confirmation, even while it runs: archiving stops it, and Undo brings it back stopped.
   const archiveIt = () => void archive(id).catch(fail);
-  const fork = (place: ForkPlace) => {
-    if (answer) void forkConversation(id, answer, place).catch(fail);
-  };
 
   // ⌥⌘R and ⌥⌘P (Ctrl on Windows and Linux) while this conversation is open. ⇧⌘A is the
   // app's (useLifecycleShortcuts).
   useEffect(() => {
-    if (archived) return;
+    if (archived || row) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(mac ? event.metaKey : event.ctrlKey)) return;
       const action =
@@ -136,182 +114,189 @@ export const ChatActions: FC<{
   const key = (keys: string) =>
     mac ? keys : keys.replace("⌥", "Alt+").replace("⇧", "Shift+").replace("⌘", "Ctrl+");
   return (
-    <>
-      <DropdownMenu modal={false}>
+    <DropdownMenu modal={false}>
+      {row ? (
+        // A row's hover action, as the project row's ⋯ is.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <RowAction aria-label={`Actions for ${conversation.title}`} className={className}>
+                <DotsHorizontal />
+              </RowAction>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{actionsName}</TooltipContent>
+        </Tooltip>
+      ) : (
         <DropdownMenuTrigger asChild>
           <TooltipIconButton
             look={compact ? "ghost" : "toolbar"}
-            tooltip={conversation.kind === "chat" ? "Chat actions" : "Session actions"}
+            tooltip={actionsName}
             size={compact ? "icon-xs" : "icon-md"}
             className={className}
           >
             <DotsHorizontal />
           </TooltipIconButton>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {!archived && (
-            <>
-              <DropdownMenuItem onSelect={onRename}>
-                <Pencil />
-                Rename
-                <DropdownMenuShortcut>{key("⌥⌘R")}</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={togglePin}>
-                {pinned ? <Unpin /> : <Pin />}
-                {pinned ? "Unpin" : "Pin"}
-                <DropdownMenuShortcut>{key("⌥⌘P")}</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={archiveIt}>
-                <Archive />
-                Archive
-                <DropdownMenuShortcut>{key("⇧⌘A")}</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {projectId && (
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setProjectExpanded(projectId, true);
-                    select({ type: "draft", kind: "session", projectId });
-                  }}
-                >
-                  <Plus />
-                  New session
-                </DropdownMenuItem>
-              )}
-              {workspace && (
-                <DropdownMenuItem onSelect={() => setClosing(true)}>
-                  <Trash />
-                  Remove worktree…
-                </DropdownMenuItem>
-              )}
-              {(projectId || workspace) && <DropdownMenuSeparator />}
-            </>
-          )}
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <Copy />
-              Copy
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              {directory && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void copy(directory, "Copied working directory").catch(() =>
-                      toast("Failed to copy working directory", { tone: "error" }),
-                    )
-                  }
-                >
-                  Copy working directory
-                </DropdownMenuItem>
-              )}
+      )}
+      <DropdownMenuContent align={row ? "start" : "end"}>
+        {!archived && (
+          <>
+            <DropdownMenuItem onSelect={onRename}>
+              <Pencil />
+              Rename
+              <DropdownMenuShortcut>{key("⌥⌘R")}</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Copy />
+            Copy
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {directory && (
               <DropdownMenuItem
                 onSelect={() =>
-                  void copy(markdown(), "Copied conversation as Markdown").catch(() =>
-                    toast("Failed to copy conversation as Markdown", { tone: "error" }),
+                  void copy(directory, "Copied path").catch(() =>
+                    toast("Failed to copy path", { tone: "error" }),
                   )
                 }
               >
-                Copy as Markdown
+                Copy path
               </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-          {answer && !archived && (
+            )}
+            <DropdownMenuItem
+              onSelect={() =>
+                void copy(shortId(id), `Copied ${noun} id`).catch(() =>
+                  toast(`Failed to copy ${noun} id`, { tone: "error" }),
+                )
+              }
+            >
+              Copy {noun} id
+            </DropdownMenuItem>
+            {row ? <StoredMarkdownItem conversation={conversation} /> : <CopyMarkdownItem title={conversation.title} />}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        {!archived &&
+          (row ? (
+            <ForkSub conversation={conversation} onFork={(place) => void forkStored(conversation, place).catch(fail)} />
+          ) : (
+            <ThreadForkSub conversation={conversation} />
+          ))}
+        {directory && (
+          <>
+            <DropdownMenuSeparator />
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <BranchAlt />
-                Fork
+                <Folder />
+                Open in
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {conversation.kind === "chat" ? (
-                  <DropdownMenuItem onSelect={() => fork("workspace")}>Fork chat</DropdownMenuItem>
-                ) : (
-                  FORK_PLACES.map(({ place, title }) => (
-                    <DropdownMenuItem key={place} onSelect={() => fork(place)}>
-                      {title}
-                    </DropdownMenuItem>
-                  ))
+                <DropdownMenuItem onSelect={() => void openFolder(directory).catch(fail)}>
+                  <Folder />
+                  {mac ? "Finder" : "File manager"}
+                </DropdownMenuItem>
+                {mac && (
+                  <DropdownMenuItem
+                    onSelect={() => void openFolder(directory, "Terminal").catch(fail)}
+                  >
+                    <Dock />
+                    Terminal
+                  </DropdownMenuItem>
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-          )}
-          {directory && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Folder />
-                  Open in
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem onSelect={() => void openFolder(directory).catch(fail)}>
-                    <Folder />
-                    {mac ? "Finder" : "File manager"}
-                  </DropdownMenuItem>
-                  {mac && (
-                    <DropdownMenuItem
-                      onSelect={() => void openFolder(directory, "Terminal").catch(fail)}
-                    >
-                      <Dock />
-                      Terminal
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {workspace && (
-        <CloseWorkspaceDialog
-          conversationId={id}
-          workspace={workspace}
-          open={closing}
-          onOpenChange={setClosing}
-        />
-      )}
-    </>
+          </>
+        )}
+        <DropdownMenuSeparator />
+        {!archived && (
+          <DropdownMenuItem onSelect={archiveIt}>
+            <Archive />
+            Archive
+            <DropdownMenuShortcut>{key("⇧⌘A")}</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+        {/* The Archived page's confirm, for a conversation still at work too: deleting stops it. */}
+        <DropdownMenuItem variant="destructive" onSelect={() => askDelete([id])}>
+          <Trash />
+          Permanently delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };
 
-/** The confirm before "Remove worktree": it names the folder that goes and the branch that stays. */
-const CloseWorkspaceDialog: FC<{
-  conversationId: string;
-  workspace: SessionWorkspace;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}> = ({ conversationId, workspace, open, onOpenChange }) => {
-  const [busy, setBusy] = useState(false);
+/** The id the `brigadier` CLI names a conversation by: the last 8 characters of its id (ConversationId::short). */
+function shortId(id: string): string {
+  return id.slice(-8);
+}
+
+const copiedMarkdown = () => toast("Copied conversation as Markdown");
+const markdownFailed = () => toast("Failed to copy conversation as Markdown", { tone: "error" });
+
+/** Copy › Copy as Markdown: the thread around, as it shows. */
+const CopyMarkdownItem: FC<{ title: string }> = ({ title }) => {
+  const markdown = useThreadMarkdown(title);
   return (
-    <ConfirmDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Remove worktree?"
-      description={
-        <>
-          This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
-          changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
-          unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
-          next change makes a fresh worktree in the same folder.
-        </>
-      }
-      confirm="Remove worktree"
-      destructive
-      busy={busy}
-      onConfirm={() => {
-        setBusy(true);
-        closeWorkspace(conversationId)
-          .then((text) => {
-            toast(text);
-            onOpenChange(false);
-          })
-          .catch((error: unknown) =>
-            toast(`Couldn't remove the worktree: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
-          )
-          .finally(() => setBusy(false));
-      }}
-    />
+    <DropdownMenuItem onSelect={() => void copy(markdown(), "Copied conversation as Markdown").catch(markdownFailed)}>
+      Copy as Markdown
+    </DropdownMenuItem>
   );
 };
+
+/**
+ * A row's Copy › Copy as Markdown: the conversation's thread is read first. The clipboard write
+ * starts during the click and takes the text once read: WebKit refuses one begun after a wait.
+ */
+const StoredMarkdownItem: FC<{ conversation: Conversation }> = ({ conversation }) => (
+  <DropdownMenuItem
+    onSelect={() => {
+      const text = storedBranch(conversation).then(
+        (messages) => new Blob([branchMarkdown(conversation.title, messages)], { type: "text/plain" }),
+      );
+      void navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).then(copiedMarkdown, markdownFailed);
+    }}
+  >
+    Copy as Markdown
+  </DropdownMenuItem>
+);
+
+/** A row's Fork: from the latest answer of the conversation's thread, read first. */
+async function forkStored(conversation: Conversation, place: ForkPlace): Promise<void> {
+  const answer = latestAnswer(await storedBranch(conversation));
+  if (!answer) throw new Error(`Nothing to fork yet: the ${conversation.kind === "chat" ? "chat" : "session"} has no answer.`);
+  await forkConversation(conversation.id, answer, place);
+}
+
+/** Fork › of the thread around, from its latest answer; none before there is one. */
+const ThreadForkSub: FC<{ conversation: Conversation }> = ({ conversation }) => {
+  const answer = useLatestAnswer();
+  if (!answer) return null;
+  return <ForkSub conversation={conversation} onFork={(place) => void forkConversation(conversation.id, answer, place).catch(fail)} />;
+};
+
+/** Fork ›: where the fork goes. */
+const ForkSub: FC<{ conversation: Conversation; onFork: (place: ForkPlace) => void }> = ({ conversation, onFork }) => (
+  <DropdownMenuSub>
+    <DropdownMenuSubTrigger>
+      <BranchAlt />
+      Fork
+    </DropdownMenuSubTrigger>
+    <DropdownMenuSubContent>
+      {conversation.kind === "chat" ? (
+        <DropdownMenuItem onSelect={() => onFork("workspace")}>Fork chat</DropdownMenuItem>
+      ) : (
+        forkPlaces(conversation.setup).map(({ place, title }) => (
+          <DropdownMenuItem key={place} onSelect={() => onFork(place)}>
+            {title}
+          </DropdownMenuItem>
+        ))
+      )}
+    </DropdownMenuSubContent>
+  </DropdownMenuSub>
+);
 
 /** The rename dialog the header's title and ⌥⌘R open. */
 export const RenameDialog: FC<{

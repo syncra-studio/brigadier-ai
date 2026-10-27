@@ -134,6 +134,46 @@ export function refusedDescribed(name: PeerName): Described {
   return { words: { kind: "other", doing: label, done: label, object: name.title, phrase: "Couldn’t message a session" }, status: "completed" };
 }
 
+/** How a message the thread's own `brigadier send` gave another session stands, for its row. */
+export type SessionSendState = "sending" | "sent" | "declined" | "refused";
+
+/** Where a session's `brigadier send` stands: running, sent, the user's Deny, or failed. */
+export function sessionSendState(status: ItemStatus, refused: string | null): SessionSendState {
+  if (status === "inProgress") return "sending";
+  if (status === "declined") return "declined";
+  return status === "failed" || refused !== null ? "refused" : "sent";
+}
+
+/**
+ * The words before the session a `brigadier send` row names: "Messaging Docs", then "Messaged
+ * Docs" (the message follows, a step fainter), "Didn't send message to Docs", "Couldn't send
+ * message to Docs".
+ */
+export function sessionSendWords(state: SessionSendState): string {
+  switch (state) {
+    case "sending":
+      return "Messaging ";
+    case "sent":
+      return "Messaged ";
+    case "declined":
+      return "Didn’t send message to ";
+    case "refused":
+      return "Couldn’t send message to ";
+  }
+}
+
+/** A `brigadier send` row's words and how it stands, as a group reads them: "Messaged Docs". */
+export function sessionSentDescribed(name: PeerName, state: SessionSendState): Described {
+  if (state === "refused" || state === "declined") {
+    const label = `${sessionSendWords(state)}${name.title}`;
+    return { words: { kind: "other", doing: label, done: label, object: name.title, phrase: state === "declined" ? "Didn’t message a session" : "Couldn’t message a session" }, status: "completed" };
+  }
+  return {
+    words: { kind: "message", doing: `Messaging ${name.title}`, done: `Messaged ${name.title}`, object: name.title },
+    status: state === "sending" ? "inProgress" : "completed",
+  };
+}
+
 /**
  * Whether the row's name opens the receiver at the message itself: only once the receiver has
  * it (a message waiting for the user's OK, declined, or refused before it went has none there).

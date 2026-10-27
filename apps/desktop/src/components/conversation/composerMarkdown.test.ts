@@ -181,3 +181,20 @@ test("backticks typed around a pasted chip never put the chip in a code mark (th
   );
   assert.equal(exported(field), "a \\` b `x` c");
 });
+
+test("a pasted text or image kept between bare backticks (a draft or message from before they went escaped) comes back a chip, not code", () => {
+  for (const [chip, text] of [[pasteChip(1), "[Pasted text #1]"], [imageChip(2), "[Image #2]"]] as const) {
+    const back = imported(`commented this \`${text} \``);
+    assert.deepEqual(chips(back), [chip.id]);
+    back.getEditorState().read(() => {
+      // The backticks went as the code span's; what's left beside the chip is plain text.
+      assert.equal($getRoot().getTextContent(), `commented this ${text} `);
+      assert.ok([...$dfs()].every(({ node }) => !$isTextNode(node) || !node.hasFormat("code")));
+    });
+    assert.equal(exported(back), `commented this ${text} `);
+  }
+  // Code around it stays code; another chip in the same span stays its text.
+  const mixed = imported("see `run [Pasted text #1] @task-9 now`");
+  assert.deepEqual(chips(mixed), ["paste:1"]);
+  assert.equal(exported(mixed), "see `run `[Pasted text #1]` @task-9 now`");
+});

@@ -1173,6 +1173,7 @@ mod tests {
         let naked = PlainWorker {
             quota_policy: None,
             permission: crate::model::PermissionLevel::Ask,
+            inherited: false,
             local: false,
             repo: None,
             base: None,

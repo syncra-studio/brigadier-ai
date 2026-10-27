@@ -4,7 +4,10 @@
  * The sessions of what was once a workspace are plain sessions too. `close=1` adds the open
  * session's tab bar: closing a working session's tab stops nothing and a click on its row opens
  * it again. The sessions that need the user come first; one that
- * starts needing the user moves up. Writes what it saw to #sessions-result (SessionsRender.test.ts reads it).
+ * starts needing the user moves up. `rowThread=1`: a row's ⋯, its session not open, copies its
+ * thread as Markdown and forks it from its latest answer, both read from the daemon first; one
+ * with no answer says there is nothing to fork. Writes what it saw to #sessions-result
+ * (SessionsRender.test.ts reads it).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -16,8 +19,8 @@ import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { NavRow } from "@/components/controls/nav-row";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
-import { fixtureInput } from "@/fixtures/input";
-import type { Conversation, ConversationActivity, EventEnvelope, Project, Question, Request, WorkerRow } from "@/ipc/generated";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
+import type { Conversation, ConversationActivity, ConversationView, Environment, EventEnvelope, FileEntry, Project, Question, Request, ThreadView, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 import { useLastOpened } from "@/state/lastOpened";
@@ -26,11 +29,43 @@ import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
 const params = new URLSearchParams(location.search);
 const requests: string[] = [];
+/** The thread "Fix the login" (w2-a) has in its CLI's file: two answers. The others have none. */
+const said = (seconds: number, itemId: string, role: "user" | "assistant", text: string): FileEntry =>
+  ({ atMs: 1_000 + seconds * 1000, event: { type: "message", itemId, role, text } }) as FileEntry;
+const loginThread: ThreadView = {
+  entries: [
+    said(0, "u1", "user", "Fix the login."),
+    said(2, "a1", "assistant", "The token expired; it refreshes now."),
+    said(10, "u2", "user", "And the logout?"),
+    said(12, "a2", "assistant", "Logout clears it too."),
+  ],
+  turns: [
+    { userMessage: "u1", startedAtMs: 1_000, endedAtMs: 3_000, end: "done", error: null, requests: [] },
+    { userMessage: "u2", startedAtMs: 11_000, endedAtMs: 13_000, end: "done", error: null, requests: [] },
+  ],
+} as unknown as ThreadView;
+const forks: unknown[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
-  const { method } = (payload as { request: Request }).request;
-  requests.push(method);
-  return { method };
+  const req = (payload as { request: Request }).request;
+  const { method } = req;
+  requests.push(req.method === "getConversation" || req.method === "threadView" ? `${method} ${"id" in req ? req.id : req.conversationId}` : method);
+  if (!params.has("rowThread")) return { method };
+  switch (req.method) {
+    case "getConversation":
+      return { method, view: {
+        conversation: useApp.getState().conversations[req.id], context: null, messages: { messages: [], hasMore: false },
+        tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [],
+        queue: { items: [], paused: false }, run: "idle", runRequest: null, head: null, ratings: {}, streaming: null, notices: [], previews: [],
+      } as unknown as ConversationView };
+    case "threadView":
+      return { method, view: req.conversationId === "w2-a" ? loginThread : { entries: [], turns: [] } };
+    case "forkConversation":
+      forks.push({ conversationId: req.conversationId, messageId: req.messageId, place: req.place });
+      return { method, conversation: { ...useApp.getState().conversations[req.conversationId]!, id: "fork-1", title: "Fix the login (fork)" } };
+    default:
+      return { method };
+  }
 });
 
 const project = "p-1";
@@ -201,6 +236,9 @@ const tooltipText = () => {
   return content?.querySelector('[role="tooltip"]')?.textContent ?? content?.textContent;
 };
 
+/** The open menus' items. */
+const items = () => [...document.querySelectorAll("[role=menu] [role=menuitem]")];
+
 /** Measure the real pointer's hover on the row and each of its sibling action buttons. */
 async function hoverRow() {
   const title = "In this session we'll fix the sidebar session row hover and truncation";
@@ -214,7 +252,8 @@ async function hoverRow() {
   const pinWord = params.has("pinned") ? "Unpin" : "Pin";
   const noun = params.has("chats") ? "chat" : "session";
   const pin = row.querySelector<HTMLButtonElement>(`button[aria-label="${pinWord} ${title}"]`)!;
-  const archive = row.querySelector<HTMLButtonElement>(`button[aria-label="Archive ${title}"]`)!;
+  const dots = row.querySelector<HTMLButtonElement>(`button[aria-label="Actions for ${title}"]`)!;
+  const dotsTip = params.has("chats") ? "Chat actions" : "Session actions";
   const background = () => getComputedStyle(button).backgroundColor;
   const move = async (element: Element) => {
     const rect = element.getBoundingClientRect();
@@ -236,15 +275,15 @@ async function hoverRow() {
     background: background(),
     titleRight: text.getBoundingClientRect().right,
     titleWidth: text.getBoundingClientRect().width,
-    actionsLeft: pin.getBoundingClientRect().left,
+    actionsLeft: dots.getBoundingClientRect().left,
     statusVisible: getComputedStyle(status).display !== "none" && getComputedStyle(status).visibility !== "hidden",
     statusDisplay: getComputedStyle(status).display,
     overflowing: text.scrollWidth > text.clientWidth,
   };
   const actions = [];
-  for (const action of [pin, archive]) {
+  for (const action of [dots, pin]) {
     await move(action);
-    await until(() => tooltipText() === `${action === pin ? pinWord : "Archive"} ${noun}`);
+    await until(() => tooltipText() === (action === pin ? `${pinWord} ${noun}` : dotsTip));
     actions.push({
       background: background(),
       underPointer: action.matches(":hover"),
@@ -254,7 +293,78 @@ async function hoverRow() {
   }
   await fixtureInput({ type: "pointer", x: 1200, y: 900 });
   await wait(150);
-  return { idle, hovered, actions, navHoverBackground, after: { background: background(), titleWidth: text.getBoundingClientRect().width } };
+  const after = { background: background(), titleWidth: text.getBoundingClientRect().width };
+  // The ⋯ opens the tab's menu.
+  await fixtureClick(dots);
+  await until(() => document.querySelector("[role=menu]") !== null);
+  const menu = items().map((item) => item.textContent?.trim());
+  await fixtureClick(items().find((item) => item.textContent?.trim() === "Copy")!);
+  await until(() => document.querySelectorAll("[role=menu]").length > 1);
+  const copyMenu = [...document.querySelectorAll("[role=menu]")].at(-1)!;
+  const copy = [...copyMenu.querySelectorAll("[role=menuitem]")].map((item) => item.textContent?.trim());
+  await fixtureInput({ type: "key", key: "Escape" });
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until(() => document.querySelector("[role=menu]") === null);
+  return { idle, hovered, actions, menu, copy, navHoverBackground, after };
+}
+
+/** A session's setup working in `environment`. */
+const workingIn = (environment: Environment): Conversation["setup"] => ({
+  type: "session", repo: "/tmp/sessions-fixture", environment, permission: "ask", planMode: false, workersSeeUncommitted: null,
+  orchestrator: { provider: "claude", model: null, effort: null },
+});
+
+/**
+ * A row's ⋯ with its session not open: Copy as Markdown, then Fork, of "Fix the login", which
+ * works in its own worktree; Fork of "Tidy the docs", in the user's checkout, which has no answer.
+ */
+let step = "";
+async function rowThread() {
+  const copied: string[] = [];
+  Object.defineProperty(navigator, "clipboard", { value: {
+    write: async (written: ClipboardItem[]) => void copied.push(await (await written[0]!.getType("text/plain")).text()),
+  } });
+  const seen: Record<string, unknown> = { open: useApp.getState().selection.type };
+  // The Fork submenu's places, per session.
+  const places: Record<string, (string | undefined)[]> = {};
+  const pick = async (title: string, path: string[]) => {
+    step = `${title}: ${path.join(" › ")}`;
+    // The menu before has gone, and the row is drawn.
+    await until(() => document.querySelector("[role=menu]") === null && rowButton(title) !== undefined);
+    const row = rowButton(title)!.closest("li")!;
+    await fixtureInput({ type: "pointer", x: row.getBoundingClientRect().x + 20, y: row.getBoundingClientRect().y + 10 });
+    await fixtureClick(row.querySelector(`button[aria-label="Actions for ${title}"]`)!);
+    await until(() => document.querySelector("[role=menu]") !== null);
+    const menu = items().map((item) => item.textContent?.trim());
+    for (const [index, name] of path.entries()) {
+      // A submenu slides in: it is clicked where it comes to rest.
+      if (index > 0) {
+        await until(() => document.querySelectorAll("[role=menu]").length > index);
+        await wait(300);
+        if (path[0] === "Fork") places[title] = [...[...document.querySelectorAll("[role=menu]")].at(-1)!.querySelectorAll("[role=menuitem]")].map((item) => item.textContent?.trim());
+      }
+      await fixtureClick(items().find((item) => item.textContent?.trim() === name)!);
+    }
+    return menu;
+  };
+  seen.menu = await pick("Fix the login", ["Copy", "Copy as Markdown"]);
+  await until(() => copied.length > 0);
+  seen.markdown = copied[0];
+  useApp.setState((state) => ({ conversations: {
+    ...state.conversations,
+    "w2-a": { ...state.conversations["w2-a"]!, setup: workingIn({ type: "newWorktree", base: "main", branch: "brigadier/w2/session", path: "/tmp/sessions-fixture/w2", start: null }) },
+    "w3-a": { ...state.conversations["w3-a"]!, setup: workingIn({ type: "localCheckout", branch: "main" }) },
+  } }));
+  await pick("Fix the login", ["Fork", "Fork in a new worktree"]);
+  await until(() => forks.length > 0);
+  seen.forks = forks;
+  seen.read = requests.filter((request) => /^(getConversation|threadView) w2-a$/.test(request));
+  await pick("Tidy the docs", ["Fork", "Fork in the same folder"]);
+  await until(() => toastTexts().some((text) => text?.startsWith("Nothing to fork")));
+  seen.toasts = toastTexts();
+  seen.forksAfter = forks.length;
+  seen.places = places;
+  return seen;
 }
 
 /** The toasts on screen, by their text. */
@@ -340,6 +450,10 @@ function Fixture() {
   useEffect(() => {
     if (params.has("hover")) {
       void hoverRow().then((seen) => setResult(JSON.stringify(seen)));
+      return;
+    }
+    if (params.has("rowThread")) {
+      void rowThread().then((seen) => setResult(JSON.stringify(seen)), (error: unknown) => setResult(JSON.stringify({ error: `${String(error)} (${step})` })));
       return;
     }
     if (params.has("doneRead")) {

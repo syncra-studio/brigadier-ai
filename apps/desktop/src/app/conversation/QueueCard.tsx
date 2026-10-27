@@ -15,6 +15,7 @@ import { useCallback, useContext } from "react";
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { useNamedMentions } from "@/app/conversation/workerNames";
 import { useAction } from "@/app/conversation/useAction";
 import { TooltipIconButton, Button } from "@/components/controls";
 import {
@@ -128,6 +129,8 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   // A session's own view has Side chat tabs; a side chat has none of its own.
   const view = useContext(ViewContext);
   const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
+  // Its workers by name, as the composer's chips show them; the text it sends keeps `@task-N`.
+  const named = useNamedMentions();
   if (items.length === 0 && sent.length === 0) return null;
 
   return (
@@ -170,10 +173,10 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
               }
             >
               {/* The message comes first: with no room for both, the status note gives way, down to its first words (#447). */}
-              <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={preview || undefined}>
+              <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={named(preview) || undefined}>
                 {item.text ? (
                   <>
-                    <InlineImageText text={item.text} attachments={item.attachments} />
+                    <InlineImageText text={named(item.text)} attachments={item.attachments} />
                     {attached && <span className="text-muted-foreground"> · {attached}</span>}
                   </>
                 ) : (

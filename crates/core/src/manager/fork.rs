@@ -7,10 +7,13 @@
 //! transcripts, they keep no branch or worktree of the source, and its model starts a CLI
 //! session of its own, seeded with the transcript.
 //!
+//! Its thread is drawn from its CLI's record, as every thread is: it keeps a copy of the
+//! source's, up to that answer, in `record/forked.json`, shown before its own CLI's items.
+//!
 //! A session's fork works from the commit that was current at that answer: the last commit
 //! its copied requests landed, or where the session stood before its first landing when they
-//! landed none. It gets a new branch there, in the user's checkout ("in this workspace") or
-//! in a worktree of its own.
+//! landed none. It gets a new branch there, in the user's checkout ("in the same folder", only
+//! for a session working there) or in a worktree of its own.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -19,6 +22,7 @@ use brigadier_git::Oid;
 use brigadier_store::NewEvent;
 
 use super::SessionManager;
+use super::session_dir::write_atomic;
 use super::{blocking, git_error};
 use crate::board::Board;
 use crate::model::{
@@ -26,11 +30,17 @@ use crate::model::{
     MessageRole, Setup, streams,
 };
 use crate::sessions::{Origin, ROOT, branch_of, decode};
+use crate::thread_view;
 use crate::work::{RequestState, TaskId};
 use crate::{Error, Result};
 
 /// Events of a stream read at once while copying it.
 const COPY_PAGE: u32 = 500;
+
+/// Why a session in its own worktree doesn't fork "in the same folder" (#648): that folder is
+/// its worktree, which it keeps to itself.
+pub(super) const WORKTREE_FORK: &str =
+    "This session works in its own worktree: fork it in a new worktree.";
 
 impl SessionManager {
     /// Starts a new conversation from the answer `message_id` of `source`: the thread up to
@@ -47,6 +57,17 @@ impl SessionManager {
             return Err(Error::Invalid(
                 "this conversation is archived; restore it first".into(),
             ));
+        }
+        if place == ForkPlace::Workspace
+            && matches!(
+                conversation.setup,
+                Some(Setup::Session {
+                    environment: Environment::NewWorktree { .. },
+                    ..
+                })
+            )
+        {
+            return Err(Error::Invalid(WORKTREE_FORK.into()));
         }
         let messages = self.core.all_messages(&source).await?;
         let point = messages
@@ -102,6 +123,12 @@ impl SessionManager {
                 "wait for its workers to finish before forking it".into(),
             ));
         }
+
+        // The thread as the source's CLI kept it, up to that answer: the fork's starts with it.
+        let thread = match &point.request_id {
+            Some(request) => thread_view::forked_at(&self.thread_view(&source)?, request),
+            None => None,
+        };
 
         // A fork is a new conversation: its model must be available, as when starting one.
         if let Some(setup) = &conversation.setup {
@@ -205,6 +232,18 @@ impl SessionManager {
             })
             .collect::<Result<Vec<DomainEvent>>>()?;
         self.core.record_conversation(&id, events).await?;
+        if let Some(thread) = thread {
+            let text =
+                serde_json::to_string(&thread).map_err(|err| Error::Invalid(err.to_string()))?;
+            let record = self.session_dir(&id).record();
+            let text = swap(text);
+            blocking(move || {
+                std::fs::create_dir_all(&record)
+                    .map_err(|err| Error::Invalid(format!("{}: {err}", record.display())))?;
+                write_atomic(&record.join("forked.json"), text.as_bytes())
+            })
+            .await?;
+        }
         Ok(fork)
     }
 

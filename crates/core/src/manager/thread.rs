@@ -256,6 +256,10 @@ impl SessionManager {
                 .await;
         } else {
             self.ask_user_for_thread(conv, cli, request).await;
+            // Raised while its card opened, after the waiting cards were looked at: it goes.
+            if self.raised_to_full(&conv.id, cli) {
+                self.allow_waiting_at_full(&conv.id).await;
+            }
         }
     }
 

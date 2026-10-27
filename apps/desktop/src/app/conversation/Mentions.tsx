@@ -142,12 +142,6 @@ export function pageMentions(mentions: readonly Mention[] | undefined): Mention[
 /** The files and conversations the `@` menu put in the composer, by their `@name`. */
 export class MentionMemory {
   private readonly byLabel = new Map<string, Mention>();
-  /** The open session's workers, whose `@task-N` chips too. */
-  private workers: readonly MentionTarget[] = [];
-
-  setWorkers(workers: readonly MentionTarget[]): void {
-    this.workers = workers;
-  }
 
   record(mention: Mention, name: string): void {
     this.byLabel.set(name, mention);
@@ -173,16 +167,16 @@ export class MentionMemory {
 
   /**
    * The mention whose name starts at `at` in `text` (just past an `@`): the longest remembered
-   * file or conversation, else a worker as `task-N`.
+   * file or conversation, else one of the open session's `workers` as `task-N`.
    */
-  match(text: string, at: number): ChipMention | null {
+  match(text: string, at: number, workers: readonly MentionTarget[]): ChipMention | null {
     let best: [string, Mention] | null = null;
     for (const entry of this.byLabel) {
       if (text.startsWith(entry[0], at) && entry[0].length > (best?.[0].length ?? 0)) best = entry;
     }
     if (best) return itemOf(best[1], best[0]);
     const task = /^task-(\d+)/.exec(text.slice(at));
-    const target = task && this.workers.find((entry) => entry.number === Number(task[1]));
+    const target = task && workers.find((entry) => entry.number === Number(task[1]));
     return target && task ? itemOf({ type: "task", id: target.id }, task[0]) : null;
   }
 }

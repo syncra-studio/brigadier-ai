@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type MouseEvent } from "react";
+import { memo, useEffect, useState, type ComponentType, type MouseEvent } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
@@ -22,6 +22,8 @@ export type RowActions = {
   onPick: (id: string, event: MouseEvent) => boolean;
   /** The picked rows, in the order the sidebar shows them. */
   picked: () => string[];
+  /** A row's ⋯ and its menu: the same as its tab's. */
+  Menu: ComponentType<{ conversation: Conversation; onRename: () => void }>;
 };
 
 /** Keeps a row's title clear of its actions while they show. */
@@ -54,7 +56,7 @@ export function RowStatus({ conversationId, reclaimSpace = false }: { conversati
 }
 
 /**
- * A chat or session: its title, its state at the end, and on hover Pin and Archive. A
+ * A chat or session: its title, its state at the end, and on hover its ⋯ and Pin. A
  * right-click opens its menu (Pin, Rename…, Archive, Delete…), or on one of several picked
  * rows the menu for all of them (Archive (N), Delete (N)…). ⌘-click (Ctrl-click off macOS)
  * picks it, Shift-click picks a range.
@@ -164,6 +166,7 @@ export const ConversationRow = memo(function ConversationRow({
         )}
       </ContextMenu>
       <RowActionsSlot>
+        <actions.Menu conversation={conversation} onRename={() => actions.onRename(conversation)} />
         <Tooltip>
           <TooltipTrigger asChild>
             <RowAction
@@ -174,17 +177,6 @@ export const ConversationRow = memo(function ConversationRow({
             </RowAction>
           </TooltipTrigger>
           <TooltipContent side="bottom">{pinned ? `Unpin ${noun}` : `Pin ${noun}`}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <RowAction
-              aria-label={`Archive ${title}`}
-              onClick={archiveIt}
-            >
-              <Archive />
-            </RowAction>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Archive {noun}</TooltipContent>
         </Tooltip>
       </RowActionsSlot>
     </li>

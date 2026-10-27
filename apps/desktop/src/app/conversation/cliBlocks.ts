@@ -11,6 +11,7 @@ import {
   type ThreadNode,
   type ThreadTree,
 } from "@/app/conversation/blocks";
+import { sessionSent } from "@/app/conversation/sessionSend";
 import { shownText } from "@/app/conversation/streamRelease";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import type {
@@ -37,11 +38,12 @@ const CARRY_ON = "Carry on from the hand-off note.";
 
 /**
  * How Brigadier's own messages to the thread's CLI start (run2-D44: never a bubble): a card's
- * answer, a resume, a background command's result, another session's message, a preview's end,
- * a carry-on after a limit. The CLI's reply to one still shows.
+ * answer, a resume, a background command's result, a preview's end, a carry-on after a limit. The
+ * CLI's reply to one still shows. Another session's message is not Brigadier's: it shows as that
+ * session's (S30).
  */
 const BRIGADIER_SAYS =
-  /^\[(?:message from session |decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early)/;
+  /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early)/;
 
 /** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
 const CODEX_WAKE = /^\[your background command /;
@@ -892,7 +894,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       default: {
         if (readsOnly(event, waited)) return;
-        const kind = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
+        const tool = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
+        // Its `brigadier send` to another session is the row of the message it sent (S30).
+        const kind = sessionSent(tool, event, board) ?? tool;
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }

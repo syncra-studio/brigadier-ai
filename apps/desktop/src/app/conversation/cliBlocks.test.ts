@@ -747,13 +747,61 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   assert.deepEqual(cliBlocks({ ...own, seams: [{ ...seam, open: true, at: null }] }, "conv").flatMap((block) => block.seams), []);
 });
 
-test("Brigadier's own words to the CLI are no bubble, as a turn's start or a steer; the CLI's reply shows (run2-D44)", () => {
+test("another session's message shows as that session's, its header gone, as a turn's start and as a steer (S30)", () => {
   const from = "c-0123456789abcdef";
   const sent = (id: string, text: string) => `[message from session "API work" (${from}) · ${id}]\n${text}`;
   const peers: ThreadView = {
     entries: [
       user("u1", sent("sm-aaaaaaaaaaaa", "Can you check the schema?"), 1000),
       user("s1", sent("sm-bbbbbbbbbbbb", "Also the docs."), 1100, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Checked." }, 1200),
+      user("u2", "My own words", 2000),
+    ],
+    // Brigadier queues another session's message with no request of the user's.
+    turns: [turn("u1", 1000, 1500, "done"), { ...turn("u2", 2000, 2500, "done"), requests: ["r-u2"] }],
+  };
+  const [first, second] = cliBlocks(peers, "c1", NO_BOARD);
+  assert.equal(first!.user?.kind, "peer");
+  assert.equal(first!.user?.kind === "peer" && first!.user.text, "Can you check the schema?");
+  assert.deepEqual(first!.user?.kind === "peer" && first!.user.message.peer, { messageId: "sm-aaaaaaaaaaaa", from });
+  assert.equal(first!.user?.kind === "peer" && first!.user.message.id, "sm-aaaaaaaaaaaa");
+  assert.equal(first!.steers[0]!.message.role, "peer");
+  assert.equal(first!.steers[0]!.text, "Also the docs.");
+  assert.deepEqual(first!.steers[0]!.message.peer, { messageId: "sm-bbbbbbbbbbbb", from });
+  assert.deepEqual(first!.texts.map((text) => text.text), ["Checked."]);
+  assert.equal(second!.user?.kind === "message" && second!.user.text, "My own words");
+});
+
+/** The thread's `brigadier send` to `to`, as its CLI recorded it. */
+const send = (id: string, to: string, output: string | null, status: "inProgress" | "completed" = "completed") =>
+  tool(id, "Bash", JSON.stringify({ command: `brigadier send ${to} "Can you check the schema?"` }), status, output);
+
+test("the thread's `brigadier send` to another session is the row of its message; one to its worker keeps its own (S30)", () => {
+  const sends: ThreadView = {
+    entries: [
+      user("u1", "Ask API work and the worker", 1000),
+      at(send("t1", "4f2a9c1e", "Sent sm-0123456789ab to session 4f2a9c1e: it works on it.\n"), 1100),
+      at(send("t2", "0011aa22", "Sent to 0011aa22: it works on it.\n"), 1200),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Asked both." }, 1300),
+    ],
+    turns: [{ ...turn("u1", 1000, 1400, "done"), requests: ["r1"] }],
+  };
+  const [block] = cliBlocks(sends, "conv", NO_BOARD);
+  const [toSession, toWorker] = block!.orchestratorSteps.map((step) => step.kind);
+  assert.deepEqual(toSession, {
+    type: "sessionSent", itemId: "t1", to: "4f2a9c1e", text: "Can you check the schema?", status: "completed", messageId: "sm-0123456789ab", refused: null,
+  });
+  assert.equal(toWorker?.type, "tool");
+  // The same, reloaded mid-turn: a send still running reads as the session's while no worker has the id.
+  const running: ThreadView = { entries: [sends.entries[0]!, at(send("t1", "4f2a9c1e", null, "inProgress"), 1100)], turns: [{ ...turn("u1", 1000, null, null), requests: ["r1"] }] };
+  assert.equal(cliBlocks(running, "conv", NO_BOARD)[0]!.orchestratorSteps[0]?.kind.type, "sessionSent");
+});
+
+test("Brigadier's own words to the CLI are no bubble, as a turn's start or a steer; the CLI's reply shows (run2-D44)", () => {
+  const peers: ThreadView = {
+    entries: [
+      user("u0", "Start", 900),
+      user("s1", "[answer] You asked the user:\nNo\n[card c0]", 1100, { steer: true }),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Checked." }, 1200),
       user("u2", "My own words", 2000),
       user("d1", "[decision] The user approved: run the migration", 3000),
@@ -766,7 +814,7 @@ test("Brigadier's own words to the CLI are no bubble, as a turn's start or a ste
       user("c1", "[Brigadier quit while you were working on this request, and the user asked you to continue. Check git status and git log first.]", 8000),
     ],
     turns: [
-      turn("u1", 1000, 1500, "done"),
+      { ...turn("u0", 900, 1500, "done"), requests: ["r-u0"] },
       { ...turn("u2", 2000, 2500, "done"), requests: ["r-u2"] },
       turn("d1", 3000, 3200, "done"),
       turn("q1", 4000, 4100, "done"),
@@ -778,7 +826,7 @@ test("Brigadier's own words to the CLI are no bubble, as a turn's start or a ste
   };
   const blocks = cliBlocks(peers, "c1", NO_BOARD);
   assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind ?? null]), [
-    ["u1", null], ["u2", "message"], ["d1", null], ["q1", null], ["r1", null], ["p1", null], ["g1", null], ["c1", null],
+    ["u0", "message"], ["u2", "message"], ["d1", null], ["q1", null], ["r1", null], ["p1", null], ["g1", null], ["c1", null],
   ]);
   assert.deepEqual(blocks[0]!.steers, []);
   assert.deepEqual(blocks[0]!.texts.map((text) => text.text), ["Checked."]);

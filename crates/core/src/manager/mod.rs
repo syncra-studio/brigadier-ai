@@ -940,8 +940,10 @@ impl SessionManager {
         if let Some(before) = before.filter(|before| before != &selected) {
             self.model_selected(&id, before, selected).await?;
         }
-        // Raised to Full access mid-turn: what its thread waits on goes now.
+        // Raised to Full access mid-turn: what its thread and its inheriting workers wait on
+        // goes now.
         self.allow_waiting_at_full(&id).await;
+        self.allow_workers_waiting_at_full(&id).await;
         Ok(conversation)
     }
 

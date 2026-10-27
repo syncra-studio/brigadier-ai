@@ -14,7 +14,7 @@ test("the conversation moves a follow-up through its queue and admission without
     deciding: { deciding: true, note: "Deciding", buttons: [], notice: null },
     held: { deciding: true, note: "Read when the current command ends", buttons: [], notice: null },
     offered: { deciding: false, note: null, buttons: ["Open as a new session", "Run here"], notice: null },
-    sentToWorker: { deciding: false, note: null, buttons: [], notice: `Sent to worker #2 “Docs”: ${"Follow-up awaiting admission"}`, rail: 0, chat: 0 },
+    sentToWorker: { deciding: false, note: null, buttons: [], notice: `Sent to Docs: ${"Follow-up awaiting admission"}`, rail: 0, chat: 0 },
     whileWorkersWork: { rail: 1, chat: 0, deciding: true },
     chatWhileWorkersWork: { rail: 1, chat: 0, deciding: true },
   });

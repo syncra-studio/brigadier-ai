@@ -280,6 +280,7 @@ export const SlashCommands: FC<{
           </DropdownMenuTrigger>
           <ForkPlaces
             side="top"
+            setup={conversation.setup}
             onPick={(place) => run(() => forkConversation(conversation.id, answer, place))}
           />
         </DropdownMenu>

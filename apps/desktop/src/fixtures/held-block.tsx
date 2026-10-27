@@ -103,7 +103,7 @@ function seen() {
   return {
     blocks: blocks.length,
     headers: blocks.map((block) => block.querySelector('[data-slot="request-work-label"]')?.textContent ?? null),
-    steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*\d.*$/, "").trim() ?? "")),
+    steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
   };
 }
 

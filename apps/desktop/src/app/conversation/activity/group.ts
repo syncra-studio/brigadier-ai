@@ -79,6 +79,7 @@ function leadWork(step: BlockOrchestratorStep): "work" | "hidden" | "apart" {
     // A message to another session is a row of the work (a wait for its reply joins it), its
     // refusal too.
     case "peerSent":
+    case "sessionSent":
     case "messageRefused":
       return "work";
     default:
@@ -129,7 +130,8 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
  */
 export function stepKey(step: LeadStep): string {
   const { kind } = step;
-  if (kind.type === "tool") return `step:${kind.itemId}`;
+  // A session's message is its `brigadier send` call: the same row as the call ran.
+  if (kind.type === "tool" || kind.type === "sessionSent") return `step:${kind.itemId}`;
   if (kind.type === "providerTransition") return `step:transition:${kind.id}`;
   if (kind.type === "peerSent" && kind.messageIds[0] !== undefined) return `step:peer:${kind.messageIds[0]}`;
   const of = "taskId" in kind ? `:${kind.taskId}` : "";

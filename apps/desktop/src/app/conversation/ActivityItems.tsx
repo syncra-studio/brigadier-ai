@@ -7,7 +7,7 @@ import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadS
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { went } from "@/app/conversation/activity/peerWords";
 import { allowedAt, deniedCall } from "@/app/conversation/activity/words";
-import type { SequenceEntry as Entry } from "@/app/conversation/blocks";
+import { type SequenceEntry as Entry, sentMessageIds } from "@/app/conversation/blocks";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { entryKey, SequenceEntry } from "@/app/conversation/SequenceEntry";
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
@@ -49,7 +49,7 @@ export const ActivityItems: FC<{
   // A message to another session says how its exchange stands itself: the line stays under it.
   const newest = unjoined.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
-  const inGroup = lastStep?.type === "step" && lastStep.step.kind.type !== "peerSent" && lastStep.step.kind.type !== "messageRefused";
+  const inGroup = lastStep?.type === "step" && !["peerSent", "sessionSent", "messageRefused"].includes(lastStep.step.kind.type);
   // A message the running lead just sent, with nothing after it yet: its row still reads as
   // sending and no line goes under it, so the wait that usually follows takes the row over and
   // the turn never shrinks under the user's message.
@@ -98,7 +98,7 @@ export const ActivityItems: FC<{
               describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}
               renderStep={(step, key) => <KeptScope key={key} name={`step:${key}`}>{peerStepRow(step, step === going) ?? <LeadStepRow step={shown(step)} />}</KeptScope>}
               reveal={revealing || revealDenied
-                ? (step) => (!!revealing && step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing))
+                ? (step) => (!!revealing && sentMessageIds(step.kind).includes(revealing))
                   || (revealDenied && denied(step))
                 : undefined}
             />

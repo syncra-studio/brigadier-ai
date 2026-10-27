@@ -2523,6 +2523,8 @@ mod notice_dismiss_tests;
 #[cfg(unix)]
 mod page_tools_tests;
 #[cfg(unix)]
+mod permission_switch_tests;
+#[cfg(unix)]
 #[cfg(unix)]
 mod plain_merge_tests;
 #[cfg(unix)]

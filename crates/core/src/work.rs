@@ -1037,6 +1037,10 @@ pub struct PlainWorker {
     pub quota_policy: Option<WorkerQuotaPolicy>,
     /// Its CLI's permission mode: its session's unless `--permission` said (Q8).
     pub permission: crate::model::PermissionLevel,
+    /// No `--permission` was given: it runs at its session's level as that changes, not
+    /// [`Self::permission`]. A worker recorded before this was kept counts as given one.
+    #[serde(default)]
+    pub inherited: bool,
     /// It works in its session's checkout (`--local`; a Chat's worker: `repo`'s), not a
     /// worktree of its own.
     #[serde(default)]

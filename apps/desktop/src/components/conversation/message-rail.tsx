@@ -13,6 +13,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { useNamedMentions } from "@/app/conversation/workerNames";
 import { placeOf, type ThreadListState, useThreadList, useThreadListIds } from "@/components/conversation/thread-list";
 import type { ThreadScroller } from "@/components/conversation/thread-scroll";
 import type { MessageMatches } from "@/ipc/generated";
@@ -440,6 +441,8 @@ const Rail: FC<{
   const [hover, setHover] = useState<Hover | null>(null);
   const press = useRef<{ y: number; scrubbing: boolean; last: string | null } | null>(null);
   const scrubbed = useRef(false);
+  // The workers a message @-mentions by name, as its bubble shows them.
+  const named = useNamedMentions();
 
   const hoverAt = (index: number, marker: HTMLElement) => {
     const nav = navRef.current;
@@ -553,7 +556,7 @@ const Rail: FC<{
               <button
                 type="button"
                 data-rail-marker={entry.id}
-                aria-label={entry.text || "Message"}
+                aria-label={named(entry.text) || "Message"}
                 aria-current={current || undefined}
                 className="w-rail-marker h-rail-marker-height flex items-center focus:outline-none"
                 onPointerEnter={(event) => hoverAt(index, event.currentTarget)}
@@ -587,7 +590,7 @@ const Rail: FC<{
         <RailPreview
           id={hovered.id}
           top={hover.top}
-          text={hovered.text}
+          text={named(hovered.text)}
         />
       )}
     </nav>

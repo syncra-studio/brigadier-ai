@@ -1,7 +1,6 @@
 /**
- * The session tab's ⋯ "Session actions" (issue 213): "New session" for a session in a project,
- * "Remove worktree…" only for a session with a worktree of its own, and its dialog's confirm
- * sends `closeWorkspace`. Driven with the browser's real clicks; IPC is mocked and
+ * The session tab's ⋯ "Session actions" (issue 213): Copy › has the path and the id the CLI uses; "Permanently delete" asks with the Archived page's confirm and sends
+ * `delete`; ⌥⌘P still pins. Driven with the browser's real clicks and keys; IPC is mocked and
  * records the calls, no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -10,8 +9,9 @@ import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ChatActions } from "@/app/shell/ChatActions";
+import { DeleteDialog } from "@/app/shell/dialogs/DeleteDialog";
 import { TooltipProvider } from "@/components/overlays";
-import { fixtureClick } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Conversation, Environment, Request, Setup } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
@@ -29,6 +29,9 @@ const conversations: Conversation[] = [
   { ...base, id: "repo", setup: setup({ type: "localCheckout", branch: "main" }) },
   { ...base, id: "chat", kind: "chat", projectId: null },
 ];
+/** A session with an id as the daemon makes them, for Copy session id. */
+const real: Conversation = { ...conversations[0]!, id: "019a2b3c-4d5e-7f60-8a9b-0c1d362537be" };
+conversations.push(real);
 useApp.setState({
   conversations: Object.fromEntries(conversations.map((conversation) => [conversation.id, conversation])),
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
@@ -38,9 +41,14 @@ const calls: unknown[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "closeWorkspace") {
-    calls.push({ method: req.method, conversationId: req.conversationId });
-    return { method: req.method, text: "Removed the worktree" };
+  if (req.method === "setPinned") {
+    calls.push({ method: req.method, id: req.id, pinned: req.pinned });
+    return { method: req.method, conversation: { ...useApp.getState().conversations[req.id]!, pinnedAtMs: req.pinned ? 1 : null } };
+  }
+  if (req.method === "previewDelete") return { method: req.method, branches: [], files: [] };
+  if (req.method === "delete") {
+    calls.push({ method: req.method, ids: req.ids });
+    return { method: req.method, outcomes: req.ids.map((id) => ({ id, error: null, conversation: null })) };
   }
   return { method: req.method };
 });
@@ -63,6 +71,7 @@ function mount(conversation: Conversation) {
             <ChatActions conversation={conversation} onRename={() => {}} compact />
           </div>
         </main>
+        <DeleteDialog />
       </Runtime>
     </TooltipProvider>,
   );
@@ -94,18 +103,49 @@ async function menu(conversation: Conversation) {
   return items().map((item) => item.textContent?.trim());
 }
 
+// What Copy writes, as the clipboard would hold it.
+const copied: string[] = [];
+Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => void copied.push(text) } });
+
+/** The open submenu's items, after a real click on `trigger` in the menu. */
+async function submenu(trigger: string) {
+  await fixtureClick(items().find((item) => item.textContent?.trim() === trigger)!);
+  await until(`the ${trigger} submenu`, () => document.querySelectorAll("[role=menu]").length > 1);
+  // Where it comes to rest: it slides in.
+  await sleep(300);
+  return [...[...document.querySelectorAll("[role=menu]")].at(-1)!.querySelectorAll("[role=menuitem]")];
+}
+
 try {
   const menus: Record<string, unknown> = {};
-  for (const conversation of conversations) menus[conversation.id] = await menu(conversation);
+  const copies: Record<string, unknown> = {};
+  for (const conversation of conversations.slice(0, 3)) {
+    menus[conversation.id] = await menu(conversation);
+    copies[conversation.id] = (await submenu("Copy")).map((item) => item.textContent?.trim());
+  }
   seen.menus = menus;
-  await menu(conversations[0]!);
-  await fixtureClick(items().find((item) => item.textContent?.trim() === "Remove worktree…")!);
-  await until("the dialog", () => document.querySelector("[role=dialog]") !== null);
-  seen.dialog = document.querySelector("[role=dialog] h2")?.textContent;
-  const confirm = [...document.querySelectorAll("[role=dialog] button")].find((button) => button.textContent?.trim() === "Remove worktree")!;
-  await fixtureClick(confirm);
-  await until("the close", () => calls.length > 0);
-  await until("the dialog to close", () => document.querySelector("[role=dialog]") === null);
+  seen.copies = copies;
+  await menu(real);
+  for (const [index, name] of ["Copy session id", "Copy path"].entries()) {
+    if (!document.querySelector("[role=menu]")) await open(real.id);
+    const item = (await submenu("Copy")).find((each) => each.textContent?.trim() === name)!;
+    seen.step = `clicking ${name}`;
+    await fixtureClick(item);
+    await until(`the copy of ${name}`, () => copied.length > index && document.querySelector("[role=menu]") === null);
+  }
+  seen.copied = copied;
+  // ⌥⌘P pins the conversation whose ⋯ is on screen, with Pin gone from its menu.
+  seen.step = "pressing ⌥⌘P";
+  await fixtureInput({ type: "key", key: "p", modifiers: ["Alt", "Meta"] });
+  await until("the pin", () => calls.length > 0);
+  seen.step = "deleting";
+  await menu(real);
+  await fixtureClick(items().find((item) => item.textContent?.trim() === "Permanently delete")!);
+  await until("the delete dialog", () => document.querySelector("[role=dialog]") !== null);
+  seen.deleteDialog = document.querySelector("[role=dialog] h2")?.textContent;
+  const remove = [...document.querySelectorAll("[role=dialog] button")].find((button) => button.textContent?.trim() === "Delete session")!;
+  await fixtureClick(remove);
+  await until("the delete", () => calls.length > 1);
 } catch (error) {
   seen.error = String(error);
 }

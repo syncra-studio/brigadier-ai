@@ -44,6 +44,7 @@ import {
   isFinal,
   isLive,
   reopenedSince,
+  sentMessageIds,
   type SequenceEntry as Entry,
   updateIndices,
 } from "@/app/conversation/blocks";
@@ -146,7 +147,7 @@ export const RequestBlock: FC = () => {
   const conversationId = useViewConversation()?.id ?? null;
   // A jump to a message this turn sent opens its work.
   const revealing = useRevealing(conversationId);
-  const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(revealing));
+  const holds = !!revealing && !!meta?.orchestratorSteps.some((step) => sentMessageIds(step.kind).includes(revealing));
   const { show } = fold;
   useEffect(() => {
     if (holds) show();

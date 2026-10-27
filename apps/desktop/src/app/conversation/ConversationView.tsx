@@ -34,6 +34,7 @@ import {
   type BoardDigest,
   type PeerOf,
   peerOf,
+  sentMessageIds,
   type ThreadNode,
 } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
@@ -458,7 +459,7 @@ function rowHolding(nodes: readonly ThreadNode[], messageId: string): string | n
     if (
       block.texts.some((text) => text.anchors?.includes(messageId)) ||
       block.steers.some((steer) => steer.message.id === messageId) ||
-      block.orchestratorSteps.some((step) => step.kind.type === "peerSent" && step.kind.messageIds.includes(messageId))
+      block.orchestratorSteps.some((step) => sentMessageIds(step.kind).includes(messageId))
     ) {
       return node.id;
     }
@@ -843,11 +844,12 @@ export function ConversationView({
       setError(null);
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
-      // What wasn't sent goes back into the composer: a refusal never takes the typed message. A
-      // draft's goes to the conversation made for it, which shows by then.
+      // What wasn't sent goes back into the composer, its pasted texts and images too: a refusal
+      // never takes the typed message. A draft's goes to the conversation made for it, which
+      // shows by then.
       let target = conversationId;
       const keep = (cause: unknown) => {
-        putBack(target ?? NEW_CHAT_SCOPE, text);
+        putBack(target ?? NEW_CHAT_SCOPE, outgoing);
         fail(cause);
       };
       if (background && source && isTaskTab(source)) {
@@ -1079,7 +1081,7 @@ export function ConversationView({
   );
   const visuals = useMemo(() => canDrawVisuals(conversation, embedded) && conversationId ? {
     running,
-    prefill: (text: string) => putBack(conversationId, text),
+    prefill: (text: string) => putBack(conversationId, { text, attachments: [], mentions: [] }),
     openLink: (url: string) => { void openVisualLink(url, { agent: true }).catch(fail); },
   } : null, [conversation, embedded, conversationId, running, fail]);
   return (
