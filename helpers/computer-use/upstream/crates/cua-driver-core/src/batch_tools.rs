@@ -1695,6 +1695,7 @@ fn parse_action(
         crate::tool::coerce_string_scalars(&schema, &mut args);
     }
     prepare_args(&mut args, session).map_err(|message| PlanError::step(index, message))?;
+    fill_window_from_token(&mut args).map_err(|message| PlanError::step(index, message))?;
     let (window, element) = locate::take_selector(args.as_object_mut().expect("object"))
         .map_err(|message| PlanError::step(index, format!("{tool}: {message}")))?;
     crate::tool::normalize_argument_aliases(tool, &mut args)
@@ -1742,6 +1743,43 @@ fn parse_action(
         element,
         find_timeout: Duration::from_millis(find_timeout),
     })
+}
+
+/// A token addresses the window of its snapshot even when the caller omits
+/// pid/window_id. Resolve before planning so both later steps and observe:{}
+/// inherit that exact window, rather than a previous step's unrelated window.
+fn fill_window_from_token(args: &mut Value) -> Result<(), String> {
+    let Some(token) = args.get("element_token").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let Some((snapshot, index)) = token.split_once(':') else {
+        return Ok(());
+    };
+    let Some(row) = index
+        .parse()
+        .ok()
+        .and_then(|index| crate::window_state_view::snapshot_row(snapshot, index))
+    else {
+        // Unknown tokens remain subject to the platform's stale-token check.
+        return Ok(());
+    };
+    if args
+        .get("pid")
+        .and_then(Value::as_i64)
+        .is_some_and(|pid| pid != row.pid)
+        || args
+            .get("window_id")
+            .and_then(Value::as_u64)
+            .is_some_and(|window| window != row.window_id)
+    {
+        return Err("element_token belongs to a different pid or window_id; refresh get_window_state for the intended window".into());
+    }
+    let object = args.as_object_mut().expect("object");
+    object.entry("pid").or_insert_with(|| json!(row.pid));
+    object
+        .entry("window_id")
+        .or_insert_with(|| json!(row.window_id));
+    Ok(())
 }
 
 fn parse_observe(

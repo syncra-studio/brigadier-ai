@@ -732,3 +732,55 @@ async fn non_scalar_set_value_is_rejected_before_any_batch_action() {
         assert_eq!(harness.hits("set_value"), 0);
     }
 }
+
+#[tokio::test]
+async fn observe_inherits_each_token_snapshots_window() {
+    let harness = Harness::new();
+    crate::window_state_view::remember_for_test(
+        "s7ffe0041",
+        4242,
+        77,
+        "- [12] AXButton \"Save\"\n",
+    );
+    crate::window_state_view::remember_for_test(
+        "s7ffe0042",
+        4343,
+        88,
+        "- [3] AXButton \"Close\"\n",
+    );
+    let result = harness
+        .run(json!({
+            "steps": [
+                {"click": {"element_token": "s7ffe0041:12"}},
+                {"click": {"element_token": "s7ffe0042:3"}}
+            ],
+            "observe": {}
+        }))
+        .await;
+    assert_ne!(result.is_error, Some(true), "{}", text(&result));
+    assert_eq!(harness.hits("click"), 2);
+    assert_eq!(harness.last("click")["pid"], 4343);
+    assert_eq!(harness.last("click")["window_id"], 88);
+    assert_eq!(harness.last("get_window_state")["pid"], 4343);
+    assert_eq!(harness.last("get_window_state")["window_id"], 88);
+}
+
+#[tokio::test]
+async fn conflicting_token_window_is_rejected_before_actions() {
+    let harness = Harness::new();
+    crate::window_state_view::remember_for_test(
+        "s7ffe0043",
+        4242,
+        77,
+        "- [12] AXButton \"Save\"\n",
+    );
+    let result = harness
+        .run(json!({
+            "steps": [{"click": {"element_token": "s7ffe0043:12", "pid": 999}}],
+            "observe": {}
+        }))
+        .await;
+    assert_eq!(result.is_error, Some(true));
+    assert!(text(&result).contains("different pid or window_id"));
+    assert_eq!(harness.hits("click"), 0);
+}

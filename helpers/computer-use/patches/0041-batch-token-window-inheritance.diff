@@ -1,0 +1,133 @@
+diff --git a/crates/cua-driver-core/src/batch_tools.rs b/crates/cua-driver-core/src/batch_tools.rs
+index 506434eeb..ec3e585ae 100644
+--- a/crates/cua-driver-core/src/batch_tools.rs
++++ b/crates/cua-driver-core/src/batch_tools.rs
+@@ -1695,6 +1695,7 @@ fn parse_action(
+         crate::tool::coerce_string_scalars(&schema, &mut args);
+     }
+     prepare_args(&mut args, session).map_err(|message| PlanError::step(index, message))?;
++    fill_window_from_token(&mut args).map_err(|message| PlanError::step(index, message))?;
+     let (window, element) = locate::take_selector(args.as_object_mut().expect("object"))
+         .map_err(|message| PlanError::step(index, format!("{tool}: {message}")))?;
+     crate::tool::normalize_argument_aliases(tool, &mut args)
+@@ -1744,6 +1745,43 @@ fn parse_action(
+     })
+ }
+ 
++/// A token addresses the window of its snapshot even when the caller omits
++/// pid/window_id. Resolve before planning so both later steps and observe:{}
++/// inherit that exact window, rather than a previous step's unrelated window.
++fn fill_window_from_token(args: &mut Value) -> Result<(), String> {
++    let Some(token) = args.get("element_token").and_then(Value::as_str) else {
++        return Ok(());
++    };
++    let Some((snapshot, index)) = token.split_once(':') else {
++        return Ok(());
++    };
++    let Some(row) = index
++        .parse()
++        .ok()
++        .and_then(|index| crate::window_state_view::snapshot_row(snapshot, index))
++    else {
++        // Unknown tokens remain subject to the platform's stale-token check.
++        return Ok(());
++    };
++    if args
++        .get("pid")
++        .and_then(Value::as_i64)
++        .is_some_and(|pid| pid != row.pid)
++        || args
++            .get("window_id")
++            .and_then(Value::as_u64)
++            .is_some_and(|window| window != row.window_id)
++    {
++        return Err("element_token belongs to a different pid or window_id; refresh get_window_state for the intended window".into());
++    }
++    let object = args.as_object_mut().expect("object");
++    object.entry("pid").or_insert_with(|| json!(row.pid));
++    object
++        .entry("window_id")
++        .or_insert_with(|| json!(row.window_id));
++    Ok(())
++}
++
+ fn parse_observe(
+     registry: &ToolRegistry,
+     value: &Value,
+diff --git a/crates/cua-driver-core/src/batch_tools/tests.rs b/crates/cua-driver-core/src/batch_tools/tests.rs
+index 9783adc48..af5b504db 100644
+--- a/crates/cua-driver-core/src/batch_tools/tests.rs
++++ b/crates/cua-driver-core/src/batch_tools/tests.rs
+@@ -732,3 +732,55 @@ async fn non_scalar_set_value_is_rejected_before_any_batch_action() {
+         assert_eq!(harness.hits("set_value"), 0);
+     }
+ }
++
++#[tokio::test]
++async fn observe_inherits_each_token_snapshots_window() {
++    let harness = Harness::new();
++    crate::window_state_view::remember_for_test(
++        "s7ffe0041",
++        4242,
++        77,
++        "- [12] AXButton \"Save\"\n",
++    );
++    crate::window_state_view::remember_for_test(
++        "s7ffe0042",
++        4343,
++        88,
++        "- [3] AXButton \"Close\"\n",
++    );
++    let result = harness
++        .run(json!({
++            "steps": [
++                {"click": {"element_token": "s7ffe0041:12"}},
++                {"click": {"element_token": "s7ffe0042:3"}}
++            ],
++            "observe": {}
++        }))
++        .await;
++    assert_ne!(result.is_error, Some(true), "{}", text(&result));
++    assert_eq!(harness.hits("click"), 2);
++    assert_eq!(harness.last("click")["pid"], 4343);
++    assert_eq!(harness.last("click")["window_id"], 88);
++    assert_eq!(harness.last("get_window_state")["pid"], 4343);
++    assert_eq!(harness.last("get_window_state")["window_id"], 88);
++}
++
++#[tokio::test]
++async fn conflicting_token_window_is_rejected_before_actions() {
++    let harness = Harness::new();
++    crate::window_state_view::remember_for_test(
++        "s7ffe0043",
++        4242,
++        77,
++        "- [12] AXButton \"Save\"\n",
++    );
++    let result = harness
++        .run(json!({
++            "steps": [{"click": {"element_token": "s7ffe0043:12", "pid": 999}}],
++            "observe": {}
++        }))
++        .await;
++    assert_eq!(result.is_error, Some(true));
++    assert!(text(&result).contains("different pid or window_id"));
++    assert_eq!(harness.hits("click"), 0);
++}
+diff --git a/crates/cua-driver-core/src/window_state_view.rs b/crates/cua-driver-core/src/window_state_view.rs
+index a0cb5fffa..053d038aa 100644
+--- a/crates/cua-driver-core/src/window_state_view.rs
++++ b/crates/cua-driver-core/src/window_state_view.rs
+@@ -271,6 +271,12 @@ pub fn apply(
+     structured: &mut Value,
+ ) {
+     if opts.full_output {
++        if let (Some(sid), Some(md)) = (
++            structured.get("snapshot_id").and_then(Value::as_str),
++            structured.get("tree_markdown").and_then(Value::as_str),
++        ) {
++            remember(sid, ctx, md);
++        }
+         return;
+     }
+     trim_metadata(opts, structured);

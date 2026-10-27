@@ -271,6 +271,12 @@ pub fn apply(
     structured: &mut Value,
 ) {
     if opts.full_output {
+        if let (Some(sid), Some(md)) = (
+            structured.get("snapshot_id").and_then(Value::as_str),
+            structured.get("tree_markdown").and_then(Value::as_str),
+        ) {
+            remember(sid, ctx, md);
+        }
         return;
     }
     trim_metadata(opts, structured);
