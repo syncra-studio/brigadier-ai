@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, keptThread, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
@@ -534,6 +534,30 @@ test("a message sent while the view is read again stays on its way once stored",
   assert.deepEqual(sentBubbles(kept), sentBubbles(sending), "the bubble stays, and the earlier turns still don't show as working");
   // A new session's first message, its view never read, likewise.
   assert.deepEqual(cliThreadTree(null, "conv", [stored("m2", 5000)], {}, [], NO_BOARD, run, true, 3000).nodes.map((node) => node.id), ["m2", "request:m2"]);
+});
+
+test("a thread whose view can't be read shows the messages kept, its ended turns as ended", () => {
+  // The read failed (the daemon's error): m0 and m1 with their replies are turns from before the
+  // view went missing at 3000; m2 is sent since.
+  const answer = (id: string, createdAtMs: number): Message => ({ ...stored(id, createdAtMs), role: "assistant", text: `reply ${id}` });
+  const kept = [stored("m0", 900), answer("a0", 950), stored("m1", 2000), answer("a1", 2100), stored("m2", 5000)];
+  const run = { state: "running", error: null } as const;
+  const tree = cliThreadTree(keptThread(kept, { a1: "reply a1, whole" }, 3000), "conv", kept, {}, [], NO_BOARD, run, true, 3000);
+  assert.deepEqual(sentBubbles(tree), [
+    ["user", "done", 900, "stored m0"],
+    ["block", "done", 900, "stored m0"],
+    ["user", "done", 2000, "stored m1"],
+    ["block", "done", 2000, "stored m1"],
+    ["user", "working", 5000, "stored m2"],
+    ["block", "working", 5000, "stored m2"],
+  ]);
+  assert.equal(tree.nodes[1]?.block.endedAtMs, 950, "a turn ends at its last reply, not now");
+  assert.deepEqual(keptThread(kept, { a1: "reply a1, whole" }, 3000).entries.map((entry) => entry.event.type === "message" && entry.event.text), [
+    "stored m0",
+    "reply a0",
+    "stored m1",
+    "reply a1, whole",
+  ]);
 });
 
 /** A tree's nodes as drawn: each user bubble's text, each block's requests. */

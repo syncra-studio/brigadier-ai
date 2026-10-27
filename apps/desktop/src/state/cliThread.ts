@@ -18,6 +18,23 @@ import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent
 
 export const useCliThread = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
 
+/**
+ * The conversations whose last read of their thread failed (the daemon's error, or an answer
+ * with no view), until one lands: they draw from the messages Brigadier keeps (`keptThread`), not
+ * a loading thread that never ends.
+ */
+export const useUnreadThreads = create<{ failed: Readonly<Record<string, true>> }>(() => ({ failed: {} }));
+
+function readFailed(conversationId: string, failed: boolean): void {
+  if (!!useUnreadThreads.getState().failed[conversationId] === failed) return;
+  useUnreadThreads.setState((state) => {
+    const next: Record<string, true> = { ...state.failed };
+    if (failed) next[conversationId] = true;
+    else delete next[conversationId];
+    return { failed: next };
+  });
+}
+
 /** The item an event is about, as its CLI named it (`session_file::item_id`). */
 export function itemIdOf(event: ProviderEvent): string | null {
   switch (event.type) {
@@ -177,8 +194,10 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     const fresh = heard.filter((entry) => itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry)));
     const landed = fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view;
     setView(conversationId, { ...landed, ...read.lists });
+    readFailed(conversationId, false);
   } catch (error) {
     console.error("reading the thread failed", error);
+    readFailed(conversationId, true);
   } finally {
     reads.delete(conversationId);
     if (read.again) void loadThreadView(conversationId);
@@ -272,6 +291,11 @@ export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   for (const id of Object.keys(views)) if (!shown.includes(id)) dropped.set(id, now);
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
+}
+
+/** Whether conversation `conversationId`'s thread has no view because its read failed. */
+export function useThreadUnreadable(conversationId: string | null): boolean {
+  return useUnreadThreads((s) => (conversationId ? !!s.failed[conversationId] : false));
 }
 
 /** A conversation's thread, read when first asked for; `null` until read. */

@@ -37,7 +37,7 @@ import {
   sentMessageIds,
   type ThreadNode,
 } from "@/app/conversation/blocks";
-import { cliThreadTree } from "@/app/conversation/cliBlocks";
+import { cliThreadTree, keptThread } from "@/app/conversation/cliBlocks";
 import { heldRows, keepDrawnBlocks } from "@/app/conversation/heldThread";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
@@ -105,7 +105,7 @@ import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDire
 import { holdDirect } from "@/state/heldDirect";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadView, useWorkerRows } from "@/state/cliThread";
+import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadUnreadable, useThreadView, useWorkerRows } from "@/state/cliThread";
 import { isNativeWorker } from "@/state/nativeWorkers";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
@@ -602,9 +602,11 @@ export function ConversationView({
   const session = conversation?.kind === "session" || resolved.kind === "session";
   // The thread is the CLI's own, read from its session file (S9, S10).
   const cliView = useThreadView(conversationId);
+  // One whose read failed draws the messages Brigadier keeps, not a thread loading for good.
+  const unreadable = useThreadUnreadable(conversationId) && cliView === null;
   // The view opens with what it has: what arrives as it draws (its board, the messages read
   // again) is built in a task of its own, the frame after, not in the one that opens it (#628).
-  const live = { cliView, items: thread.items, fullText: thread.fullText, digest, pending, run, runError };
+  const live = { cliView, unreadable, items: thread.items, fullText: thread.fullText, digest, pending, run, runError };
   const [opening, setOpening] = useState(true);
   const [openedWith] = useState(live);
   useEffect(() => {
@@ -615,9 +617,9 @@ export function ConversationView({
   const full = useMemo(
     () =>
       conversationId
-        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session, unreadSince(conversationId)))
+        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView ?? (built.unreadable ? keptThread(built.items, built.fullText, unreadSince(conversationId)) : null), conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session, unreadSince(conversationId)))
         : cliThreadTree(null, "", [], {}, built.pending, EMPTY_DIGEST, { state: built.run, error: built.runError }),
-    [built.cliView, conversationId, built.items, built.fullText, built.digest, built.pending, built.run, built.runError, session],
+    [built.cliView, built.unreadable, conversationId, built.items, built.fullText, built.digest, built.pending, built.run, built.runError, session],
   );
   // A jump to a message between sessions here: its row is mounted, and it lands once shown.
   const reveal = useReveal((s) => (!embedded && s.reveal?.conversationId === conversationId ? s.reveal : null));
@@ -998,7 +1000,7 @@ export function ConversationView({
       setError(null);
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
-    isLoading: conversationId !== null && cliView === null,
+    isLoading: conversationId !== null && cliView === null && !unreadable,
     isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,

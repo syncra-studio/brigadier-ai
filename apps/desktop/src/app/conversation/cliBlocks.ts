@@ -954,6 +954,27 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
 /** A thread not read yet: no turns. */
 const NOT_READ: ThreadView = { entries: [], turns: [] };
 
+/**
+ * A thread whose view couldn't be read, from the messages Brigadier keeps: those stored before
+ * `before` (`unreadSince`) as turns that ended, each user message one with the replies after it.
+ * One stored since is in none, so it stays on its way (`cliThreadTree`).
+ */
+export function keptThread(messages: readonly Message[], fullText: Readonly<Record<string, string>>, before: number): ThreadView {
+  const entries: FileEntry[] = [];
+  const turns: ThreadTurn[] = [];
+  for (const message of messages) {
+    if ((message.role !== "user" && message.role !== "assistant") || message.createdAtMs >= before) continue;
+    const atMs = message.createdAtMs;
+    if (message.role === "user") {
+      turns.push({ userMessage: message.id, startedAtMs: atMs, endedAtMs: atMs, end: "done", error: null, requests: [message.requestId ?? message.id] });
+    } else if (turns.length === 0) continue;
+    const last = turns.at(-1)!;
+    last.endedAtMs = atMs;
+    entries.push({ event: { type: "message", itemId: message.id, role: message.role, text: fullText[message.id] ?? message.text }, atMs });
+  }
+  return { entries, turns };
+}
+
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
 type RunNow = { state: RunState; error: string | null };
 
