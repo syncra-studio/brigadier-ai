@@ -15,7 +15,13 @@ fn registered_root(registered: &[PathBuf], project: Option<&Path>, cwd: &Path) -
     let key = brigadier_registry::claude_config::project_key(at);
     registered
         .iter()
-        .find(|root| at.starts_with(root))
+        .find(|root| root.as_path() == at)
+        .or_else(|| {
+            registered
+                .iter()
+                .filter(|root| at.starts_with(root))
+                .max_by_key(|root| root.components().count())
+        })
         .or_else(|| {
             registered
                 .iter()
@@ -158,9 +164,19 @@ mod tests {
         );
         assert_eq!(
             registered_root(std::slice::from_ref(&main), Some(&main), &work),
-            Some(main)
+            Some(main.clone())
         );
         assert!(registered_root(&[], None, &work).is_none());
+        let child = main.join("nested");
+        let roots = vec![main.clone(), child.clone()];
+        assert_eq!(
+            registered_root(&roots, Some(&child), &work),
+            Some(child.clone())
+        );
+        assert_eq!(
+            registered_root(&roots, None, &child.join("src")),
+            Some(child)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
