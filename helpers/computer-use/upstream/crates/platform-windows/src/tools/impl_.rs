@@ -3777,7 +3777,7 @@ impl Tool for ClickTool {
                         let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) else {
                             return Ok(None);
                         };
-                        crate::uia::click::try_click(hwnd, element.as_ptr(), expand_only)
+                        crate::uia::click::retained_click(hwnd, element.clone(), expand_only)
                     }
                 })
                 .await;
@@ -5226,7 +5226,7 @@ impl Tool for PressKeyTool {
                 Ok(Ok(())) => {
                     unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
                         "scope": "desktop", "path": "SendInput", "key": key_display,
-                        "effect": "unverifiable"
+                        "effect": "unverifiable", "verified": false
                     }))
                 }
                 Ok(Err(error)) => ToolResult::error(error.to_string()),
@@ -5582,7 +5582,7 @@ impl Tool for HotkeyTool {
                 Ok(Ok(())) => {
                     unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
                         "scope": "desktop", "path": "SendInput", "keys": full_keys,
-                        "effect": "unverifiable"
+                        "effect": "unverifiable", "verified": false
                     }))
                 }
                 Ok(Err(error)) => ToolResult::error(error.to_string()),

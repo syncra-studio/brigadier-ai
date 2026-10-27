@@ -17,14 +17,12 @@ pub fn candidate(
     control: &str,
     actual: &str,
     wanted: &str,
-    top: bool,
     in_menu: bool,
     in_document: bool,
 ) -> bool {
     !in_document
         && in_menu
         && matches!(control, "MenuItem" | "Button")
-        && (!top || control == "MenuItem" || control == "Button")
         && label_matches(actual, wanted)
 }
 
@@ -40,12 +38,10 @@ mod tests {
     }
     #[test]
     fn detached_popup_does_not_need_the_menu_bars_ancestry() {
-        assert!(candidate(
-            "MenuItem", "Save as", "Save as", false, true, false
-        ));
-        assert!(candidate("Button", "File", "File", true, true, false));
-        assert!(!candidate("Text", "File", "File", true, true, false));
-        assert!(!candidate("Button", "File", "File", true, false, false));
-        assert!(!candidate("MenuItem", "File", "File", true, true, true));
+        assert!(candidate("MenuItem", "Save as", "Save as", true, false));
+        assert!(candidate("Button", "File", "File", true, false));
+        assert!(!candidate("Text", "File", "File", true, false));
+        assert!(!candidate("Button", "File", "File", false, false));
+        assert!(!candidate("MenuItem", "File", "File", true, true));
     }
 }

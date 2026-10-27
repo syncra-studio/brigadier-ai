@@ -81,3 +81,69 @@ mod key_tests {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickPattern {
+    WindowClose,
+    Invoke,
+    Toggle,
+    Select,
+    Expand,
+}
+
+pub fn pattern_order(titlebar_close: bool, expand_only: bool) -> &'static [ClickPattern] {
+    use ClickPattern::*;
+    if expand_only {
+        &[Expand]
+    } else if titlebar_close {
+        &[WindowClose]
+    } else {
+        &[Invoke, Toggle, Select, Expand]
+    }
+}
+
+pub fn window_closed(present_before: bool, present_after: bool) -> bool {
+    present_before && !present_after
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    #[test]
+    fn close_expand_and_generic_click_use_their_own_patterns() {
+        use ClickPattern::*;
+        assert_eq!(pattern_order(true, false), &[WindowClose]);
+        assert_eq!(pattern_order(true, true), &[Expand]);
+        assert_eq!(
+            pattern_order(false, false),
+            &[Invoke, Toggle, Select, Expand]
+        );
+        assert_eq!(pattern_order(false, true), &[Expand]);
+    }
+    #[test]
+    fn a_preexisting_missing_window_is_not_a_confirmed_close() {
+        assert!(!window_closed(false, false));
+        assert!(!window_closed(false, true));
+        assert!(!window_closed(true, true));
+        assert!(window_closed(true, false));
+    }
+}
+
+pub fn close_button_identity(button: bool, in_titlebar: bool, name: &str, id: &str) -> bool {
+    button
+        && in_titlebar
+        && (name.eq_ignore_ascii_case("close") || id.eq_ignore_ascii_case("close"))
+}
+
+#[cfg(test)]
+mod titlebar_tests {
+    #[test]
+    fn a_client_close_button_or_close_tab_never_closes_the_whole_window() {
+        use super::close_button_identity;
+        assert!(close_button_identity(true, true, "Close", ""));
+        assert!(close_button_identity(true, true, "Fermer", "Close"));
+        assert!(!close_button_identity(true, false, "Close", "Close"));
+        assert!(!close_button_identity(true, true, "Close Tab", "CloseTab"));
+        assert!(!close_button_identity(false, true, "Close", "Close"));
+    }
+}

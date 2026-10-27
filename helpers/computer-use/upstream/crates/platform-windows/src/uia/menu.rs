@@ -128,14 +128,7 @@ fn find(
             let (in_menu, in_document) = menu_ancestry(uia, &element, top);
             // An owned popup or a previously expanded item provides the menu scope
             // even when XAML omits Menu/MenuBar ancestry in its fragment tree.
-            if crate::menu_path::candidate(
-                control,
-                &name,
-                wanted,
-                top,
-                in_menu || popup,
-                in_document,
-            ) {
+            if crate::menu_path::candidate(control, &name, wanted, in_menu || popup, in_document) {
                 matches.push(element);
             }
         }
@@ -144,6 +137,17 @@ fn find(
 }
 
 pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
+    let path = path.to_vec();
+    super::windows_enum::run_uia_with_deadline_cancelable(
+        "menu-path", std::time::Duration::from_secs(4), "no fallback input",
+        move |cancelled| invoke_inner(hwnd, &path, &cancelled),
+    ).map_err(|error| format!("Menu action not confirmed because {}. No fallback input was sent; read fresh state before retrying.", super::click::deadline_reason(error)))?
+}
+fn invoke_inner(
+    hwnd: u64,
+    path: &[String],
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
     if path.is_empty() || path.len() > 16 {
         return Err("menu path must contain 1 to 16 segments".into());
     }
@@ -212,6 +216,7 @@ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
                     // may have opened its popup and needs cleanup.
                     opened.push(pattern.clone());
                     super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
+                        super::click::ensure_active(cancelled)?;
                         pattern.Expand()
                     })
                     .map_err(|e| format!("could not expand {wanted}: {e}"))?;
@@ -220,12 +225,19 @@ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
             } else {
                 super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
                     if let Ok(p) = target.GetCurrentPattern(UIA_InvokePatternId) {
-                        p.cast::<IUIAutomationInvokePattern>()?.Invoke()
+                        {
+                            let p = p.cast::<IUIAutomationInvokePattern>()?;
+                            super::click::ensure_active(cancelled)?;
+                            p.Invoke()
+                        }
                     } else {
-                        target
-                            .GetCurrentPattern(UIA_SelectionItemPatternId)?
-                            .cast::<IUIAutomationSelectionItemPattern>()?
-                            .Select()
+                        {
+                            let p = target
+                                .GetCurrentPattern(UIA_SelectionItemPatternId)?
+                                .cast::<IUIAutomationSelectionItemPattern>()?;
+                            super::click::ensure_active(cancelled)?;
+                            p.Select()
+                        }
                     }
                 })
                 .map_err(|e| {
@@ -238,17 +250,23 @@ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
     if let Err(error) = result {
         let mut cleanup_failed = false;
         for pattern in opened.iter().rev() {
-            cleanup_failed |= super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
+            let collapsed = super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
                 pattern.Collapse()
-            })
-            .is_err();
+            });
+            cleanup_failed |= collapsed.is_err()
+                || unsafe { pattern.CurrentExpandCollapseState() }.ok()
+                    != Some(ExpandCollapseState_Collapsed);
         }
         return Err(format!(
             "{error}. {}",
             if cleanup_failed {
                 "Could not confirm all menus opened by this call collapsed; read fresh state."
             } else {
-                "Collapsed menus opened by this call."
+                if opened.is_empty() {
+                    "No menu was opened by this call."
+                } else {
+                    "Menus opened by this call are collapsed."
+                }
             }
         ));
     }

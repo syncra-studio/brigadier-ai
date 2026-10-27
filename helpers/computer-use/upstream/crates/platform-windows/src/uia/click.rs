@@ -1,18 +1,22 @@
 //! Semantic clicks and bounded effect readback; never equate dispatch with success.
-use crate::input_outcome::{observed_change, summary, ControlState};
+use crate::input_outcome::{
+    observed_change, pattern_order, summary, window_closed, ClickPattern, ControlState,
+};
 use cua_driver_core::action_record::{
     ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
     EvidenceKind, RequestedDelivery,
 };
 use cua_driver_core::protocol::ToolResult;
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use windows::core::Interface;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW, WM_CLOSE};
 
 struct ComApartment(bool);
 impl ComApartment {
@@ -66,6 +70,7 @@ fn state(element: &IUIAutomationElement) -> ControlState {
 pub(crate) struct Readback {
     hwnd: u64,
     _com: ComApartment,
+    present_before: bool,
     before: ControlState,
 }
 impl Readback {
@@ -81,6 +86,7 @@ impl Readback {
         Self {
             hwnd,
             _com: com,
+            present_before: unsafe { IsWindow(HWND(hwnd as *mut _)) }.as_bool(),
             before,
         }
     }
@@ -94,7 +100,7 @@ impl Readback {
         let mut closed = false;
         let mut changed = false;
         for attempt in 0..9 {
-            closed = !unsafe { IsWindow(hwnd) }.as_bool();
+            closed = window_closed(self.present_before, unsafe { IsWindow(hwnd) }.as_bool());
             if !closed {
                 changed = ptr.is_some_and(|ptr| {
                     let element =
@@ -132,7 +138,7 @@ impl Readback {
             });
         }
         ToolResult::text(summary(route, closed, changed)).with_structured(serde_json::json!({
-            "path": if transport == ActionTransport::WindowsPostMessage { "post_message" } else { "ax" },
+            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
             "verified": confirmed, "effect": if confirmed { "confirmed" } else { "unverifiable" }
         })).with_action_record(record)
     }
@@ -167,7 +173,7 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
                 break;
             };
             if parent.CurrentControlType().ok() == Some(UIA_TitleBarControlTypeId) {
-                return true;
+                return crate::input_outcome::close_button_identity(true, true, &name, &id);
             }
             if parent.CurrentControlType().ok() == Some(UIA_WindowControlTypeId) {
                 break;
@@ -178,69 +184,159 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
     }
 }
 
-/// None means no supported semantic pattern. A failed supported action is terminal:
-/// falling back could dispatch the same command twice after a provider error.
-pub(crate) fn try_click(
+/// Cancellation is checked after provider lookups and immediately before each
+/// mutation: a late provider return must not send input after the caller timed out.
+pub(super) fn ensure_active(cancelled: &AtomicBool) -> windows::core::Result<()> {
+    if cancelled.load(Ordering::Acquire) {
+        Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+            0x80004004_u32 as i32,
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &'static str {
+    use super::windows_enum::UiaDeadlineError;
+    match error {
+        UiaDeadlineError::Timeout => {
+            "the app's accessibility provider did not respond within 4 seconds"
+        }
+        UiaDeadlineError::Busy => "an earlier accessibility provider call is still running",
+        UiaDeadlineError::Unavailable => {
+            "the accessibility worker could not start or stopped unexpectedly"
+        }
+    }
+}
+
+pub(crate) fn retained_click(
+    hwnd: u64,
+    retained: super::snapshot::RetainedElement,
+    expand_only: bool,
+) -> anyhow::Result<Option<ToolResult>> {
+    super::windows_enum::run_uia_with_deadline_cancelable(
+        "semantic-click", Duration::from_secs(4), "no fallback input",
+        move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled),
+    ).map_err(|error| anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))?
+}
+
+/// None means no supported semantic pattern. A failed supported action is terminal.
+fn try_click(
     hwnd: u64,
     ptr: usize,
     expand_only: bool,
+    cancelled: &AtomicBool,
 ) -> anyhow::Result<Option<ToolResult>> {
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
+    let order = pattern_order(titlebar_close(&element), expand_only);
     let dispatch = || -> windows::core::Result<Option<(&str, ActionTransport)>> {
         unsafe {
-            if !expand_only && titlebar_close(&element) {
-                let root = automation()?.ElementFromHandle(HWND(hwnd as *mut _))?;
-                if let Ok(p) = root.GetCurrentPattern(UIA_WindowPatternId) {
-                    p.cast::<IUIAutomationWindowPattern>()?.Close()?;
+            for action in order {
+                let id = match action {
+                    ClickPattern::WindowClose => UIA_WindowPatternId,
+                    ClickPattern::Invoke => UIA_InvokePatternId,
+                    ClickPattern::Toggle => UIA_TogglePatternId,
+                    ClickPattern::Select => UIA_SelectionItemPatternId,
+                    ClickPattern::Expand => UIA_ExpandCollapsePatternId,
+                };
+                let root;
+                let source: &IUIAutomationElement = if *action == ClickPattern::WindowClose {
+                    root = automation()?.ElementFromHandle(HWND(hwnd as *mut _))?;
+                    &root
+                } else {
+                    &element
+                };
+                let pattern = source.GetCurrentPattern(id);
+                // Non-client Close has a precise WM_CLOSE fallback. Ordinary
+                // client mouse messages do not implement a title-bar hit.
+                if *action == ClickPattern::WindowClose && pattern.is_err() {
+                    ensure_active(cancelled)?;
+                    PostMessageW(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                     return Ok(Some((
-                        "WindowPattern.Close",
-                        ActionTransport::WindowsUiaInvoke,
+                        "PostMessage WM_CLOSE",
+                        ActionTransport::WindowsPostMessage,
                     )));
                 }
-            }
-            if !expand_only {
-                if let Ok(p) = element.GetCurrentPattern(UIA_InvokePatternId) {
-                    p.cast::<IUIAutomationInvokePattern>()?.Invoke()?;
-                    return Ok(Some(("UIA Invoke", ActionTransport::WindowsUiaInvoke)));
-                }
-                if let Ok(p) = element.GetCurrentPattern(UIA_TogglePatternId) {
-                    p.cast::<IUIAutomationTogglePattern>()?.Toggle()?;
-                    return Ok(Some(("UIA Toggle", ActionTransport::WindowsUiaToggle)));
-                }
-                if let Ok(p) = element.GetCurrentPattern(UIA_SelectionItemPatternId) {
-                    p.cast::<IUIAutomationSelectionItemPattern>()?.Select()?;
-                    return Ok(Some((
-                        "UIA SelectionItem.Select",
-                        ActionTransport::WindowsUiaSelection,
-                    )));
-                }
-            }
-            if let Ok(p) = element.GetCurrentPattern(UIA_ExpandCollapsePatternId) {
-                p.cast::<IUIAutomationExpandCollapsePattern>()?.Expand()?;
-                return Ok(Some((
-                    "UIA ExpandCollapse.Expand",
-                    ActionTransport::WindowsUiaExpandCollapse,
-                )));
+                let Ok(pattern) = pattern else {
+                    continue;
+                };
+                let (route, transport) = match action {
+                    ClickPattern::WindowClose => {
+                        let p = pattern.cast::<IUIAutomationWindowPattern>()?;
+                        ensure_active(cancelled)?;
+                        p.Close()?;
+                        ("WindowPattern.Close", ActionTransport::WindowsUiaInvoke)
+                    }
+                    ClickPattern::Invoke => {
+                        let p = pattern.cast::<IUIAutomationInvokePattern>()?;
+                        ensure_active(cancelled)?;
+                        p.Invoke()?;
+                        ("UIA Invoke", ActionTransport::WindowsUiaInvoke)
+                    }
+                    ClickPattern::Toggle => {
+                        let p = pattern.cast::<IUIAutomationTogglePattern>()?;
+                        ensure_active(cancelled)?;
+                        p.Toggle()?;
+                        ("UIA Toggle", ActionTransport::WindowsUiaToggle)
+                    }
+                    ClickPattern::Select => {
+                        let p = pattern.cast::<IUIAutomationSelectionItemPattern>()?;
+                        ensure_active(cancelled)?;
+                        p.Select()?;
+                        (
+                            "UIA SelectionItem.Select",
+                            ActionTransport::WindowsUiaSelection,
+                        )
+                    }
+                    ClickPattern::Expand => {
+                        let p = pattern.cast::<IUIAutomationExpandCollapsePattern>()?;
+                        ensure_active(cancelled)?;
+                        p.Expand()?;
+                        (
+                            "UIA ExpandCollapse.Expand",
+                            ActionTransport::WindowsUiaExpandCollapse,
+                        )
+                    }
+                };
+                return Ok(Some((route, transport)));
             }
             Ok(None)
         }
     };
     let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, dispatch)
-        .map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; no second click was sent. Read fresh state before retrying."))?;
+        .map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
     Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
 }
 
 /// Search inside the addressed window, never ElementFromPoint on the user's
 /// desktop: an occluding app must not become the click target.
 pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
+    match super::windows_enum::run_uia_with_deadline_cancelable(
+        "semantic-point-click", Duration::from_secs(4), "no fallback input",
+        move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
+    ) {
+        Ok(result) => result,
+        Err(error) => Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))))),
+    }
+}
+fn at_point_inner(
+    hwnd: u64,
+    x: i32,
+    y: i32,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Option<ToolResult>> {
     let _com = ComApartment::new();
     unsafe {
         let uia = automation()?;
         let root = uia.ElementFromHandle(HWND(hwnd as *mut _))?;
         let all = root.FindAll(TreeScope_Subtree, &uia.CreateTrueCondition()?)?;
         let mut candidates = Vec::new();
-        for i in 0..all.Length()?.min(5000) {
+        let count = all.Length()?;
+        if count > 5000 {
+            anyhow::bail!("UIA click tree exceeded 5000 elements; no input was sent");
+        }
+        for i in 0..count {
             let element = all.GetElement(i)?;
             let Ok(rect) = element.CurrentBoundingRectangle() else {
                 continue;
@@ -252,7 +348,7 @@ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolR
         }
         candidates.sort_by_key(|(area, _)| *area);
         for (_, element) in candidates {
-            match try_click(hwnd, element.as_raw() as usize, false) {
+            match try_click(hwnd, element.as_raw() as usize, false, cancelled) {
                 Ok(Some(result)) => return Ok(Some(result)),
                 Ok(None) => {}
                 Err(error) => return Ok(Some(ToolResult::error(error.to_string()))),
@@ -266,7 +362,21 @@ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolR
 mod tests {
     use super::*;
     #[test]
+    fn an_already_missing_window_is_never_a_confirmed_close() {
+        let result =
+            Readback::new(0, None).finish(None, "Close", ActionTransport::WindowsPostMessage);
+        assert_eq!(result.structured_content.unwrap()["verified"], false);
+    }
+    #[test]
+    fn cancellation_prevents_late_mutation() {
+        let cancelled = AtomicBool::new(true);
+        assert!(ensure_active(&cancelled).is_err());
+        cancelled.store(false, Ordering::Release);
+        assert!(ensure_active(&cancelled).is_ok());
+    }
+    #[test]
     fn invalid_window_is_not_a_successful_semantic_click() {
-        assert!(at_point(0, 0, 0).is_err());
+        let result = at_point(0, 0, 0);
+        assert!(result.is_err() || result.unwrap().is_some_and(|r| r.is_error == Some(true)));
     }
 }
