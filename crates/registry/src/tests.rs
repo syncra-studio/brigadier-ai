@@ -1692,3 +1692,122 @@ fn the_watcher_looks_at_each_projects_own_configs_and_skills() {
     let real = std::fs::canonicalize(&elsewhere).unwrap();
     assert!(watched.trees.contains(&real), "{:?}", watched.trees);
 }
+
+#[test]
+fn rows_include_codex_runtime_servers_and_bundled_skills_with_provenance() {
+    let home = fixture("row-provenance");
+    let roots = roots(&home, &[]);
+    write(
+        &roots.codex_home.join("config.toml"),
+        r#"
+[mcp_servers.node_repl]
+command = "node_repl"
+[plugins."browser@openai-bundled"]
+enabled = true
+"#,
+    );
+    let plugin = roots
+        .codex_home
+        .join("plugins/cache/openai-bundled/browser/1.0.0");
+    write(
+        &plugin.join(".codex-plugin/plugin.json"),
+        r#"{"name":"browser","skills":"./skills/"}"#,
+    );
+    skill(&plugin.join("skills/browser"), "browser", "Browse");
+    let catalog = Catalog::read(&roots, None);
+    let rows = Catalog::rows(&[catalog]);
+    let node = rows.iter().find(|row| row.name == "node_repl").unwrap();
+    assert_eq!(node.definitions[0].provenance.agent, Some(Agent::Codex));
+    assert_eq!(node.definitions[0].provenance.native, "node_repl");
+    assert_eq!(
+        node.definitions[0].provenance.file,
+        roots.codex_home.join("config.toml")
+    );
+    let browser = rows.iter().find(|row| row.name == "browser").unwrap();
+    let origin = &browser.definitions[0].provenance;
+    assert_eq!(origin.plugin.as_deref(), Some("browser@openai-bundled"));
+    assert_eq!(origin.native, "browser:browser");
+    assert_eq!(origin.fingerprint.len(), 64);
+    assert_eq!(origin.file, plugin.join("skills/browser/SKILL.md"));
+}
+
+#[test]
+fn rows_group_content_but_retain_each_source_and_separate_endpoints() {
+    let home = fixture("rows-grouping");
+    let roots = roots(&home, &[]);
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"db":{"url":"https://one.test/mcp"}}}"#,
+    );
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[mcp_servers.db]\nurl = 'https://two.test/mcp'\n",
+    );
+    skill(&roots.claude_dir.join("skills/shared"), "shared", "same");
+    skill(&roots.codex_home.join("skills/shared"), "shared", "same");
+    let catalogs = [Catalog::read(&roots, None)];
+    let rows = Catalog::rows(&catalogs);
+    assert_eq!(rows.iter().filter(|row| row.name == "db").count(), 2);
+    let shared = rows.iter().find(|row| row.name == "shared").unwrap();
+    assert_eq!(shared.definitions.len(), 2);
+    assert!(!shared.different_per_agent);
+    let id = shared.id.clone();
+    write(
+        &roots.codex_home.join("skills/shared/support.txt"),
+        "support affects identity",
+    );
+    let rows = Catalog::rows(&[Catalog::read(&roots, None)]);
+    let shared = rows.iter().find(|row| row.name == "shared").unwrap();
+    assert_ne!(id, shared.id);
+    assert!(shared.different_per_agent);
+    assert_eq!(shared.definitions.len(), 2);
+}
+
+#[test]
+fn read_rows_retains_disabled_project_plugin_definitions() {
+    let home = fixture("disabled-project-rows");
+    let roots = roots(&home, &[]);
+    let project = home.join("project");
+    let plugin = home.join("plugin");
+    write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name":"team"}"#,
+    );
+    skill(&plugin.join("skills/review"), "review", "Review");
+    write(
+        &plugin.join(".mcp.json"),
+        r#"{"mcpServers":{"db":{"url":"https://team.test/mcp"}}}"#,
+    );
+    write(&roots.claude_dir.join("plugins/installed_plugins.json"), &serde_json::json!({"plugins":{"team@test":[{"scope":"project", "projectPath":project,"installPath":plugin}]}}).to_string());
+    write(
+        &project.join(".claude/settings.json"),
+        r#"{"enabledPlugins":{"team@test":false}}"#,
+    );
+    let rows = Catalog::read_rows(&roots, std::slice::from_ref(&project));
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.definitions[0].provenance.project, Some(project.clone()));
+        assert_eq!(
+            row.definitions[0].provenance.plugin.as_deref(),
+            Some("team@test")
+        );
+    }
+    assert!(Catalog::read(&roots, Some(&project)).plugins.is_empty());
+}
+
+#[test]
+fn equivalent_remote_definitions_share_a_row_regardless_of_header_order() {
+    let home = fixture("header-order-rows");
+    let roots = roots(&home, &[]);
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"db":{"url":"https://same.test/mcp","headers":{"Z":"z","A":"a"}}}}"#,
+    );
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[mcp_servers.db]\nurl = 'https://same.test/mcp'\nhttp_headers = { A = 'a', Z = 'z' }\n",
+    );
+    let rows = Catalog::read_rows(&roots, &[]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].definitions.len(), 2);
+}

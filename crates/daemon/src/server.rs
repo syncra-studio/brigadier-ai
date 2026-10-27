@@ -2542,6 +2542,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
         },
+        Request::GetPluginCatalog
+        | Request::SetPluginChoice { .. }
+        | Request::SetPluginChoiceScope { .. }
+        | Request::StartPluginSignIn { .. }
+        | Request::GetPluginSignInStatus { .. }
+        | Request::SignOutPlugin { .. } => {
+            return Err(brigadier_core::Error::Invalid("not yet".into()).into());
+        }
         Request::GetPlugins => {
             let mut plugins = daemon.sessions.plugins_view().await?;
             plugin_icons(&daemon.site_icons, &mut plugins).await;

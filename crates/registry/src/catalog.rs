@@ -1,0 +1,349 @@
+//! Provenance-preserving rows shared by the page and launch resolver. Reading never writes.
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+use crate::{Agent, Catalog, Server, SkillRoot, Source, Transport};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    Server,
+    Skill,
+}
+
+/// A native identity is kept separately from its plain display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Provenance {
+    /// None for import offers from Desktop and Cursor.
+    pub agent: Option<Agent>,
+    pub file: PathBuf,
+    pub plugin: Option<String>,
+    pub project: Option<PathBuf>,
+    pub native: String,
+    /// Includes tool aliases as well as the CLI's suppression identity.
+    pub aliases: Vec<String>,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Content {
+    Server(Box<Server>),
+    Skill { path: PathBuf, description: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Definition {
+    pub provenance: Provenance,
+    pub content: Content,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    pub id: String,
+    pub kind: Kind,
+    pub name: String,
+    /// A remote resource URL, or a fingerprint of a process and its configuration.
+    pub endpoint: Option<String>,
+    pub definitions: Vec<Definition>,
+    /// L12: keep each agent's native version; never inject this name across agents.
+    pub different_per_agent: bool,
+}
+
+pub fn fingerprint(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Hash file names and bytes, including supporting files and hidden files. Unreadable or
+/// cyclic trees get no content identity, so they cannot accidentally merge with another tree.
+pub fn skill_fingerprint(path: &Path) -> Option<String> {
+    fn visit(path: &Path, hasher: &mut Sha256, ancestors: &mut Vec<PathBuf>) -> Option<()> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        if ancestors.contains(&canonical) {
+            return None;
+        }
+        if path.is_dir() {
+            ancestors.push(canonical);
+            let mut entries = std::fs::read_dir(path)
+                .ok()?
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            hasher.update((entries.len() as u64).to_le_bytes());
+            for entry in entries {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                hasher.update((name.len() as u64).to_le_bytes());
+                hasher.update(name.as_bytes());
+                hasher.update([u8::from(entry.path().is_dir())]);
+                visit(&entry.path(), hasher, ancestors)?;
+            }
+            ancestors.pop();
+        } else {
+            let bytes = std::fs::read(path).ok()?;
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
+        Some(())
+    }
+    let mut hasher = Sha256::new();
+    visit(path, &mut hasher, &mut Vec::new())?;
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+impl Server {
+    pub fn provenance(&self) -> Provenance {
+        let agent = match self.source {
+            Source::ClaudeUser
+            | Source::ClaudeLocal
+            | Source::ClaudeProject
+            | Source::ClaudePlugin => Some(Agent::Claude),
+            Source::CodexUser | Source::CodexProject | Source::CodexPlugin => Some(Agent::Codex),
+            _ => None,
+        };
+        let native = match &self.plugin {
+            Some(plugin) if plugin.agent == Agent::Claude => {
+                format!("plugin:{}:{}", plugin.name, self.name)
+            }
+            _ => self.name.clone(),
+        };
+        let mut aliases = vec![native.clone(), self.native_name()];
+        aliases.sort();
+        aliases.dedup();
+        // Canonical maps make content identity independent of header/env ordering. Secret
+        // values enter only this hash and never the provenance or serialized page model.
+        let transport = match &self.transport {
+            Transport::Stdio {
+                command, args, env, ..
+            } => {
+                let env: BTreeMap<_, _> = env
+                    .iter()
+                    .map(|(key, value)| (key, value.expose()))
+                    .collect();
+                serde_json::json!({"kind":"stdio", "command":command, "args":args, "cwd":self.transport.working_dir(), "env":env})
+            }
+            Transport::Http { url, headers } => {
+                let headers: BTreeMap<_, _> = headers
+                    .iter()
+                    .map(|(key, value)| (key, value.expose()))
+                    .collect();
+                serde_json::json!({"kind":"http", "url":url, "headers":headers})
+            }
+        };
+        let identity = serde_json::json!({"transport":transport,
+            "clientId":self.oauth.as_ref().and_then(|oauth| oauth.client_id.as_ref()),
+            "clientSecret":self.oauth.as_ref().and_then(|oauth| oauth.client_secret.as_ref()).map(|secret| secret.expose()),
+        });
+        Provenance {
+            agent,
+            file: self.file.clone(),
+            plugin: self.plugin.as_ref().map(|plugin| plugin.id.clone()),
+            project: self.project.clone(),
+            native,
+            aliases,
+            fingerprint: fingerprint(identity.to_string().as_bytes()),
+        }
+    }
+}
+
+impl Catalog {
+    /// Complete page catalog, including disabled project-only plugin definitions. Unlike
+    /// `Catalog::read`, presence here does not imply native availability in a session.
+    pub fn read_rows(roots: &crate::Roots, projects: &[PathBuf]) -> Vec<Row> {
+        let mut catalogs = Vec::new();
+        for project in std::iter::once(None).chain(projects.iter().map(|path| Some(path.as_path())))
+        {
+            let mut catalog = Self::read(roots, project);
+            let mut plugins = crate::plugins::claude_definitions(roots, project);
+            if let Some(project) = project {
+                let layer = crate::servers::read_toml(
+                    &project.join(".codex/config.toml"),
+                    Source::CodexProject,
+                    Some(project),
+                    &mut Vec::new(),
+                );
+                plugins.extend(
+                    crate::plugins::codex_switched(roots, layer.as_ref(), Some(project))
+                        .into_iter()
+                        .map(|(plugin, _)| plugin),
+                );
+            }
+            for plugin in plugins {
+                if catalog.plugins.contains(&plugin) || catalog.off.plugins.contains(&plugin) {
+                    continue;
+                }
+                crate::skills::add_plugin(&mut catalog.off.skills, &plugin);
+                catalog.off.servers.extend(crate::servers::plugin(
+                    roots,
+                    &plugin,
+                    None,
+                    &mut catalog.problems,
+                ));
+                catalog.off.plugins.push(plugin);
+            }
+            catalogs.push(catalog);
+        }
+        Self::rows(&catalogs)
+    }
+
+    /// Combine user and registered-project catalogs without losing definitions or aliases.
+    /// Desktop/Cursor rows remain import offers (`agent == None`).
+    pub fn rows(catalogs: &[Self]) -> Vec<Row> {
+        let mut grouped: BTreeMap<(Kind, String, String), Row> = BTreeMap::new();
+        let mut add = |kind: Kind, name: &str, endpoint: Option<String>, definition: Definition| {
+            let key = (
+                kind,
+                name.to_owned(),
+                definition.provenance.fingerprint.clone(),
+            );
+            let row = grouped.entry(key.clone()).or_insert_with(|| Row {
+                id: format!(
+                    "{}:{}:{}",
+                    if kind == Kind::Server {
+                        "server"
+                    } else {
+                        "skill"
+                    },
+                    name,
+                    fingerprint(key.2.as_bytes())
+                ),
+                kind,
+                name: name.to_owned(),
+                endpoint,
+                definitions: Vec::new(),
+                different_per_agent: false,
+            });
+            if !row.definitions.contains(&definition) {
+                row.definitions.push(definition);
+            }
+        };
+        for catalog in catalogs {
+            for server in catalog.servers.iter().chain(&catalog.off.servers) {
+                let provenance = server.provenance();
+                let endpoint = Some(match &server.transport {
+                    Transport::Http { url, .. } => url.clone(),
+                    _ => provenance.fingerprint.clone(),
+                });
+                add(
+                    Kind::Server,
+                    &server.name,
+                    endpoint,
+                    Definition {
+                        provenance,
+                        content: Content::Server(Box::new(server.clone())),
+                    },
+                );
+            }
+            for skill in catalog.skills.iter().chain(&catalog.off.skills) {
+                for (root, path) in &skill.entries {
+                    let (agent, project, plugin, native) = match root {
+                        SkillRoot::ClaudeUser => (Agent::Claude, None, None, skill.name.clone()),
+                        SkillRoot::ClaudeSynced(_) => (
+                            Agent::Claude,
+                            None,
+                            None,
+                            format!("synced-skill:{}", skill.name),
+                        ),
+                        SkillRoot::AgentsUser | SkillRoot::CodexUser => {
+                            (Agent::Codex, None, None, skill.name.clone())
+                        }
+                        SkillRoot::ClaudeProject(project) => (
+                            Agent::Claude,
+                            Some(project.clone()),
+                            None,
+                            skill.name.clone(),
+                        ),
+                        SkillRoot::AgentsProject(project) => (
+                            Agent::Codex,
+                            Some(project.clone()),
+                            None,
+                            skill.name.clone(),
+                        ),
+                        SkillRoot::Plugin(plugin) => (
+                            plugin.agent,
+                            plugin.project.clone(),
+                            Some(plugin.id.clone()),
+                            plugin.skill_name(&skill.name),
+                        ),
+                    };
+                    let file = path.join("SKILL.md");
+                    let fingerprint = skill_fingerprint(path)
+                        .unwrap_or_else(|| fingerprint(file.to_string_lossy().as_bytes()));
+                    let provenance = Provenance {
+                        agent: Some(agent),
+                        file,
+                        plugin,
+                        project,
+                        aliases: vec![native.clone()],
+                        native,
+                        fingerprint,
+                    };
+                    add(
+                        Kind::Skill,
+                        &skill.name,
+                        None,
+                        Definition {
+                            provenance,
+                            content: Content::Skill {
+                                path: path.clone(),
+                                description: skill.description.clone(),
+                            },
+                        },
+                    );
+                }
+            }
+        }
+        let mut rows: Vec<Row> = grouped.into_values().collect();
+        let conflicts: Vec<String> = rows
+            .iter()
+            .filter(|row| row.kind == Kind::Skill)
+            .filter(|row| {
+                rows.iter().any(|other| {
+                    other.kind == Kind::Skill
+                        && other.name == row.name
+                        && other.id != row.id
+                        && row.definitions.iter().any(|a| {
+                            other
+                                .definitions
+                                .iter()
+                                .any(|b| a.provenance.agent != b.provenance.agent)
+                        })
+                })
+            })
+            .map(|row| row.name.clone())
+            .collect();
+        for name in conflicts {
+            let matches: Vec<_> = rows
+                .iter()
+                .filter(|row| row.kind == Kind::Skill && row.name == name)
+                .cloned()
+                .collect();
+            if matches.len() < 2 {
+                continue;
+            }
+            rows.retain(|row| row.kind != Kind::Skill || row.name != name);
+            rows.push(Row {
+                id: format!("skill:{name}:different-per-agent"),
+                kind: Kind::Skill,
+                name,
+                endpoint: None,
+                definitions: matches
+                    .into_iter()
+                    .flat_map(|row| row.definitions)
+                    .collect(),
+                different_per_agent: true,
+            });
+        }
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
+        rows
+    }
+}

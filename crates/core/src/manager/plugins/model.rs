@@ -1081,3 +1081,92 @@ pub(crate) fn model(
     elsewhere.retain(|entry| !sharing.imported.contains(&entry.key));
     Model { rows, elsewhere }
 }
+
+/// The new read-only page model. Legacy sharing rows above remain until their callers are
+/// retired; the resolver and new protocol use only these provenance-preserving rows.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogView {
+    pub rows: Vec<CatalogRow>,
+    /// Hash of catalog + choices for later menu cache invalidation.
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogRow {
+    pub id: String,
+    pub kind: PluginKind,
+    pub name: String,
+    pub definitions: Vec<CatalogDefinition>,
+    pub different_per_agent: bool,
+    pub choice: super::choices::Choice,
+    pub sign_in: CatalogSignIn,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDefinition {
+    pub agent: Option<brigadier_providers::ProviderKind>,
+    pub file: String,
+    pub plugin: Option<String>,
+    pub project: Option<String>,
+    pub native: String,
+    pub aliases: Vec<String>,
+    pub fingerprint: String,
+    pub transport: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum CatalogSignIn {
+    #[default]
+    NotRequired,
+    SignedOut,
+    SigningIn {
+        flow_id: String,
+    },
+    SignedIn,
+    CliFallback {
+        agents: Vec<brigadier_providers::ProviderKind>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl CatalogView {
+    pub fn new(
+        rows: &[brigadier_registry::catalog::Row],
+        choices: &super::choices::Choices,
+    ) -> Self {
+        use brigadier_registry::catalog::{Content, Kind};
+        let rows: Vec<_> = rows.iter().map(|row| CatalogRow {
+            id: row.id.clone(), kind: if row.kind == Kind::Server { PluginKind::Server } else { PluginKind::Skill },
+            name: row.name.clone(), different_per_agent: row.different_per_agent,
+            choice: choices.choice(row),
+            sign_in: if row.definitions.iter().any(|definition| matches!(&definition.content, Content::Server(server) if server.signs_in)) { CatalogSignIn::SignedOut } else { CatalogSignIn::NotRequired },
+            definitions: row.definitions.iter().map(|definition| {
+                let origin = &definition.provenance;
+                let (transport, endpoint) = match &definition.content {
+                    Content::Server(server) => match &server.transport {
+                        Transport::Http { .. } => (Some("http".to_owned()), server.written.url.clone()),
+                        Transport::Stdio { .. } => (Some("stdio".to_owned()), server.written.command.clone()),
+                    },
+                    Content::Skill { .. } => (None, None),
+                };
+                CatalogDefinition { agent: origin.agent.map(super::provider), file: origin.file.to_string_lossy().into_owned(), plugin: origin.plugin.clone(), project: origin.project.as_ref().map(|path| path.to_string_lossy().into_owned()), native: origin.native.clone(), aliases: origin.aliases.clone(), fingerprint: origin.fingerprint.clone(), transport, endpoint }
+            }).collect(),
+        }).collect();
+        let bytes = serde_json::to_vec(&rows).expect("catalog rows are serializable");
+        Self {
+            rows,
+            version: brigadier_registry::catalog::fingerprint(&bytes),
+        }
+    }
+}

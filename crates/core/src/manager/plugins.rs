@@ -7,10 +7,12 @@
 //! started in that project gets. Items Brigadier adds live in the Library
 //! ([`brigadier_registry::library`]) and reach each agent through its own plugin commands.
 
+pub mod choices;
 mod jobs;
 mod library_cli;
 mod model;
 pub mod ops;
+pub mod resolve;
 mod share;
 
 use std::path::{Path, PathBuf};
@@ -22,6 +24,7 @@ use brigadier_registry::library::{Entry, Library};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub use model::{CatalogDefinition, CatalogRow, CatalogSignIn, CatalogView};
 use model::{KeyKind, Model, ProjectCatalog, Row};
 use share::Sharing;
 

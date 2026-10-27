@@ -2358,6 +2358,8 @@ impl CodexSession {
                         type_: p::TextUserInputType::Text,
                     });
                 }
+                // D: composer input serializes resolved skill references.
+                crate::InputPart::Skill { .. } => {}
                 crate::InputPart::Text(_) => {}
             }
         }
@@ -2724,6 +2726,11 @@ fn skill_commands(skills: Vec<Skill>, trusted: bool) -> Vec<CliCommand> {
         .filter(|skill| skill.enabled && (trusted || skill.scope != "repo"))
         .filter(|skill| seen.insert(skill.name.clone()))
         .map(|skill| CliCommand {
+            // D: composer input fills command provenance and invocation.
+            kind: None,
+            source: None,
+            invocation: None,
+            agent_only: None,
             text: format!("${}", skill.name),
             description: Some(skill.short_description.unwrap_or(skill.description))
                 .filter(|text| !text.is_empty()),
@@ -3007,6 +3014,11 @@ mod tests {
         assert_eq!(
             trusted[1],
             CliCommand {
+                // D: composer input fills command provenance and invocation.
+                kind: None,
+                source: None,
+                invocation: None,
+                agent_only: None,
                 name: "grill-me".into(),
                 text: "$grill-me".into(),
                 description: Some("Grill".into()),
@@ -3945,6 +3957,8 @@ mod tests {
 
     fn server(name: &str, transport: McpTransport, env: &[(&str, &str)]) -> McpServer {
         McpServer {
+            // B: launch fills gateway metadata for resolved remote servers.
+            gateway: None,
             name: name.into(),
             transport,
             env: env

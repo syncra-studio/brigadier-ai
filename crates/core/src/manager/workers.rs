@@ -2715,6 +2715,8 @@ fn held_text(input: &TurnInput) -> String {
         .parts_with_file_notes()
         .into_iter()
         .map(|part| match part {
+            // D: composer input preserves typed skill references across handoffs.
+            InputPart::Skill { invocation, .. } => format!("/{invocation}"),
             InputPart::Text(text) => text,
             InputPart::Image(file) => format!(
                 "[Attached image \"{}\" ({}): {}]",

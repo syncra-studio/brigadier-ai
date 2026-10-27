@@ -3461,6 +3461,8 @@ impl SessionManager {
         }
         for mention in mentions {
             match mention {
+                // D: composer input resolves the row against the current resolver output.
+                Mention::Skill { .. } => {}
                 Mention::Task { id } => {
                     if let Ok(tasks) = self.core.tasks(owner).await
                         && let Some(task) = tasks.iter().find(|t| &t.id == id)

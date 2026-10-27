@@ -108,6 +108,8 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         access: Access::Full,
         append_system_prompt: None,
         mcp_servers: vec![McpServer {
+            // B: launch fills gateway metadata for resolved remote servers.
+            gateway: None,
             name: "probe".into(),
             transport: brigadier_providers::McpTransport::Stdio {
                 command: PathBuf::from("python3"),

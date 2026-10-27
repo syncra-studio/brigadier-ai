@@ -901,12 +901,34 @@ pub struct McpServerState {
     pub transport: Option<String>,
 }
 
-/// One thing a CLI runs when a message holds it, for the composer's `/` menu: a built-in
-/// command, a skill (the user's, the project's or a plugin's), a plugin's command or an MCP
-/// prompt, as the CLI itself reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// The group in the composer's command menu.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CliCommandKind {
+    Action,
+    Skill,
+    #[default]
+    Command,
+    Prompt,
+}
+
+/// One item in the composer's `/` menu, enriched with its resolved wire identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CliCommand {
+    /// Optional until each provider enriches its command catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<CliCommandKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub invocation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent_only: Option<ProviderKind>,
     /// Its name as the CLI lists it ("review", "github:triage (MCP)").
     pub name: String,
     /// What a message holds to run it ("/review", "$review").
@@ -1240,6 +1262,7 @@ pub fn is_image_mime(mime: &str) -> bool {
 /// One ordered piece of a turn's input.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputPart {
+    Skill { invocation: String, path: PathBuf },
     Text(String),
     Image(InputFile),
 }
@@ -1302,7 +1325,7 @@ impl TurnInput {
         self.files.is_empty()
             && self.parts.iter().all(|part| match part {
                 InputPart::Text(text) => text.trim().is_empty(),
-                InputPart::Image(_) => false,
+                InputPart::Image(_) | InputPart::Skill { .. } => false,
             })
     }
 
@@ -1388,6 +1411,8 @@ pub enum McpTransport {
 /// An MCP server a session gets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServer {
+    /// Filled by the daemon gateway; transport/env are the resolved loopback URL/header.
+    pub gateway: Option<McpGateway>,
     pub name: String,
     pub transport: McpTransport,
     /// Its values by name: a stdio server's environment, an HTTP server's headers. They may be
@@ -1403,6 +1428,22 @@ pub struct McpServer {
     /// tools behind its tool search, and a model that has to look a tool up first tends to
     /// fall back to its built-in ones.
     pub always_load: bool,
+}
+
+/// The local gateway authority. Its secret is never included in Debug output.
+#[derive(Clone, PartialEq, Eq)]
+pub struct McpGateway {
+    pub url: String,
+    pub secret_header: (String, String),
+}
+
+impl std::fmt::Debug for McpGateway {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpGateway")
+            .field("url", &self.url)
+            .field("secret_header", &self.secret_header.0)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The MCP servers and skills of the user's own setup a session goes without

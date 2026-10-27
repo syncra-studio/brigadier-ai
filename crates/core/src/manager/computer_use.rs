@@ -111,6 +111,8 @@ impl SessionManager {
         };
         Some(ComputerUseKit {
             server: McpServer {
+                // B: launch fills gateway metadata for resolved remote servers.
+                gateway: None,
                 name: SERVER_NAME.into(),
                 transport: McpTransport::Stdio {
                     command: helper_program(&placed.app),

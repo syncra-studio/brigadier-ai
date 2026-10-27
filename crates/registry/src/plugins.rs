@@ -550,6 +550,46 @@ pub(crate) fn claude(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
     plugins
 }
 
+/// All installed definitions, including project-only plugins switched off in settings.
+/// This is for the read-only catalog, never a statement that a CLI loads a plugin.
+pub(crate) fn claude_definitions(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
+    let mut plugins: Vec<_> = claude_installs(roots)
+        .into_iter()
+        .filter(|install| {
+            install
+                .project
+                .as_deref()
+                .is_none_or(|own| project.is_some_and(|project| own.starts_with(project)))
+        })
+        .map(|install| {
+            let fallback = split_id(&install.id).map_or(install.id.as_str(), |(name, _)| name);
+            Plugin {
+                agent: Agent::Claude,
+                name: named(&install.root, Agent::Claude, fallback),
+                id: install.id,
+                root: install.root,
+                project: install.project.as_ref().and(project).map(Path::to_owned),
+            }
+        })
+        .collect();
+    let mut folders = vec![(roots.claude_dir.join("skills"), None)];
+    if let Some(project) = project {
+        folders.push((project.join(".claude/skills"), Some(project.to_owned())));
+    }
+    for (folder, project) in folders {
+        for (name, root) in skills_folder_plugins(&folder) {
+            plugins.push(Plugin {
+                agent: Agent::Claude,
+                id: format!("{name}@skills-dir"),
+                name,
+                root,
+                project: project.clone(),
+            });
+        }
+    }
+    plugins
+}
+
 /// Claude's plugins installed for every project (or placed in the user's skills folder) that
 /// its user settings switch off.
 pub(crate) fn claude_off(roots: &Roots) -> Vec<Plugin> {

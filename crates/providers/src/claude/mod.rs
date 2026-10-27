@@ -1964,6 +1964,8 @@ impl ClaudeSession {
                 crate::InputPart::Text(text) if !text.trim().is_empty() => {
                     content.push(json!({ "type": "text", "text": text }));
                 }
+                // D: composer input serializes resolved skill references.
+                crate::InputPart::Skill { .. } => {}
                 crate::InputPart::Text(_) => {}
                 crate::InputPart::Image(file) => {
                     let bytes = tokio::fs::read(&file.path).await.map_err(|err| {
@@ -3870,6 +3872,8 @@ for line in sys.stdin:
             Some("user,project,local")
         );
         let granted = McpServer {
+            // B: launch fills gateway metadata for resolved remote servers.
+            gateway: None,
             name: "pencil".into(),
             transport: McpTransport::Stdio {
                 command: PathBuf::from("/bin/pencil"),
@@ -4125,6 +4129,8 @@ for line in sys.stdin:
             project: Some(project.clone()),
             auto_compact: false,
             mcp_servers: vec![McpServer {
+                // B: launch fills gateway metadata for resolved remote servers.
+                gateway: None,
                 name: "probe".into(),
                 transport: McpTransport::Stdio {
                     command: PathBuf::from("must-never-run"),
@@ -4603,6 +4609,8 @@ for line in sys.stdin:
     fn each_servers_values_have_their_own_aliases() {
         let dir = std::env::temp_dir();
         let server = |name: &str, transport: McpTransport, env: &[(&str, &str)]| McpServer {
+            // B: launch fills gateway metadata for resolved remote servers.
+            gateway: None,
             name: name.into(),
             transport,
             env: env

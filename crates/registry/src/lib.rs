@@ -29,6 +29,7 @@
 
 pub mod adapter;
 pub mod add_parse;
+pub mod catalog;
 pub mod claude_config;
 pub mod item;
 pub mod library;

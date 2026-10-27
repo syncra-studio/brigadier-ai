@@ -1194,6 +1194,25 @@ pub enum Request {
     /// Settings › Plugins: every skill and MCP server the agents have, each shared with every
     /// agent, where each is on and what needs the user.
     GetPlugins,
+    /// Provenance-preserving catalog and the durable choices used by the resolver.
+    GetPluginCatalog,
+    SetPluginChoice {
+        row_id: String,
+        on: bool,
+    },
+    SetPluginChoiceScope {
+        row_id: String,
+        scope: brigadier_core::manager::plugins::choices::Scope,
+    },
+    StartPluginSignIn {
+        row_id: String,
+    },
+    GetPluginSignInStatus {
+        row_id: String,
+    },
+    SignOutPlugin {
+        row_id: String,
+    },
     /// Turns Settings › Plugins item `key` on or off for every agent, keeping its projects for
     /// when it is on again. Refused (in the job's error) for a locked item. Answers with a job
     /// ([`Request::GetPluginJob`]).
@@ -2015,6 +2034,18 @@ pub enum Response {
     GetPlugins {
         plugins: brigadier_core::manager::plugins::PluginsView,
     },
+    GetPluginCatalog {
+        catalog: brigadier_core::manager::plugins::CatalogView,
+    },
+    SetPluginChoice,
+    SetPluginChoiceScope,
+    StartPluginSignIn {
+        state: brigadier_core::manager::plugins::CatalogSignIn,
+    },
+    GetPluginSignInStatus {
+        state: brigadier_core::manager::plugins::CatalogSignIn,
+    },
+    SignOutPlugin,
     SwitchPlugin {
         job: String,
     },

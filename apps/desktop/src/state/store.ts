@@ -520,6 +520,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
             (entry.mentions ?? []).every((mention, index) => {
               const queued = item.mentions[index];
               if (mention.type === "file" || mention.type === "folder") return queued?.type === mention.type && mention.path === queued.path;
+              // D: composer input preserves skill row identity through queued sends.
+              if (mention.type === "skill") return queued?.type === "skill" && mention.rowId === queued.rowId;
               if (mention.type === "task") return queued?.type === "task" && mention.id === queued.id;
               if (mention.type === "browserTab") return queued?.type === "browserTab" && mention.tab === queued.tab;
               return queued?.type === "chat" && mention.id === queued.id && mention.title === queued.title;

@@ -579,6 +579,11 @@ pub struct Workspace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Mention {
+    /// A catalog row, resolved against the current launch context at send time.
+    Skill {
+        #[serde(rename = "rowId")]
+        row_id: String,
+    },
     /// A worker of the conversation.
     Task { id: TaskId },
     /// A file of the session's checkout, relative to its root.
@@ -604,6 +609,10 @@ impl<'de> Deserialize<'de> for Mention {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "camelCase")]
         enum Tagged {
+            Skill {
+                #[serde(rename = "rowId", alias = "row_id")]
+                row_id: String,
+            },
             Task {
                 id: TaskId,
             },
@@ -634,6 +643,7 @@ impl<'de> Deserialize<'de> for Mention {
             Task(TaskId),
         }
         Ok(match Stored::deserialize(deserializer)? {
+            Stored::Tagged(Tagged::Skill { row_id }) => Mention::Skill { row_id },
             Stored::Tagged(Tagged::Task { id }) | Stored::Task(id) => Mention::Task { id },
             Stored::Tagged(Tagged::File { path }) => Mention::File { path },
             Stored::Tagged(Tagged::Folder { path }) => Mention::Folder { path },
@@ -3008,5 +3018,22 @@ mod tests {
                 .unwrap()
                 .contains("readAloudVoice")
         );
+    }
+}
+
+#[cfg(test)]
+mod skill_mention_tests {
+    use super::Mention;
+    #[test]
+    fn skill_chip_round_trips_through_custom_deserializer() {
+        let mention = Mention::Skill {
+            row_id: "skill:review:hash".into(),
+        };
+        let value = serde_json::to_value(&mention).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"type":"skill","rowId":"skill:review:hash"})
+        );
+        assert_eq!(serde_json::from_value::<Mention>(value).unwrap(), mention);
     }
 }

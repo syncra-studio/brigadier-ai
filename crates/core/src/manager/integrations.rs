@@ -173,6 +173,8 @@ pub(crate) fn granted_servers(
             }
         };
         granted.push(McpServer {
+            // B: launch fills gateway metadata for resolved remote servers.
+            gateway: None,
             name,
             transport,
             env,

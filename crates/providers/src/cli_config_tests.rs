@@ -116,6 +116,8 @@ for line in sys.stdin:
             append_system_prompt: None,
             mcp_servers: if computer {
                 vec![McpServer {
+                    // B: launch fills gateway metadata for resolved remote servers.
+                    gateway: None,
                     name: "computer".into(),
                     transport: McpTransport::Stdio {
                         command: self.0.join("computer"),

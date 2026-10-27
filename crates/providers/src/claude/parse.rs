@@ -1859,6 +1859,11 @@ pub fn commands(answer: &Value, own_servers: &[String]) -> Vec<CliCommand> {
                 return None;
             }
             Some(CliCommand {
+                // D: composer input fills command provenance and invocation.
+                kind: None,
+                source: None,
+                invocation: None,
+                agent_only: None,
                 text: format!("/{name}"),
                 description: text(command, "description"),
                 argument_hint: text(command, "argumentHint"),
@@ -1890,6 +1895,11 @@ pub fn merge_commands(known: &mut Vec<CliCommand>, names: Vec<String>) {
             continue;
         }
         known.push(CliCommand {
+            // D: composer input fills command provenance and invocation.
+            kind: None,
+            source: None,
+            invocation: None,
+            agent_only: None,
             text: format!("/{name}"),
             name,
             description: None,
@@ -3051,6 +3061,11 @@ mod tests {
         assert_eq!(
             listed[0],
             CliCommand {
+                // D: composer input fills command provenance and invocation.
+                kind: None,
+                source: None,
+                invocation: None,
+                agent_only: None,
                 name: "compact".into(),
                 text: "/compact".into(),
                 description: Some("Clear history but keep a summary".into()),

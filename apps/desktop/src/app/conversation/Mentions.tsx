@@ -22,6 +22,9 @@ const NO_TARGETS: readonly MentionTarget[] = [];
 /** What a mention leaves in the text, after `@`. */
 function label(mention: Mention, targets: readonly MentionTarget[]): string | null {
   switch (mention.type) {
+    // D: composer input supplies skill-chip labels.
+    case "skill":
+      return null;
     case "task": {
       const target = targets.find((entry) => entry.id === mention.id);
       return target ? `task-${target.number}` : null;
@@ -192,6 +195,8 @@ export function directTaskOf(item: { id: string; type: string }): string | null 
 /** A mention's menu item: its id is unique across kinds, its label goes in the text. */
 function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
   const id = "path" in mention ? `${mention.type}:${mention.path}`
+    // D: composer input uses the resolver row identity for skill chips.
+    : mention.type === "skill" ? `${mention.type}:${mention.rowId}`
     : mention.type === "browserTab" ? `${mention.type}:${mention.tab}`
     : `${mention.type}:${mention.id}`;
   return { id, type: mention.type, label: name };
