@@ -302,6 +302,12 @@ impl Tool for PressKeyTool {
 
         let pre_focus_ptr: Option<usize> = pre_focus_guard.as_ref().map(|g| g.as_ptr());
 
+        let panel_pid = if !fg {
+            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
+        } else {
+            None
+        };
+
         // ── Exact-target background gate (macOS background input v1) ──
         // A window-addressed background key is process-scoped transport: it
         // must prove exact delivery to the requested window (fresh AXWindows
@@ -454,7 +460,11 @@ impl Tool for PressKeyTool {
                     }
                     // background (default): auth-envelope post, no raise.
                     dispatch_with_ax_oracle(pid, window_id, pre_focus_ptr, || {
-                        crate::input::keyboard::press_key(pid, &key, &m)
+                        if let Some(panel_pid) = panel_pid {
+                            crate::input::keyboard::press_key_no_auth(panel_pid, &key, &m)
+                        } else {
+                            crate::input::keyboard::press_key(pid, &key, &m)
+                        }
                     })
                 })
                 .await

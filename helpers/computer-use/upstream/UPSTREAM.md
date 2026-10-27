@@ -78,6 +78,7 @@ Patches applied, in order:
 - `patches/0043-windows-elevated-window-read-refusal.diff`: refuse reads before UIA silently returns a title-bar-only tree for elevated windows; reads and input explain the privilege boundary and remedy plainly.
 - `patches/0050-off-space-picture-and-window-menu.diff`: reject black off-Space window bodies instead of using them as visual grounding, and refuse Window menu Space switches with an explicit user step; accessibility reads and semantic actions remain available.
 - `patches/0051-window-scoped-pixel-press.diff`: resolve background pixel presses within the exact AX window, including off-Space controls and actionable ancestors; only advertised AXPress is attempted, and acceptance remains explicitly unconfirmed.
+- `patches/0052-remote-open-save-panel.diff`: resolve unlisted Open/Save AX windows through client descendants and the AppKit panel service by exact CGWindowID on every Space; route panel key equivalents to their AX server without Chromium authentication and exclude client app menus.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -400,7 +400,13 @@ unsafe fn scope_top_level(top_level: &[AXUIElementRef], pid: i32, wid: u32) -> S
             set_messaging_timeout(child);
             let role = copy_string_attr(child, "AXRole").unwrap_or_default();
             let subrole = copy_string_attr(child, "AXSubrole");
-            let identifier = copy_string_attr(child, "AXIdentifier");
+            let identifier = if role == "AXWindow" && super::panel::is_panel(child) {
+                // XPC service windows can omit AXIdentifier. Scope metadata
+                // still marks the exact panel so the client's menu stays out.
+                Some("open-panel".to_owned())
+            } else {
+                copy_string_attr(child, "AXIdentifier")
+            };
             // Match AX window element → CGWindowID via private SPI.
             // Only windows carry one, so skip the round-trip elsewhere.
             let ax_window_id = if role == "AXWindow" {

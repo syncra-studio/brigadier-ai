@@ -20,6 +20,7 @@ pub mod bindings;
 pub mod enablement;
 pub mod exact_target;
 pub mod launch;
+pub mod panel;
 pub mod point_target;
 pub mod reveal_scroll;
 pub mod snapshot;

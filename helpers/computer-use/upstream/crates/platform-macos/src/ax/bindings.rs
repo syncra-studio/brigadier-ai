@@ -83,6 +83,7 @@ extern "C" {
         timeout_in_seconds: f32,
     ) -> AXError;
     pub fn AXUIElementGetTypeID() -> CFTypeID;
+    pub fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
     pub fn AXIsProcessTrusted() -> bool;
     /// `AXIsProcessTrustedWithOptions(options)` — when called with
     /// `{kAXTrustedCheckOptionPrompt: true}` raises the system Accessibility
@@ -997,6 +998,13 @@ pub unsafe fn copy_ax_windows_including(
             pid,
             window_id,
         ));
+    }
+    if !listed
+        && !windows
+            .iter()
+            .any(|&window| ax_get_window_id(window) == Some(window_id))
+    {
+        windows.extend(super::panel::copy_unlisted_window(pid, window_id));
     }
     windows
 }

@@ -712,6 +712,9 @@ pub(super) async fn run_in_background(
     path: Vec<String>,
     request: MenuRequest,
 ) -> ToolResult {
+    if crate::ax::panel::blocks_app_menu(pid, window_id) {
+        return refusal("Not done: an Open/Save panel owns keyboard input. The application's menu would act on the document instead. Read and address the panel's window_id; use its controls or hotkey for Go to Folder.".into());
+    }
     if needs_current_space(
         &path,
         crate::windows::window_on_current_space_by_id(window_id),

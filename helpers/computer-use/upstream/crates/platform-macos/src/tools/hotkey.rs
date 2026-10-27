@@ -289,6 +289,14 @@ impl Tool for HotkeyTool {
             return error;
         }
 
+        let panel_pid = if !fg {
+            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
+        } else {
+            None
+        };
+        let panel_owns_keys =
+            !fg && window_id.is_some_and(|wid| crate::ax::panel::blocks_app_menu(pid, wid));
+
         // ── Menu key equivalents in a background app ──
         // Background key events reach a window's views but never its app's
         // menu key equivalents, so a background cmd+s to TextEdit saved
@@ -297,7 +305,7 @@ impl Tool for HotkeyTool {
         // item in the background instead (verified for Save), or refuse when
         // macOS keeps it disabled. No key events are sent on this route.
         let mut key_scope: Option<crate::input::skylight::WindowKeyScope> = None;
-        if !fg && px.is_none() {
+        if !fg && px.is_none() && !panel_owns_keys {
             if let (Some(wid), Some(combo)) = (
                 window_id,
                 super::menu_equivalent::Combo::parse(&modifiers, &key),
@@ -598,6 +606,19 @@ impl Tool for HotkeyTool {
                                 || crate::input::keyboard::hotkey_no_auth(pid, &key, &m),
                             )?;
                             Ok(())
+                        }
+                        (false, false, _, _) if panel_pid.is_some() => {
+                            if let Some(ptr) = element_ptr {
+                                focus_hotkey_element(pid, ptr)?;
+                            }
+                            // AppKit's panel key equivalents use the native
+                            // event path. The Chromium auth envelope bypasses
+                            // those handlers and silently drops Go to Folder.
+                            crate::input::keyboard::hotkey_no_auth(
+                                panel_pid.expect("checked"),
+                                &key,
+                                &m,
+                            )
                         }
                         // background (default): auth-envelope post to the pid, no
                         // raise — even when window_id was supplied for targeting.

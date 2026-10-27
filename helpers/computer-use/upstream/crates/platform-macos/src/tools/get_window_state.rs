@@ -714,7 +714,9 @@ impl Tool for GetWindowStateTool {
                      on purpose: the accessibility elements reachable under this pid \
                      belong to other surfaces (the menu bar, other windows), not to the \
                      requested window, so presenting them would misground the next \
-                     action."
+                     action. The exact-window lookup also checked client descendants and \
+                     the AppKit Open/Save panel service; no matching AX window was available. \
+                     Background input is unavailable until that exact surface can be resolved."
                 ));
                 structured["escalation"] = serde_json::json!({
                     "recommended": "foreground",
