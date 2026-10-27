@@ -79,11 +79,10 @@ function withCodexWake(view: ThreadView): ThreadView {
   return { ...view, entries, turns };
 }
 
-/** A row as the user reads it; a subagent's name is the model's own words. */
+/** A work row as the user reads it; subagent lifecycle rows are outside the main thread. */
 function row(kind: ToolStep): string {
   const words = toolStepWords(kind);
-  const said = kind.stopped ? `stopped ${words.done}` : stepLabel(words, kind.status, kind.exit ?? null);
-  return said.replace(/^(Ran|Running) agent: .*/, "$1 agent: …");
+  return kind.stopped ? `stopped ${words.done}` : stepLabel(words, kind.status, kind.exit ?? null);
 }
 
 /**
@@ -142,17 +141,19 @@ const SCENARIOS: Record<string, RegExp> = {
 };
 
 /**
- * Where the CLIs genuinely differ, and why that is allowed. None of these shows in what
- * `seen` compares; each is kept here, labelled, so a new difference can't hide behind it.
+ * Recorded differences in model-authored text and provider lifecycle. Each is asserted
+ * explicitly before the shared work is compared, so a new difference cannot hide behind it.
  * - (a) The model's own words: its texts in the work, a subagent's name. Proposed (D52).
  * - (b) Codex folds when its final answer starts, Claude at turn end: Claude has no answer
  *   phase (D55). The end views compared here don't see it.
  * - (c) Claude's model ends its turn while its background subagent runs, and a second CLI
  *   turn answers when it is done, joined to the same block; Codex waits in one turn (D27, D57).
+ *   With lifecycle rows hidden (L1), only Claude has commentary to fold before its answer.
  */
 const EXEMPT = {
   /** (c): Claude's subagent block holds two replies, Codex's one. */
   subagentReplies: { claude: 2, codex: 1 },
+  subagentFold: { claude: true, codex: false },
 };
 function compare(scenario: string, source: "live" | "persisted") {
   const prompts = SCENARIOS[scenario]!;
@@ -162,6 +163,13 @@ function compare(scenario: string, source: "live" | "persisted") {
   const left = seen(withBackground(claude[source], claude.events), prompts);
   const right = seen(withCodexTerminalEnd(withBackground(codexView, codex.events)), prompts);
   assert.ok(right.length > 0, `${scenario}: no turn compared`);
+  if (scenario === "subagent") {
+    assert.deepEqual(left.map((block) => block.folded), [EXEMPT.subagentFold.claude], source);
+    assert.deepEqual(right.map((block) => block.folded), [EXEMPT.subagentFold.codex], source);
+    assert.deepEqual(left.map((block) => block.shown), [[]], "subagent lifecycle rows stay out of the main thread");
+    assert.deepEqual(left.map((block) => ({ ...block, folded: false })), right.map((block) => ({ ...block, folded: false })), `${scenario} (${source}) differs beyond its recorded commentary`);
+    return;
+  }
   assert.deepEqual(left, right, `${scenario} (${source}) reads differently on Claude and Codex`);
 }
 

@@ -14,18 +14,7 @@
           "text": "OK"
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "toolu_011E1g6VbebewGRL7iDU426f",
-          "name": "Agent",
-          "detail": "Run echo hi",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943240470,
-          "item": "tool"
-        }
-      ]
+      "steps": []
     }
   ],
   "persisted": [
@@ -43,18 +32,7 @@
           "text": "OK"
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "toolu_011E1g6VbebewGRL7iDU426f",
-          "name": "Agent",
-          "detail": "Run echo hi",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943240470,
-          "item": "tool"
-        }
-      ]
+      "steps": []
     }
   ]
 }

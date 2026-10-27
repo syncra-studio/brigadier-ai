@@ -10,18 +10,7 @@
           "text": "OK"
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
-          "name": "agents/spawnAgent",
-          "detail": "echo hi",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943444116,
-          "item": "tool"
-        }
-      ]
+      "steps": []
     }
   ],
   "persisted": [
@@ -35,18 +24,7 @@
           "text": "OK"
         }
       ],
-      "steps": [
-        {
-          "type": "tool",
-          "itemId": "01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
-          "name": "agents/spawnAgent",
-          "detail": "echo hi",
-          "status": "completed",
-          "throughPosition": 0,
-          "endedAtMs": 1792943444116,
-          "item": "tool"
-        }
-      ]
+      "steps": []
     }
   ]
 }
