@@ -92,6 +92,7 @@ const asked: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "getBackgroundHistory") return { method: req.method, history: { records: [], next: null, total: 1 } };
   if (req.method === "getTrackedWork") return { method: req.method, work: { pullRequests: [], prHistory: [], waitingOn: [] } };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "getSessionDiff") return { method: req.method, stat: { files: [], insertions: 380, deletions: 2 }, commits: 4 };
@@ -116,7 +117,9 @@ async function drive(): Promise<string> {
   await frame();
   const seen: Record<string, unknown> = {};
   seen.switchProviders = useApp.getState().settings.switchProviders;
-  seen.sections = [...card()!.querySelectorAll('[data-slot="summary-section"] > header button[aria-controls]')].map((title) => title.textContent?.trim());
+  seen.backgroundClock = !!card()!.querySelector('[data-activities] > header [data-slot="background-history-link"][aria-label="Background history"]');
+  seen.backgroundRows = card()!.querySelectorAll('[data-activities] [data-slot="summary-row"]').length;
+  seen.sections = [...card()!.querySelectorAll('[data-slot="summary-section"] > header > :first-child')].map((title) => title.textContent?.trim());
   seen.projectMenu = !!card()!.querySelector('[data-slot="summary-section"] > header button[aria-label="Project actions"], [data-slot="summary-section"] > header button[aria-haspopup]');
   const rows = [...card()!.querySelectorAll<HTMLElement>('[data-slot="summary-row"], [data-slot="workers-summary"], [data-slot="workers-summary-worker"]')].filter((row) => !row.closest("[data-activities]"));
   seen.rowHeights = [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))];

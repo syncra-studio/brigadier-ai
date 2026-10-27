@@ -75,7 +75,7 @@ export async function findHistoricalOutput(id: string, source: "task" | "preview
   if (startedAtMs === undefined) return null;
   let before: string | undefined;
   do {
-    const { history } = await request({ method: "getBackgroundHistory", conversationId: id, limit: 100, ...(before && { before }) });
+    const { history } = await request({ method: "getBackgroundHistory", conversationId: id, limit: 100, includeRunning: true, ...(before && { before }) });
     const record = history.records.find((item) => item.taskId === taskId && (startedAtMs === undefined || item.startedAtMs === startedAtMs) && (source === "preview" ? item.kind === "preview" : item.kind !== "preview" && item.workerId === (worker ?? null)));
     if (record) return readHistoryOutput(id, record.id);
     before = history.next ?? undefined;

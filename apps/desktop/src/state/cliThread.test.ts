@@ -5,7 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
-import { applyThreadNews, loadThreadView, mergeEntries, useCliThread } from "@/state/cliThread";
+import { applyThreadNews, loadThreadView, mergeEntries, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
 const command = (status: "inProgress" | "completed", output: string | null = null): ProviderEvent => ({
@@ -232,5 +232,54 @@ test("a background command's end and the turn it starts land together: the block
     unsubscribe();
     clearMocks();
     useCliThread.setState({ views: {} });
+  }
+});
+
+test("a view dropped on reconnect is unread from then on; one never read, since the app started", async () => {
+  const empty: ThreadView = { entries: [], turns: [] };
+  useCliThread.setState({ views: { shown: empty, away: empty } });
+  mockIPC((cmd) => (cmd === "ipc_request" ? { method: "threadView", view: empty } : null));
+  try {
+    const started = unreadSince("never");
+    assert.ok(started <= Date.now());
+    const before = Date.now();
+    await resyncThreadViews(["shown"]);
+    assert.equal(useCliThread.getState().views["away"], undefined);
+    // Its earlier turns are no message on its way; one sent from now on is.
+    assert.ok(unreadSince("away") >= before && unreadSince("away") <= Date.now());
+    assert.equal(unreadSince("shown"), started, "a shown view is kept, not dropped");
+    assert.equal(unreadSince("never"), started);
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a thread whose read fails is marked unreadable until a read lands", async () => {
+  const empty: ThreadView = { entries: [], turns: [] };
+  let answer: unknown = new Error("no such conversation");
+  mockIPC((cmd) => {
+    if (cmd !== "ipc_request") return null;
+    if (answer instanceof Error) throw answer;
+    return answer;
+  });
+  const error = console.error;
+  console.error = () => {};
+  try {
+    await loadThreadView("broken");
+    assert.equal(useCliThread.getState().views["broken"], undefined);
+    assert.equal(useUnreadThreads.getState().failed["broken"], true, "an error");
+    answer = { method: "threadView" };
+    await loadThreadView("bare");
+    assert.equal(useUnreadThreads.getState().failed["bare"], true, "an answer with no view");
+    answer = { method: "threadView", view: empty };
+    await loadThreadView("broken");
+    assert.deepEqual(useCliThread.getState().views["broken"], empty);
+    assert.equal(useUnreadThreads.getState().failed["broken"], undefined, "read at last");
+  } finally {
+    console.error = error;
+    clearMocks();
+    useCliThread.setState({ views: {} });
+    useUnreadThreads.setState({ failed: {} });
   }
 });

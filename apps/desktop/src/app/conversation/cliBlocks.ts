@@ -951,6 +951,30 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   return blocks.filter((each) => !internal.has(each));
 }
 
+/** A thread not read yet: no turns. */
+const NOT_READ: ThreadView = { entries: [], turns: [] };
+
+/**
+ * A thread whose view couldn't be read, from the messages Brigadier keeps: those stored before
+ * `before` (`unreadSince`) as turns that ended, each user message one with the replies after it.
+ * One stored since is in none, so it stays on its way (`cliThreadTree`).
+ */
+export function keptThread(messages: readonly Message[], fullText: Readonly<Record<string, string>>, before: number): ThreadView {
+  const entries: FileEntry[] = [];
+  const turns: ThreadTurn[] = [];
+  for (const message of messages) {
+    if ((message.role !== "user" && message.role !== "assistant") || message.createdAtMs >= before) continue;
+    const atMs = message.createdAtMs;
+    if (message.role === "user") {
+      turns.push({ userMessage: message.id, startedAtMs: atMs, endedAtMs: atMs, end: "done", error: null, requests: [message.requestId ?? message.id] });
+    } else if (turns.length === 0) continue;
+    const last = turns.at(-1)!;
+    last.endedAtMs = atMs;
+    entries.push({ event: { type: "message", itemId: message.id, role: message.role, text: fullText[message.id] ?? message.text }, atMs });
+  }
+  return { entries, turns };
+}
+
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
 type RunNow = { state: RunState; error: string | null };
 
@@ -972,17 +996,23 @@ function onItsWay(key: string, user: Block["user"], startedAtMs: number, run: Ru
  * The thread as assistant-ui's message tree: the CLI's turns, one after another, then the
  * messages still on their way: sent but not stored (`pending`), and stored but in no turn of
  * the CLI's yet (a user message newer than the newest the CLI has, that no turn carried).
+ * `thread` null: not read yet, and with no view since `unreadSince`. Which stored messages a
+ * turn carries is unknown until it is read, so only one stored since then is on its way (one
+ * just sent): each earlier turn's message would read as one working since it was sent.
  */
 export function cliThreadTree(
-  view: ThreadView,
+  thread: ThreadView | null,
   conversationId: string,
-  stored: readonly Message[],
+  messages: readonly Message[],
   fullText: Readonly<Record<string, string>>,
   pending: readonly PendingMessage[],
   board: BoardDigest,
   run: RunNow,
   session = false,
+  unreadSince = Number.POSITIVE_INFINITY,
 ): ThreadTree {
+  const view = thread ?? NOT_READ;
+  const stored = thread ? messages : messages.filter((message) => message.createdAtMs >= unreadSince);
   const named = new Set(view.turns.flatMap((turn) => turn.requests));
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
   const blocks = cliBlocks(view, conversationId, board, session, typed);

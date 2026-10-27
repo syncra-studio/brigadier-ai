@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, keptThread, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
@@ -498,6 +498,65 @@ test("the tree chains the turns, then the messages on their way", () => {
   assert.deepEqual(failed.nodes.slice(2).map((node) => [node.id, node.block.state, node.block.error]), [
     ["m2", "failed", "The CLI did not start."],
     ["request:m2", "failed", "The CLI did not start."],
+  ]);
+});
+
+test("a thread opened again before its view is read invents no live turns from the messages kept", () => {
+  // A reconnect dropped the view of a session not shown; opened again, Brigadier's messages are
+  // read before the CLI's view of its ended turns lands.
+  const kept = [stored("m0", 900), stored("m1", 2000)];
+  const read = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0", "m1"] }] };
+  for (const run of [{ state: "idle", error: null }, { state: "running", error: null }] as const) {
+    const loading = cliThreadTree(null, "conv", kept, {}, [], NO_BOARD, run);
+    assert.deepEqual(loading.nodes, [], `nothing drawn while the view loads (${run.state})`);
+    assert.equal(loading.headId, null);
+    // A message being sent still shows at once.
+    const pending = [{ localId: "local-1", conversationId: "conv", text: "Sending", createdAtMs: 2300, attachments: [] }];
+    assert.deepEqual(cliThreadTree(null, "conv", kept, {}, pending, NO_BOARD, run).nodes.map((node) => node.id), ["local-1", "request:local-1"]);
+    // Once read, the turns show as they ended.
+    const loaded = cliThreadTree(read, "conv", kept, {}, [], NO_BOARD, run);
+    assert.ok(loaded.nodes.every((node) => node.block.state === "done"));
+  }
+});
+
+/** A tree's nodes as drawn on their way: kind, state, start and bubble text. */
+const sentBubbles = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.kind, node.block.state, node.block.startedAtMs, node.block.user?.kind === "message" ? node.block.user.text : node.block.user?.kind === "pending" ? node.block.user.pending.text : null]);
+
+test("a message sent while the view is read again stays on its way once stored", () => {
+  // The view went missing at 3000 (a reconnect, or a session new in this app): m0 and m1 are
+  // turns from before, m2 is sent now, and the daemon stores it before the view lands.
+  const pending = [{ localId: "local-2", conversationId: "conv", text: "stored m2", createdAtMs: 5000, attachments: [] }];
+  const run = { state: "running", error: null } as const;
+  const sending = cliThreadTree(null, "conv", [stored("m0", 900), stored("m1", 2000)], {}, pending, NO_BOARD, run, true, 3000);
+  const kept = cliThreadTree(null, "conv", [stored("m0", 900), stored("m1", 2000), stored("m2", 5000)], {}, [], NO_BOARD, run, true, 3000);
+  assert.deepEqual(sentBubbles(sending), [["user", "working", 5000, "stored m2"], ["block", "working", 5000, "stored m2"]]);
+  assert.deepEqual(sentBubbles(kept), sentBubbles(sending), "the bubble stays, and the earlier turns still don't show as working");
+  // A new session's first message, its view never read, likewise.
+  assert.deepEqual(cliThreadTree(null, "conv", [stored("m2", 5000)], {}, [], NO_BOARD, run, true, 3000).nodes.map((node) => node.id), ["m2", "request:m2"]);
+});
+
+test("a thread whose view can't be read shows the messages kept, its ended turns as ended", () => {
+  // The read failed (the daemon's error): m0 and m1 with their replies are turns from before the
+  // view went missing at 3000; m2 is sent since.
+  const answer = (id: string, createdAtMs: number): Message => ({ ...stored(id, createdAtMs), role: "assistant", text: `reply ${id}` });
+  const kept = [stored("m0", 900), answer("a0", 950), stored("m1", 2000), answer("a1", 2100), stored("m2", 5000)];
+  const run = { state: "running", error: null } as const;
+  const tree = cliThreadTree(keptThread(kept, { a1: "reply a1, whole" }, 3000), "conv", kept, {}, [], NO_BOARD, run, true, 3000);
+  assert.deepEqual(sentBubbles(tree), [
+    ["user", "done", 900, "stored m0"],
+    ["block", "done", 900, "stored m0"],
+    ["user", "done", 2000, "stored m1"],
+    ["block", "done", 2000, "stored m1"],
+    ["user", "working", 5000, "stored m2"],
+    ["block", "working", 5000, "stored m2"],
+  ]);
+  assert.equal(tree.nodes[1]?.block.endedAtMs, 950, "a turn ends at its last reply, not now");
+  assert.deepEqual(keptThread(kept, { a1: "reply a1, whole" }, 3000).entries.map((entry) => entry.event.type === "message" && entry.event.text), [
+    "stored m0",
+    "reply a0",
+    "stored m1",
+    "reply a1, whole",
   ]);
 });
 

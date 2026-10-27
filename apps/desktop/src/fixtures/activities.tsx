@@ -64,7 +64,7 @@ useApp.setState({
 let seq = 0;
 const durableHistory = new Set<string>();
 const send = (...events: EventEnvelope["event"][]) => applyBoardEvents(events.map((event) => {
-  if (event.type === "previewUpdated") durableHistory.add(event.preview.id);
+  if (event.type === "previewUpdated" && ["exited", "failed", "stopped"].includes(event.preview.state.type)) durableHistory.add(event.preview.id);
   seq += 1;
   return { seq, stream: `conversation:${id}`, streamSeq: seq, atMs: Date.now(), event } as EventEnvelope;
 }));
@@ -230,6 +230,24 @@ async function driveEnded(): Promise<Record<string, unknown>> {
   seen.ended = ids();
   seen.section = !!section();
   seen.restartOrDismiss = restartOrDismiss();
+  const header = section()?.querySelector("header");
+  const history = header?.querySelector<HTMLButtonElement>('[data-slot="background-history-link"]');
+  seen.historyInHeader = !!history;
+  seen.historyLabel = history?.getAttribute("aria-label");
+  seen.clockIcon = history?.querySelector("svg")?.outerHTML;
+  seen.headerOnly = section()?.children.length === 1;
+  seen.idleTitle = text(header?.querySelector("span"));
+  seen.foldControls = section()?.querySelectorAll("[aria-controls], [aria-expanded]").length;
+  seen.rowCount = section()?.querySelectorAll('[data-slot="summary-row"]').length;
+  seen.idleHeight = section()?.getBoundingClientRect().height;
+  if (history) {
+    const rect = history.getBoundingClientRect();
+    await fixtureInput({ type: "pointer", x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+    await until(() => !!document.querySelector('[role="tooltip"]'), 3000);
+    seen.tooltip = text(document.querySelector('[role="tooltip"]'));
+    history.click();
+    seen.historyTab = sessionTabs(id).active;
+  }
   return seen;
 }
 
@@ -238,7 +256,7 @@ const sleep: BackgroundTask = { id: "bdza4j3ng", itemId: "toolu_bash", kind: "sh
   startedAtMs: now - 8_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/bdza4j3ng.output", summary: null, lastLine: "sleeping" };
 const helper: BackgroundTask = { id: "a0c79", itemId: "toolu_agent", kind: "agent", label: "Reply with hi", status: "running",
   startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
-const tasksSaid = (...background: BackgroundTask[]) => { background.forEach((task) => durableHistory.add(task.id)); applyThreadNews({ conversationId: id, entries: [], opened: false, background }); };
+const tasksSaid = (...background: BackgroundTask[]) => { background.filter((task) => task.status !== "running").forEach((task) => durableHistory.add(task.id)); applyThreadNews({ conversationId: id, entries: [], opened: false, background }); };
 /** Frames until `done` holds, up to `ms`; how long it took. */
 async function until(done: () => boolean, ms: number): Promise<number> {
   const start = Date.now();
@@ -250,25 +268,29 @@ async function driveTasks(): Promise<Record<string, unknown>> {
   tasksSaid(sleep, helper);
   await frame();
   const running = ids();
+  const liveSection = !!section();
   tasksSaid({ ...sleep, status: "completed", endedAtMs: Date.now() }, { ...helper, status: "stopped", endedAtMs: Date.now() });
   await frame();
-  return { running, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
+  return { running, liveSection, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** A worker's CLI's background tasks, as its row carries them. */
 const devApp: BackgroundTask = { id: "b7dev", itemId: "toolu_dev", kind: "shell", label: "Run the dev app", status: "running",
   startedAtMs: now - 30_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/b7dev.output", summary: null, lastLine: "VITE ready" };
 
-const workerTasksSaid = (...background: { task: BackgroundTask; command: string | null }[]) => showRows(id, [rowOf(worker, { background })]);
+const workerTasksSaid = (...background: { task: BackgroundTask; command: string | null }[]) => {
+  background.filter(({ task }) => task.status !== "running").forEach(({ task }) => durableHistory.add(task.id));
+  showRows(id, [rowOf(worker, { background })]);
+};
 
 async function driveWorkerTasks(): Promise<Record<string, unknown>> {
-  durableHistory.add(devApp.id);
   workerTasksSaid({ task: devApp, command: "pnpm tauri:dev" });
   await frame();
   const running = ids();
+  const liveSection = !!section();
   workerTasksSaid({ task: { ...devApp, status: "stopped", endedAtMs: Date.now() }, command: "pnpm tauri:dev" });
   await frame();
-  return { running, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
+  return { running, liveSection, ended: ids(), history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** Raw apps have native lifecycle/identity: placement never invents a preview, URL or port. */
@@ -282,7 +304,6 @@ async function driveApps(): Promise<Record<string, unknown>> {
     { event: { type: "command", itemId: "call-tests", command: "pnpm test", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
   ], opened: false });
   const workerApp = { ...devApp, itemId: "call-worker-app", label: "Run the worker website" };
-  durableHistory.add(workerApp.id);
   workerTasksSaid({ task: workerApp, command: "next dev" }, { task: { ...tests, id: "worker-test" }, command: "pnpm test" });
   await until(() => ids().length === 3, 5000);
   const running = ids();

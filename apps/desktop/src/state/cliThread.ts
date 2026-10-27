@@ -18,6 +18,23 @@ import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent
 
 export const useCliThread = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
 
+/**
+ * The conversations whose last read of their thread failed (the daemon's error, or an answer
+ * with no view), until one lands: they draw from the messages Brigadier keeps (`keptThread`), not
+ * a loading thread that never ends.
+ */
+export const useUnreadThreads = create<{ failed: Readonly<Record<string, true>> }>(() => ({ failed: {} }));
+
+function readFailed(conversationId: string, failed: boolean): void {
+  if (!!useUnreadThreads.getState().failed[conversationId] === failed) return;
+  useUnreadThreads.setState((state) => {
+    const next: Record<string, true> = { ...state.failed };
+    if (failed) next[conversationId] = true;
+    else delete next[conversationId];
+    return { failed: next };
+  });
+}
+
 /** The item an event is about, as its CLI named it (`session_file::item_id`). */
 export function itemIdOf(event: ProviderEvent): string | null {
   switch (event.type) {
@@ -177,8 +194,10 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     const fresh = heard.filter((entry) => itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry)));
     const landed = fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view;
     setView(conversationId, { ...landed, ...read.lists });
+    readFailed(conversationId, false);
   } catch (error) {
     console.error("reading the thread failed", error);
+    readFailed(conversationId, true);
   } finally {
     reads.delete(conversationId);
     if (read.again) void loadThreadView(conversationId);
@@ -248,14 +267,35 @@ export function applyThreadNews(news: ThreadNews): void {
   if (queued.length === 1) scheduleNews();
 }
 
+/** When the app started: a conversation's view not read since was never read here. */
+const APP_START_MS = Date.now();
+
+/** When each conversation's view was dropped (`resyncThreadViews`). */
+const dropped = new Map<string, number>();
+
+/**
+ * Since when conversation `conversationId` has had no view read: its turns were all before that,
+ * so only a message stored since may be on its way while its view is read (`cliThreadTree`).
+ */
+export function unreadSince(conversationId: string): number {
+  return dropped.get(conversationId) ?? APP_START_MS;
+}
+
 /**
  * After (re)connecting: the news missed is read again with the shown conversations' threads;
  * the others are dropped and read when they open.
  */
 export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   const { views } = useCliThread.getState();
+  const now = Date.now();
+  for (const id of Object.keys(views)) if (!shown.includes(id)) dropped.set(id, now);
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
+}
+
+/** Whether conversation `conversationId`'s thread has no view because its read failed. */
+export function useThreadUnreadable(conversationId: string | null): boolean {
+  return useUnreadThreads((s) => (conversationId ? !!s.failed[conversationId] : false));
 }
 
 /** A conversation's thread, read when first asked for; `null` until read. */

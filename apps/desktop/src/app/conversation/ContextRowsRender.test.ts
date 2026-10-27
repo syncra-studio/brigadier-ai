@@ -5,6 +5,8 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the context card reads in the reference order, one row-height line per row, a line per worker while a few work, the branch row (Q91: no Changes row), and its clicks open things instead of growing it", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "context-rows.html?drive=1", "context-rows-result", 60000)) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["todo-app", "Workers", "Background", "Sources"]);
+  assert.equal(seen.backgroundClock, true);
+  assert.equal(seen.backgroundRows, 0);
   assert.equal(seen.projectMenu, false, "the project row is plain: no ⋯");
   assert.deepEqual(seen.rowHeights, [28], JSON.stringify(seen.odd));
   assert.deepEqual(seen.workers, ["API routes working+48 −0", "Web page working+120 −4", "1 done"]);
