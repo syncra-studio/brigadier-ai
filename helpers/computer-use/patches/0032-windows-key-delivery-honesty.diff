@@ -1,0 +1,175 @@
+Why: report Windows press_key and hotkey dispatch as unconfirmed on PostMessage, SendInput and UIA accelerator routes, including structured results.
+
+--- a/crates/platform-windows/src/input_outcome.rs
++++ b/crates/platform-windows/src/input_outcome.rs
+@@ -59,3 +59,25 @@
+         assert!(summary("Toggle", false, true).contains("confirmed a control"));
+     }
+ }
++
++/// Keyboard dispatch has no semantic readback. Neither S_OK nor a queued
++/// message proves that an accelerator ran or a key reached the target.
++pub fn dispatch_summary(action: &str, route: &str) -> String {
++    format!(
++        "Dispatched {action} via {route}; effect not confirmed. Read fresh state before retrying."
++    )
++}
++
++#[cfg(test)]
++mod key_tests {
++    #[test]
++    fn every_unobserved_key_route_reports_uncertainty() {
++        for route in ["PostMessage", "SendInput", "UIA accelerator"] {
++            let text = super::dispatch_summary("Ctrl+S", route);
++            assert!(text.contains("not confirmed"), "{text}");
++            assert!(
++                !text.contains("✅") && !text.contains("Pressed") && !text.contains("Performed")
++            );
++        }
++    }
++}
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5131,6 +5131,33 @@
+
+ // ── press_key ─────────────────────────────────────────────────────────────────
+
++fn unconfirmed_key_result(action: &str, path: &str) -> ToolResult {
++    ToolResult::text(crate::input_outcome::dispatch_summary(action, path))
++        .with_structured(json!({"path": path, "verified": false, "effect": "unverifiable"}))
++}
++
++#[cfg(test)]
++mod key_outcome_tests {
++    #[test]
++    fn windows_key_result_never_promotes_dispatch_to_success() {
++        use cua_driver_core::protocol::Content;
++        for path in ["PostMessage", "SendInput", "uia"] {
++            let result = super::unconfirmed_key_result("Ctrl+S", path);
++            assert_eq!(
++                result.structured_content.as_ref().unwrap()["verified"],
++                false
++            );
++            assert_eq!(
++                result.structured_content.as_ref().unwrap()["effect"],
++                "unverifiable"
++            );
++            assert!(result.content.iter().any(
++                |c| matches!(c, Content::Text { text, .. } if text.contains("not confirmed"))
++            ));
++        }
++    }
++}
++
+ pub struct PressKeyTool {
+     state: Arc<ToolState>,
+ }
+@@ -5196,13 +5223,12 @@
+             })
+             .await
+             {
+-                Ok(Ok(())) => ToolResult::text(format!(
+-                    "Sent {key_display} to the foreground application (scope:desktop)."
+-                ))
+-                .with_structured(json!({
+-                    "scope": "desktop", "path": "SendInput", "key": key_display,
+-                    "effect": "unverifiable"
+-                })),
++                Ok(Ok(())) => {
++                    unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
++                        "scope": "desktop", "path": "SendInput", "key": key_display,
++                        "effect": "unverifiable"
++                    }))
++                }
+                 Ok(Err(error)) => ToolResult::error(error.to_string()),
+                 Err(error) => ToolResult::error(format!("desktop key task failed: {error}")),
+             };
+@@ -5417,11 +5443,11 @@
+             })
+             .await;
+             return match send_result {
+-                Ok(Ok(())) => ToolResult::text(format!(
+-                    "✅ Sent {key_display} via SendInput on pid {raw_pid} (delivery_mode:foreground)."
+-                )),
++                Ok(Ok(())) => {
++                    unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), "SendInput")
++                }
+                 Ok(Err(e)) => ToolResult::error(e.to_string()),
+-                Err(e)     => ToolResult::error(format!("Task error: {e}")),
++                Err(e) => ToolResult::error(format!("Task error: {e}")),
+             };
+         }
+         let result = tokio::task::spawn_blocking({
+@@ -5434,22 +5460,9 @@
+         })
+         .await;
+         match result {
+-            Ok(Ok(())) => ToolResult::text(format!(
+-                "📨 Sent {key_display} to pid {raw_pid} via PostMessage (not verified). \
+-                 If it didn't land, retry with delivery_mode:\"foreground\"."
+-            ))
+-            .with_structured(serde_json::json!({
+-                "path": "key_events",
+-                "key": key_display,
+-                "verified": false,
+-                "verify": "unreadable",
+-                "effect": "unverifiable",
+-                "escalation": {
+-                    "recommended": "foreground",
+-                    "reason": "background key delivery could not be confirmed — re-call \
+-                               with delivery_mode:\"foreground\" if a screenshot shows the key didn't land."
+-                },
+-            })),
++            Ok(Ok(())) => {
++                unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), "PostMessage")
++            }
+             Ok(Err(e)) => ToolResult::error(e.to_string()),
+             Err(e) => ToolResult::error(format!("Task error: {e}")),
+         }
+@@ -5566,13 +5579,12 @@
+             })
+             .await
+             {
+-                Ok(Ok(())) => ToolResult::text(format!(
+-                    "Sent {key_display} to the foreground application (scope:desktop)."
+-                ))
+-                .with_structured(json!({
+-                    "scope": "desktop", "path": "SendInput", "keys": full_keys,
+-                    "effect": "unverifiable"
+-                })),
++                Ok(Ok(())) => {
++                    unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
++                        "scope": "desktop", "path": "SendInput", "keys": full_keys,
++                        "effect": "unverifiable"
++                    }))
++                }
+                 Ok(Err(error)) => ToolResult::error(error.to_string()),
+                 Err(error) => ToolResult::error(format!("desktop hotkey task failed: {error}")),
+             };
+@@ -5724,10 +5736,10 @@
+             })
+             .await;
+             return match result {
+-                Ok(Ok((true, _))) => ToolResult::text(format!(
+-                    "✅ Pressed {key_display_for_result} on pid {raw_pid} via UIA \
+-                     InvokePattern/TogglePattern (XAML / UWP target)."
+-                )),
++                Ok(Ok((true, _))) => unconfirmed_key_result(
++                    &format!("{key_display_for_result} to pid {raw_pid}"),
++                    "uia",
++                ),
+                 Ok(Ok((false, scanned))) => ToolResult::error(format!(
+                     "hotkey on a modern XAML / UWP target (pid {raw_pid}, hwnd {hwnd}) \
+                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
+@@ -5831,10 +5843,7 @@
+             "PostMessage"
+         };
+         match result {
+-            Ok(Ok(())) => ToolResult::text(format!(
+-                "✅ Pressed {key_display} on pid {raw_pid} via {path} \
+-                 (Win32 target)."
+-            )),
++            Ok(Ok(())) => unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), path),
+             Ok(Err(e)) => ToolResult::error(e.to_string()),
+             Err(e) => ToolResult::error(format!("Task error: {e}")),
+         }

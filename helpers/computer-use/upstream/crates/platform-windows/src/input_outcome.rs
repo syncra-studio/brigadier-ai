@@ -59,3 +59,25 @@ mod tests {
         assert!(summary("Toggle", false, true).contains("confirmed a control"));
     }
 }
+
+/// Keyboard dispatch has no semantic readback. Neither S_OK nor a queued
+/// message proves that an accelerator ran or a key reached the target.
+pub fn dispatch_summary(action: &str, route: &str) -> String {
+    format!(
+        "Dispatched {action} via {route}; effect not confirmed. Read fresh state before retrying."
+    )
+}
+
+#[cfg(test)]
+mod key_tests {
+    #[test]
+    fn every_unobserved_key_route_reports_uncertainty() {
+        for route in ["PostMessage", "SendInput", "UIA accelerator"] {
+            let text = super::dispatch_summary("Ctrl+S", route);
+            assert!(text.contains("not confirmed"), "{text}");
+            assert!(
+                !text.contains("✅") && !text.contains("Pressed") && !text.contains("Performed")
+            );
+        }
+    }
+}

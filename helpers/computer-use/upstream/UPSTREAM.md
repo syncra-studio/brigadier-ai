@@ -65,6 +65,7 @@ Patches applied, in order:
 - `patches/0016-helper-windowserver-identity.diff`: the WindowServer diagnostic recognizes Brigadier's helper bundles (Brigadier Computer Use.app and BrigadierCu.app) and BRIGADIER_CU_EMBEDDED=1, and uses the helper's own launch setup instead of recommending the upstream app daemon.
 - `patches/0030-windows-semantic-click-readback.diff`: prefer UI Automation patterns and WindowPattern.Close for Windows clicks, with bounded window/control readback and honest unconfirmed outcomes.
 - `patches/0031-windows-winui-menu-path.diff`: resolve WinUI/XAML menu bars and detached owned popups in the background, invoke native patterns, and collapse menus opened by a failed call.
+- `patches/0032-windows-key-delivery-honesty.diff`: report Windows press_key and hotkey dispatch as unconfirmed on PostMessage, SendInput and UIA accelerator routes, including structured results.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
