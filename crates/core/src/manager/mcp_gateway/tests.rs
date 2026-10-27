@@ -18,8 +18,13 @@ struct FixtureState {
     challenge: Mutex<String>,
     redirect: Mutex<String>,
     seen: Mutex<Vec<(String, String, Option<String>)>>,
+    prompts: Mutex<Vec<Value>>,
+    prompt_lists: AtomicUsize,
+    prompt_blocked: AtomicBool,
+    prompt_release: tokio::sync::Notify,
+    prompt_sse: AtomicBool,
 }
-struct Fixture {
+pub(crate) struct Fixture {
     state: Arc<FixtureState>,
     stop: CancellationToken,
 }
@@ -29,7 +34,7 @@ impl Drop for Fixture {
     }
 }
 impl Fixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let state = Arc::new(FixtureState {
             origin: format!("http://{}", listener.local_addr().unwrap()),
@@ -60,8 +65,25 @@ impl Fixture {
         });
         Self { state, stop }
     }
-    fn resource(&self) -> String {
+    pub(crate) fn resource(&self) -> String {
         format!("{}/mcp", self.state.origin)
+    }
+    pub(crate) fn set_prompts(&self, names: &[&str]) {
+        *self.state.prompts.lock().unwrap() = names.iter().map(|name| json!({
+            "name":name, "description":"A remote prompt", "arguments":[{"name":"topic", "required":true}]
+        })).collect();
+    }
+    pub(crate) fn prompt_lists(&self) -> usize {
+        self.state.prompt_lists.load(Ordering::SeqCst)
+    }
+    async fn wait_prompt_lists(&self, count: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while self.prompt_lists() < count {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
     fn browser(&self) -> Arc<dyn Fn(&str) + Send + Sync> {
         Arc::new(|url| {
@@ -72,7 +94,7 @@ impl Fixture {
             });
         })
     }
-    async fn signed_in(&self, gateway: &Arc<McpGatewayService>) {
+    pub(crate) async fn signed_in(&self, gateway: &Arc<McpGatewayService>) {
         let state = gateway
             .start_sign_in(&self.resource(), self.browser())
             .await;
@@ -196,6 +218,10 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
             .unwrap();
     }
     let method = request.method().clone();
+    let version = request
+        .headers()
+        .get("mcp-protocol-version")
+        .map(|value| value.to_str().unwrap().to_owned());
     let session = request
         .headers()
         .get("mcp-session-id")
@@ -206,8 +232,61 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
     state.seen.lock().unwrap().push((
         method.to_string(),
         String::from_utf8(body.to_vec()).unwrap(),
-        session,
+        session.clone(),
     ));
+    if method == axum::http::Method::POST
+        && let Ok(message) = serde_json::from_slice::<Value>(&body)
+    {
+        if message.get("method").and_then(Value::as_str) == Some("initialize") {
+            assert_eq!(
+                message
+                    .pointer("/params/clientInfo/name")
+                    .and_then(Value::as_str),
+                Some("Brigadier")
+            );
+            return Response::builder().header("mcp-session-id", "prompt-session").header("content-type", "application/json").body(Body::from(json!({
+                "jsonrpc":"2.0", "id":message["id"], "result":{"protocolVersion":"2025-11-25", "capabilities":{"prompts":{}}}
+            }).to_string())).unwrap();
+        }
+        if message.get("method").and_then(Value::as_str) == Some("prompts/list") {
+            assert_eq!(session.as_deref(), Some("prompt-session"));
+            assert_eq!(version.as_deref(), Some("2025-11-25"));
+            state.prompt_lists.fetch_add(1, Ordering::SeqCst);
+            let release = state.prompt_release.notified();
+            if state.prompt_blocked.load(Ordering::SeqCst) {
+                release.await;
+            }
+            let prompts = state.prompts.lock().unwrap().clone();
+            let mut result = if message.pointer("/params/cursor").is_some() {
+                json!({"prompts":prompts.into_iter().skip(1).collect::<Vec<_>>()})
+            } else {
+                let next = prompts.len() > 1;
+                let mut result = json!({"prompts":prompts.into_iter().take(1).collect::<Vec<_>>()});
+                if next {
+                    result["nextCursor"] = json!("page-two");
+                }
+                result
+            };
+            // Keep the prompt names remote-controlled so cache refresh tests detect changes.
+            let response =
+                json!({"jsonrpc":"2.0", "id":message["id"], "result":result.take()}).to_string();
+            if state.prompt_sse.load(Ordering::SeqCst) {
+                let middle = response.len() / 2;
+                let chunks = vec![
+                    Ok::<_, io::Error>(": keepalive\r\n\r\nevent: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/prompts/list_changed\"}\r\n\r\ndata: ".to_owned()),
+                    Ok(response[..middle].to_owned()), Ok(format!("{}\r\n\r\n", &response[middle..])),
+                ];
+                return Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                    .unwrap();
+            }
+            return Response::builder()
+                .header("content-type", "application/json")
+                .body(Body::from(response))
+                .unwrap();
+        }
+    }
     match method {
         axum::http::Method::GET => {
             let first = futures_util::stream::once(async {
@@ -563,4 +642,121 @@ async fn mcp_gateway_client_metadata_document_is_our_client_id_when_supported() 
         .await
         .is_err()
     );
+}
+
+fn prompt_server(
+    gateway: &McpGatewayService,
+    row: &str,
+    resource: &str,
+) -> brigadier_providers::McpServer {
+    let endpoint = gateway.endpoint(row, resource).unwrap();
+    brigadier_providers::McpServer {
+        gateway: Some(endpoint.clone()),
+        name: "db".into(),
+        transport: brigadier_providers::McpTransport::Http { url: endpoint.url },
+        env: vec![endpoint.secret_header],
+        tool_timeout_secs: None,
+        trusted: false,
+        always_load: false,
+    }
+}
+
+#[tokio::test]
+async fn mcp_gateway_prompt_cache_handles_sse_pagination_and_terminates_its_own_session() {
+    let fixture = Fixture::new().await;
+    fixture.set_prompts(&["review", "summarize"]);
+    fixture.state.prompt_sse.store(true, Ordering::SeqCst);
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let server = prompt_server(&gateway, "row", &fixture.resource());
+    assert!(
+        gateway
+            .cached_prompts(std::slice::from_ref(&server))
+            .is_empty()
+    );
+    gateway.wait_for_prompt_cache().await;
+    let prompts = gateway.cached_prompts(std::slice::from_ref(&server));
+    assert_eq!(
+        prompts
+            .iter()
+            .map(|prompt| prompt.name.as_str())
+            .collect::<Vec<_>>(),
+        ["review", "summarize"]
+    );
+    assert_eq!(fixture.prompt_lists(), 2);
+    let seen = fixture.state.seen.lock().unwrap();
+    assert!(
+        seen.iter().any(|(method, _, session)| method == "DELETE"
+            && session.as_deref() == Some("prompt-session"))
+    );
+    assert!(seen.iter().any(
+        |(_, body, session)| body.contains("notifications/initialized")
+            && session.as_deref() == Some("prompt-session")
+    ));
+}
+
+#[tokio::test]
+async fn mcp_gateway_prompt_cache_returns_stale_entries_while_one_background_refresh_is_pending() {
+    let fixture = Fixture::new().await;
+    fixture.set_prompts(&["before"]);
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let servers = [prompt_server(&gateway, "row", &fixture.resource())];
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "before");
+    fixture.set_prompts(&["after"]);
+    fixture.state.prompt_blocked.store(true, Ordering::SeqCst);
+    gateway.expire_prompt_cache();
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "before");
+    fixture.wait_prompt_lists(2).await;
+    // The fixture is blocked: repeated menu reads must still return, and must deduplicate
+    // the refresh instead of spawning more sessions for this row/grant.
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "before");
+    assert_eq!(fixture.prompt_lists(), 2);
+    fixture.state.prompt_blocked.store(false, Ordering::SeqCst);
+    fixture.state.prompt_release.notify_one();
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "after");
+    assert_eq!(fixture.prompt_lists(), 2);
+}
+
+#[tokio::test]
+async fn mcp_gateway_prompt_cache_is_discarded_on_sign_out_and_new_grants_start_empty() {
+    let fixture = Fixture::new().await;
+    fixture.set_prompts(&["old-grant"]);
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let servers = [prompt_server(&gateway, "row", &fixture.resource())];
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "old-grant");
+    gateway.sign_out(&fixture.resource()).await.unwrap();
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    fixture.state.revoked.store(false, Ordering::SeqCst);
+    fixture.set_prompts(&["new-grant"]);
+    fixture.signed_in(&gateway).await;
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "new-grant");
+    assert_eq!(fixture.prompt_lists(), 2);
+}
+
+#[tokio::test]
+async fn mcp_gateway_prompt_cache_is_per_row_and_shared_by_local_session_capabilities() {
+    let fixture = Fixture::new().await;
+    fixture.set_prompts(&["review"]);
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let first = [prompt_server(&gateway, "row-one", &fixture.resource())];
+    let second = [prompt_server(&gateway, "row-one", &fixture.resource())];
+    let other = [prompt_server(&gateway, "row-two", &fixture.resource())];
+    assert!(gateway.cached_prompts(&first).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&second)[0].name, "review");
+    assert_eq!(fixture.prompt_lists(), 1);
+    assert!(gateway.cached_prompts(&other).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&other)[0].name, "review");
+    assert_eq!(fixture.prompt_lists(), 2);
 }

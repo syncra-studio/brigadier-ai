@@ -34,8 +34,17 @@ impl Probes {
 }
 
 /// Remote prompt discovery is supplied by the daemon gateway; never launch stdio servers here.
-fn gateway_prompts(_account: &AccountRef, _project: Option<&Path>) -> Vec<CliCommand> {
-    Vec::new()
+fn gateway_prompts(
+    gateway: &std::sync::Arc<super::mcp_gateway::McpGatewayService>,
+    account: &AccountRef,
+    resolved: &plugins::resolve::Resolved,
+) -> Vec<CliCommand> {
+    if account.provider != ProviderKind::Claude {
+        return Vec::new();
+    }
+    // The caller already resolved this account's current project, trust and choices.
+    // Reusing that snapshot prevents cached prompts from bypassing off/scope decisions.
+    gateway.cached_prompts(&resolved.servers)
 }
 
 fn builtins(provider: ProviderKind) -> Vec<CliCommand> {
@@ -400,7 +409,7 @@ impl SessionManager {
             );
         }
         let mut prompts = self.cli_command_probes.fresh(&key);
-        prompts.extend(gateway_prompts(&account, project.as_deref()));
+        prompts.extend(gateway_prompts(self.mcp_gateway(), &account, &resolved));
         prompts.retain(|prompt| {
             prompt
                 .source
@@ -417,6 +426,137 @@ impl SessionManager {
 mod tests {
     use super::*;
     use plugins::resolve::{Resolved, ResolvedSkill};
+
+    struct PromptCatalog {
+        root: PathBuf,
+        roots: brigadier_registry::Roots,
+        project: PathBuf,
+        other: PathBuf,
+        rows: Vec<brigadier_registry::catalog::Row>,
+    }
+    impl PromptCatalog {
+        fn new(resource: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("gateway-prompt-menu-{}", uuid::Uuid::new_v4()));
+            let home = root.join("home");
+            let project = root.join("project");
+            let other = root.join("other-project");
+            for path in [&home, &project, &other] {
+                std::fs::create_dir_all(path).unwrap();
+            }
+            let roots = brigadier_registry::Roots::from_vars([(
+                "HOME".to_owned(),
+                home.to_string_lossy().into_owned(),
+            )])
+            .unwrap();
+            std::fs::write(
+                &roots.claude_json,
+                serde_json::json!({"mcpServers":{
+                    "db":{"type":"http", "url":resource},
+                    "local":{"command":"must-never-be-spawned"}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let rows = Catalog::read_rows(&roots, &[project.clone(), other.clone()]);
+            Self {
+                root,
+                roots,
+                project,
+                other,
+                rows,
+            }
+        }
+        fn row(&self) -> &str {
+            &self.rows.iter().find(|row| row.name == "db").unwrap().id
+        }
+        fn resolve(
+            &self,
+            gateway: &super::super::mcp_gateway::McpGatewayService,
+            project: &Path,
+            choices: &plugins::choices::Choices,
+        ) -> Resolved {
+            plugins::resolve::resolve(plugins::resolve::Context {
+                agent: brigadier_registry::Agent::Claude,
+                account_home: &self.roots,
+                project_root: Some(project),
+                cwd: project,
+                trusted: true,
+                role: plugins::resolve::Role::Thread,
+                rows: &self.rows,
+                choices,
+                gateway: Some(gateway),
+            })
+        }
+    }
+    impl Drop for PromptCatalog {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_prompts_arrive_on_second_call_and_follow_current_on_and_project_scope() {
+        use super::super::mcp_gateway::{McpGatewayService, store::MemoryStore, tests::Fixture};
+        use plugins::choices::{Choice, Choices, Global, Scope};
+        let fixture = Fixture::new().await;
+        fixture.set_prompts(&["review"]);
+        let gateway =
+            McpGatewayService::with_store(std::sync::Arc::new(MemoryStore::default()), None)
+                .unwrap();
+        let catalog = PromptCatalog::new(&fixture.resource());
+        let account = AccountRef::own(ProviderKind::Claude);
+        let mut choices = Choices::default();
+        // No grant: no discovery, no browser, and no stdio process for the local server.
+        let resolved = catalog.resolve(&gateway, &catalog.project, &choices);
+        assert!(gateway_prompts(&gateway, &account, &resolved).is_empty());
+        assert_eq!(fixture.prompt_lists(), 0);
+        fixture.signed_in(&gateway).await;
+        let resolved = catalog.resolve(&gateway, &catalog.project, &choices);
+        assert!(gateway_prompts(&gateway, &account, &resolved).is_empty());
+        gateway.wait_for_prompt_cache().await;
+        let prompts = gateway_prompts(&gateway, &account, &resolved);
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "review");
+        assert_eq!(prompts[0].invocation.as_deref(), Some("mcp__db__review"));
+        assert_eq!(prompts[0].text, "/mcp__db__review");
+        assert_eq!(prompts[0].source.as_deref(), Some("db"));
+        assert_eq!(prompts[0].kind, Some(CliCommandKind::Prompt));
+        assert_eq!(prompts[0].agent_only, Some(ProviderKind::Claude));
+        assert_eq!(prompts[0].description.as_deref(), Some("A remote prompt"));
+        assert_eq!(prompts[0].argument_hint.as_deref(), Some("<topic>"));
+        assert_eq!(fixture.prompt_lists(), 1);
+        // A distinct account reuses the same row/grant cache, not another request.
+        let other_account = AccountRef::new(ProviderKind::Claude, Some("acct-two".into()));
+        assert_eq!(
+            gateway_prompts(&gateway, &other_account, &resolved),
+            prompts
+        );
+        assert!(
+            gateway_prompts(&gateway, &AccountRef::own(ProviderKind::Codex), &resolved).is_empty()
+        );
+        choices.0.insert(
+            catalog.row().into(),
+            Choice {
+                on: false,
+                scope: Scope::Global(Global::Global),
+            },
+        );
+        let off = catalog.resolve(&gateway, &catalog.project, &choices);
+        assert!(gateway_prompts(&gateway, &account, &off).is_empty());
+        choices.0.insert(
+            catalog.row().into(),
+            Choice {
+                on: true,
+                scope: Scope::Projects(vec![catalog.project.clone()]),
+            },
+        );
+        let outside = catalog.resolve(&gateway, &catalog.other, &choices);
+        assert!(gateway_prompts(&gateway, &account, &outside).is_empty());
+        let inside = catalog.resolve(&gateway, &catalog.project, &choices);
+        assert_eq!(gateway_prompts(&gateway, &account, &inside), prompts);
+        assert_eq!(fixture.prompt_lists(), 1);
+    }
 
     fn skills() -> Resolved {
         Resolved {

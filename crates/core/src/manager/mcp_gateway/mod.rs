@@ -2,9 +2,10 @@
 //! capability; upstream OAuth credentials never leave this module or the daemon's store.
 mod manager;
 mod oauth;
+mod prompts;
 pub mod store;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use super::plugins::{CatalogSignIn, resolve::Gateway};
 use axum::{
@@ -22,7 +23,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use store::{Grant, TokenStore};
@@ -39,6 +40,7 @@ struct Credentials {
 struct Resource {
     credentials: tokio::sync::Mutex<Credentials>,
     granted: AtomicBool,
+    grant_generation: AtomicU64,
     fallback: AtomicBool,
 }
 struct Lease {
@@ -54,6 +56,7 @@ pub struct McpGatewayService {
     leases: Mutex<HashMap<String, Lease>>,
     stop: CancellationToken,
     client_document: Option<String>,
+    prompt_cache: prompts::Cache,
 }
 impl Drop for McpGatewayService {
     fn drop(&mut self) {
@@ -90,6 +93,7 @@ impl McpGatewayService {
             leases: Mutex::default(),
             stop: stop.clone(),
             client_document,
+            prompt_cache: prompts::Cache::default(),
         });
         let router = Router::new()
             .route("/mcp/{row}", any(proxy))
@@ -119,6 +123,7 @@ impl McpGatewayService {
                 };
                 Arc::new(Resource {
                     granted: AtomicBool::new(grant.is_some()),
+                    grant_generation: AtomicU64::new(0),
                     fallback: AtomicBool::new(false),
                     credentials: tokio::sync::Mutex::new(Credentials {
                         grant,
@@ -179,6 +184,7 @@ impl McpGatewayService {
                     Ok(()) => {
                         credentials.grant = Some(grant);
                         credentials.streams = CancellationToken::new();
+                        entry.grant_generation.store(generation, Ordering::Release);
                         entry.granted.store(true, Ordering::Release);
                         entry.fallback.store(false, Ordering::Release);
                         CatalogSignIn::SignedIn
@@ -292,6 +298,7 @@ impl McpGatewayService {
         credentials.generation += 1;
         credentials.streams.cancel();
         entry.granted.store(false, Ordering::Release);
+        self.prompt_cache.invalidate(resource);
         entry.fallback.store(false, Ordering::Release);
         let grant = credentials.grant.take();
         credentials.state = CatalogSignIn::SignedOut;
@@ -316,8 +323,21 @@ impl McpGatewayService {
         deleted
     }
     async fn reject_bearer(&self, resource: &str, rejected: &str) {
+        self.reject_bearer_for_grant(resource, rejected, None).await;
+    }
+    async fn reject_bearer_for_grant(
+        &self,
+        resource: &str,
+        rejected: &str,
+        generation: Option<u64>,
+    ) {
         let entry = self.resource(resource);
         let mut credentials = entry.credentials.lock().await;
+        if generation
+            .is_some_and(|generation| entry.grant_generation.load(Ordering::Acquire) != generation)
+        {
+            return;
+        }
         // A late 401 from an old request must not revoke a newly rotated grant.
         if credentials
             .grant
@@ -329,6 +349,7 @@ impl McpGatewayService {
             credentials.state = CatalogSignIn::SignedOut;
             credentials.streams.cancel();
             entry.granted.store(false, Ordering::Release);
+            self.prompt_cache.invalidate(resource);
             let _ = self.store.delete(resource);
         }
     }
@@ -344,6 +365,7 @@ impl McpGatewayService {
                 credentials.state = CatalogSignIn::SignedOut;
                 credentials.streams.cancel();
                 entry.granted.store(false, Ordering::Release);
+                self.prompt_cache.invalidate(resource);
                 let _ = self.store.delete(resource);
                 return Err(StatusCode::UNAUTHORIZED);
             };
@@ -364,6 +386,7 @@ impl McpGatewayService {
                     credentials.state = CatalogSignIn::SignedOut;
                     credentials.streams.cancel();
                     entry.granted.store(false, Ordering::Release);
+                    self.prompt_cache.invalidate(resource);
                     let _ = self.store.delete(resource);
                     return Err(StatusCode::UNAUTHORIZED);
                 }
