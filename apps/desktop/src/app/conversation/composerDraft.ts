@@ -139,7 +139,7 @@ export function useComposerDraft(
     if (!draft || !composer.getState().isEmpty) return;
     memory.recall(
       (draft.mentions ?? [])
-        .filter(({ at, name, mention }) => saved!.text.startsWith(mention.type === "skill" ? name : `@${name}`, at))
+        .filter(({ at, name, mention }) => mention != null && saved!.text.startsWith(mention.type === "skill" ? name : `@${name}`, at))
         .map(({ mention }) => mention),
     );
     composer.setText(draft.text);

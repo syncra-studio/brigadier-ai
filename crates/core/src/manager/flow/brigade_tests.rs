@@ -19,22 +19,21 @@ async fn flow(name: &str, thread: ProviderKind) -> Flow {
     .await
 }
 
-/// The skill text a spec's installed plugin holds.
+/// Both launch adapters expose the shipped skills through the session overlay.
 fn installed(spec: &SessionSpec) -> String {
+    assert!(spec.installed_skills.is_empty());
+    let skills = spec
+        .add_dirs
+        .iter()
+        .map(|root| root.join(".claude/skills"))
+        .chain(spec.skill_plugins.iter().map(|root| root.join("skills")))
+        .find(|root| root.join("brigade/SKILL.md").is_file())
+        .expect("the session receives the brigade skill");
     assert_eq!(
-        spec.installed_skills.len(),
-        1,
-        "{:?}",
-        spec.installed_skills
-    );
-    let plugin = &spec.installed_skills[0];
-    assert!(plugin.join(".claude-plugin/plugin.json").is_file());
-    // `/fusion` ships beside it, in the same plugin (S36).
-    assert_eq!(
-        std::fs::read_to_string(plugin.join("skills/fusion/SKILL.md")).unwrap(),
+        std::fs::read_to_string(skills.join("fusion/SKILL.md")).unwrap(),
         FUSION
     );
-    std::fs::read_to_string(plugin.join("skills/brigade/SKILL.md")).unwrap()
+    std::fs::read_to_string(skills.join("brigade/SKILL.md")).unwrap()
 }
 
 #[tokio::test]
@@ -52,8 +51,14 @@ async fn every_session_and_chat_on_both_clis_starts_with_the_skill() {
             .find(|(of, spec)| *of == provider && spec.tools == ToolSet::Thread)
             .expect("the session started");
         assert_eq!(installed(&thread.1), SKILL, "{provider:?}");
-        // Brigadier's other skills stay for workers only.
-        assert!(thread.1.skill_plugins.is_empty());
+        // The only extra skill root is the session overlay; worker-only roots stay out.
+        assert!(
+            thread
+                .1
+                .skill_plugins
+                .iter()
+                .all(|root| root.file_name().is_some_and(|name| name == "overlay"))
+        );
         let chat_dir = flow.manager.session_dir(&chat).work();
         let chat = specs
             .iter()

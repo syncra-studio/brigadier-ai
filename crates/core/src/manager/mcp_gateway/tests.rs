@@ -738,6 +738,14 @@ async fn mcp_gateway_prompt_cache_is_discarded_on_sign_out_and_new_grants_start_
     fixture.signed_in(&gateway).await;
     assert!(gateway.cached_prompts(&servers).is_empty());
     gateway.wait_for_prompt_cache().await;
+    assert_eq!(
+        fixture.prompt_lists(),
+        1,
+        "the revoked capability stays unusable"
+    );
+    let servers = [prompt_server(&gateway, "row", &fixture.resource())];
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    gateway.wait_for_prompt_cache().await;
     assert_eq!(gateway.cached_prompts(&servers)[0].name, "new-grant");
     assert_eq!(fixture.prompt_lists(), 2);
 }
@@ -759,4 +767,28 @@ async fn mcp_gateway_prompt_cache_is_per_row_and_shared_by_local_session_capabil
     gateway.wait_for_prompt_cache().await;
     assert_eq!(gateway.cached_prompts(&other)[0].name, "review");
     assert_eq!(fixture.prompt_lists(), 2);
+}
+
+#[tokio::test]
+async fn mcp_gateway_old_capabilities_stay_revoked_after_signing_in_again() {
+    let fixture = Fixture::new().await;
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let old = gateway.endpoint("row", &fixture.resource()).unwrap();
+    gateway.sign_out(&fixture.resource()).await.unwrap();
+    fixture.state.revoked.store(false, Ordering::SeqCst);
+    fixture.signed_in(&gateway).await;
+    let current = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let client = reqwest::Client::new();
+    for (endpoint, expected) in [(old, StatusCode::UNAUTHORIZED), (current, StatusCode::OK)] {
+        assert_eq!(
+            request(&client, &endpoint, reqwest::Method::POST)
+                .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            expected
+        );
+    }
 }

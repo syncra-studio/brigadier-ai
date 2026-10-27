@@ -106,18 +106,18 @@ fn flip_accounts(flow: &Flow) {
     flow.weekly_resets_in(ProviderKind::Claude, Some("acct-b"), 120);
 }
 
-/// What of a CLI's start is its routing pick and grants.
+/// Routing and explicit grants survive an account switch. Native suppression is
+/// resolved again for the new account's actual setup, so its off list can differ.
 fn pick(kind: ProviderKind, spec: &SessionSpec) -> String {
     let servers: Vec<&str> = spec.mcp_servers.iter().map(|s| s.name.as_str()).collect();
     format!(
         "{kind:?} model={:?} effort={:?} fast={} access={:?} servers={servers:?} naked={} \
-         off={:?} prompt={:?}",
+         prompt={:?}",
         spec.model,
         spec.effort,
         spec.fast,
         spec.access,
         spec.naked_worker,
-        spec.switched_off.servers,
         spec.append_system_prompt,
     )
 }

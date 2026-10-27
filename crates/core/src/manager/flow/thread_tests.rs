@@ -80,11 +80,15 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         let (provider, spec) = &specs[0];
         assert_eq!(*provider, thread);
         assert_eq!(spec.tools, ToolSet::Thread);
-        // Only its ledger's folder besides its workspace (S17).
-        assert_eq!(
-            spec.add_dirs,
-            vec![flow.manager.session_dir(&flow.conversation).record()]
-        );
+        // Claude adds the skill overlay as a directory; Codex uses its skill roots API.
+        let folder = flow.manager.session_dir(&flow.conversation);
+        let mut expected_dirs = vec![folder.record()];
+        if thread == ProviderKind::Claude {
+            expected_dirs.push(folder.root().join("overlay"));
+        } else {
+            assert_eq!(spec.skill_plugins, [folder.root().join("overlay")]);
+        }
+        assert_eq!(spec.add_dirs, expected_dirs);
         assert_eq!(spec.cwd, worktree);
         assert!(spec.owned_cwd, "a New worktree is Brigadier's");
         let scratch = spec.sweep_dir.clone().expect("its sweep folder");

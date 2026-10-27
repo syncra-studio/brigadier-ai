@@ -18,9 +18,10 @@ impl SessionManager {
         let registry = self.registry();
         let projects = self.plugin_projects();
         let row_id = row_id.to_owned();
+        let data_dir = self.data_dir.clone();
         super::super::blocking(move || {
             let projects: Vec<_> = projects.into_iter().map(|(_, _, path)| path).collect();
-            let rows = Catalog::read_rows(registry.roots(), &projects);
+            let rows = Catalog::read_rows_with_library(registry.roots(), &projects, &data_dir);
             let row = rows
                 .iter()
                 .find(|row| row.id == row_id)

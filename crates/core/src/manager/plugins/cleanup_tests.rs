@@ -262,7 +262,14 @@ fn cleanup_corrupt_file_is_reported_untouched_and_retried() {
         "{\"enabledPlugins\":{\"test@brigadier\":true}}",
     );
     let error = home.run(&no_import, &no_cli).unwrap_err();
-    assert!(error.contains(&broken.display().to_string()));
+    assert!(
+        error.contains(
+            &std::fs::canonicalize(&broken)
+                .unwrap()
+                .display()
+                .to_string()
+        )
+    );
     assert_eq!(std::fs::read_to_string(&broken).unwrap(), "{ broken JSON\n");
     assert!(
         !home
@@ -810,4 +817,25 @@ fn cleanup_legacy_server_restore_is_idempotent_and_keeps_saved_values() {
             .unwrap()
             .contains("somebody-elses-command")
     );
+}
+
+#[test]
+fn cleanup_corrupt_toml_never_copies_credential_lines_into_errors_or_checkpoints() {
+    let home = Home::new();
+    let marker = "REVIEW_PRIVATE_TOML_VALUE";
+    let original =
+        format!("[mcp_servers.private]\ncommand = 'fixture'\nTOKEN = '{marker}' invalid\n");
+    let file = home.write(".codex/config.toml", &original);
+    let error = home.run(&no_import, &no_cli).unwrap_err();
+    assert!(
+        !error.contains(marker),
+        "cleanup error exposed a credential line"
+    );
+    assert!(
+        !std::fs::read_to_string(home.data.join(CHECKPOINT))
+            .unwrap()
+            .contains(marker)
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), original);
+    assert!(!finished(&home.data));
 }

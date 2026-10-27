@@ -8,11 +8,12 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
+import { useCliCommands } from "@/app/conversation/useCliCommands";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fusionProviders } from "@/fixtures/fusionProviders";
 import { fixtureInput } from "@/fixtures/input";
-import type { Conversation, ConversationView as View, Mention, Project, Request } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, Mention, Project, ProviderKind, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { setRichComposer } from "@/state/composerMode";
 import { armFusionSend } from "@/state/fusionSend";
@@ -58,9 +59,11 @@ mockIPC((command, payload) => {
     case "listFiles":
       listings.push(`session:${req.conversationId}`);
       return { method: req.method, files: FILES, truncated: false };
+    case "getPluginCatalog":
+      return { method: req.method, catalog: { rows: [], version: "composer-menus" } };
     case "listCliCommands":
       // As the session's CLI reports them: one of the user's skills.
-      return { method: req.method, commands: [{ name: "fusion", text: "/fusion", description: "Fusion", argumentHint: null }, { name: "grill-me", text: "/grill-me", description: "A relentless interview.", argumentHint: null }] };
+      return { method: req.method, commands: [{ name: "fusion", text: "/fusion", description: "Fusion", argumentHint: null }, { name: "grill-me", text: "/grill-me", kind: "skill", source: "skill:grill-me:fixture", invocation: "grill-me", agentOnly: null, description: "A relentless interview.", argumentHint: null }] };
     case "listProjectFiles":
       listings.push(`project:${req.projectId}`);
       return { method: req.method, files: FILES, truncated: false };
@@ -179,6 +182,12 @@ async function exercise(mode: "rich" | "plain") {
   await key("Enter");
   await until("the skill typed", () => commands() === null && typed().includes("grill-me"));
   seen.picked = typed().replaceAll("\u00a0", " ").trimEnd();
+  seen.pickedChip = field()?.querySelector('[data-slot="composer-chip"][data-chip="skill"]') !== null;
+  const beforeSkillSend = sends.length;
+  await key("Enter");
+  await until("the skill send", () => sends.length > beforeSkillSend);
+  seen.pickedSent = { text: sends.at(-1)!.text.trim(), mentions: sends.at(-1)!.mentions };
+  await until("the empty field after the skill", () => typed() === "");
   await clear();
   // In the middle of a message, the text after it kept.
   await type("z tail");
@@ -319,11 +328,19 @@ async function exercise(mode: "rich" | "plain") {
   return seen;
 }
 
+function CommandConsumer({ provider }: { provider: ProviderKind }) {
+  const [commands] = useCliCommands({ provider, projectId: null, repo: null });
+  return <span data-command-provider={provider}>{commands.some((command) => command.name === "grill-me") ? "ready" : "waiting"}</span>;
+}
+
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
     seen.rich = await exercise("rich");
     seen.plain = await exercise("plain");
+    root.render(<><CommandConsumer provider="claude" /><CommandConsumer provider="codex" /></>);
+    await until("both command consumers", () => ["claude", "codex"].every((provider) => document.querySelector(`[data-command-provider="${provider}"]`)?.textContent === "ready"));
+    seen.independentCommands = true;
   } catch (error) {
     seen.error = String(error);
   }

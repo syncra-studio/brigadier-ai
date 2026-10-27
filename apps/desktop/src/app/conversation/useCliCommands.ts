@@ -6,7 +6,6 @@ import type { CliCommand, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
 type Asked = Omit<Extract<Request, { method: "listCliCommands" }>, "method">;
-const known = new Map<string, readonly CliCommand[]>();
 const NONE: readonly CliCommand[] = [];
 
 export function cliCommandsCacheKey(question: Asked, version: string, account: unknown): string {
@@ -31,7 +30,7 @@ export function useCliCommands(target: CliTarget | null): [readonly CliCommand[]
   const accountKey = JSON.stringify([settings.accounts, target && "conversation" in target ? target.conversation.setup : null]);
   const identity = JSON.stringify([questionKey, accountKey]);
   const generation = useRef(0);
-  const [answer, setAnswer] = useState<{ identity: string; key: string } | null>(null);
+  const [answer, setAnswer] = useState<{ identity: string; key: string; commands: readonly CliCommand[] } | null>(null);
   const refresh = useCallback(() => {
     if (questionKey === null) return;
     const current = ++generation.current;
@@ -42,9 +41,7 @@ export function useCliCommands(target: CliTarget | null): [readonly CliCommand[]
       const key = cliCommandsCacheKey(question, catalog.version, accountKey);
       const { commands } = await request({ method: "listCliCommands", ...question });
       if (current !== generation.current) return;
-      known.clear();
-      known.set(key, commands);
-      setAnswer({ identity, key });
+      setAnswer({ identity, key, commands });
     }).catch((error: unknown) => {
       if (current !== generation.current) return;
       setAnswer(null);
@@ -55,5 +52,5 @@ export function useCliCommands(target: CliTarget | null): [readonly CliCommand[]
     refresh();
     return () => { generation.current += 1; };
   }, [refresh]);
-  return [(answer?.identity === identity && known.get(answer.key)) || NONE, refresh];
+  return [answer?.identity === identity ? answer.commands : NONE, refresh];
 }

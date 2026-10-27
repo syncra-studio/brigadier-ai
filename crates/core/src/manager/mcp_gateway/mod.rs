@@ -46,6 +46,7 @@ struct Resource {
 struct Lease {
     row: String,
     resource: String,
+    generation: u64,
 }
 
 pub struct McpGatewayService {
@@ -322,9 +323,6 @@ impl McpGatewayService {
         }
         deleted
     }
-    async fn reject_bearer(&self, resource: &str, rejected: &str) {
-        self.reject_bearer_for_grant(resource, rejected, None).await;
-    }
     async fn reject_bearer_for_grant(
         &self,
         resource: &str,
@@ -419,6 +417,7 @@ impl Gateway for McpGatewayService {
                 Lease {
                     row: row_id.into(),
                     resource: resource.into(),
+                    generation: entry.grant_generation.load(Ordering::Acquire),
                 },
             );
         let mut url = reqwest::Url::parse(&self.address).ok()?;
@@ -500,15 +499,24 @@ async fn proxy(
         .get(SECRET_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let resource = {
+    let (resource, generation) = {
         let leases = gateway.leases.lock().unwrap_or_else(|p| p.into_inner());
         let lease = leases
             .get(secret)
             .filter(|lease| lease.row == row)
             .ok_or(StatusCode::UNAUTHORIZED)?;
-        lease.resource.clone()
+        (lease.resource.clone(), lease.generation)
     };
+    let entry = gateway.resource(&resource);
+    if entry.grant_generation.load(Ordering::Acquire) != generation {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let (bearer, cancelled) = gateway.bearer(&resource).await?;
+    // A sign-out/new sign-in can race the bearer lookup. Old session capabilities
+    // must never acquire the replacement grant, even if the upstream reuses its token.
+    if entry.grant_generation.load(Ordering::Acquire) != generation || cancelled.is_cancelled() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let (parts, body) = request.into_parts();
     let mut upstream = gateway.client.request(parts.method, &resource);
     for (name, value) in &parts.headers {
@@ -527,7 +535,9 @@ async fn proxy(
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
     let cancelled = if response.status() == StatusCode::UNAUTHORIZED {
-        gateway.reject_bearer(&resource, &bearer).await;
+        gateway
+            .reject_bearer_for_grant(&resource, &bearer, Some(generation))
+            .await;
         // Forward the upstream 401, including its challenge/body, after revoking the grant.
         CancellationToken::new()
     } else {

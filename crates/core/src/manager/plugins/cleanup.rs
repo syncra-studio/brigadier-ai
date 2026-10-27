@@ -389,7 +389,7 @@ impl Cleanup<'_> {
                             Some(text) => {
                                 let doc: DocumentMut = text
                                     .parse()
-                                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                                    .map_err(|_| format!("{}: invalid TOML", file.display()))?;
                                 doc.get("marketplaces")
                                     .and_then(|m| m.get("brigadier"))
                                     .is_some()
@@ -539,7 +539,7 @@ impl Flag {
             return Ok(());
         }
         edit_file(&self.file, |text| {
-            let mut doc: DocumentMut = text.parse().map_err(|e| format!("invalid TOML: {e}"))?;
+            let mut doc: DocumentMut = text.parse().map_err(|_| "invalid TOML".to_owned())?;
             let Some(server) = doc
                 .get_mut("mcp_servers")
                 .and_then(|s| s.get_mut(&self.name))
@@ -640,7 +640,7 @@ fn edit_file(
 
 fn clean_toml(file: &Path, remove_marketplace: bool) -> Result<(), String> {
     edit_file(file, |text| {
-        let mut doc: DocumentMut = text.parse().map_err(|e| format!("invalid TOML: {e}"))?;
+        let mut doc: DocumentMut = text.parse().map_err(|_| "invalid TOML".to_owned())?;
         let mut changed = false;
         for section in ["plugins", "marketplaces"] {
             if section == "marketplaces" && !remove_marketplace {

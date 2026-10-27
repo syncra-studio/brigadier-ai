@@ -506,3 +506,77 @@ async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versio
         flow.stop().await;
     }
 }
+
+#[tokio::test]
+async fn library_sign_in_status_uses_the_managers_data_dir_without_an_env_override() {
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start("library-sign-in-data-dir", Options::default(), script).await;
+    assert!(
+        !flow
+            .manager
+            .registry()
+            .roots()
+            .vars
+            .contains_key("BRIGADIER_DATA_DIR")
+    );
+    write(
+        &flow
+            .manager
+            .data_dir
+            .join("library/servers/review-oauth.json"),
+        &json!({"mcpServers":{"review-oauth":{"type":"http","url":"https://review.invalid/mcp"}}})
+            .to_string(),
+    );
+    let catalog = flow.manager.plugin_catalog().unwrap();
+    let row = catalog
+        .rows
+        .iter()
+        .find(|row| row.name == "review-oauth")
+        .unwrap();
+    assert_eq!(
+        flow.manager
+            .get_plugin_sign_in_status(&row.id)
+            .await
+            .unwrap(),
+        crate::manager::plugins::CatalogSignIn::SignedOut
+    );
+    flow.manager.sign_out_plugin(&row.id).await.unwrap();
+    flow.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn saving_a_library_skill_cannot_follow_a_skills_root_into_a_project() {
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start("library-skill-root-link", Options::default(), script).await;
+    let original = "---\nname: review-linked\n---\nUSER_CONTENT\n";
+    let source = flow.repo.join(".claude/skills/review-linked/SKILL.md");
+    write(&source, original);
+    let library = flow.manager.data_dir.join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    std::os::unix::fs::symlink(flow.repo.join(".claude/skills"), library.join("skills")).unwrap();
+    let catalog = flow.manager.plugin_catalog().unwrap();
+    let row = catalog
+        .rows
+        .iter()
+        .find(|row| row.name == "review-linked")
+        .unwrap();
+    let details = flow.manager.catalog_item_details(row.id.clone()).unwrap();
+    let file = details
+        .skills
+        .iter()
+        .find(|file| file.read_only.is_none())
+        .unwrap();
+    assert!(
+        flow.manager
+            .save_catalog_skill(
+                row.id.clone(),
+                file.path.clone(),
+                "CHANGED".into(),
+                original.into()
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+    flow.stop().await;
+}

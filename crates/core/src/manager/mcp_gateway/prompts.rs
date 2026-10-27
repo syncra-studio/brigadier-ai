@@ -66,7 +66,9 @@ impl McpGatewayService {
                     continue;
                 };
                 let entry = self.resource(&lease.resource);
-                if !entry.granted.load(Ordering::Acquire) || entry.fallback.load(Ordering::Acquire)
+                if !entry.granted.load(Ordering::Acquire)
+                    || entry.fallback.load(Ordering::Acquire)
+                    || entry.grant_generation.load(Ordering::Acquire) != lease.generation
                 {
                     continue;
                 }

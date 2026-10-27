@@ -833,7 +833,9 @@ impl crate::manager::SessionManager {
             std::fs::canonicalize(file).map_err(|e| crate::Error::Invalid(e.to_string()))?;
         let root = std::fs::canonicalize(self.data_dir.join("library/skills"))
             .map_err(|e| crate::Error::Invalid(e.to_string()))?;
-        if !canonical.starts_with(root) {
+        let data_dir = std::fs::canonicalize(&self.data_dir)
+            .map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        if !root.starts_with(data_dir) || !canonical.starts_with(root) {
             return Err(crate::Error::Invalid(
                 "The skill points outside the library.".into(),
             ));
