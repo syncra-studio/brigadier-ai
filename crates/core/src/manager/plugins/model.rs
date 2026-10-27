@@ -52,6 +52,11 @@ pub enum CatalogSignIn {
     SignedIn,
     CliFallback {
         agents: Vec<brigadier_providers::ProviderKind>,
+        #[serde(default)]
+        steps: Vec<super::super::mcp_login::AgentSignIn>,
+    },
+    CliSetupRequired {
+        agents: Vec<brigadier_providers::ProviderKind>,
     },
     Failed {
         message: String,

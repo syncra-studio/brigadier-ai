@@ -77,6 +77,8 @@ pub(crate) struct Workspace {
 
 /// A worker's CLI session as [`SessionManager::worker_session`] makes it.
 pub(crate) struct WorkerSession {
+    pub plugins: super::plugins::resolve::Resolved,
+    pub plugin_lease: Arc<super::mcp_gateway::SessionLease>,
     pub spec: SessionSpec,
     /// The level it runs at ([`SessionManager::worker_level`]).
     pub level: PermissionLevel,
@@ -843,7 +845,7 @@ impl SessionManager {
         let account = self.runtime.account_for(&task.route.choice);
         let repo = self.trusted_repo(&conversation_id);
         let grants = spec.mcp_servers.clone();
-        let resolved = self
+        let mut resolved = self
             .resolve_plugins(
                 &account,
                 repo.as_deref(),
@@ -864,9 +866,12 @@ impl SessionManager {
             )
             .await;
         }
+        let plugin_lease = self.mcp_gateway().lease_session(&mut resolved);
         super::plugins::launch::apply_resolved(&mut spec, &resolved, &worker_dir, provider)?;
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
+            plugins: resolved,
+            plugin_lease,
             spec,
             level,
             cwd,
@@ -895,6 +900,8 @@ impl SessionManager {
         let resumed = matches!(origin, Origin::Resume { .. });
         let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
         let WorkerSession {
+            plugins,
+            plugin_lease,
             spec,
             level,
             cwd,
@@ -935,6 +942,8 @@ impl SessionManager {
             WriteCause::FreshStart
         };
         let cli = Arc::new(Cli {
+            plugins,
+            plugin_lease,
             provider,
             meter: TokenMeter::new(continues)
                 .on_account(account.account.clone())
@@ -982,6 +991,7 @@ impl SessionManager {
         .await?;
         if stopped || live.state.lock().await.quota_cancelled {
             live.close_cli().await;
+            cli.plugin_lease.release();
             self.grants.revoke(&cli.grants);
             return Err(stopped_as_it_started(task));
         }
@@ -1587,6 +1597,7 @@ impl SessionManager {
             }
         }
         self.record_worker_events(&live.id, deltas).await;
+        cli.plugin_lease.release();
         self.grants.revoke(&cli.grants);
         let (stopping, replaced) = {
             let mut state = live.state.lock().await;

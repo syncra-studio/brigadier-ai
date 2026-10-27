@@ -189,6 +189,21 @@ pub fn apply_resolved(
     session_dir: &Path,
     provider: brigadier_providers::ProviderKind,
 ) -> Result<()> {
+    // Naked-worker grants were resolved before their launch scope minted capabilities.
+    // Replace those unbound descriptors while preserving Brigadier's own prefilled servers.
+    for server in &mut spec.mcp_servers {
+        if server
+            .gateway
+            .as_ref()
+            .is_some_and(|g| g.secret_header.1.is_empty())
+            && let Some(bound) = resolved
+                .servers
+                .iter()
+                .find(|bound| bound.name == server.name)
+        {
+            *server = bound.clone();
+        }
+    }
     spec.mcp_servers.extend(
         resolved
             .servers
@@ -275,7 +290,7 @@ mod overlay_tests {
     use brigadier_providers::{Access, Origin, ProviderKind, SessionSpec, ToolSet};
     use brigadier_registry::{Agent, Roots};
 
-    fn test_spec(cwd: &Path) -> SessionSpec {
+    pub(super) fn test_spec(cwd: &Path) -> SessionSpec {
         SessionSpec {
             cwd: cwd.to_owned(),
             model: None,
@@ -808,5 +823,51 @@ mod secret_tests {
             1
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod lease_grant_tests {
+    use super::*;
+    #[test]
+    fn prefilled_worker_gateway_grants_receive_the_launch_capability() {
+        use brigadier_providers::{McpGateway, McpServer, McpTransport, ProviderKind};
+        let gateway = McpGateway {
+            resource: "https://resource.invalid/mcp".into(),
+            row_id: "row".into(),
+            url: "https://resource.invalid/mcp".into(),
+            secret_header: ("x-brigadier-mcp-secret".into(), String::new()),
+        };
+        let server = McpServer {
+            name: "granted".into(),
+            gateway: Some(gateway),
+            transport: McpTransport::Http {
+                url: "https://resource.invalid/mcp".into(),
+            },
+            env: Vec::new(),
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+        };
+        let mut spec = super::overlay_tests::test_spec(Path::new("/unused"));
+        spec.mcp_servers.push(server.clone());
+        let mut bound = server;
+        bound.gateway.as_mut().unwrap().url = "http://127.0.0.1:1234/mcp/row".into();
+        bound.gateway.as_mut().unwrap().secret_header.1 = "fixture-capability".into();
+        bound.transport = McpTransport::Http {
+            url: bound.gateway.as_ref().unwrap().url.clone(),
+        };
+        bound.env = vec![bound.gateway.as_ref().unwrap().secret_header.clone()];
+        apply_resolved(
+            &mut spec,
+            &Resolved {
+                servers: vec![bound.clone()],
+                ..Default::default()
+            },
+            Path::new("/unused"),
+            ProviderKind::Codex,
+        )
+        .unwrap();
+        assert_eq!(spec.mcp_servers, [bound]);
     }
 }

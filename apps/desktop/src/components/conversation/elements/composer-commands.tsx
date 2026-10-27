@@ -34,6 +34,7 @@ export type ComposerCommand = {
   text?: string;
   chip?: Unstable_TriggerItem;
   trailing?: string;
+  disabled?: boolean;
 };
 
 /** assistant-ui's trigger adapter (its type lives in @assistant-ui/core). */
@@ -109,6 +110,7 @@ export const ComposerCommands: FC<{
                   <ComposerPrimitive.Unstable_TriggerPopoverItem
                     item={item}
                     index={index}
+                    aria-disabled={command?.disabled}
                     className={cn(itemBase, "data-highlighted:bg-foreground/8 hover:bg-foreground/8 w-full shrink-0 text-start")}
                   >
                     <MenuRow
@@ -156,6 +158,7 @@ function TypeCommandText({
     () =>
       registerSelectItemOverride((item) => {
         const command = byId.get(item.id);
+        if (command?.disabled) return true;
         const text = command?.chip?.label ?? command?.text;
         const at = trigger.current;
         if (text === undefined || !at) return false;

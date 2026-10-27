@@ -196,8 +196,13 @@ impl SessionManager {
                 CatalogSignIn::SignedIn | CatalogSignIn::NotRequired => {
                     return self.cli_library_output("login");
                 }
-                CatalogSignIn::CliFallback { ref agents } if agents.is_empty() => {
+                CatalogSignIn::CliFallback { ref agents, .. } if agents.is_empty() => {
                     return self.cli_library_output("login");
+                }
+                CatalogSignIn::CliSetupRequired { .. } => {
+                    return failed(
+                        "This server only accepts sign-in from Claude Code or Codex: add it in that CLI",
+                    );
                 }
                 CatalogSignIn::Failed { message } => return failed(message),
                 _ => {}

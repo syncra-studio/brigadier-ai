@@ -206,6 +206,8 @@ mod watchdog;
 
 /// A live CLI session of a conversation or task.
 pub(crate) struct Cli {
+    pub plugins: super::plugins::resolve::Resolved,
+    pub plugin_lease: Arc<super::mcp_gateway::SessionLease>,
     pub provider: ProviderKind,
     /// The login it runs on.
     pub account: crate::accounts::AccountRef,
@@ -3108,7 +3110,7 @@ impl SessionManager {
         // account it runs on now.
         let account = self.runtime.account_for(&choice);
         let repo = self.trusted_repo(&conv.id);
-        let resolved = self
+        let mut resolved = self
             .resolve_plugins(
                 &account,
                 repo.as_deref(),
@@ -3129,6 +3131,7 @@ impl SessionManager {
             )
             .await;
         }
+        let plugin_lease = self.mcp_gateway().lease_session(&mut resolved);
         super::plugins::launch::apply_resolved(
             &mut spec,
             &resolved,
@@ -3211,7 +3214,11 @@ impl SessionManager {
         // Why this CLI starts, for where its cache writes come from (BUILD-PLAN B0).
         let restart = conv.take_restart_cause().await;
         let cause = start_cause(fresh, resumed, restart);
+        self.cli_command_probes
+            .launch(&conv.id, plugin_lease.id(), &account, &resolved);
         let cli = Arc::new(Cli {
+            plugins: resolved,
+            plugin_lease,
             provider: choice.provider,
             meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex)
                 .on_account(account.account.clone())
@@ -4006,6 +4013,7 @@ impl SessionManager {
                         deadline = None;
                         self.store_deltas(&conv, std::mem::take(&mut deltas), &mut said).await;
                         if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+                            self.remember_claude_prompts(&conv.id, &cli).await;
                             said.clear();
                         }
                         // A CLI that starts (again) tells its MCP servers anew.
@@ -4061,6 +4069,9 @@ impl SessionManager {
         }
         self.store_deltas(&conv, deltas, &mut said).await;
         self.record_held_looked(&conv).await;
+        self.remember_claude_prompts(&conv.id, &cli).await;
+        self.cli_command_probes.end(&conv.id, cli.plugin_lease.id());
+        cli.plugin_lease.release();
         self.grants.revoke(&cli.grants);
         conv.items().cli_ended();
         let (was_busy, closing, failed, jobs, current) = {

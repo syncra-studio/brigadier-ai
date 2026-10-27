@@ -151,7 +151,7 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
-pub use mcp_login::{AgentSignIn, AgentSignInState, McpSignInProgress, McpSignInStatus};
+pub use mcp_login::{AgentSignIn, AgentSignInState};
 pub use side_chat::BrowserPage;
 pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};

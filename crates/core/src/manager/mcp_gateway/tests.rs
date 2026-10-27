@@ -334,10 +334,10 @@ async fn mcp_gateway_dcr_pkce_streamable_http_and_rotation_across_two_sessions()
     let fixture = Fixture::new().await;
     let store = Arc::new(MemoryStore::default());
     let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
-    assert!(gateway.endpoint("row", &fixture.resource()).is_none());
+    assert!(gateway.test_endpoint("row", &fixture.resource()).is_none());
     fixture.signed_in(&gateway).await;
-    let first = gateway.endpoint("row", &fixture.resource()).unwrap();
-    let second = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let first = gateway.test_endpoint("row", &fixture.resource()).unwrap();
+    let second = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     assert_ne!(first.secret_header, second.secret_header);
     assert!(!format!("{first:?}").contains(&first.secret_header.1));
     let client = reqwest::Client::new();
@@ -456,7 +456,7 @@ async fn mcp_gateway_rejects_missing_wrong_secret_cross_row_and_browser_origin()
     let fixture = Fixture::new().await;
     let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
     fixture.signed_in(&gateway).await;
-    let endpoint = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let endpoint = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     let client = reqwest::Client::new();
     assert_eq!(
         client.get(&endpoint.url).send().await.unwrap().status(),
@@ -509,7 +509,7 @@ async fn mcp_gateway_refused_dcr_is_cli_fallback_without_opening_browser() {
             gateway.status(&fixture.resource()).await,
             CatalogSignIn::CliFallback { .. }
         ) {
-            assert!(gateway.endpoint("row", &fixture.resource()).is_none());
+            assert!(gateway.test_endpoint("row", &fixture.resource()).is_none());
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -534,8 +534,8 @@ async fn mcp_gateway_upstream_revocation_invalidates_every_session_and_returns_4
     let store = Arc::new(MemoryStore::default());
     let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
     fixture.signed_in(&gateway).await;
-    let first = gateway.endpoint("row", &fixture.resource()).unwrap();
-    let second = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let first = gateway.test_endpoint("row", &fixture.resource()).unwrap();
+    let second = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     fixture.state.revoked.store(true, Ordering::SeqCst);
     let client = reqwest::Client::new();
     let response = request(&client, &first, reqwest::Method::GET)
@@ -565,7 +565,7 @@ async fn mcp_gateway_sign_out_during_rotation_cannot_resurrect_the_grant() {
     let store = Arc::new(MemoryStore::default());
     let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
     fixture.signed_in(&gateway).await;
-    let endpoint = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let endpoint = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     {
         let entry = gateway.resource(&fixture.resource());
         entry
@@ -649,7 +649,7 @@ fn prompt_server(
     row: &str,
     resource: &str,
 ) -> brigadier_providers::McpServer {
-    let endpoint = gateway.endpoint(row, resource).unwrap();
+    let endpoint = gateway.test_endpoint(row, resource).unwrap();
     brigadier_providers::McpServer {
         gateway: Some(endpoint.clone()),
         name: "db".into(),
@@ -774,11 +774,11 @@ async fn mcp_gateway_old_capabilities_stay_revoked_after_signing_in_again() {
     let fixture = Fixture::new().await;
     let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
     fixture.signed_in(&gateway).await;
-    let old = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let old = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     gateway.sign_out(&fixture.resource()).await.unwrap();
     fixture.state.revoked.store(false, Ordering::SeqCst);
     fixture.signed_in(&gateway).await;
-    let current = gateway.endpoint("row", &fixture.resource()).unwrap();
+    let current = gateway.test_endpoint("row", &fixture.resource()).unwrap();
     let client = reqwest::Client::new();
     for (endpoint, expected) in [(old, StatusCode::UNAUTHORIZED), (current, StatusCode::OK)] {
         assert_eq!(
@@ -791,4 +791,160 @@ async fn mcp_gateway_old_capabilities_stay_revoked_after_signing_in_again() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn rotated_grant_waits_for_durable_retry_without_reusing_the_refresh_token() {
+    struct Flaky {
+        inner: MemoryStore,
+        fail: AtomicBool,
+    }
+    impl TokenStore for Flaky {
+        fn load(&self, r: &str) -> io::Result<Option<Grant>> {
+            self.inner.load(r)
+        }
+        fn save(&self, r: &str, g: &Grant) -> io::Result<()> {
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(io::Error::other("fixture save failure"));
+            }
+            self.inner.save(r, g)
+        }
+        fn delete(&self, r: &str) -> io::Result<()> {
+            self.inner.delete(r)
+        }
+    }
+    let fixture = Fixture::new().await;
+    let store = Arc::new(Flaky {
+        inner: MemoryStore::default(),
+        fail: AtomicBool::new(false),
+    });
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let endpoint = gateway.test_endpoint("row", &fixture.resource()).unwrap();
+    gateway
+        .resource(&fixture.resource())
+        .credentials
+        .lock()
+        .await
+        .grant
+        .as_mut()
+        .unwrap()
+        .expires_at = 0;
+    store.fail.store(true, Ordering::SeqCst);
+    let client = reqwest::Client::new();
+    for expected in [StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK] {
+        assert_eq!(
+            request(&client, &endpoint, reqwest::Method::POST)
+                .json(&json!({"id":1,"method":"tools/list"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            expected
+        );
+    }
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        store
+            .load(&fixture.resource())
+            .unwrap()
+            .unwrap()
+            .refresh_token
+            .as_deref(),
+        Some("refresh-1")
+    );
+}
+
+#[tokio::test]
+async fn metadata_reads_mint_no_leases_and_session_release_and_ttl_revoke_capabilities() {
+    let fixture = Fixture::new().await;
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    for _ in 0..100 {
+        assert!(Gateway::endpoint(gateway.as_ref(), "row", &fixture.resource()).is_some());
+    }
+    assert!(gateway.leases.lock().unwrap().is_empty());
+    let mut server = prompt_server(&gateway, "row", &fixture.resource());
+    gateway.release_leases("fixture");
+    server.gateway = Gateway::endpoint(gateway.as_ref(), "row", &fixture.resource());
+    let mut resolved = super::super::plugins::resolve::Resolved {
+        servers: vec![server],
+        ..Default::default()
+    };
+    let lease = gateway.lease_session(&mut resolved);
+    let endpoint = resolved.servers[0].gateway.clone().unwrap();
+    assert_eq!(gateway.leases.lock().unwrap().len(), 1);
+    lease.release();
+    assert!(gateway.leases.lock().unwrap().is_empty());
+    assert_eq!(
+        request(&reqwest::Client::new(), &endpoint, reqwest::Method::GET)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let _lease = gateway.lease_session(&mut resolved);
+    for lease in gateway.leases.lock().unwrap().values_mut() {
+        lease.expires = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    }
+    gateway.expire_leases();
+    assert!(gateway.leases.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn library_only_refusing_server_requires_native_setup_without_running_native_login() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    let fixture = Fixture::new().await;
+    fixture.state.refused.store(true, Ordering::SeqCst);
+    let flow = Flow::start(
+        "library-refusing-status",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let file = flow.manager.data_dir.join("library/servers/refusing.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!({"mcpServers":{"refusing":{"type":"http","url":fixture.resource()}}}).to_string(),
+    )
+    .unwrap();
+    let row = flow
+        .manager
+        .plugin_catalog()
+        .unwrap()
+        .rows
+        .into_iter()
+        .find(|row| row.name == "refusing")
+        .unwrap();
+    let open: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(|_| panic!("refusing client must not open a browser"));
+    assert!(flow.manager.sign_in_browser.set(open.clone()).is_ok());
+    flow.manager
+        .mcp_gateway()
+        .start_sign_in(&fixture.resource(), open)
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while matches!(
+            flow.manager.mcp_gateway().status(&fixture.resource()).await,
+            CatalogSignIn::SigningIn { .. }
+        ) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for state in [
+        flow.manager
+            .get_plugin_sign_in_status(&row.id)
+            .await
+            .unwrap(),
+        flow.manager.start_plugin_sign_in(&row.id).await.unwrap(),
+    ] {
+        assert!(
+            matches!(state, CatalogSignIn::CliSetupRequired { agents } if agents == brigadier_providers::ProviderKind::ALL)
+        );
+    }
+    flow.stop().await;
 }

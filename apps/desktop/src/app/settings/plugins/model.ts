@@ -59,13 +59,26 @@ export const shownDetail = (detail: string) => detail.replace(/^https:\/\//, "")
 /** What a won't-start message says is wrong: "unknown type "websocket"". */
 export const wontStartReason = (message: string) => message.replace(/^Won't start:\s*/i, "").replace(/\.$/, "");
 
+function cliSignInState(state: import("@/ipc/generated").AgentSignInState): string {
+  switch (state.type) {
+    case "alreadySignedIn": case "signedIn": return "signed in";
+    case "waiting": return "waiting to sign in";
+    case "starting": return "starting sign-in";
+    case "inBrowser": return "waiting for browser";
+    case "cancelled": return "cancelled";
+    case "failed": return state.reason;
+  }
+}
+
 export function signInLine(state: import("@/ipc/generated").CatalogSignIn): string {
   switch (state.type) {
     case "signedIn": return "Signed in";
     case "signedOut": return "Sign in";
     case "signingIn": return "Waiting for your browser…";
     case "failed": return state.message;
-    case "cliFallback": return `Uses each CLI's sign-in${state.agents.length ? `: ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(", ")} still need it` : ""}`;
+    case "cliSetupRequired": return `This server only accepts sign-in from ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : "Codex").join(" or ")}: add it in that CLI`;
+    case "cliFallback": if (state.steps?.length) return state.steps.map((step) => `${step.agent === "claude" ? "Claude Code" : "Codex"}: ${cliSignInState(step.state)}`).join("; ");
+      return `Uses each CLI's sign-in${state.agents.length ? `: ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(", ")} still need it` : ""}`;
     case "notRequired": return "";
   }
 }

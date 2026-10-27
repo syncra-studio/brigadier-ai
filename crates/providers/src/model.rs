@@ -1433,6 +1433,8 @@ pub struct McpServer {
 /// The local gateway authority. Its secret is never included in Debug output.
 #[derive(Clone, PartialEq, Eq)]
 pub struct McpGateway {
+    pub resource: String,
+    pub row_id: String,
     pub url: String,
     pub secret_header: (String, String),
 }

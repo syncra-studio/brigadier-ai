@@ -25,44 +25,14 @@ fn the_sign_in_page_is_the_link_with_an_oauth_request() {
     );
 }
 
-#[test]
-fn the_status_sums_the_agents_up() {
-    let agent = |state| AgentSignIn {
-        agent: ProviderKind::Claude,
-        server: "s".into(),
-        state,
-    };
-    let progress = |states: Vec<AgentSignInState>, finished| McpSignInProgress {
-        agents: states.into_iter().map(agent).collect(),
-        finished,
-    };
-    use AgentSignInState as S;
-    assert_eq!(
-        progress(vec![S::SignedIn, S::InBrowser], false).status(),
-        McpSignInStatus::Pending
-    );
-    assert_eq!(
-        progress(vec![S::AlreadySignedIn, S::SignedIn], true).status(),
-        McpSignInStatus::SignedIn
-    );
-    assert_eq!(
-        progress(vec![S::SignedIn, S::Cancelled], true).status(),
-        McpSignInStatus::Cancelled
-    );
-    assert_eq!(
-        progress(
-            vec![
-                S::Failed {
-                    reason: "no".into()
-                },
-                S::Cancelled
-            ],
-            true
-        )
-        .status(),
-        McpSignInStatus::Failed {
-            reason: "no".into()
-        }
+fn assert_signed(progress: &McpSignInProgress) {
+    assert!(progress.finished && !progress.agents.is_empty());
+    assert!(
+        progress.agents.iter().all(|agent| matches!(
+            agent.state,
+            AgentSignInState::SignedIn | AgentSignInState::AlreadySignedIn
+        )),
+        "{progress:?}"
     );
 }
 
@@ -228,7 +198,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
         pages.iter().find(|l| l.ends_with("claude")).unwrap(),
     );
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_signed(&progress);
     // In the agents' own order, whichever came first.
     assert_eq!(
         progress
@@ -290,7 +260,7 @@ fn a_sign_in_starts_from_the_lists_settings_showed() {
     let (open, opened) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_signed(&progress);
     assert_eq!(opened.lock().unwrap().len(), 2);
     // No list was read, and the ones kept say both are signed in.
     assert!(!fake.dir.join("lists").exists());
@@ -333,53 +303,6 @@ fn a_list_read_before_a_sign_in_ended_does_not_undo_it() {
     assert!(listed[0].needs_sign_in, "{listed:?}");
 }
 
-/// Asked again, the agents' lists are read at once: each stand-in list here waits for the
-/// other's to start, and gives up alone.
-#[cfg(unix)]
-#[test]
-fn asking_again_reads_every_list_at_once() {
-    let fake = fake::fake("again");
-    for agent in ["claude", "codex"] {
-        let listed = match agent {
-            "claude" => "plugin:p:srv: http://127.0.0.1:1/mcp (HTTP) - ✔ Connected",
-            _ => r#"[{"name":"srv","auth_status":"o_auth"}]"#,
-        };
-        std::fs::write(
-            fake.dir.join(agent),
-            format!(
-                "#!/bin/sh
-echo {agent} >> \"$STATE/lists\"
-n=0
-until [ \"$(wc -l < \"$STATE/lists\")\" -ge 2 ]; do
-  n=$((n + 1)); [ $n -gt 100 ] && {{ echo 'Error: read alone' >&2; exit 1; }}
-  sleep 0.05
-done
-echo '{listed}'
-"
-            ),
-        )
-        .unwrap();
-    }
-    let logins = McpLogins::default();
-    logins.list_every(&fake.clis, None).unwrap();
-    for agent in [Agent::Claude, Agent::Codex] {
-        let (_, listed) = lock(&logins.lists).get(&(agent, None)).cloned().unwrap();
-        assert_eq!(listed.len(), 1, "{agent:?} {listed:?}");
-        assert!(!listed[0].needs_sign_in);
-    }
-    // One that fails says why, in its CLI's words.
-    std::fs::write(fake.dir.join("lists"), "").unwrap();
-    std::fs::write(
-        fake.dir.join("codex"),
-        "#!/bin/sh\necho codex >> \"$STATE/lists\"\necho 'Error: no config' >&2; exit 1\n",
-    )
-    .unwrap();
-    assert_eq!(
-        logins.list_every(&fake.clis, None),
-        Err("no config".to_owned())
-    );
-}
-
 /// Who waits for a sign-in hears it finished the moment it does, not at its next look.
 #[cfg(unix)]
 #[test]
@@ -392,7 +315,7 @@ fn waiting_for_a_sign_in_ends_when_it_does() {
     let progress = logins.finished(&id, Duration::from_secs(60)).unwrap();
     assert!(progress.finished, "{progress:?}");
     assert!(asked.elapsed() < Duration::from_secs(20));
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn);
+    assert_signed(&progress);
     assert!(logins.finished("nope", Duration::ZERO).is_none());
 }
 
@@ -417,10 +340,9 @@ fn a_cancelled_sign_in_stops_its_clis() {
     // Asking again while it waits gives the same sign-in, its pages opened again.
     assert_eq!(logins.start(fake.clis.clone(), target.clone(), open), id);
     assert_eq!(logins.pending(&target).as_deref(), Some(id.as_str()));
-    logins.reopen(&id).unwrap();
     logins.cancel(&id).unwrap();
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.status(), McpSignInStatus::Cancelled);
+    assert!(progress.finished);
     assert!(
         progress
             .agents
@@ -430,7 +352,6 @@ fn a_cancelled_sign_in_stops_its_clis() {
     );
     assert!(!fake.dir.join("claude-in").exists() && !fake.dir.join("codex-in").exists());
     assert_eq!(logins.pending(&target), None);
-    assert!(logins.reopen(&id).is_err());
 }
 
 #[cfg(unix)]
@@ -447,20 +368,15 @@ fn a_login_that_fails_says_why_in_the_clis_words() {
     std::fs::write(fake.dir.join("codex"), "#!/bin/sh\ncase \"$1 $2\" in\n\"mcp list\") echo '[{\"name\":\"srv\",\"auth_status\":\"not_logged_in\"}]' ;;\n*) echo 'Error: the server refused the client' >&2; exit 1 ;;\nesac\n").unwrap();
     let id = logins.start(fake.clis.clone(), target, Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(
-        progress.status(),
-        McpSignInStatus::Failed {
-            reason: "the server refused the client".into()
-        },
-        "{progress:?}"
-    );
-    assert_eq!(progress.agents.len(), 1);
+    assert_eq!(progress.agents.len(), 2);
+    assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Claude && matches!(&step.state, AgentSignInState::Failed { reason } if reason.contains("Add this server"))));
+    assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Codex && matches!(&step.state, AgentSignInState::Failed { reason } if reason == "the server refused the client")));
 }
 
-/// An agent whose CLI isn't installed has nothing to sign in: the others' sign-in is whole.
+/// Missing CLIs remain explicitly represented in fallback status.
 #[cfg(unix)]
 #[test]
-fn an_agent_without_its_cli_is_left_out() {
+fn an_agent_without_its_cli_is_reported_truthfully() {
     let mut fake = fake::fake("missing");
     let bin = fake.dir.clone();
     fake.clis.binary = Arc::new(move |agent| (agent == Agent::Claude).then(|| bin.join("claude")));
@@ -468,11 +384,15 @@ fn an_agent_without_its_cli_is_left_out() {
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
-    assert_eq!(
-        progress.agents.iter().map(|a| a.agent).collect::<Vec<_>>(),
-        [ProviderKind::Claude]
+    assert_eq!(progress.agents.len(), 2);
+    assert!(
+        progress
+            .agents
+            .iter()
+            .any(|step| step.agent == ProviderKind::Claude
+                && step.state == AgentSignInState::SignedIn)
     );
+    assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Codex && matches!(&step.state, AgentSignInState::Failed { reason } if reason.contains("not installed"))));
 }
 
 /// A server only a project configures: each CLI lists, signs in to and signs out of it only
@@ -519,7 +439,7 @@ esac
     };
     let id = logins.start(fake.clis.clone(), target.clone(), Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn, "{progress:?}");
+    assert_signed(&progress);
     assert_eq!(progress.agents.len(), 2, "{progress:?}");
     assert!(fake.dir.join("claude-in").exists() && fake.dir.join("codex-in").exists());
 
@@ -933,7 +853,7 @@ mod live {
             std::thread::sleep(Duration::from_millis(10));
         };
         println!("progress: {progress:#?}");
-        assert_eq!(progress.status(), McpSignInStatus::SignedIn);
+        assert_signed(&progress);
         assert_eq!(progress.agents.len(), 2);
         assert!(
             progress
@@ -994,7 +914,7 @@ fn fallback_spreads_only_the_cli_that_finished_before_reporting_success() {
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     logins.set_fallback_flow("row", id.clone());
     let progress = fake::wait(&logins, &id, |progress| progress.finished);
-    assert_eq!(progress.status(), McpSignInStatus::SignedIn);
+    assert_signed(&progress);
     let spread = spread.lock().unwrap();
     assert_eq!(spread.len(), 2);
     assert!(spread.contains(&ProviderKind::Claude));
@@ -1013,5 +933,10 @@ fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_i
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |progress| progress.finished);
-    assert!(matches!(progress.status(), McpSignInStatus::Failed { .. }));
+    assert!(
+        progress
+            .agents
+            .iter()
+            .any(|agent| matches!(agent.state, AgentSignInState::Failed { .. }))
+    );
 }

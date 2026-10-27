@@ -61,20 +61,23 @@ impl McpGatewayService {
                 continue;
             };
             let key = {
-                let leases = self.leases.lock().unwrap_or_else(|p| p.into_inner());
-                let Some(lease) = leases.get(&endpoint.secret_header.1) else {
-                    continue;
-                };
-                let entry = self.resource(&lease.resource);
-                if !entry.granted.load(Ordering::Acquire)
-                    || entry.fallback.load(Ordering::Acquire)
-                    || entry.grant_generation.load(Ordering::Acquire) != lease.generation
+                let entry = self.resource(&endpoint.resource);
+                if !entry.granted.load(Ordering::Acquire) || entry.fallback.load(Ordering::Acquire)
                 {
                     continue;
                 }
+                if !endpoint.secret_header.1.is_empty() {
+                    let leases = self.leases.lock().unwrap_or_else(|p| p.into_inner());
+                    if !leases.get(&endpoint.secret_header.1).is_some_and(|lease| {
+                        lease.expires > Instant::now()
+                            && lease.generation == entry.grant_generation.load(Ordering::Acquire)
+                    }) {
+                        continue;
+                    }
+                }
                 Key {
-                    row: lease.row.clone(),
-                    resource: lease.resource.clone(),
+                    row: endpoint.row_id.clone(),
+                    resource: endpoint.resource.clone(),
                     grant: entry.grant_generation.load(Ordering::Acquire),
                 }
             };

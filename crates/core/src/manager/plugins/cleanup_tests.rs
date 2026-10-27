@@ -811,7 +811,7 @@ fn cleanup_legacy_server_restore_is_idempotent_and_keeps_saved_values() {
         &file,
         "[mcp_servers.legacy]\ncommand='somebody-elses-command'\n",
     );
-    assert!(original.restore(&ctx, &restore).is_err());
+    original.restore(&ctx, &restore).unwrap();
     assert!(
         std::fs::read_to_string(file)
             .unwrap()
@@ -838,4 +838,105 @@ fn cleanup_corrupt_toml_never_copies_credential_lines_into_errors_or_checkpoints
     );
     assert_eq!(std::fs::read_to_string(file).unwrap(), original);
     assert!(!finished(&home.data));
+}
+
+/// Explicit end-verification harness. The caller must prepare/rebase a disposable real copy
+/// and run this binary with writes to the original home denied by the OS sandbox.
+#[test]
+#[ignore = "requires an explicitly prepared disposable copy of real CLI homes"]
+fn cleanup_on_explicit_real_copy() {
+    let root = PathBuf::from(
+        std::env::var_os("BRIGADIER_REVIEW_COPY").expect("explicit copy root required"),
+    );
+    assert!(root.join(".review-copy").is_file(), "copy sentinel missing");
+    let home = root.join("home");
+    let project = root.join("project");
+    let data = home.join("Library/Application Support/Brigadier");
+    let roots = Roots::from_vars([
+        ("HOME".into(), home.display().to_string()),
+        ("TMPDIR".into(), root.join("tmp").display().to_string()),
+        ("PATH".into(), std::env::var("PATH").unwrap()),
+    ])
+    .unwrap();
+    let library = Library::in_home(&home, PathBuf::from("brigadier"));
+    let projects = vec![project];
+    let binary = |agent| {
+        Some(PathBuf::from(match agent {
+            Agent::Claude => "/Users/stephen/.local/bin/claude",
+            Agent::Codex => "/Users/stephen/.local/bin/codex",
+        }))
+    };
+    let env: Vec<_> = roots.vars.clone().into_iter().collect();
+    let ctx = Ctx {
+        roots: &roots,
+        env: &env,
+        library: &library,
+        secrets: &NoSecrets,
+        projects: &projects,
+        claude_configs: &[],
+        binary: &binary,
+    };
+    let import = |_: &Sharing| {
+        let rows = Catalog::read_rows(&roots, &projects);
+        super::super::choices::import_sharing_file(
+            &data,
+            &library.root().join(".sharing.json"),
+            &rows,
+        )
+        .map(|_| ())
+    };
+    let runner = |agent, home: &Path, steps: &[Step]| {
+        let mut effective = roots.clone();
+        match agent {
+            Agent::Claude => {
+                effective.claude_dir = home.into();
+                effective.claude_json = claude_config::config_file(&roots.home, Some(home));
+            }
+            Agent::Codex => effective.codex_home = home.into(),
+        }
+        brigadier_registry::adapter::apply(
+            adapter(agent),
+            &effective,
+            &Catalog::read(&effective, None),
+            steps,
+            &env,
+            binary(agent).as_deref(),
+        )
+        .map(|_| ())
+        .map_err(|_| "copy fixture CLI migration failed".to_owned())
+    };
+    let result = Cleanup {
+        data: &data,
+        installed_default: &data,
+        overridden: false,
+        ctx: &ctx,
+        codex_homes: &[],
+    }
+    .run(&import, &runner);
+    if result.is_err() {
+        eprintln!("real-copy cleanup returned an error; details kept only in copy checkpoint");
+    }
+    assert!(result.is_ok(), "real-copy cleanup did not complete");
+    assert!(finished(&data));
+    assert!(data.join("plugins.json").is_file());
+    println!("real-copy cleanup complete; durable choices file exists");
+}
+
+#[test]
+fn cleanup_keeps_a_users_replacement_server_and_the_saved_original() {
+    let home = Home::new();
+    home.sharing(json!({}));
+    let config = home.write(
+        ".claude.json",
+        "{\"mcpServers\":{\"db\":{\"command\":\"user-replacement\"}}}\n",
+    );
+    let before = std::fs::read(&config).unwrap();
+    let record = home.write(".brigadier/library/.moved/server.json", json!({"originals":[{
+        "kind":"server","agent":"claude","name":"db","project":null,
+        "transport":{"type":"stdio","command":"old-original","args":[],"env":[],"cwd":null},"secrets":"old/db"
+    }]}).to_string());
+    home.run(&|_| Ok(()), &no_cli).unwrap();
+    assert!(finished(&home.data));
+    assert_eq!(std::fs::read(config).unwrap(), before);
+    assert!(record.is_file());
 }

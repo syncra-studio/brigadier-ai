@@ -61,6 +61,7 @@ export function cliMenuCommands(
       return {
         id: kind === "skill" ? `skill:${command.source}` : `/${command.invocation ?? command.name}`,
         label: name,
+        ...(kind === "skill" && command.text === "" ? { disabled: true } : {}),
         ...(description ? { description } : {}),
         group: kind === "skill" ? "Skills" : kind === "prompt" ? "MCP prompts" : kind === "action" ? "Brigadier actions" : `${cli.name ?? "CLI"} commands`,
         ...(command.agentOnly ? { trailing: command.agentOnly === "claude" ? "Claude Code" : "Codex" } : {}),

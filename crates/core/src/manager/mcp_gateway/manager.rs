@@ -14,7 +14,7 @@ impl SessionManager {
         &self.mcp_gateway
     }
 
-    async fn plugin_sign_in_target(&self, row_id: &str) -> Result<(String, Target)> {
+    async fn plugin_sign_in_target(&self, row_id: &str) -> Result<(String, Target, bool)> {
         let registry = self.registry();
         let projects = self.plugin_projects();
         let row_id = row_id.to_owned();
@@ -38,6 +38,12 @@ impl SessionManager {
                             plugin: server.plugin.as_ref().map(|plugin| plugin.name.clone()),
                             project: definition.provenance.project.clone(),
                         },
+                        row.definitions.iter().all(|definition| {
+                            definition
+                                .provenance
+                                .file
+                                .starts_with(data_dir.join("library"))
+                        }),
                     ));
                 }
             }
@@ -47,7 +53,7 @@ impl SessionManager {
     }
 
     pub async fn start_plugin_sign_in(&self, row_id: &str) -> Result<CatalogSignIn> {
-        let (resource, target) = self.plugin_sign_in_target(row_id).await?;
+        let (resource, target, library_only) = self.plugin_sign_in_target(row_id).await?;
         let open: Open = self
             .sign_in_browser
             .get()
@@ -57,6 +63,11 @@ impl SessionManager {
             self.mcp_gateway.status(&resource).await,
             CatalogSignIn::CliFallback { .. }
         ) {
+            if library_only {
+                return Ok(CatalogSignIn::CliSetupRequired {
+                    agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                });
+            }
             self.mcp_logins.enable_account_spread(self.runtime.clone());
             let flow = self.mcp_logins.start(self.clis(), target, open);
             self.mcp_logins.set_fallback_flow(row_id, flow);
@@ -66,8 +77,13 @@ impl SessionManager {
     }
 
     pub async fn get_plugin_sign_in_status(&self, row_id: &str) -> Result<CatalogSignIn> {
-        let (resource, _) = self.plugin_sign_in_target(row_id).await?;
+        let (resource, _, library_only) = self.plugin_sign_in_target(row_id).await?;
         let state = self.mcp_gateway.status(&resource).await;
+        if library_only && matches!(state, CatalogSignIn::CliFallback { .. }) {
+            return Ok(CatalogSignIn::CliSetupRequired {
+                agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+            });
+        }
         if matches!(state, CatalogSignIn::CliFallback { .. })
             && let Some(progress) = self.mcp_logins.fallback_progress(row_id)
         {
@@ -86,17 +102,21 @@ impl SessionManager {
                 })
                 .map(|step| step.agent)
                 .collect();
-            return Ok(CatalogSignIn::CliFallback { agents });
+            return Ok(CatalogSignIn::CliFallback {
+                agents,
+                steps: progress.agents,
+            });
         }
         Ok(state)
     }
 
     pub async fn sign_out_plugin(&self, row_id: &str) -> Result<()> {
-        let (resource, target) = self.plugin_sign_in_target(row_id).await?;
+        let (resource, target, library_only) = self.plugin_sign_in_target(row_id).await?;
         if matches!(
             self.mcp_gateway.status(&resource).await,
             CatalogSignIn::CliFallback { .. }
-        ) {
+        ) && !library_only
+        {
             let (logins, clis, runtime) =
                 (self.mcp_logins.clone(), self.clis(), self.runtime.clone());
             let row_id = row_id.to_owned();

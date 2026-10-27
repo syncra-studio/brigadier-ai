@@ -1,8 +1,6 @@
 //! The agents' MCP servers and skills as sessions meet them: each thread and worker keeps its
-//! own agent's servers and skills, as its CLI loads them; the user turns them on or off with
-//! each CLI's own setup (Settings › Plugins). A worker (`brigadier start`) goes without them
-//! but the servers it was started with (D13, D18), and sign-ins go through each CLI's own `mcp
-//! login`.
+//! resolved catalog items. A naked worker gets only explicit server grants; OAuth uses the
+//! daemon gateway with an explicit per-CLI fallback.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,13 +9,13 @@ use std::sync::Arc;
 #[cfg(test)]
 use brigadier_providers::McpTransport;
 use brigadier_providers::{McpServer, ProviderKind, SwitchedOff};
-use brigadier_registry::{Agent, Registry, Roots, Server};
+use brigadier_registry::{Agent, Registry, Roots};
 #[cfg(test)]
 use brigadier_registry::{Catalog, Session, SkillRoot, Source, Transport};
 
 use super::SessionManager;
-use super::mcp_login::{Clis, McpSignInProgress, McpSignInStatus, Open, Target};
-use crate::model::{ConversationId, ProjectId};
+use super::mcp_login::Clis;
+use crate::model::ConversationId;
 use crate::{Error, Result};
 
 /// Brigadier's own servers' names, which a worker keeps.
@@ -191,15 +189,6 @@ pub(crate) fn granted_servers(
     Ok(granted)
 }
 
-/// The sign-in target of `server`, listed in `project`.
-fn target(server: &Server, project: Option<&Path>) -> Target {
-    Target {
-        server: server.name.clone(),
-        plugin: server.plugin.as_ref().map(|plugin| plugin.name.clone()),
-        project: project.map(Path::to_owned),
-    }
-}
-
 impl SessionManager {
     /// The catalog of servers and skills, kept current by its watcher.
     pub(crate) fn registry(&self) -> Arc<Registry> {
@@ -221,26 +210,6 @@ impl SessionManager {
         }
     }
 
-    /// `project`'s first repository, when given: refused while the user doesn't trust its
-    /// folder.
-    fn trusted_project_repo(&self, project: Option<ProjectId>) -> Result<Option<PathBuf>> {
-        let Some(id) = project else {
-            return Ok(None);
-        };
-        let project = self.core.project(&id)?;
-        let repo = project
-            .repos
-            .first()
-            .map(|repo| repo.path.clone())
-            .ok_or_else(|| Error::Invalid("the project has no repository".into()))?;
-        if !project.counts_trusted(&repo) {
-            return Err(Error::Invalid(
-                "the project's folder isn't trusted: its servers aren't read".into(),
-            ));
-        }
-        Ok(Some(PathBuf::from(repo)))
-    }
-
     /// How the agents' CLIs are run for their MCP commands: the login shell's environment and
     /// each one's binary, the user's choice included.
     pub(crate) fn clis(&self) -> Clis {
@@ -255,94 +224,6 @@ impl SessionManager {
                 .collect(),
             binary: Arc::new(move |agent| env.resolve(provider(agent))),
         }
-    }
-
-    /// The server `server_id` that signs in with OAuth, of `project`'s catalog when given and
-    /// trusted (else the user's), as a sign-in target.
-    async fn signing_server(&self, server_id: &str, project: Option<ProjectId>) -> Result<Target> {
-        let repo = self.trusted_project_repo(project)?;
-        let registry = self.registry();
-        let server_id = server_id.to_owned();
-        super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            let server = catalog
-                .server(&server_id)
-                .ok_or_else(|| Error::Invalid(format!("no MCP server `{server_id}` here")))?;
-            if !server.signs_in {
-                return Err(Error::Invalid(format!(
-                    "`{}` doesn't sign in with OAuth",
-                    server.name
-                )));
-            }
-            Ok(target(server, repo.as_deref()))
-        })
-        .await
-    }
-
-    /// Signs every agent that has the server `server_id` (of `project`'s catalog, when given
-    /// and trusted) and needs it in to it, one after another, each with its CLI's own `mcp
-    /// login`; each sign-in page opens in the user's browser (`open`). Its id at once, for
-    /// [`Self::mcp_sign_in`]. One already going for the server is kept: its page opens again
-    /// and its id comes back.
-    pub async fn sign_in_mcp_server(
-        &self,
-        server_id: &str,
-        project: Option<ProjectId>,
-        open: Open,
-    ) -> Result<String> {
-        let target = self.signing_server(server_id, project).await?;
-        Ok(self.mcp_logins.start(self.clis(), target, open))
-    }
-
-    /// How sign-in `id` ([`Self::sign_in_mcp_server`]) went, all agents at once.
-    pub fn mcp_sign_in(&self, id: &str) -> Result<McpSignInStatus> {
-        Ok(self.mcp_sign_in_progress(id)?.status())
-    }
-
-    /// How sign-in `id` goes, agent by agent.
-    pub fn mcp_sign_in_progress(&self, id: &str) -> Result<McpSignInProgress> {
-        self.mcp_logins
-            .progress(id)
-            .ok_or_else(|| Error::Invalid(format!("no sign-in `{id}`")))
-    }
-
-    /// Stops sign-in `id`: the agent signing in now is stopped, the ones after it skipped.
-    pub fn cancel_mcp_sign_in(&self, id: &str) -> Result<()> {
-        self.mcp_logins.cancel(id).map_err(Error::Invalid)
-    }
-
-    /// Opens sign-in `id`'s current page in the browser again.
-    pub fn reopen_mcp_sign_in(&self, id: &str) -> Result<()> {
-        self.mcp_logins.reopen(id).map_err(Error::Invalid)
-    }
-
-    /// Signs every agent that has the server `server_id` out of it, with its CLI's own `mcp
-    /// logout`.
-    pub async fn sign_out_mcp_server(
-        &self,
-        server_id: &str,
-        project: Option<ProjectId>,
-    ) -> Result<()> {
-        let target = self.signing_server(server_id, project).await?;
-        let (logins, clis) = (self.mcp_logins.clone(), self.clis());
-        super::blocking(move || logins.sign_out(&clis, &target).map_err(Error::Invalid)).await
-    }
-
-    /// Reads the agents' own lists again, all at once, so Settings › Plugins next shows who
-    /// needs a sign-in as of now.
-    pub async fn ask_mcp_sign_in_again(
-        &self,
-        server_id: &str,
-        project: Option<ProjectId>,
-    ) -> Result<()> {
-        let target = self.signing_server(server_id, project).await?;
-        let (logins, clis) = (self.mcp_logins.clone(), self.clis());
-        super::blocking(move || {
-            logins
-                .list_every(&clis, target.project.as_deref())
-                .map_err(Error::Invalid)
-        })
-        .await
     }
 
     /// What a naked worker in `cwd` goes without ([`naked_switched_off`]), and the servers

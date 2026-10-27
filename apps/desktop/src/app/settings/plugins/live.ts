@@ -1,8 +1,8 @@
 import type { PluginDraft, PluginsAdapter } from "./adapter";
 import { pickFolder, request } from "@/ipc/client";
-import type { CatalogView, PluginProjectView } from "@/ipc/generated";
+import type { CatalogView } from "@/ipc/generated";
 import { useApp } from "@/state/store";
-import type { PluginsView } from "./types";
+import type { PluginProjectView, PluginsView } from "./types";
 
 /** The catalog's durable choices, rendered with the shared Settings grid. */
 export function catalogPage(catalog: CatalogView, projects: PluginProjectView[]): PluginsView {

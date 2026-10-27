@@ -316,6 +316,37 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
             suppress(&mut resolved.off, definition);
         }
     }
+    if ctx.agent == Agent::Codex {
+        let mut names: std::collections::BTreeSet<_> =
+            resolved.servers.iter().map(|s| s.name.clone()).collect();
+        for selected in &mut resolved.servers {
+            let collision = native_rows
+                .iter()
+                .flat_map(|row| &row.definitions)
+                .any(|definition| {
+                    matches!(&definition.content, Content::Server(own)
+                    if definition.provenance.agent == Some(Agent::Codex)
+                        && own.plugin.is_none() && own.name == selected.name
+                        && matches!((&own.transport, &selected.transport),
+                            (Transport::Http { .. }, McpTransport::Stdio { .. }) |
+                            (Transport::Stdio { .. }, McpTransport::Http { .. })))
+                });
+            if collision {
+                let original = selected.name.clone();
+                let mut alias = format!("{original}-brigadier");
+                let mut suffix = 2;
+                while names.contains(&alias) || native_rows.iter().any(|row| row.name == alias) {
+                    alias = format!("{original}-brigadier-{suffix}");
+                    suffix += 1;
+                }
+                names.insert(alias.clone());
+                selected.name = alias;
+                if !resolved.off.servers.contains(&original) {
+                    resolved.off.servers.push(original);
+                }
+            }
+        }
+    }
     resolved
         .off
         .servers
@@ -659,6 +690,8 @@ mod tests {
                 assert!(row_id.starts_with("server:db:"));
                 assert_eq!(resource, "https://user.test/mcp");
                 Some(McpGateway {
+                    resource: resource.into(),
+                    row_id: row_id.into(),
                     url: "http://127.0.0.1:1234/mcp/db".into(),
                     secret_header: ("X-Brigadier-Session".into(), "local-secret".into()),
                 })
@@ -745,5 +778,48 @@ mod tests {
             assert_eq!(choices.choice(row).scope, Scope::Global(Global::Global));
         }
         assert!(import_sharing(&serde_json::json!({"chosen":"invalid"}), &rows).is_err());
+    }
+    #[test]
+    fn codex_transport_collisions_use_an_alias_and_disable_the_native_entry() {
+        for native_http in [false, true] {
+            let fixture = Fixture::new();
+            write(
+                &fixture.roots.codex_home.join("config.toml"),
+                if native_http {
+                    "[mcp_servers.db]\nurl='https://native.invalid/mcp'\n"
+                } else {
+                    "[mcp_servers.db]\ncommand='native-server'\n"
+                },
+            );
+            write(
+                &fixture.roots.claude_json,
+                if native_http {
+                    r#"{"mcpServers":{"db":{"command":"selected-server"}}}"#
+                } else {
+                    r#"{"mcpServers":{"db":{"url":"https://selected.invalid/mcp"}}}"#
+                },
+            );
+            let rows = fixture.rows();
+            let mut choices = Choices::default();
+            for row in &rows {
+                if row
+                    .definitions
+                    .iter()
+                    .any(|d| d.provenance.agent == Some(Agent::Codex))
+                {
+                    let mut choice = choices.choice(row);
+                    choice.on = false;
+                    choices.0.insert(row.id.clone(), choice);
+                }
+            }
+            let resolved = fixture.resolve(Agent::Codex, &rows, &choices);
+            assert_eq!(resolved.servers.len(), 1);
+            assert_eq!(resolved.servers[0].name, "db-brigadier");
+            assert!(resolved.off.servers.iter().any(|name| name == "db"));
+            assert_eq!(
+                matches!(resolved.servers[0].transport, McpTransport::Stdio { .. }),
+                native_http
+            );
+        }
     }
 }

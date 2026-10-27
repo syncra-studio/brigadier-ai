@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { Changes } from "./changes";
+import { signInLine } from "./model";
 import type { PluginItemView, PluginsView } from "./types";
 
 const item = (key: string, on: boolean): PluginItemView => ({
@@ -221,4 +222,16 @@ test("live catalog adapter saves project roots and reads persisted choices on a 
     useApp.setState({ projects: previousProjects });
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
   }
+});
+
+test("a refusing library-only server explains that setup belongs in a native CLI", () => {
+  assert.equal(signInLine({ type: "cliSetupRequired", agents: ["claude", "codex"] }), "This server only accepts sign-in from Claude Code or Codex: add it in that CLI");
+});
+
+test("fallback lists both CLI states, including cancellation and missing setup", () => {
+  assert.equal(signInLine({ type: "cliFallback", agents: ["codex"], steps: [
+    { agent: "claude", server: "db", state: { type: "signedIn" } },
+    { agent: "codex", server: "db", state: { type: "failed", reason: "Add this server in Codex to use its sign-in" } },
+  ] }), "Claude Code: signed in; Codex: Add this server in Codex to use its sign-in");
+  assert.equal(signInLine({ type: "cliFallback", agents: ["claude"], steps: [{ agent: "claude", server: "db", state: { type: "cancelled" } }] }), "Claude Code: cancelled");
 });

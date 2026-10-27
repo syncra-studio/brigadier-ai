@@ -28,24 +28,6 @@ const POLL: Duration = Duration::from_millis(20);
 /// Opens a link in the user's browser.
 pub(crate) type Open = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// How a sign-in went, for every agent at once. It never carries a token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum McpSignInStatus {
-    /// Still going: an agent is waiting for the user in their browser, or starting.
-    Pending,
-    /// Every agent that needed it is signed in.
-    SignedIn,
-    /// The user cancelled it.
-    Cancelled,
-    /// Why, in a short plain sentence (the first agent's that failed).
-    Failed { reason: String },
-}
-
 /// How a sign-in goes, agent by agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +42,7 @@ pub struct McpSignInProgress {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSignIn {
     pub agent: ProviderKind,
-    /// The server's name in that agent's own list.
+    // The server's name in that agent's own list.
     pub server: String,
     pub state: AgentSignInState,
 }
@@ -85,25 +67,6 @@ pub enum AgentSignInState {
     Failed {
         reason: String,
     },
-}
-
-impl McpSignInProgress {
-    pub fn status(&self) -> McpSignInStatus {
-        if !self.finished {
-            return McpSignInStatus::Pending;
-        }
-        let states = || self.agents.iter().map(|agent| &agent.state);
-        if let Some(reason) = states().find_map(|state| match state {
-            AgentSignInState::Failed { reason } => Some(reason.clone()),
-            _ => None,
-        }) {
-            return McpSignInStatus::Failed { reason };
-        }
-        if states().any(|state| *state == AgentSignInState::Cancelled) {
-            return McpSignInStatus::Cancelled;
-        }
-        McpSignInStatus::SignedIn
-    }
 }
 
 pub(crate) fn provider(agent: Agent) -> ProviderKind {
@@ -331,17 +294,6 @@ impl McpLogins {
         Ok(())
     }
 
-    /// Opens sign-in `id`'s waiting pages again.
-    pub(crate) fn reopen(&self, id: &str) -> Result<(), String> {
-        let runs = lock(&self.runs);
-        let run = runs.get(id).ok_or_else(|| format!("no sign-in `{id}`"))?;
-        if run.links.is_empty() || run.progress.finished {
-            return Err("No sign-in page is waiting.".to_owned());
-        }
-        run.open_again();
-        Ok(())
-    }
-
     fn update(&self, id: &str, change: impl FnOnce(&mut Run)) {
         if let Some(run) = lock(&self.runs).get_mut(id) {
             change(run);
@@ -367,8 +319,7 @@ impl McpLogins {
         self.update(id, |run| run.progress.finished = true);
     }
 
-    /// One agent's part of sign-in `id`: none when its CLI isn't installed (Settings shows no
-    /// sign-in of it) or its list hasn't the server.
+    /// Every CLI gets a status, including unavailable CLIs and missing native definitions.
     fn sign_agent_in(
         &self,
         id: &str,
@@ -377,12 +328,20 @@ impl McpLogins {
         cancel: &AtomicBool,
         adapter: &dyn AgentAdapter,
     ) {
-        if (clis.binary)(adapter.agent()).is_none() {
-            return;
-        }
         let agent = provider(adapter.agent());
-        let step = match self.entry(clis, adapter, target) {
-            Ok(None) => return,
+        let entry = if (clis.binary)(adapter.agent()).is_none() {
+            Err(format!("{} is not installed", adapter.label()))
+        } else {
+            self.entry(clis, adapter, target)
+        };
+        let step = match entry {
+            Ok(None) => AgentSignIn {
+                agent,
+                server: target.server.clone(),
+                state: AgentSignInState::Failed {
+                    reason: format!("Add this server in {} to use its sign-in", adapter.label()),
+                },
+            },
             Ok(Some(entry)) => AgentSignIn {
                 agent,
                 server: entry.name,
@@ -534,20 +493,6 @@ impl McpLogins {
             (Instant::now(), listed.clone()),
         );
         Ok(listed)
-    }
-
-    /// Reads every CLI's own list for `project` now, all at once, and keeps them: the first
-    /// agent's error, in their order, if one failed.
-    pub(crate) fn list_every(&self, clis: &Clis, project: Option<&Path>) -> Result<(), String> {
-        std::thread::scope(|scope| {
-            let reads =
-                adapters().map(|adapter| scope.spawn(move || self.list(clis, adapter, project)));
-            reads.into_iter().try_for_each(|read| {
-                read.join()
-                    .unwrap_or_else(|_| Err("reading the list stopped".to_owned()))
-                    .map(drop)
-            })
-        })
     }
 
     /// Signs every agent that lists `target` out of it, with its CLI's own `mcp logout`.

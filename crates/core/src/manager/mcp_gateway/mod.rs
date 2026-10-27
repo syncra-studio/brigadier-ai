@@ -33,6 +33,7 @@ pub const SECRET_HEADER: &str = "x-brigadier-mcp-secret";
 
 struct Credentials {
     grant: Option<Grant>,
+    pending: Option<Grant>,
     state: CatalogSignIn,
     generation: u64,
     streams: CancellationToken,
@@ -47,6 +48,31 @@ struct Lease {
     row: String,
     resource: String,
     generation: u64,
+    owner: String,
+    expires: std::time::Instant,
+    cancelled: CancellationToken,
+}
+
+const LEASE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+pub struct SessionLease {
+    gateway: std::sync::Weak<McpGatewayService>,
+    owner: String,
+}
+impl SessionLease {
+    pub(super) fn id(&self) -> &str {
+        &self.owner
+    }
+    pub fn release(&self) {
+        if let Some(gateway) = self.gateway.upgrade() {
+            gateway.release_leases(&self.owner);
+        }
+    }
+}
+impl Drop for SessionLease {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 pub struct McpGatewayService {
@@ -104,7 +130,100 @@ impl McpGatewayService {
                 .with_graceful_shutdown(stop.cancelled_owned())
                 .await;
         });
+        let weak = Arc::downgrade(&gateway);
+        let stop = gateway.stop.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tokio::select! { _ = stop.cancelled() => break, _ = interval.tick() => {} }
+                let Some(gateway) = weak.upgrade() else {
+                    break;
+                };
+                gateway.expire_leases();
+            }
+        });
         Ok(gateway)
+    }
+    fn expire_leases(&self) {
+        self.leases
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|_, lease| {
+                let keep = lease.expires > std::time::Instant::now();
+                if !keep {
+                    lease.cancelled.cancel();
+                }
+                keep
+            });
+    }
+    fn release_leases(&self, owner: &str) {
+        self.leases
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|_, lease| {
+                let keep = lease.owner != owner;
+                if !keep {
+                    lease.cancelled.cancel();
+                }
+                keep
+            });
+    }
+    pub fn lease_session(
+        self: &Arc<Self>,
+        resolved: &mut super::plugins::resolve::Resolved,
+    ) -> Arc<SessionLease> {
+        self.expire_leases();
+        let owner = uuid::Uuid::new_v4().to_string();
+        for server in &mut resolved.servers {
+            if let Some(metadata) = &server.gateway {
+                let endpoint = self.issue_endpoint(&metadata.row_id, &metadata.resource, &owner);
+                server.transport = brigadier_providers::McpTransport::Http {
+                    url: endpoint.url.clone(),
+                };
+                server.env = vec![endpoint.secret_header.clone()];
+                server.gateway = Some(endpoint);
+            }
+        }
+        Arc::new(SessionLease {
+            gateway: Arc::downgrade(self),
+            owner,
+        })
+    }
+    fn issue_endpoint(&self, row: &str, resource: &str, owner: &str) -> McpGateway {
+        let secret = oauth::random();
+        let generation = self
+            .resource(resource)
+            .grant_generation
+            .load(Ordering::Acquire);
+        self.leases
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                secret.clone(),
+                Lease {
+                    row: row.into(),
+                    resource: resource.into(),
+                    generation,
+                    owner: owner.into(),
+                    expires: std::time::Instant::now() + LEASE_TTL,
+                    cancelled: CancellationToken::new(),
+                },
+            );
+        let mut url = reqwest::Url::parse(&self.address).expect("loopback address");
+        url.path_segments_mut()
+            .expect("HTTP URL")
+            .extend(["mcp", row]);
+        McpGateway {
+            url: url.into(),
+            resource: resource.into(),
+            row_id: row.into(),
+            secret_header: (SECRET_HEADER.into(), secret),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_endpoint(&self, row: &str, resource: &str) -> Option<McpGateway> {
+        <Self as Gateway>::endpoint(self, row, resource)?;
+        Some(self.issue_endpoint(row, resource, "fixture"))
     }
     fn resource(&self, resource: &str) -> Arc<Resource> {
         let mut resources = self.resources.lock().unwrap_or_else(|p| p.into_inner());
@@ -128,6 +247,7 @@ impl McpGatewayService {
                     fallback: AtomicBool::new(false),
                     credentials: tokio::sync::Mutex::new(Credentials {
                         grant,
+                        pending: None,
                         state,
                         generation: 0,
                         streams: CancellationToken::new(),
@@ -183,6 +303,7 @@ impl McpGatewayService {
             credentials.state = match result {
                 Ok(Some(grant)) => match gateway.store.save(&resource, &grant) {
                     Ok(()) => {
+                        credentials.pending = None;
                         credentials.grant = Some(grant);
                         credentials.streams = CancellationToken::new();
                         entry.grant_generation.store(generation, Ordering::Release);
@@ -197,6 +318,7 @@ impl McpGatewayService {
                 Ok(None) => {
                     entry.fallback.store(true, Ordering::Release);
                     CatalogSignIn::CliFallback {
+                        steps: Vec::new(),
                         agents: vec![
                             brigadier_providers::ProviderKind::Claude,
                             brigadier_providers::ProviderKind::Codex,
@@ -301,7 +423,11 @@ impl McpGatewayService {
         entry.granted.store(false, Ordering::Release);
         self.prompt_cache.invalidate(resource);
         entry.fallback.store(false, Ordering::Release);
-        let grant = credentials.grant.take();
+        let grant = credentials
+            .pending
+            .take()
+            .or_else(|| credentials.grant.take());
+        credentials.grant = None;
         credentials.state = CatalogSignIn::SignedOut;
         let deleted = self.store.delete(resource);
         drop(credentials);
@@ -354,6 +480,12 @@ impl McpGatewayService {
     async fn bearer(&self, resource: &str) -> Result<(String, CancellationToken), StatusCode> {
         let entry = self.resource(resource);
         let mut credentials = entry.credentials.lock().await;
+        if let Some(pending) = &credentials.pending {
+            self.store
+                .save(resource, pending)
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            credentials.grant = credentials.pending.take();
+        }
         let Some(mut grant) = credentials.grant.clone() else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -391,10 +523,12 @@ impl McpGatewayService {
             };
             // Never publish a rotated access token before its corresponding refresh token
             // has been durably replaced. Hold the authority lock across refresh and commit.
+            credentials.grant = None;
+            credentials.pending = Some(grant.clone());
             self.store
                 .save(resource, &grant)
                 .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-            credentials.grant = Some(grant.clone());
+            credentials.grant = credentials.pending.take();
         }
         Ok((grant.access_token, credentials.streams.clone()))
     }
@@ -408,30 +542,18 @@ impl Gateway for McpGatewayService {
         if !entry.granted.load(Ordering::Acquire) || entry.fallback.load(Ordering::Acquire) {
             return None;
         }
-        let secret = oauth::random();
-        self.leases
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(
-                secret.clone(),
-                Lease {
-                    row: row_id.into(),
-                    resource: resource.into(),
-                    generation: entry.grant_generation.load(Ordering::Acquire),
-                },
-            );
-        let mut url = reqwest::Url::parse(&self.address).ok()?;
-        url.path_segments_mut().ok()?.extend(["mcp", row_id]);
         Some(McpGateway {
-            url: url.into(),
-            secret_header: (SECRET_HEADER.into(), secret),
+            url: resource.into(),
+            resource: resource.into(),
+            row_id: row_id.into(),
+            secret_header: (SECRET_HEADER.into(), String::new()),
         })
     }
 }
 
 impl Gateway for Arc<McpGatewayService> {
     fn endpoint(&self, row_id: &str, resource: &str) -> Option<McpGateway> {
-        self.as_ref().endpoint(row_id, resource)
+        <McpGatewayService as Gateway>::endpoint(self.as_ref(), row_id, resource)
     }
 }
 
@@ -499,13 +621,18 @@ async fn proxy(
         .get(SECRET_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let (resource, generation) = {
-        let leases = gateway.leases.lock().unwrap_or_else(|p| p.into_inner());
+    let (resource, generation, lease_cancelled) = {
+        let mut leases = gateway.leases.lock().unwrap_or_else(|p| p.into_inner());
         let lease = leases
-            .get(secret)
-            .filter(|lease| lease.row == row)
+            .get_mut(secret)
+            .filter(|lease| lease.row == row && lease.expires > std::time::Instant::now())
             .ok_or(StatusCode::UNAUTHORIZED)?;
-        (lease.resource.clone(), lease.generation)
+        lease.expires = std::time::Instant::now() + LEASE_TTL;
+        (
+            lease.resource.clone(),
+            lease.generation,
+            lease.cancelled.clone(),
+        )
     };
     let entry = gateway.resource(&resource);
     if entry.grant_generation.load(Ordering::Acquire) != generation {
@@ -514,7 +641,10 @@ async fn proxy(
     let (bearer, cancelled) = gateway.bearer(&resource).await?;
     // A sign-out/new sign-in can race the bearer lookup. Old session capabilities
     // must never acquire the replacement grant, even if the upstream reuses its token.
-    if entry.grant_generation.load(Ordering::Acquire) != generation || cancelled.is_cancelled() {
+    if entry.grant_generation.load(Ordering::Acquire) != generation
+        || cancelled.is_cancelled()
+        || lease_cancelled.is_cancelled()
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let (parts, body) = request.into_parts();
@@ -549,9 +679,9 @@ async fn proxy(
             downstream = downstream.header(name, value);
         }
     }
-    let stream = response
-        .bytes_stream()
-        .take_until(cancelled.cancelled_owned());
+    let stream = response.bytes_stream().take_until(async move {
+        tokio::select! { _ = cancelled.cancelled() => {}, _ = lease_cancelled.cancelled() => {} }
+    });
     downstream
         .body(Body::from_stream(stream))
         .map_err(|_| StatusCode::BAD_GATEWAY)

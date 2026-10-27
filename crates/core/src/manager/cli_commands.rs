@@ -4,33 +4,129 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use brigadier_providers::{CliCommand, CliCommandKind, ProviderKind};
-use brigadier_registry::Catalog;
 
 use super::{SessionManager, plugins};
 use crate::accounts::AccountRef;
 use crate::model::{ConversationId, ProjectId, Setup};
 use crate::{Error, Result};
 
-/// Optional live enrichment, bound to the exact choices/catalog snapshot it came from.
+/// Last live Claude prompt metadata, persisted by account/project; never credentials.
 #[derive(Default)]
-pub(super) struct Probes(Mutex<HashMap<ProbeKey, Vec<CliCommand>>>);
-type ProbeKey = (AccountRef, Option<PathBuf>, String);
-
+pub(super) struct Probes {
+    prompts: Mutex<HashMap<ProbeKey, Vec<CliCommand>>>,
+    launches: Mutex<HashMap<ConversationId, (String, AccountRef, plugins::resolve::Resolved)>>,
+}
+type ProbeKey = (AccountRef, Option<PathBuf>);
 impl Probes {
-    fn fresh(&self, key: &ProbeKey) -> Vec<CliCommand> {
-        self.0
+    fn fresh(&self, data: &Path, key: &ProbeKey) -> Vec<CliCommand> {
+        let mut cache = self.prompts.lock().unwrap_or_else(|p| p.into_inner());
+        if cache.is_empty()
+            && let Ok(bytes) = std::fs::read(data.join("claude-prompts.json"))
+            && let Ok(entries) = serde_json::from_slice::<Vec<(ProbeKey, Vec<CliCommand>)>>(&bytes)
+        {
+            cache.extend(entries);
+        }
+        cache.get(key).cloned().unwrap_or_default()
+    }
+    fn keep(&self, data: &Path, key: ProbeKey, commands: Vec<CliCommand>) {
+        // Merge disk entries first, so updating one account never drops another account's cache.
+        let _ = self.fresh(data, &key);
+        let mut cache = self.prompts.lock().unwrap_or_else(|p| p.into_inner());
+        cache.insert(key, commands);
+        let entries: Vec<_> = cache.iter().collect();
+        let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            std::fs::create_dir_all(data)?;
+            let temp = data.join(format!(".prompts-{}.tmp", uuid::Uuid::new_v4()));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temp)?;
+            file.write_all(&serde_json::to_vec(&entries).map_err(std::io::Error::other)?)?;
+            file.sync_all()?;
+            std::fs::rename(temp, data.join("claude-prompts.json"))
+        };
+        if write().is_err() {
+            tracing::warn!("could not save Claude prompt metadata");
+        }
+    }
+    pub(super) fn launch(
+        &self,
+        id: &ConversationId,
+        owner: &str,
+        account: &AccountRef,
+        resolved: &plugins::resolve::Resolved,
+    ) {
+        self.launches
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
+            .insert(
+                id.clone(),
+                (owner.into(), account.clone(), resolved.clone()),
+            );
     }
+    pub(super) fn end(&self, id: &ConversationId, owner: &str) {
+        let mut launches = self.launches.lock().unwrap_or_else(|p| p.into_inner());
+        if launches.get(id).is_some_and(|entry| entry.0 == owner) {
+            launches.remove(id);
+        }
+    }
+    fn snapshot(
+        &self,
+        id: &ConversationId,
+        account: Option<&AccountRef>,
+    ) -> Option<plugins::resolve::Resolved> {
+        self.launches
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(id)
+            .filter(|entry| account.is_none_or(|account| account == &entry.1))
+            .map(|entry| entry.2.clone())
+    }
+}
 
-    fn keep(&self, key: ProbeKey, commands: Vec<CliCommand>) {
-        let mut cache = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        cache.retain(|known, _| known.0 != key.0 || known.1 != key.1 || known.2 == key.2);
-        cache.insert(key, commands);
+/// Version only launch identities and paths: never bearer/header/env values or capabilities.
+fn command_version(resolved: &plugins::resolve::Resolved) -> String {
+    let skills: Vec<_> = resolved
+        .skills
+        .iter()
+        .map(|s| (&s.row_id, &s.invocation, &s.path))
+        .collect();
+    let servers: Vec<_> = resolved
+        .servers
+        .iter()
+        .map(|s| {
+            (
+                &s.name,
+                s.gateway.as_ref().map(|g| (&g.row_id, &g.resource)),
+            )
+        })
+        .collect();
+    brigadier_registry::catalog::fingerprint(
+        serde_json::to_string(&(skills, servers))
+            .expect("identities serialize")
+            .as_bytes(),
+    )
+}
+
+fn same_server(a: &brigadier_providers::McpServer, b: &brigadier_providers::McpServer) -> bool {
+    fn normalized(server: &brigadier_providers::McpServer) -> brigadier_providers::McpServer {
+        let mut server = server.clone();
+        if let Some(gateway) = &mut server.gateway {
+            gateway.url = gateway.resource.clone();
+            gateway.secret_header.1.clear();
+            server.transport = brigadier_providers::McpTransport::Http {
+                url: gateway.resource.clone(),
+            };
+            server.env.clear();
+        }
+        server
     }
+    normalized(a) == normalized(b)
 }
 
 /// Remote prompt discovery is supplied by the daemon gateway; never launch stdio servers here.
@@ -202,27 +298,7 @@ impl SessionManager {
                 plugins::resolve::Role::Thread,
             )
             .await?;
-        let registered: Vec<_> = self
-            .core
-            .catalog()
-            .projects
-            .into_iter()
-            .flat_map(|project| {
-                project
-                    .repos
-                    .into_iter()
-                    .map(|repo| PathBuf::from(repo.path))
-            })
-            .collect();
-        let rows = Catalog::read_rows(&roots, &registered);
-        let choices = plugins::choices::Choices::load(&self.data_dir).map_err(Error::Invalid)?;
-        let version = brigadier_registry::catalog::fingerprint(
-            format!(
-                "{}:{resolved:?}",
-                plugins::CatalogView::new(&rows, &choices).version
-            )
-            .as_bytes(),
-        );
+        let version = command_version(&resolved);
         Ok((resolved, version))
     }
 
@@ -231,6 +307,9 @@ impl SessionManager {
         id: &ConversationId,
         account: Option<&AccountRef>,
     ) -> Result<plugins::resolve::Resolved> {
+        if let Some(snapshot) = self.cli_command_probes.snapshot(id, account) {
+            return Ok(snapshot);
+        }
         let conversation = self.core.conversation(id)?;
         let choice = match &conversation.setup {
             Some(Setup::Session { orchestrator, .. }) => orchestrator.clone(),
@@ -336,6 +415,28 @@ impl SessionManager {
         }
     }
 
+    pub(super) async fn remember_claude_prompts(
+        &self,
+        id: &ConversationId,
+        cli: &super::conversation::Cli,
+    ) {
+        if cli.provider != ProviderKind::Claude {
+            return;
+        }
+        let project = match self.core.conversation(id).ok().and_then(|c| c.setup) {
+            Some(Setup::Session { repo, .. }) => Some(PathBuf::from(repo)),
+            _ => None,
+        };
+        let commands = cli.session.commands().await;
+        if !commands.is_empty() {
+            self.cli_command_probes.keep(
+                &self.data_dir,
+                (cli.account.clone(), project),
+                live_prompts(cli.provider, commands),
+            );
+        }
+    }
+
     pub async fn cli_commands(
         &self,
         id: Option<ConversationId>,
@@ -396,19 +497,26 @@ impl SessionManager {
                 trusted,
             )
         };
-        let (resolved, version) = self
+        let (current, _version) = self
             .command_resolution(&account, project.as_deref(), cwd.as_deref(), trusted)
             .await?;
-        let key = (account.clone(), project.clone(), version);
+        let key = (account.clone(), project.clone());
+        let resolved = cli
+            .as_ref()
+            .map_or_else(|| current.clone(), |cli| cli.plugins.clone());
         if account.provider == ProviderKind::Claude
-            && let Some(cli) = cli
+            && let Some(cli) = &cli
         {
-            self.cli_command_probes.keep(
-                key.clone(),
-                live_prompts(account.provider, cli.session.commands().await),
-            );
+            let commands = cli.session.commands().await;
+            if !commands.is_empty() {
+                self.cli_command_probes.keep(
+                    &self.data_dir,
+                    key.clone(),
+                    live_prompts(account.provider, commands),
+                );
+            }
         }
-        let mut prompts = self.cli_command_probes.fresh(&key);
+        let mut prompts = self.cli_command_probes.fresh(&self.data_dir, &key);
         prompts.extend(gateway_prompts(self.mcp_gateway(), &account, &resolved));
         prompts.retain(|prompt| {
             prompt
@@ -418,13 +526,52 @@ impl SessionManager {
         });
         let mut seen = std::collections::HashSet::new();
         prompts.retain(|prompt| seen.insert(prompt.invocation.clone()));
-        Ok(menu(account.provider, &resolved, prompts))
+        let mut commands = menu(account.provider, &resolved, prompts);
+        if cli.is_some() {
+            for command in &mut commands {
+                if command.kind == Some(CliCommandKind::Skill)
+                    && !current.skills.iter().any(|s| {
+                        Some(&s.row_id) == command.source.as_ref()
+                            && Some(&s.invocation) == command.invocation.as_ref()
+                    })
+                {
+                    command.description = Some("applies to new sessions".into());
+                }
+                if command.kind == Some(CliCommandKind::Prompt)
+                    && resolved
+                        .servers
+                        .iter()
+                        .find(|s| Some(&s.name) == command.source.as_ref())
+                        .is_some_and(|old| !current.servers.iter().any(|new| same_server(old, new)))
+                {
+                    command.description = Some("applies to new sessions".into());
+                }
+            }
+            for skill in &current.skills {
+                if !resolved.skills.iter().any(|s| s.row_id == skill.row_id) {
+                    let mut item = menu(
+                        account.provider,
+                        &plugins::resolve::Resolved {
+                            skills: vec![skill.clone()],
+                            ..Default::default()
+                        },
+                        Vec::new(),
+                    )
+                    .remove(0);
+                    item.text.clear();
+                    item.description = Some("applies to new sessions".into());
+                    commands.push(item);
+                }
+            }
+        }
+        Ok(commands)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brigadier_registry::Catalog;
     use plugins::resolve::{Resolved, ResolvedSkill};
 
     struct PromptCatalog {
@@ -808,32 +955,144 @@ mod tests {
     }
 
     #[test]
-    fn choice_catalog_account_and_project_changes_invalidate_enrichment() {
-        let cache = Probes::default();
+    fn live_prompt_metadata_persists_per_account_and_project() {
+        let dir = std::env::temp_dir().join(format!("prompt-persistence-{}", uuid::Uuid::new_v4()));
         let key = (
             AccountRef::own(ProviderKind::Claude),
             Some(PathBuf::from("/project")),
-            "before".to_owned(),
         );
-        cache.keep(key.clone(), vec![CliCommand::default()]);
-        assert_eq!(cache.fresh(&key).len(), 1);
-        let changed = (key.0.clone(), key.1.clone(), "after".to_owned());
-        assert!(cache.fresh(&changed).is_empty());
-        cache.keep(changed, Vec::new());
-        assert!(cache.fresh(&key).is_empty());
+        let cache = Probes::default();
+        cache.keep(
+            &dir,
+            key.clone(),
+            vec![CliCommand {
+                name: "review".into(),
+                ..Default::default()
+            }],
+        );
+        let restarted = Probes::default();
+        assert_eq!(restarted.fresh(&dir, &key)[0].name, "review");
         assert!(
-            cache
-                .fresh(&(
-                    AccountRef::new(ProviderKind::Claude, Some("other".into())),
-                    key.1.clone(),
-                    key.2.clone()
-                ))
+            restarted
+                .fresh(&dir, &(key.0.clone(), Some(PathBuf::from("/other"))))
                 .is_empty()
         );
         assert!(
-            cache
-                .fresh(&(key.0, Some(PathBuf::from("/other")), key.2))
+            restarted
+                .fresh(
+                    &dir,
+                    &(
+                        AccountRef::new(ProviderKind::Claude, Some("other".into())),
+                        key.1
+                    )
+                )
                 .is_empty()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[tokio::test]
+    async fn live_skill_menu_and_sends_keep_launch_choices_until_session_end() {
+        use crate::manager::flow::{Flow, Options, Reply};
+        use crate::model::Mention;
+        let flow = Flow::start(
+            "launch-skill-snapshot",
+            Options {
+                files: vec![(".claude/skills/old/SKILL.md", "---\nname: old\n---\nOLD")],
+                ..Default::default()
+            },
+            std::sync::Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+        )
+        .await;
+        flow.say("start").await;
+        flow.settled().await;
+        let row = flow
+            .manager
+            .plugin_catalog()
+            .unwrap()
+            .rows
+            .into_iter()
+            .find(|r| r.name == "old")
+            .unwrap();
+        flow.manager.set_plugin_choice(&row.id, false).unwrap();
+        let file = flow.manager.data_dir.join("library/skills/new/SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "---\nname: new\n---\nNEW").unwrap();
+        let commands = flow
+            .manager
+            .cli_commands(Some(flow.conversation.clone()), None, None, None)
+            .await
+            .unwrap();
+        let old = commands.iter().find(|c| c.name == "old").unwrap();
+        assert_eq!(old.description.as_deref(), Some("applies to new sessions"));
+        assert!(!old.text.is_empty());
+        let new = commands.iter().find(|c| c.name == "new").unwrap();
+        assert_eq!(new.description.as_deref(), Some("applies to new sessions"));
+        assert!(new.text.is_empty());
+        let cli = flow
+            .manager
+            .conv(&flow.conversation)
+            .unwrap()
+            .cli()
+            .await
+            .unwrap();
+        assert!(
+            flow.manager
+                .skill_inputs(
+                    &flow.conversation,
+                    &[Mention::Skill { row_id: row.id }],
+                    Some(&cli.account)
+                )
+                .await
+                .is_ok()
+        );
+        assert!(
+            flow.manager
+                .skill_inputs(
+                    &flow.conversation,
+                    &[Mention::Skill {
+                        row_id: new.source.clone().unwrap()
+                    }],
+                    Some(&cli.account)
+                )
+                .await
+                .is_err()
+        );
+        cli.session.close().await;
+        cli.ended.cancelled().await;
+        let commands = flow
+            .manager
+            .cli_commands(Some(flow.conversation.clone()), None, None, None)
+            .await
+            .unwrap();
+        assert!(!commands.iter().any(|c| c.name == "old"));
+        assert!(
+            !commands
+                .iter()
+                .find(|c| c.name == "new")
+                .unwrap()
+                .text
+                .is_empty()
+        );
+        flow.stop().await;
+    }
+
+    #[test]
+    fn command_versions_exclude_credentials_and_capabilities() {
+        let mut resolved = skills();
+        let server = brigadier_providers::McpServer {
+            name: "db".into(),
+            gateway: None,
+            transport: brigadier_providers::McpTransport::Http {
+                url: "https://resource.invalid/mcp".into(),
+            },
+            env: vec![("Authorization".into(), "before".into())],
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+        };
+        resolved.servers.push(server);
+        let before = command_version(&resolved);
+        resolved.servers[0].env[0].1 = "after".into();
+        assert_eq!(before, command_version(&resolved));
     }
 }

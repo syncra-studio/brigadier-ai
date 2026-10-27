@@ -1029,13 +1029,14 @@ impl Original {
                         ) => url == other && same_values(headers, other_headers),
                         _ => false,
                     };
-                    return if same && existing.oauth.is_none() {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "Couldn't put {name} back: a different server is already there."
-                        ))
-                    };
+                    if !(same && existing.oauth.is_none()) {
+                        // A user's replacement wins. Keep the saved original in .moved,
+                        // but do not let a safe non-overwrite block retiring our installs.
+                        tracing::info!(
+                            "kept a user replacement of a legacy MCP server; saved original retained"
+                        );
+                    }
+                    return Ok(());
                 }
                 let steps = agent.add_server(name, &spec, &place).map_err(|err| err.0)?;
                 runner(
