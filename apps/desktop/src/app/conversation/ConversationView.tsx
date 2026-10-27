@@ -76,7 +76,6 @@ import type {
   Mention,
   ModelChoice,
   Rating,
-  ThreadView,
 } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
@@ -468,7 +467,6 @@ function rowHolding(nodes: readonly ThreadNode[], messageId: string): string | n
 }
 
 const NO_PENDING: PendingMessage[] = [];
-const EMPTY_VIEW: ThreadView = { entries: [], turns: [] };
 const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
 const EMPTY_DIGEST: BoardDigest = {
@@ -617,8 +615,8 @@ export function ConversationView({
   const full = useMemo(
     () =>
       conversationId
-        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView ?? EMPTY_VIEW, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session))
-        : cliThreadTree(EMPTY_VIEW, "", [], {}, built.pending, EMPTY_DIGEST, { state: built.run, error: built.runError }),
+        ? keepDrawnBlocks(conversationId, cliThreadTree(built.cliView, conversationId, built.items, built.fullText, built.pending, built.digest ?? EMPTY_DIGEST, { state: built.run, error: built.runError }, session))
+        : cliThreadTree(null, "", [], {}, built.pending, EMPTY_DIGEST, { state: built.run, error: built.runError }),
     [built.cliView, conversationId, built.items, built.fullText, built.digest, built.pending, built.run, built.runError, session],
   );
   // A jump to a message between sessions here: its row is mounted, and it lands once shown.

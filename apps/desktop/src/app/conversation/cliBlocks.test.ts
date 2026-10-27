@@ -501,6 +501,24 @@ test("the tree chains the turns, then the messages on their way", () => {
   ]);
 });
 
+test("a thread opened again before its view is read invents no live turns from the messages kept", () => {
+  // A reconnect dropped the view of a session not shown; opened again, Brigadier's messages are
+  // read before the CLI's view of its ended turns lands.
+  const kept = [stored("m0", 900), stored("m1", 2000)];
+  const read = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0", "m1"] }] };
+  for (const run of [{ state: "idle", error: null }, { state: "running", error: null }] as const) {
+    const loading = cliThreadTree(null, "conv", kept, {}, [], NO_BOARD, run);
+    assert.deepEqual(loading.nodes, [], `nothing drawn while the view loads (${run.state})`);
+    assert.equal(loading.headId, null);
+    // A message being sent still shows at once.
+    const pending = [{ localId: "local-1", conversationId: "conv", text: "Sending", createdAtMs: 2300, attachments: [] }];
+    assert.deepEqual(cliThreadTree(null, "conv", kept, {}, pending, NO_BOARD, run).nodes.map((node) => node.id), ["local-1", "request:local-1"]);
+    // Once read, the turns show as they ended.
+    const loaded = cliThreadTree(read, "conv", kept, {}, [], NO_BOARD, run);
+    assert.ok(loaded.nodes.every((node) => node.block.state === "done"));
+  }
+});
+
 /** A tree's nodes as drawn: each user bubble's text, each block's requests. */
 const bubbles = (tree: ReturnType<typeof cliThreadTree>) =>
   tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user?.kind === "message" ? node.block.user.text : node.block.requestIds]);

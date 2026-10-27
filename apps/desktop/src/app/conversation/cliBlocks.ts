@@ -951,6 +951,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   return blocks.filter((each) => !internal.has(each));
 }
 
+/** A thread not read yet: no turns. */
+const NOT_READ: ThreadView = { entries: [], turns: [] };
+
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
 type RunNow = { state: RunState; error: string | null };
 
@@ -972,17 +975,21 @@ function onItsWay(key: string, user: Block["user"], startedAtMs: number, run: Ru
  * The thread as assistant-ui's message tree: the CLI's turns, one after another, then the
  * messages still on their way: sent but not stored (`pending`), and stored but in no turn of
  * the CLI's yet (a user message newer than the newest the CLI has, that no turn carried).
+ * `thread` null: not read yet. Which stored messages a turn carries is unknown until it is, so
+ * none is on its way: each ended turn's message would read as one working since it was sent.
  */
 export function cliThreadTree(
-  view: ThreadView,
+  thread: ThreadView | null,
   conversationId: string,
-  stored: readonly Message[],
+  messages: readonly Message[],
   fullText: Readonly<Record<string, string>>,
   pending: readonly PendingMessage[],
   board: BoardDigest,
   run: RunNow,
   session = false,
 ): ThreadTree {
+  const view = thread ?? NOT_READ;
+  const stored = thread ? messages : [];
   const named = new Set(view.turns.flatMap((turn) => turn.requests));
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
   const blocks = cliBlocks(view, conversationId, board, session, typed);
