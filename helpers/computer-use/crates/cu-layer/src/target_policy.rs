@@ -63,6 +63,8 @@ pub enum RefusalReason {
     Driver,
     /// An authentication or security surface of the operating system.
     SecuritySurface,
+    /// A Windows Store app hosted by a shared application frame.
+    StoreApp,
 }
 
 impl RefusalReason {
@@ -72,6 +74,7 @@ impl RefusalReason {
             Self::Terminal => "terminal",
             Self::Driver => "driver",
             Self::SecuritySurface => "security_surface",
+            Self::StoreApp => "store_app_background_unsupported",
         }
     }
 }
@@ -255,6 +258,9 @@ pub fn classify(identity: &TargetIdentity, allowed: &[String]) -> Option<Refusal
     if is_driver(&bundle, &name) {
         return Some(RefusalReason::Driver);
     }
+    if bundle == "applicationframehost" || name == "applicationframehost" {
+        return Some(RefusalReason::StoreApp);
+    }
     if is_security_surface(&bundle, &name) {
         return Some(RefusalReason::SecuritySurface);
     }
@@ -329,7 +335,6 @@ fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
     matches!(
         bundle,
         "consent"
-            | "applicationframehost"
             | "credentialuibroker"
             | "logonui"
             | "lockapp"
@@ -592,6 +597,7 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         }
         RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
         RefusalReason::SecuritySurface => SECURITY_REFUSAL,
+        RefusalReason::StoreApp => "Store apps can't be driven in the background on Windows yet. Ask the user to do this step.",
     };
     let message = format!(
         "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
@@ -611,6 +617,22 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_frame_refusal_names_background_support_not_credentials() {
+        let identity = TargetIdentity {
+            name: "ApplicationFrameHost".into(),
+            bundle_id: Some("applicationframehost".into()),
+            pid: Some(28908),
+        };
+        let result = check("get_window_state", &identity, &[]).unwrap_err();
+        let state = result.structured_content.unwrap();
+        assert_eq!(state["reason"], "store_app_background_unsupported");
+        let message = state["message"].as_str().unwrap();
+        assert!(message.contains("Store apps can't be driven in the background on Windows yet"));
+        assert!(message.contains("Ask the user to do this step"));
+        assert!(!message.contains("credential"));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
