@@ -30,6 +30,7 @@ pub use mouse::{
     send_wheel_synthesized,
 };
 
+use cua_driver_core::window_state_view::windows_integrity_message as integrity_block_message;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
@@ -50,18 +51,6 @@ mod il {
     pub const MEDIUM_PLUS: u32 = 0x2100;
     pub const HIGH: u32 = 0x3000;
     pub const SYSTEM: u32 = 0x4000;
-}
-
-fn il_name(rid: u32) -> &'static str {
-    match rid {
-        il::UNTRUSTED => "Untrusted",
-        il::LOW => "Low",
-        il::MEDIUM => "Medium",
-        il::MEDIUM_PLUS => "Medium+",
-        il::HIGH => "High",
-        il::SYSTEM => "System",
-        _ => "unknown",
-    }
 }
 
 /// Read the mandatory integrity level (the last sub-authority of the
@@ -139,21 +128,28 @@ pub fn post_message_blocked_by_uipi(hwnd: u64) -> Option<String> {
     let target = unsafe { process_integrity_rid(target_handle) };
     let _ = unsafe { CloseHandle(target_handle) };
     let target = target?;
-    if target > own {
-        Some(format!(
-            "UIPI: target hwnd 0x{hwnd:x} (pid {pid}) is at {} integrity; \
-             cua-driver is at {} integrity. PostMessage to a higher-integrity \
-             window is silently dropped by the target's message pump — the \
-             call would return success but no input would land. Common cause: \
-             a Win32 app whose application manifest requests \
-             `requireAdministrator` (most Program-Files installs of Notepad++, \
-             VS Code system-scope, etc. land at High integrity). Run the \
-             daemon elevated to drive these, or use a non-elevated copy of \
-             the target. See https://learn.microsoft.com/en-us/windows/win32/winauto/uipi",
-            il_name(target),
-            il_name(own),
-        ))
-    } else {
-        None
+    integrity_block_message(own, target).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    #[test]
+    fn administrator_windows_explain_the_read_and_input_limit_plainly() {
+        let message = integrity_block_message(il::MEDIUM, il::HIGH).unwrap();
+        assert!(message.starts_with("This window runs as administrator"));
+        assert!(message.contains("cannot be read or controlled"));
+        assert!(message.contains("restart the computer-use helper as administrator"));
+        assert!(integrity_block_message(il::HIGH, il::HIGH).is_none());
+        assert!(integrity_block_message(il::HIGH, il::MEDIUM).is_none());
+        assert!(integrity_block_message(il::MEDIUM, il::MEDIUM).is_none());
+    }
+
+    #[test]
+    fn lower_privilege_helpers_do_not_mislabel_normal_apps_as_administrator() {
+        let message = integrity_block_message(il::LOW, il::MEDIUM).unwrap();
+        assert!(message.contains("higher privileges"));
+        assert!(!message.contains("administrator"));
     }
 }

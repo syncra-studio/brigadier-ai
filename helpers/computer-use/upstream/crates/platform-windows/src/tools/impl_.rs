@@ -1315,6 +1315,12 @@ impl Tool for GetWindowStateTool {
                 ));
             }
         };
+        if let Some(message) = crate::input::post_message_blocked_by_uipi(hwnd) {
+            return ToolResult::error(message).with_structured(json!({
+                "code": "elevated_window", "effect": "refused",
+                "pid": pid, "window_id": hwnd,
+            }));
+        }
         // Window identity metadata (additive): title + on-screen rectangle from
         // the lookup we already did, plus the owning process's executable
         // name. Names the surface on the capture-only path, where no UIA tree

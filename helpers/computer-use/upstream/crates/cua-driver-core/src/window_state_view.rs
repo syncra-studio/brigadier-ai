@@ -1568,3 +1568,34 @@ mod tests {
         assert!(s.get("_note").is_some());
     }
 }
+
+/// Shared by reads and input: higher privilege also makes UIA return a
+/// misleading, incomplete title-bar-only tree.
+pub fn windows_integrity_message(own: u32, target: u32) -> Option<&'static str> {
+    if target <= own {
+        None
+    } else if target >= 0x3000 {
+        Some("This window runs as administrator and cannot be read or controlled from a normal session. Open the app without administrator privileges, or restart the computer-use helper as administrator.")
+    } else {
+        Some("This window runs with higher privileges than the computer-use helper and cannot be read or controlled from this session. Open the app with the same privileges as the helper.")
+    }
+}
+
+#[cfg(test)]
+mod windows_integrity_tests {
+    use super::windows_integrity_message;
+
+    #[test]
+    fn privilege_decision_and_hint_are_portable() {
+        assert!(windows_integrity_message(0x2000, 0x2000).is_none());
+        assert!(windows_integrity_message(0x3000, 0x2000).is_none());
+        assert!(windows_integrity_message(0x3000, 0x3000).is_none());
+        let admin = windows_integrity_message(0x2000, 0x3000).unwrap();
+        assert!(admin.contains("runs as administrator"));
+        assert!(admin.contains("cannot be read or controlled"));
+        assert!(admin.contains("restart the computer-use helper as administrator"));
+        let restricted = windows_integrity_message(0x1000, 0x2000).unwrap();
+        assert!(restricted.contains("higher privileges"));
+        assert!(!restricted.contains("administrator"));
+    }
+}

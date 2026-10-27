@@ -1,0 +1,132 @@
+diff --git a/crates/cua-driver-core/src/window_state_view.rs b/crates/cua-driver-core/src/window_state_view.rs
+index 053d038aa..0636fe947 100644
+--- a/crates/cua-driver-core/src/window_state_view.rs
++++ b/crates/cua-driver-core/src/window_state_view.rs
+@@ -1568,3 +1568,34 @@ mod tests {
+         assert!(s.get("_note").is_some());
+     }
+ }
++
++/// Shared by reads and input: higher privilege also makes UIA return a
++/// misleading, incomplete title-bar-only tree.
++pub fn windows_integrity_message(own: u32, target: u32) -> Option<&'static str> {
++    if target <= own {
++        None
++    } else if target >= 0x3000 {
++        Some("This window runs as administrator and cannot be read or controlled from a normal session. Open the app without administrator privileges, or restart the computer-use helper as administrator.")
++    } else {
++        Some("This window runs with higher privileges than the computer-use helper and cannot be read or controlled from this session. Open the app with the same privileges as the helper.")
++    }
++}
++
++#[cfg(test)]
++mod windows_integrity_tests {
++    use super::windows_integrity_message;
++
++    #[test]
++    fn privilege_decision_and_hint_are_portable() {
++        assert!(windows_integrity_message(0x2000, 0x2000).is_none());
++        assert!(windows_integrity_message(0x3000, 0x2000).is_none());
++        assert!(windows_integrity_message(0x3000, 0x3000).is_none());
++        let admin = windows_integrity_message(0x2000, 0x3000).unwrap();
++        assert!(admin.contains("runs as administrator"));
++        assert!(admin.contains("cannot be read or controlled"));
++        assert!(admin.contains("restart the computer-use helper as administrator"));
++        let restricted = windows_integrity_message(0x1000, 0x2000).unwrap();
++        assert!(restricted.contains("higher privileges"));
++        assert!(!restricted.contains("administrator"));
++    }
++}
+diff --git a/crates/platform-windows/src/input/mod.rs b/crates/platform-windows/src/input/mod.rs
+index 4b3a2ebb6..aea63f92e 100644
+--- a/crates/platform-windows/src/input/mod.rs
++++ b/crates/platform-windows/src/input/mod.rs
+@@ -30,6 +30,7 @@ pub use mouse::{
+     send_wheel_synthesized,
+ };
+ 
++use cua_driver_core::window_state_view::windows_integrity_message as integrity_block_message;
+ use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+ use windows::Win32::Security::{
+     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+@@ -52,18 +53,6 @@ mod il {
+     pub const SYSTEM: u32 = 0x4000;
+ }
+ 
+-fn il_name(rid: u32) -> &'static str {
+-    match rid {
+-        il::UNTRUSTED => "Untrusted",
+-        il::LOW => "Low",
+-        il::MEDIUM => "Medium",
+-        il::MEDIUM_PLUS => "Medium+",
+-        il::HIGH => "High",
+-        il::SYSTEM => "System",
+-        _ => "unknown",
+-    }
+-}
+-
+ /// Read the mandatory integrity level (the last sub-authority of the
+ /// integrity SID) of a process handle. Returns `None` on any API failure.
+ unsafe fn process_integrity_rid(process: HANDLE) -> Option<u32> {
+@@ -139,21 +128,28 @@ pub fn post_message_blocked_by_uipi(hwnd: u64) -> Option<String> {
+     let target = unsafe { process_integrity_rid(target_handle) };
+     let _ = unsafe { CloseHandle(target_handle) };
+     let target = target?;
+-    if target > own {
+-        Some(format!(
+-            "UIPI: target hwnd 0x{hwnd:x} (pid {pid}) is at {} integrity; \
+-             cua-driver is at {} integrity. PostMessage to a higher-integrity \
+-             window is silently dropped by the target's message pump — the \
+-             call would return success but no input would land. Common cause: \
+-             a Win32 app whose application manifest requests \
+-             `requireAdministrator` (most Program-Files installs of Notepad++, \
+-             VS Code system-scope, etc. land at High integrity). Run the \
+-             daemon elevated to drive these, or use a non-elevated copy of \
+-             the target. See https://learn.microsoft.com/en-us/windows/win32/winauto/uipi",
+-            il_name(target),
+-            il_name(own),
+-        ))
+-    } else {
+-        None
++    integrity_block_message(own, target).map(str::to_owned)
++}
++
++#[cfg(test)]
++mod integrity_tests {
++    use super::*;
++
++    #[test]
++    fn administrator_windows_explain_the_read_and_input_limit_plainly() {
++        let message = integrity_block_message(il::MEDIUM, il::HIGH).unwrap();
++        assert!(message.starts_with("This window runs as administrator"));
++        assert!(message.contains("cannot be read or controlled"));
++        assert!(message.contains("restart the computer-use helper as administrator"));
++        assert!(integrity_block_message(il::HIGH, il::HIGH).is_none());
++        assert!(integrity_block_message(il::HIGH, il::MEDIUM).is_none());
++        assert!(integrity_block_message(il::MEDIUM, il::MEDIUM).is_none());
++    }
++
++    #[test]
++    fn lower_privilege_helpers_do_not_mislabel_normal_apps_as_administrator() {
++        let message = integrity_block_message(il::LOW, il::MEDIUM).unwrap();
++        assert!(message.contains("higher privileges"));
++        assert!(!message.contains("administrator"));
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 4b6064fab..2d41b7375 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -1315,6 +1315,12 @@ impl Tool for GetWindowStateTool {
+                 ));
+             }
+         };
++        if let Some(message) = crate::input::post_message_blocked_by_uipi(hwnd) {
++            return ToolResult::error(message).with_structured(json!({
++                "code": "elevated_window", "effect": "refused",
++                "pid": pid, "window_id": hwnd,
++            }));
++        }
+         // Window identity metadata (additive): title + on-screen rectangle from
+         // the lookup we already did, plus the owning process's executable
+         // name. Names the surface on the capture-only path, where no UIA tree

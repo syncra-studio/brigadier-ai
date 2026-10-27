@@ -75,6 +75,7 @@ Patches applied, in order:
 - `patches/0040-diff-returned-element-count.diff`: refresh returned_element_count after projecting diff elements so typed observations accept changed and unchanged reads.
 - `patches/0041-batch-token-window-inheritance.diff`: run_steps resolves token snapshot windows before planning so observe:{} and subsequent steps inherit the addressed window; reject conflicting explicit targets.
 - `patches/0042-windows-hosted-window-identity.diff`: supplement Windows enumeration with the current desktop and attribute each UWP frame to its own hosted app pid; accept the app/frame pair for reads and actions.
+- `patches/0043-windows-elevated-window-read-refusal.diff`: refuse reads before UIA silently returns a title-bar-only tree for elevated windows; reads and input explain the privilege boundary and remedy plainly.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
