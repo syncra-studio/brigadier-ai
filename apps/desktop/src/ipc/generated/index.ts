@@ -396,6 +396,7 @@ export type { RoutingActivity } from "./RoutingActivity";
 export type { RunState } from "./RunState";
 export type { RunningChat } from "./RunningChat";
 export type { RuntimeMetrics } from "./RuntimeMetrics";
+export type { Said } from "./Said";
 export type { SeamMark } from "./SeamMark";
 export type { SearchFile } from "./SearchFile";
 export type { SearchKind } from "./SearchKind";

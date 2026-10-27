@@ -919,6 +919,7 @@ mod tests {
             steer: false,
             images: Vec::new(),
             phase: None,
+            said: None,
         }
     }
 

@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use brigadier_providers::session_file::Said;
 use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
@@ -194,6 +195,12 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
     assert!(input.trim_end().ends_with(CARRY_ON));
     let start = std::fs::read_to_string(&first.seams[0].start).unwrap();
     assert!(input.starts_with(start.as_str()));
+    // The nudge, the hand-off and the word to carry on are Brigadier's, never a bubble (L12).
+    let nudges = given(&inputs, NUDGE_MARK);
+    assert!(!nudges.is_empty());
+    for (_, nudge) in nudges.iter().chain([&carried[0]]) {
+        assert_eq!(flow.noted_said(nudge), Some(Said::Brigadier), "{nudge}");
+    }
 
     // The user's next message goes to that successor, resumed.
     flow.say("After one.").await;
@@ -237,6 +244,13 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
         })
         .collect();
     assert_eq!(texts, [CARRY_ON, CARRY_ON]);
+    let said: Vec<_> = view
+        .entries
+        .iter()
+        .filter(|entry| matches!(&entry.event, ProviderEvent::Message { item_id, .. } if view.seams.iter().any(|mark| mark.at.as_ref() == Some(item_id))))
+        .map(|entry| entry.said.clone())
+        .collect();
+    assert_eq!(said, [Some(Said::Brigadier), Some(Said::Brigadier)]);
     flow.stop().await;
 }
 
@@ -267,6 +281,19 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
     assert_eq!(meanwhile[0].0, file.seams[0].successor);
     assert!(meanwhile[0].1.starts_with(HANDOFF_MARK));
+    // Only the user's words show of it: the hand-off before them is Brigadier's (L12).
+    assert_eq!(
+        flow.noted_said(&meanwhile[0].1),
+        Some(Said::Both {
+            user: "Meanwhile.".into()
+        })
+    );
+    assert_eq!(
+        flow.said_in_thread("Meanwhile."),
+        [Some(Said::Both {
+            user: "Meanwhile.".into()
+        })]
+    );
     assert!(given(&inputs, CARRY_ON).is_empty());
     assert!(file.seams[0].note.is_some());
     assert_eq!(file.seams[0].messages.len(), 1);

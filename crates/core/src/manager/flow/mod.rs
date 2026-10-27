@@ -2157,6 +2157,33 @@ impl Flow {
     }
 
     /// Sends the user's message.
+    /// Who Brigadier noted wrote `text` when it sent it to this flow's conversation's CLI.
+    pub fn noted_said(&self, text: &str) -> Option<brigadier_providers::session_file::Said> {
+        self.manager.noted_said(&self.conversation, text)
+    }
+
+    /// Who wrote each user message of the conversation's thread that holds `needle`, as the
+    /// thread view says.
+    pub fn said_in_thread(
+        &self,
+        needle: &str,
+    ) -> Vec<Option<brigadier_providers::session_file::Said>> {
+        self.manager
+            .thread_view(&self.conversation)
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter_map(|entry| match &entry.event {
+                brigadier_providers::ProviderEvent::Message {
+                    role: brigadier_providers::Role::User,
+                    text,
+                    ..
+                } if text.contains(needle) => Some(entry.said.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub async fn say(&self, text: &str) {
         self.say_to(&self.conversation, text).await;
     }
@@ -2565,6 +2592,8 @@ mod thread_items_tests;
 mod internal_envelope_tests;
 #[cfg(unix)]
 mod project_sessions_tests;
+#[cfg(unix)]
+mod said_tests;
 #[cfg(unix)]
 mod session_dir_tests;
 #[cfg(unix)]

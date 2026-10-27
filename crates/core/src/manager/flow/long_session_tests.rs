@@ -237,6 +237,18 @@ async fn claude_compactions(arm: &str) -> Vec<Option<String>> {
         .unwrap();
     let native = spec.native_compaction.clone().expect("compacts natively");
     assert_eq!(native.backstop_window, Some(110_000));
+    // Its `/compact`, as Claude keeps it, is Brigadier's: never the user's bubble (L12).
+    for instructions in behavior.compactions.lock().unwrap().iter() {
+        let words = match instructions {
+            Some(instructions) => format!("/compact {instructions}"),
+            None => "/compact".to_owned(),
+        };
+        assert_eq!(
+            flow.noted_said(&words),
+            Some(brigadier_providers::session_file::Said::Brigadier),
+            "{words}"
+        );
+    }
     flow.stop().await;
     behavior.compactions.lock().unwrap().clone()
 }

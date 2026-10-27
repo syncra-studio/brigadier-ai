@@ -210,6 +210,8 @@ async fn provenance_io_failure_keeps_the_model_notification() {
         .session_dir(&flow.conversation)
         .record()
         .join("internal-inputs.json");
+    // The user's turn above was noted there already (L12): the file goes, a folder takes its place.
+    std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let body = "A reminder result that must still reach the model.";
     flow.manager
