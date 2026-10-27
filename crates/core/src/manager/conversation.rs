@@ -2389,6 +2389,7 @@ impl SessionManager {
         let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
+                || state.unowned_turn
                 || state.closing
                 || state.held
                 || state.recovering
@@ -6277,6 +6278,67 @@ fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_pending_message_waits_for_the_autonomous_cli_turn_to_end() {
+        use super::super::flow::{Flow, Options, Reply};
+        let inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = inputs.clone();
+        let flow = Flow::start(
+            "unowned-turn-pending",
+            Options::default(),
+            Arc::new(move |turn| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    if turn.conversation().is_some() {
+                        seen.lock().unwrap().push(turn.input);
+                    }
+                    Reply::text("Answered.")
+                })
+            }),
+        )
+        .await;
+        flow.say("Start.").await;
+        flow.settled().await;
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        flow.manager
+            .on_conversation_event(&conv, &cli, ProviderEvent::TurnStarted { turn_id: None })
+            .await;
+        let message = flow
+            .core
+            .append_user_message(conv.id.clone(), "Next.".into(), Vec::new(), Vec::new())
+            .await
+            .unwrap();
+        conv.state.lock().await.pending.push(message);
+        flow.manager.next_turn_now(&conv).await;
+        {
+            let state = conv.state.lock().await;
+            assert_eq!(
+                state.pending.len(),
+                1,
+                "the driver took work while the CLI still ran its own turn"
+            );
+            assert!(state.unowned_turn);
+            assert!(!state.busy);
+        }
+        assert_eq!(*inputs.lock().unwrap(), ["Start."]);
+        flow.manager
+            .on_conversation_event(
+                &conv,
+                &cli,
+                ProviderEvent::TurnCompleted {
+                    turn_id: None,
+                    status: TurnStatus::Completed,
+                    duration_ms: None,
+                    usage: None,
+                },
+            )
+            .await;
+        flow.settled().await;
+        assert_eq!(*inputs.lock().unwrap(), ["Start.", "Next."]);
+        flow.stop().await;
+    }
 
     #[tokio::test]
     async fn an_unowned_background_turn_cannot_hibernate_after_the_idle_timeout() {

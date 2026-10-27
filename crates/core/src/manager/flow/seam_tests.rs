@@ -330,6 +330,11 @@ async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
     );
+    assert_ne!(
+        file.seams[0].end.predecessor.as_deref(),
+        Some(file.seams[0].successor.as_str()),
+        "the hand-off reused its predecessor: {file:?}"
+    );
     let meanwhile = given(&inputs, "Meanwhile.");
     assert_eq!(meanwhile.len(), 1);
     assert!(
@@ -370,7 +375,22 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
     flow.say("Grow.").await;
     reached.notified().await;
     // Queued while the turn runs, before the seam.
-    flow.say("Meanwhile.").await;
+    let outcome = flow
+        .manager
+        .send_message(
+            flow.conversation.clone(),
+            "Meanwhile.".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let super::super::conversation::SendOutcome::Queued(item) = outcome else {
+        panic!("not queued")
+    };
+    assert!(item.delivered, "not steered: {item:?}");
     release.notify_one();
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
     flow.idle().await;
@@ -382,7 +402,7 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
     // successor reads it with `brigadier context` (D13), and nothing sends it again.
     let meanwhile = given(&inputs, "Meanwhile.");
     assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
-    assert_ne!(meanwhile[0].0, file.seams[0].successor);
+    assert_ne!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}",);
     assert!(
         meanwhile[0].1.starts_with("[queued message "),
         "{meanwhile:?}"
