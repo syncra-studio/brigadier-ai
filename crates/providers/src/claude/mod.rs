@@ -127,9 +127,6 @@ pub struct Claude {
     /// An extra account's ([`crate::accounts`]): the user's own config directory, where its
     /// history and settings are (its own home links them).
     main_config: Option<PathBuf>,
-    /// An extra account's: the user's own config file, whose MCP servers each session copies
-    /// in first ([`crate::accounts::carry_servers`]).
-    main_config_file: Option<PathBuf>,
 }
 
 impl Claude {
@@ -138,7 +135,6 @@ impl Claude {
             platform,
             env,
             main_config: None,
-            main_config_file: None,
         }
     }
 
@@ -146,26 +142,11 @@ impl Claude {
     /// [`crate::accounts::prepare_home`]); `env` is the user's own environment.
     pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
         let main_config = crate::accounts::main_home(ProviderKind::Claude, env);
-        let main_config_file = crate::accounts::main_config_file(env);
         let env = Arc::new(env.for_account(ProviderKind::Claude, home));
         Self {
             platform,
             env,
             main_config,
-            main_config_file,
-        }
-    }
-
-    /// An extra account's session sees the user's own MCP servers: copied into its config
-    /// file before the CLI starts. A failure is logged; the session still starts.
-    async fn carry_servers(&self) {
-        let (Some(main), Some(home)) = (self.main_config_file.clone(), self.config_dir()) else {
-            return;
-        };
-        let carried =
-            tokio::task::spawn_blocking(move || crate::accounts::carry_servers(&main, &home)).await;
-        if let Ok(Err(err)) = carried {
-            tracing::warn!(error = %err, "could not copy the user's MCP servers to the account");
         }
     }
 
@@ -423,7 +404,11 @@ impl Claude {
             } else {
                 "user"
             };
-            vec!["--setting-sources".into(), sources.into()]
+            vec![
+                "--strict-mcp-config".into(),
+                "--setting-sources".into(),
+                sources.into(),
+            ]
         } else {
             ["--strict-mcp-config", "--setting-sources", "project"]
                 .map(str::to_owned)
@@ -512,9 +497,12 @@ impl Claude {
         }
         // Brigadier's own skills, as plugins: they load beside the project's settings without
         // reading the user's.
-        for plugin in spec.skill_plugins.iter().chain(&spec.installed_skills) {
+        for plugin in &spec.skill_plugins {
             args.push("--plugin-dir".into());
             args.push(plugin.display().to_string());
+        }
+        for overlay in &spec.installed_skills {
+            args.extend(["--add-dir".to_owned(), overlay.display().to_string()]);
         }
         if let Some(model) = &spec.model {
             args.push("--model".into());
@@ -817,6 +805,19 @@ fn permission_mode(spec: &SessionSpec) -> &'static str {
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
 fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Value {
+    // A global skillOverride would hide the injected version too. Keep its qualified
+    // overlay invocation available and deny only the native plain invocation instead.
+    let overlay_collision = |name: &str| {
+        spec.add_dirs
+            .iter()
+            .chain(&spec.installed_skills)
+            .any(|root| {
+                root.join(".claude/skills")
+                    .join(name)
+                    .join("SKILL.md")
+                    .is_file()
+            })
+    };
     let mut allow: Vec<String> = spec
         .mcp_servers
         .iter()
@@ -829,6 +830,7 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         .switched_off
         .servers
         .iter()
+        .filter(|name| !name.starts_with("plugin:"))
         .map(|name| format!("mcp__{name}"))
         .collect();
     // A plugin's skill: `skillOverrides` doesn't reach plugin skills (2.1.306), a deny rule
@@ -837,6 +839,13 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         spec.switched_off
             .plugin_skills
             .iter()
+            .map(|name| format!("Skill({name})")),
+    );
+    deny.extend(
+        spec.switched_off
+            .skill_names
+            .iter()
+            .filter(|name| overlay_collision(name))
             .map(|name| format!("Skill({name})")),
     );
     if matches!(
@@ -896,11 +905,21 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     }
     // The user's own skills they switched off for Brigadier. Claude keys them by name, so
     // every skill of that name goes (docs/research/phase7-probes.md (b)).
+    if !spec.switched_off.servers.is_empty() {
+        settings["deniedMcpServers"] = Value::Array(
+            spec.switched_off
+                .servers
+                .iter()
+                .map(|name| json!({"serverName":name}))
+                .collect(),
+        );
+    }
     if !spec.switched_off.skill_names.is_empty() {
         let off: Map<String, Value> = spec
             .switched_off
             .skill_names
             .iter()
+            .filter(|name| !overlay_collision(name))
             .map(|name| (name.clone(), json!("off")))
             .collect();
         settings["skillOverrides"] = Value::Object(off);
@@ -1344,7 +1363,6 @@ impl Provider for Claude {
                     "no saved Claude session {native_id} to resume"
                 )));
             }
-            self.carry_servers().await;
             let user_config = self.config_dir();
             let args = Self::session_args(
                 &spec,
@@ -1615,7 +1633,6 @@ impl Provider for Claude {
             // `--input-format`, `--include-partial-messages` and `--replay-user-messages`).
             // Its instructions are in the session record (`--system-prompt-snapshot`, on by
             // default), so `--append-system-prompt` isn't repeated.
-            self.carry_servers().await;
             let user_config = self.config_dir();
             let mut args = Self::session_flags(
                 &spec,
@@ -2875,14 +2892,15 @@ for line in sys.stdin:
 
     /// The `/brigade` skill loads as a plugin beside Brigadier's other skills (S15).
     #[test]
-    fn installed_skills_load_as_plugins() {
+    fn installed_skills_load_from_overlay_roots() {
         let dir = Temp::new();
         let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
         spec.tools = ToolSet::Thread;
         spec.installed_skills = vec![PathBuf::from("/data/brigade")];
         let args = Claude::session_args(&spec, dir.path(), "x", false, None).unwrap();
-        let at = args.iter().position(|arg| arg == "--plugin-dir").unwrap();
+        let at = args.iter().position(|arg| arg == "--add-dir").unwrap();
         assert_eq!(args[at + 1], "/data/brigade");
+        assert!(!args.iter().any(|arg| arg == "--plugin-dir"));
     }
 
     fn assert_thinking_args(args: &[String]) {
@@ -3846,7 +3864,7 @@ for line in sys.stdin:
                 "{tools:?}"
             );
             assert!(
-                !args.contains(&"--strict-mcp-config".to_owned()),
+                args.contains(&"--strict-mcp-config".to_owned()),
                 "{tools:?}"
             );
             // The user's own servers load from their settings; Brigadier adds none (S16c).
@@ -3905,7 +3923,7 @@ for line in sys.stdin:
         };
         let config_dir = Some(config.path());
         let args = Claude::session_args(&worker, cwd.path(), "n", false, config_dir).unwrap();
-        assert!(!args.contains(&"--strict-mcp-config".to_owned()));
+        assert!(args.contains(&"--strict-mcp-config".to_owned()));
         assert_eq!(
             flag(&args, "--setting-sources").as_deref(),
             Some("user,project,local")
@@ -4761,6 +4779,10 @@ for line in sys.stdin:
         assert!(deny.contains(&json!("mcp__plugin_docs_server")), "{deny:?}");
         assert!(deny.contains(&json!("Skill(docs:write)")), "{deny:?}");
         assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
+        assert_eq!(
+            settings["deniedMcpServers"],
+            json!([{"serverName":"railway"},{"serverName":"plugin_docs_server"}])
+        );
         // Nothing switched off, nothing added.
         let plain = settings_of(&spec(&dir, &[]));
         assert!(plain.get("skillOverrides").is_none());
@@ -4773,5 +4795,50 @@ for line in sys.stdin:
 
     fn settings_of(spec: &SessionSpec) -> Value {
         settings(spec, &SubAgents::Any, false)
+    }
+    #[test]
+    fn strict_launch_flags_keep_secret_values_out_of_argv() {
+        let temp = Temp::new();
+        let root = std::env::var_os("BRIGADIER_PLUGIN_PROBE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temp.path().to_owned());
+        let mut session = spec(&root.join("work"), &[]);
+        session.model = None;
+        session.tools = ToolSet::Thread;
+        session.project = Some(root.join("work"));
+        session.add_dirs = vec![root.join("overlay")];
+        session.mcp_servers = vec![McpServer {
+            gateway: None,
+            name: "selected".into(),
+            transport: McpTransport::Stdio {
+                command: "/usr/bin/python3".into(),
+                args: vec![root.join("server.py").display().to_string()],
+                cwd: None,
+            },
+            env: vec![("FIXTURE_SECRET".into(), "fixture-secret".into())],
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+        }];
+        session.switched_off.servers = vec!["native-user".into()];
+        let strict = Claude::session_flags(&session, &session.cwd, false, None);
+        assert!(strict.iter().any(|flag| flag == "--strict-mcp-config"));
+        assert!(!strict.join(" ").contains("fixture-secret"));
+        let env = session_env(&session, false, None);
+        assert!(env.iter().any(|(_, value)| value == "fixture-secret"));
+        session
+            .switched_off
+            .servers
+            .push("plugin:fixture:plugin-native".into());
+        session.switched_off.skill_names = vec!["collision".into()];
+        let denied = Claude::session_flags(&session, &session.cwd, false, None);
+        assert!(denied.join(" ").contains("plugin:fixture:plugin-native"));
+        if std::env::var_os("BRIGADIER_PLUGIN_PROBE_DIR").is_some() {
+            std::fs::write(
+                root.join("claude-flags.json"),
+                json!({"strict":strict,"denied":denied,"env":env}).to_string(),
+            )
+            .unwrap();
+        }
     }
 }

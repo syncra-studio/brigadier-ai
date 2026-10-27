@@ -3107,6 +3107,26 @@ impl SessionManager {
         // Every account shares the CLI's session history: a conversation resumes on whichever
         // account it runs on now.
         let account = self.runtime.account_for(&choice);
+        let repo = self.trusted_repo(&conv.id);
+        let resolved = self
+            .resolve_plugins(
+                &account,
+                repo.as_deref(),
+                &spec.cwd,
+                self.repo_trust(&conv.id) == Some(true),
+                if spec.tools.user_setup() {
+                    super::plugins::resolve::Role::Thread
+                } else {
+                    super::plugins::resolve::Role::Worker { grants: &[] }
+                },
+            )
+            .await?;
+        super::plugins::launch::apply_resolved(
+            &mut spec,
+            &resolved,
+            self.session_dir(&conv.id).root(),
+            choice.provider,
+        )?;
         let started = match self
             .runtime
             .start_hosted(&owner, &account, spec.clone())

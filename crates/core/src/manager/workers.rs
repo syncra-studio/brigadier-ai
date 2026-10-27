@@ -733,8 +733,13 @@ impl SessionManager {
         // still loads.
         let (switched_off, granted) = match task.plain.as_ref() {
             Some(plain) => {
-                self.naked_worker_setup(&conversation_id, provider, &cwd, &plain.mcps)
-                    .await
+                self.naked_worker_setup(
+                    &conversation_id,
+                    &self.runtime.account_for(&task.route.choice),
+                    &cwd,
+                    &plain.mcps,
+                )
+                .await?
             }
             None => Default::default(),
         };
@@ -782,7 +787,7 @@ impl SessionManager {
                 .await;
             });
         }
-        let spec = SessionSpec {
+        let mut spec = SessionSpec {
             cwd: cwd.clone(),
             model: task.route.choice.model.clone(),
             effort: task.route.choice.effort.clone(),
@@ -802,7 +807,7 @@ impl SessionManager {
                 .chain(granted)
                 .collect(),
             tools: ToolSet::Lean,
-            skill_plugins: computer.into_iter().map(|kit| kit.plugin).collect(),
+            skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
             installed_skills: Vec::new(),
             switched_off,
             add_dirs: vec![record],
@@ -835,6 +840,23 @@ impl SessionManager {
             // Its temp folder names its session, so Delete and the sweep find it (D7).
             temp_tag: Some(task.conversation_id.short().to_owned()),
         };
+        let account = self.runtime.account_for(&task.route.choice);
+        let repo = self.trusted_repo(&conversation_id);
+        let grants = spec.mcp_servers.clone();
+        let resolved = self
+            .resolve_plugins(
+                &account,
+                repo.as_deref(),
+                &cwd,
+                self.repo_trust(&conversation_id) == Some(true),
+                if task.plain.is_some() {
+                    super::plugins::resolve::Role::Worker { grants: &grants }
+                } else {
+                    super::plugins::resolve::Role::Thread
+                },
+            )
+            .await?;
+        super::plugins::launch::apply_resolved(&mut spec, &resolved, &worker_dir, provider)?;
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
             spec,

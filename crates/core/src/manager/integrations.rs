@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
-use brigadier_registry::{
-    Agent, Catalog, Registry, Roots, Server, Session, SkillRoot, Source, Transport,
-};
+#[cfg(test)]
+use brigadier_providers::McpTransport;
+use brigadier_providers::{McpServer, ProviderKind, SwitchedOff};
+use brigadier_registry::{Agent, Registry, Roots, Server};
+#[cfg(test)]
+use brigadier_registry::{Catalog, Session, SkillRoot, Source, Transport};
 
 use super::SessionManager;
 use super::mcp_login::{Clis, McpSignInProgress, McpSignInStatus, Open, Target};
@@ -49,6 +51,7 @@ pub(super) fn registry(vars: impl IntoIterator<Item = (String, String)>) -> Arc<
 
 /// What of its agent's own setup a naked worker (`brigadier start`, D13) goes without: every
 /// skill, and every MCP server but those `granted` names (D18).
+#[cfg(test)]
 pub(crate) fn naked_switched_off(
     catalog: &Catalog,
     session: &Session<'_>,
@@ -126,6 +129,7 @@ pub(crate) fn naked_switched_off(
 /// (`session`'s), under the name `brigadier context mcps` prints for it, which is the name its
 /// CLI knows it by. Each is given to the CLI as Brigadier's own servers are, since a naked
 /// worker loads none of the user's config. A name none of them has is refused.
+#[cfg(test)]
 pub(crate) fn granted_servers(
     catalog: &Catalog,
     session: &Session<'_>,
@@ -345,34 +349,32 @@ impl SessionManager {
     pub(crate) async fn naked_worker_setup(
         &self,
         conversation: &ConversationId,
-        provider: ProviderKind,
+        account: &crate::accounts::AccountRef,
         cwd: &Path,
-        grants: &[String],
-    ) -> (SwitchedOff, Vec<McpServer>) {
-        let (registry, repo) = (self.registry(), self.trusted_repo(conversation));
-        let (cwd, grants) = (cwd.to_owned(), grants.to_vec());
-        super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            let session = Session {
-                agent: agent(provider),
-                cwd: &cwd,
-                project: repo.as_deref(),
-                in_checkout: true,
-            };
-            let granted: Vec<McpServer> = grants
-                .iter()
-                .filter_map(|name| {
-                    granted_servers(&catalog, &session, std::slice::from_ref(name))
-                        .map_err(|err| tracing::warn!("a worker's granted server: {err}"))
-                        .ok()
-                })
-                .flatten()
-                .collect();
-            let names: Vec<String> = granted.iter().map(|server| server.name.clone()).collect();
-            Ok((naked_switched_off(&catalog, &session, &names), granted))
-        })
-        .await
-        .unwrap_or_default()
+        names: &[String],
+    ) -> Result<(SwitchedOff, Vec<McpServer>)> {
+        let repo = self.trusted_repo(conversation);
+        let trusted = self.repo_trust(conversation) == Some(true);
+        let resolved = self
+            .resolve_plugins(
+                account,
+                repo.as_deref(),
+                cwd,
+                trusted,
+                super::plugins::resolve::Role::Thread,
+            )
+            .await?;
+        let grants = select_grants(&resolved.servers, names).map_err(Error::Invalid)?;
+        let resolved = self
+            .resolve_plugins(
+                account,
+                repo.as_deref(),
+                cwd,
+                trusted,
+                super::plugins::resolve::Role::Worker { grants: &grants },
+            )
+            .await?;
+        Ok((resolved.off, resolved.servers))
     }
 
     /// The names `brigadier start --mcp` gave, each as its CLI knows it, or why one can't be
@@ -387,22 +389,42 @@ impl SessionManager {
         if names.is_empty() {
             return Ok(Vec::new());
         }
-        let (registry, repo) = (self.registry(), self.trusted_repo(conversation));
-        let (cwd, names) = (cwd.to_owned(), names.to_vec());
-        super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            let session = Session {
-                agent: agent(provider),
-                cwd: &cwd,
-                project: repo.as_deref(),
-                in_checkout: true,
-            };
-            Ok(granted_servers(&catalog, &session, &names)
-                .map(|servers| servers.into_iter().map(|server| server.name).collect()))
-        })
-        .await
-        .unwrap_or_else(|err| Err(err.to_string()))
+        let repo = self.trusted_repo(conversation);
+        let resolved = self
+            .resolve_plugins(
+                &crate::accounts::AccountRef::own(provider),
+                repo.as_deref(),
+                cwd,
+                self.repo_trust(conversation) == Some(true),
+                super::plugins::resolve::Role::Thread,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        select_grants(&resolved.servers, names)
+            .map(|servers| servers.into_iter().map(|server| server.name).collect())
     }
+}
+
+fn select_grants(
+    servers: &[McpServer],
+    names: &[String],
+) -> std::result::Result<Vec<McpServer>, String> {
+    let mut grants = Vec::new();
+    for name in names {
+        let server = servers
+            .iter()
+            .find(|server| server.name == *name)
+            .ok_or_else(|| {
+                format!("no enabled MCP server {name:?} here; `brigadier context mcps` lists them")
+            })?;
+        if !grants
+            .iter()
+            .any(|known: &McpServer| known.name == server.name)
+        {
+            grants.push(server.clone());
+        }
+    }
+    Ok(grants)
 }
 
 #[cfg(test)]

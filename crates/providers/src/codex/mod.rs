@@ -300,6 +300,7 @@ impl Codex {
         spec.cwd = Some(cwd.to_owned());
         if let Some(session) = session {
             crate::cli::apply_session_env(&mut spec, &session.env, &session.unset_env);
+            crate::cli::apply_session_env(&mut spec, &mcp_header_env(session), &[]);
             spec.low_priority = session.low_priority;
         }
         if let Some(hook) = stop_hook_of(session) {
@@ -584,17 +585,11 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         .map(|session| session.switched_off.plugin_servers.as_slice())
         .unwrap_or_default()
     {
-        if plugin.contains('.') || server.contains('.') {
-            tracing::warn!(
-                plugin,
-                server,
-                "a switched-off plugin server's name has a dot; left on"
-            );
-            continue;
-        }
         args.push("-c".into());
         args.push(format!(
-            "plugins.{plugin}.mcp_servers.{server}.enabled=false"
+            "plugins.{}.mcp_servers.{}.enabled=false",
+            toml_string(plugin),
+            toml_string(server)
         ));
     }
     args.push("-c".into());
@@ -629,6 +624,7 @@ fn terminal_command(
     ];
     args.extend(app_server_args(Some(spec)).into_iter().skip(1));
     let mut variables = spec.env.clone();
+    variables.extend(mcp_header_env(spec));
     variables.extend(stop_hook_of(Some(spec)).map(stop_hook_env));
     if let Some(Value::Object(servers)) = config.get_mut("mcp_servers") {
         terminal_servers(servers, env, &mut variables);
@@ -1342,6 +1338,7 @@ async fn open_thread(
     // Brigadier's own skills join the ones Codex finds itself, for this app-server only: a plain
     // `codex` never lists them. A Codex without extra skill roots still runs; the agent's prompt
     // names the tools either way.
+    let mut skill_notices = Vec::new();
     if !spec.skill_plugins.is_empty() || !spec.installed_skills.is_empty() {
         let roots: Vec<String> = spec
             .skill_plugins
@@ -1353,7 +1350,7 @@ async fn open_thread(
             .call::<_, Value>("skills/extraRoots/set", &json!({ "extraRoots": roots }))
             .await
         {
-            tracing::warn!(%error, "Codex didn't take Brigadier's skills");
+            skill_notices.push(format!("Codex couldn't load the session's skills: {error}"));
         }
     }
     let config = thread_config(rpc, spec, cwd, codex.codex_home().as_deref()).await?;
@@ -1413,7 +1410,7 @@ async fn open_thread(
             })
             .await?;
     }
-    let mut notices = Vec::new();
+    let mut notices = skill_notices;
     if !watched.is_empty() {
         let trusted_after = trusted_projects(rpc, cwd).await?;
         for path in watched {
@@ -1578,7 +1575,7 @@ async fn thread_config(
             &json!({ "includeLayers": false, "cwd": cwd.display().to_string() }),
         )
         .await?;
-    let mut servers = mcp_config(&effective, spec);
+    let servers = mcp_config(&effective, spec);
     let mut config = Map::new();
     // A thread works from a folder of Brigadier's, where Codex reads no project config: its
     // trusted project's MCP servers and compatible options come along (#315).
@@ -1596,9 +1593,8 @@ async fn thread_config(
         match read {
             Ok(read) => {
                 config.extend(project_options(&read));
-                for (name, server) in project_servers(&read) {
-                    servers.entry(name).or_insert(server);
-                }
+                // The resolver supplied the complete server set, including excluded project files.
+                // Project options remain inherited; servers never bypass row choices here.
             }
             Err(err) => {
                 tracing::warn!(project = %project.display(), error = %err, "could not read the project's Codex config");
@@ -1757,6 +1753,7 @@ fn remove_unset_options(value: &mut Value) {
 /// MCP servers from every enabled project layer, using Codex's effective settings.
 /// Layers are reported nearest first: the first layer defining a name supplies its default
 /// working folder, so inherited servers still run in their own project outside a thread's cwd.
+#[cfg(test)]
 fn project_servers(read: &Value) -> Map<String, Value> {
     let effective = read
         .pointer("/config/mcp_servers")
@@ -1794,6 +1791,50 @@ fn project_servers(read: &Value) -> Map<String, Value> {
     servers
 }
 
+const EMPTY_HEADER_VAR: &str = "BRIGADIER_MCP_SUPPRESSED_HEADER";
+
+fn header_alias(server: &str, header: &str) -> String {
+    let key: String = server
+        .bytes()
+        .chain([0])
+        .chain(header.bytes())
+        .map(|byte| format!("{byte:02X}"))
+        .collect();
+    format!("BRIGADIER_MCP_HEADER_{key}")
+}
+
+fn mcp_header_env(spec: &SessionSpec) -> Vec<(String, String)> {
+    let mut variables = vec![(EMPTY_HEADER_VAR.to_owned(), String::new())];
+    for server in spec
+        .mcp_servers
+        .iter()
+        .filter(|server| matches!(server.transport, McpTransport::Http { .. }))
+    {
+        variables.extend(
+            server
+                .env
+                .iter()
+                .map(|(key, value)| (header_alias(&server.name, key), value.clone())),
+        );
+        // Codex refuses an empty inherited bearer-token variable. Replace its source with
+        // the resolved bearer (when present), otherwise an inert non-credential value.
+        let bearer = server
+            .env
+            .iter()
+            .find_map(|(key, value)| {
+                (key.eq_ignore_ascii_case("Authorization"))
+                    .then(|| value.strip_prefix("Bearer "))
+                    .flatten()
+            })
+            .unwrap_or("brigadier-no-upstream-credentials");
+        variables.push((
+            header_alias(&server.name, "__bearer_token"),
+            bearer.to_owned(),
+        ));
+    }
+    variables
+}
+
 /// MCP overrides leave the user's servers inherited in sessions with their setup, and add the
 /// servers the session is given beside them. Other sessions explicitly disable the user's
 /// servers.
@@ -1804,7 +1845,6 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
         // A sealed session, or a naked worker (D13), goes without every server of the user's;
         // a naked worker's granted ones come back below, from [`SessionSpec::mcp_servers`]
         // (D18).
-        .filter(|_| !spec.tools.user_setup() || spec.naked_worker)
         .map(|servers| {
             servers
                 .keys()
@@ -1815,11 +1855,29 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     // The thread's config goes over the app-server's stdin, and Codex keeps none of it on
     // disk (docs/research/phase7-probes.md (i)): each server's values are in its own entry.
     for server in &spec.mcp_servers {
-        let values: Map<String, Value> = server
+        let mut values: Map<String, Value> = server
             .env
             .iter()
             .map(|(name, value)| (name.clone(), Value::String(value.clone())))
             .collect();
+        // Thread overrides merge inherited maps. Clear stale values while retaining the
+        // transport key (URL remains URL); each selected server is explicitly re-enabled.
+        let inherited = effective
+            .pointer("/config/mcp_servers")
+            .and_then(|servers| servers.get(&server.name));
+        let values_key = if matches!(server.transport, McpTransport::Http { .. }) {
+            "http_headers"
+        } else {
+            "env"
+        };
+        for key in inherited
+            .and_then(|value| value.get(values_key))
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|map| map.keys())
+        {
+            values.entry(key.clone()).or_insert_with(|| json!(""));
+        }
         let mut config = match &server.transport {
             McpTransport::Stdio { command, args, cwd } => {
                 let mut config = json!({
@@ -1834,6 +1892,33 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
             }
             McpTransport::Http { url } => json!({ "url": url, "http_headers": values }),
         };
+        if matches!(server.transport, McpTransport::Http { .. }) {
+            let inherited_env = inherited
+                .and_then(|entry| entry.get("env_http_headers"))
+                .and_then(Value::as_object);
+            let env_headers: Map<String, Value> = inherited_env
+                .into_iter()
+                .flat_map(|headers| headers.keys())
+                .map(|key| {
+                    let source = if server.env.iter().any(|(name, _)| name == key) {
+                        header_alias(&server.name, key)
+                    } else {
+                        EMPTY_HEADER_VAR.to_owned()
+                    };
+                    (key.clone(), json!(source))
+                })
+                .collect();
+            config["env_http_headers"] = json!(env_headers);
+            if inherited
+                .and_then(|entry| entry.get("bearer_token_env_var"))
+                .and_then(Value::as_str)
+                .is_some()
+            {
+                config["bearer_token_env_var"] =
+                    json!(header_alias(&server.name, "__bearer_token"));
+            }
+        }
+        config["enabled"] = json!(true);
         if let Some(secs) = server.tool_timeout_secs {
             config["tool_timeout_sec"] = json!(secs);
         }
@@ -1845,7 +1930,9 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     // The user's own servers they switched off for Brigadier, a project's copied ones too
     // (docs/research/phase7-probes.md (c)).
     for name in &spec.switched_off.servers {
-        servers.insert(name.clone(), json!({ "enabled": false }));
+        if !spec.mcp_servers.iter().any(|server| server.name == *name) {
+            servers.insert(name.clone(), json!({ "enabled": false }));
+        }
     }
     servers
 }
@@ -3338,7 +3425,11 @@ mod tests {
                 "personal": { "command": "personal-mcp", "enabled": true }
             }}});
             let servers = mcp_config(&effective, &spec(tools, None));
-            assert!(servers.is_empty(), "{tools:?}: {servers:?}");
+            assert_eq!(
+                servers["personal"],
+                json!({"enabled":false}),
+                "{tools:?}: {servers:?}"
+            );
         }
         for args in [
             ToolSet::Default,
@@ -4057,8 +4148,8 @@ mod tests {
         assert_eq!(servers["two"]["cwd"], "/srv/two");
         assert_eq!(
             servers["web"],
-            json!({"url": "https://mcp.example.com/mcp",
-                   "http_headers": {"Authorization": "Bearer c"}})
+            json!({"url": "https://mcp.example.com/mcp", "enabled":true,
+                   "http_headers": {"Authorization": "Bearer c"}, "env_http_headers":{}})
         );
         assert_eq!(servers["railway"], json!({"enabled": false}));
     }
@@ -4073,7 +4164,8 @@ mod tests {
         let mut session = spec(ToolSet::Lean, None);
         session.mcp_servers = vec![server("given", stdio("/bin/given", None), &[])];
         let full = mcp_config(&effective, &session);
-        assert!(full.get("railway").is_none() && full.get("docs").is_none());
+        assert_eq!(full["railway"]["enabled"], false);
+        assert_eq!(full["docs"]["enabled"], false);
         session.naked_worker = true;
         let lean = mcp_config(&effective, &session);
         assert_eq!(lean["railway"], json!({"enabled": false}));
@@ -4087,7 +4179,7 @@ mod tests {
             .push(server("railway", stdio("/bin/railway", None), &[]));
         let granted = mcp_config(&effective, &session);
         assert_eq!(granted["railway"]["command"], "/bin/railway");
-        assert!(granted["railway"].get("enabled").is_none(), "{granted:?}");
+        assert_eq!(granted["railway"]["enabled"], true, "{granted:?}");
         assert_eq!(granted["docs"], json!({"enabled": false}));
         session.switched_off.skill_files = vec![PathBuf::from("/h/.agents/skills/x/SKILL.md")];
         let args = app_server_args(Some(&session));
@@ -4115,7 +4207,7 @@ mod tests {
         let args = app_server_args(Some(&session));
         let plugin = args
             .iter()
-            .position(|arg| arg == "plugins.docs@market.mcp_servers.server.enabled=false")
+            .position(|arg| arg == r#"plugins."docs@market".mcp_servers."server".enabled=false"#)
             .expect("the plugin's server switched off");
         assert_eq!(args[plugin - 1], "-c");
         let at = args
@@ -4519,5 +4611,63 @@ for line in sys.stdin:
         );
         rpc.process.shutdown(EXIT_GRACE).await;
         std::fs::remove_dir_all(&scratch).unwrap();
+    }
+    #[test]
+    fn resolved_http_overrides_inherited_url_disabled_state_and_headers_on_every_origin() {
+        let root = std::env::var_os("BRIGADIER_PLUGIN_PROBE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/fixture"));
+        let mut session = spec(ToolSet::Thread, None);
+        let url = std::env::var("BRIGADIER_PLUGIN_PROBE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:1234/mcp/resource".into());
+        session.mcp_servers = vec![server(
+            "remote",
+            McpTransport::Http { url: url.clone() },
+            &[("X-Brigadier-Session", "fixture-session-secret")],
+        )];
+        let effective = json!({"config":{"mcp_servers":{"remote":{"url":"https://upstream.invalid/mcp","enabled":false,"http_headers":{"Authorization":"upstream-secret"},"env_http_headers":{"X-Upstream":"FIXTURE_UPSTREAM_HEADER"},"bearer_token_env_var":"FIXTURE_UPSTREAM_BEARER"}, "extra":{"command":"no-extra"}}}});
+        let config = mcp_config(&effective, &session);
+        assert_eq!(config["remote"]["url"], url);
+        assert_eq!(config["remote"]["enabled"], true);
+        assert_eq!(config["remote"]["http_headers"]["Authorization"], "");
+        assert_eq!(
+            config["remote"]["http_headers"]["X-Brigadier-Session"],
+            "fixture-session-secret"
+        );
+        assert!(config["remote"].get("command").is_none());
+        assert_eq!(config["extra"]["enabled"], false);
+        for origin in [
+            Origin::New,
+            Origin::Resume {
+                native_id: "native".into(),
+            },
+            Origin::Fork {
+                native_id: "native".into(),
+            },
+        ] {
+            session.origin = origin;
+            let opened = opening(
+                &session,
+                start_params(
+                    &session,
+                    &session.cwd,
+                    Map::from_iter([("mcp_servers".into(), Value::Object(config.clone()))]),
+                ),
+            );
+            let wire = match opened {
+                Opening::Start(params) => serde_json::to_value(params).unwrap(),
+                Opening::Resume(params) => serde_json::to_value(params).unwrap(),
+                Opening::Fork(params) => serde_json::to_value(params).unwrap(),
+            };
+            assert_eq!(wire["config"]["mcp_servers"]["remote"]["enabled"], true);
+        }
+        if std::env::var_os("BRIGADIER_PLUGIN_PROBE_DIR").is_some() {
+            std::fs::write(
+                root.join("codex-config.json"),
+                json!({"args":app_server_args(Some(&session)),"env":mcp_header_env(&session),"config":{"mcp_servers":config}})
+                    .to_string(),
+            )
+            .unwrap();
+        }
     }
 }
