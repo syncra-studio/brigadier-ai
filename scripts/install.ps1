@@ -88,6 +88,9 @@
     $run = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -Wait -PassThru
     if ($run.ExitCode -ne 0) { Fail "The installer failed (exit code $($run.ExitCode))." }
     if (-not (Test-Path -LiteralPath (Join-Path $target 'brigadier-app.exe'))) { Fail "The installer left no Brigadier in $target." }
+    # The app with its daemon, its command and its computer-use helper (tauri.windows.conf.json).
+    $missing = @('brigadierd.exe', 'brigadier.exe', 'brigadier-cu.exe' | Where-Object { -not (Test-Path -LiteralPath (Join-Path $target $_)) })
+    if ($missing.Count -gt 0) { Fail "The installer left Brigadier incomplete in $target (no $($missing -join ', ')). Run it again." }
     Write-Host "Installed Brigadier in $target. Open it from the Start menu to begin; it updates itself from now on."
   } finally {
     # scratch is a private folder made above, never a caller-supplied path.

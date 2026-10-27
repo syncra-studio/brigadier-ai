@@ -7,7 +7,8 @@
 //! downloads and checks the build, and the pill turns into "Restart to update". The update is
 //! installed when the app quits after that (by that pill or any other way), once the daemon has
 //! stopped. Without the click, quitting installs nothing. When the daemon doesn't stop it isn't
-//! installed: the next launch offers it again.
+//! installed: the next launch offers it again. On Windows the update is the NSIS installer, which
+//! runs as the app exits and opens it again only after "Restart to update".
 
 use std::future::Future;
 use std::pin::Pin;
@@ -105,7 +106,14 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
                 .download(|_, _| {}, || {})
                 .await
                 .map_err(|err| err.to_string())?;
-            Ok(Box::new(move || update.install(&bytes).map_err(|err| err.to_string())) as Install)
+            Ok(Box::new(move |reopen| {
+                // Windows runs the installer and exits here; it opens the app again after
+                // installing only when "Restart to update" asked for that.
+                update
+                    .restart_after_install(reopen)
+                    .install(&bytes)
+                    .map_err(|err| err.to_string())
+            }) as Install)
         })
     });
     if let Some(shown) = UPDATES.offer(version.clone(), download) {
@@ -140,8 +148,8 @@ pub enum ShownState {
     Ready,
 }
 
-/// Puts a downloaded update in place.
-type Install = Box<dyn FnOnce() -> Result<(), String> + Send>;
+/// Puts a downloaded update in place; true when the app opens again after it.
+type Install = Box<dyn FnOnce(bool) -> Result<(), String> + Send>;
 /// Downloads an update and checks its signature; again on each call.
 type Download =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Install, String>> + Send>> + Send + Sync>;
@@ -296,9 +304,10 @@ impl Updates {
                 }
             }
         };
+        let restart = self.restart.load(Ordering::Acquire);
         if let Some((version, install)) = ready {
             if daemon_stopped {
-                match install() {
+                match install(restart) {
                     Ok(()) => tracing::info!(%version, "installed the nightly update"),
                     Err(error) => {
                         tracing::warn!(%error, "could not install the nightly update");
@@ -308,7 +317,7 @@ impl Updates {
                 tracing::info!("the daemon keeps running; the update is offered again next launch");
             }
         }
-        self.restart.load(Ordering::Acquire)
+        restart
     }
 }
 
@@ -318,7 +327,7 @@ impl Updates {
 pub fn wait_counting(version: &str, installs: Arc<std::sync::atomic::AtomicUsize>) {
     *UPDATES.lock() = Stage::Ready {
         version: version.to_owned(),
-        install: Box::new(move || {
+        install: Box::new(move |_| {
             installs.fetch_add(1, Ordering::AcqRel);
             Ok(())
         }),
@@ -480,7 +489,7 @@ mod tests {
                 if fail {
                     return Err("offline".to_owned());
                 }
-                Ok(Box::new(move || {
+                Ok(Box::new(move |_| {
                     installs.fetch_add(1, Ordering::AcqRel);
                     Ok(())
                 }) as Install)
@@ -580,6 +589,27 @@ mod tests {
         tauri::async_runtime::block_on(updates.take(|_| {}));
         updates.finish(false);
         assert_eq!(installs.load(Ordering::Acquire), 0);
+    }
+
+    /// The install is told whether the app opens again: only after "Restart to update" (on
+    /// Windows the installer reopens it, so a plain quit must say no).
+    #[test]
+    fn only_restart_to_update_asks_the_install_to_reopen() {
+        for restart in [false, true] {
+            let updates = Updates::new();
+            let reopened = Arc::new(Mutex::new(None));
+            let seen = reopened.clone();
+            *updates.lock() = Stage::Ready {
+                version: V1.into(),
+                install: Box::new(move |reopen| {
+                    *seen.lock().unwrap() = Some(reopen);
+                    Ok(())
+                }),
+            };
+            updates.restart.store(restart, Ordering::Release);
+            assert_eq!(updates.finish(true), restart);
+            assert_eq!(*reopened.lock().unwrap(), Some(restart));
+        }
     }
 
     /// A newer build found before the click replaces the offer.
