@@ -101,19 +101,19 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
       ["Ship the release", "needsYou:Needs you", "Needs you · sign-in"],
       ["Footer", "working:Working", "Working"],
       ["Header", "working:Working", "Working"],
-      ["Fix the login", "done:Done", "Done"],
-      ["Tidy the docs", "done:Done", "Done"],
+      ["Fix the login", null, null],
+      ["Tidy the docs", null, null],
       ["Waiting on a limit", "working:Working", "Working · waiting for reset 14:05"],
       ["Lone worker", "working:Working", "Working"],
-      ["Old fix", "done:Done", "Done"],
-      ["Finished reply", "done:Done", "Done"],
+      ["Old fix", null, null],
+      ["Finished reply", null, null],
       ["Paused task", "stopped:Stopped", "Stopped"],
-      // Git/PR state never changes the completed turn's Done word.
-      ["Draft the notes", "done:Done", "Done"],
+      // A finished turn has no word at all; git/PR state never gives it one.
+      ["Draft the notes", null, null],
     ],
   );
   for (const row of seen.rows) {
-    assert.ok(row.words, `${row.title}: a plain state word`);
+    assert.equal(row.words === null, row.status === null, `${row.title}: a plain state word, none when finished`);
     assert.equal(row.mark, row.status?.startsWith("working:") ? "spinner" : row.status?.startsWith("needsYou:") ? "unread" : null, `${row.title}: its mark`);
     assert.equal(row.error, row.status?.startsWith("failed:"));
     assert.equal(row.plain, true, `${row.title}: no chip`);
@@ -137,7 +137,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   for (const cut of [seen.cut, seen.cutStopped]) {
     assert.deepEqual(cut, { overflows: true, ellipsis: "ellipsis", mask: "none", clear: true, word: cut.word }, JSON.stringify(cut));
   }
-  assert.equal(seen.cut.word, "Done");
+  assert.equal(seen.cut.word, null, "a finished row has no word to cut before");
   // A session's workers show in the session itself (context card, Workers panel, thread), never
   // under its row, though "Header" runs two.
   assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
@@ -176,11 +176,11 @@ test("closing a working session's tab stops nothing and says so in a note; it st
 for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
   test(`${kind} rows preserve activity, error and unread marks with plain state words (${unread ? "unread" : "read"}); the tab shows the row's own marks without words`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
-      title: string; rowWords: string; state: string; openState: string | null; words: string; tip: string; rowTip: string | null; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
+      title: string; rowWords: string | null; state: string; openState: string | null; words: string; tip: string; rowTip: string | null; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
-    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Done", "Failed", "Stopped"].toSorted());
+    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Failed", "Stopped", null].toSorted(), "a finished row has no word");
     // A draft PR does not supply the tab's state word.
-    assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes · Done");
+    assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes");
     for (const row of seen) {
       const busy = row.state === "working";
       assert.equal(row.beforeMark, busy ? "spinner" : row.state === "needsYou" || (row.state === "done" && unread) ? "unread" : null, `${row.title}: closed row mark`);
@@ -205,11 +205,11 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
 }
 
 
-test("an idle session whose turn ended shows Done with its unread dot", { timeout: 60000 }, async (t) => {
+test("an idle session whose turn ended shows only its unread dot, no Done word", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?unreadOnly=1", "sessions-result", 20000)) as { rows: { title: string; mark: string | null; words: string | null }[] };
   const row = seen.rows.find((each) => each.title === "Unread reply");
   assert.equal(row?.mark, "unread");
-  assert.equal(row?.words, "Done");
+  assert.equal(row?.words, null);
 });
 
 
@@ -243,7 +243,7 @@ test("unopened sessions with working workers keep Working until idle, including 
     assert.equal(row.status, "working:Working");
     assert.equal(row.mark, "spinner");
   }
-  assert.equal(seen.idle.status, "done:Done");
+  assert.equal(seen.idle.status, null, "no Done word");
   assert.equal(seen.idle.mark, null);
   assert.deepEqual(seen.threadReads, [], "no sidebar session's thread was read");
 });
@@ -261,10 +261,10 @@ test("a session that never ran has no state word or dot", { timeout: 60000 }, as
 test("Done uses the recorded turn-end unread dot: opening clears it through closing, and a later turn restores it", { timeout: 60000 }, async (t) => {
   type Row = { status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?doneRead=1", "sessions-result", 20000)) as { before: Row; afterClose: Row; nextTurn: Row };
-  assert.equal(seen.before.status, "done:Done");
+  assert.equal(seen.before.status, null, "no Done word");
   assert.equal(seen.before.mark, "unread");
-  assert.equal(seen.afterClose.status, "done:Done");
+  assert.equal(seen.afterClose.status, null, "no Done word");
   assert.equal(seen.afterClose.mark, null);
-  assert.equal(seen.nextTurn.status, "done:Done");
+  assert.equal(seen.nextTurn.status, null, "no Done word");
   assert.equal(seen.nextTurn.mark, "unread");
 });

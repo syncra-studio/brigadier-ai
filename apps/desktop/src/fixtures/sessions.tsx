@@ -177,8 +177,8 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
     const status = row.querySelector<HTMLElement>('[data-slot="row-status"]');
     return {
       title: button.querySelector('[data-slot="row-title"]')?.textContent?.trim(),
-      status: status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
-      tip: status?.title ?? null,
+      status: status?.dataset.status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
+      tip: status?.title || null,
       active: button.dataset.active === "true",
       mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : null,
       error: !!button.querySelector('[data-slot="status-error"]'),
@@ -518,7 +518,7 @@ function Fixture() {
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
-          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
+          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status ?? "done", rowWords: row.querySelector('[data-slot="status-word"]')?.textContent ?? null,
             unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
