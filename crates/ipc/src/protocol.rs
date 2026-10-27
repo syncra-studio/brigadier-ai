@@ -789,6 +789,10 @@ pub enum Request {
         before: Option<String>,
         #[serde(default = "background_history_limit")]
         limit: u32,
+        /// Include live records when resolving an invocation's Output tab.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        include_running: Option<bool>,
     },
     ReadBackgroundHistoryOutput {
         conversation_id: ConversationId,

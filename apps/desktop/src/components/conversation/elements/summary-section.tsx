@@ -19,6 +19,7 @@ export function SummarySection({
   count,
   summary,
   action,
+  collapsible = true,
   defaultFolded = false,
   unfoldOnIncrease = 0,
   className,
@@ -34,6 +35,8 @@ export function SummarySection({
   summary?: ReactNode;
   /** At the header's end: a `+` or an ⋯ menu. */
   action?: ReactNode;
+  /** A header without rows has no fold control or body. */
+  collapsible?: boolean;
   /** Folded until the user opens it (a plan whose steps are all done). */
   defaultFolded?: boolean;
   /** Reveal new items locally, without changing the fold saved by hand. */
@@ -46,7 +49,7 @@ export function SummarySection({
     setPreviousCount(unfoldOnIncrease);
     if (unfoldOnIncrease > previousCount) setKept(false);
   }
-  const folded = kept ?? defaultFolded;
+  const folded = collapsible && (kept ?? defaultFolded);
   const toggle = () => {
     folds.set(foldKey, !folded);
     setKept(!folded);
@@ -63,7 +66,7 @@ export function SummarySection({
       {...props}
     >
       <header className="bg-popover sticky top-0 z-10 flex h-row-sm min-w-0 items-center gap-2 ps-5 pe-3.5">
-        <button
+        {collapsible ? <button
           type="button"
           aria-expanded={!folded}
           aria-controls={bodyId}
@@ -83,12 +86,12 @@ export function SummarySection({
                 : "opacity-0 group-hover/fold:opacity-100 group-focus-visible/fold:opacity-100",
             )}
           />
-        </button>
+        </button> : <span className="text-muted-foreground min-w-0 flex-1 truncate text-label">{title}</span>}
         {action && <div className="flex shrink-0 items-center gap-0.5">{action}</div>}
       </header>
-      <div id={bodyId} hidden={folded} className="flex min-w-0 flex-col gap-0.5 px-5">
+      {collapsible && <div id={bodyId} hidden={folded} className="flex min-w-0 flex-col gap-0.5 px-5">
         {children}
-      </div>
+      </div>}
     </section>
   );
 }

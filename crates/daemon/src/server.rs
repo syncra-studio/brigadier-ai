@@ -2068,8 +2068,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             before,
             limit,
+            include_running,
         } => Response::GetBackgroundHistory {
-            history: heap(|| sessions.background_history(&conversation_id, before, limit)).await?,
+            history: heap(|| {
+                sessions.background_history_page(
+                    &conversation_id,
+                    before,
+                    limit,
+                    include_running.unwrap_or(false),
+                )
+            })
+            .await?,
         },
         Request::ReadBackgroundHistoryOutput {
             conversation_id,

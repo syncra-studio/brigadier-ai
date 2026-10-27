@@ -861,6 +861,17 @@ impl SessionManager {
         before: Option<String>,
         limit: u32,
     ) -> Result<BackgroundHistoryPage> {
+        // Internal lifecycle callers also inspect records that are still running.
+        self.background_history_page(id, before, limit, true).await
+    }
+
+    pub async fn background_history_page(
+        &self,
+        id: &ConversationId,
+        before: Option<String>,
+        limit: u32,
+        include_running: bool,
+    ) -> Result<BackgroundHistoryPage> {
         self.core.conversation(id)?;
         self.backfill_background_history(id).await?;
         self.refresh_preview_history(id).await?;
@@ -872,6 +883,7 @@ impl SessionManager {
             journal.records.into_iter().map(|e| e.record).collect(),
             before,
             limit,
+            include_running,
         )
     }
 
@@ -958,7 +970,11 @@ fn page(
     mut records: Vec<BackgroundHistoryRecord>,
     before: Option<String>,
     limit: u32,
+    include_running: bool,
 ) -> Result<BackgroundHistoryPage> {
+    if !include_running {
+        records.retain(|record| !matches!(record.status.as_str(), "running" | "paused"));
+    }
     records.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms).then(b.id.cmp(&a.id)));
     let total = records.len().min(u32::MAX as usize) as u32;
     let start = match before {
@@ -1107,15 +1123,64 @@ mod tests {
             );
         }
         let records: Vec<_> = journal.records.into_iter().map(|e| e.record).collect();
-        let first = page(records.clone(), None, 2).unwrap();
+        let first = page(records.clone(), None, 2, true).unwrap();
         assert_eq!(first.total, 3);
         assert_eq!(first.records.len(), 2);
-        let next = page(records.clone(), first.next, 2).unwrap();
+        let next = page(records.clone(), first.next, 2, true).unwrap();
         assert_eq!(next.records.len(), 1);
         assert_eq!(next.next, None);
         assert!(!first.records.iter().any(|e| e.id == next.records[0].id));
-        assert!(page(records, Some("not-a-cursor".into()), 2).is_err());
+        assert!(page(records, Some("not-a-cursor".into()), 2, true).is_err());
     }
+    #[test]
+    fn finished_pages_exclude_live_records_before_counting_and_paging() {
+        let mut journal = Journal::default();
+        let statuses = [
+            "running",
+            "paused",
+            "completed",
+            "failed",
+            "stopped",
+            "unknown",
+        ];
+        for status in statuses {
+            apply(
+                &mut journal,
+                status,
+                Some(&task(BackgroundTaskStatus::Running)),
+            );
+            let record = &mut journal.records.last_mut().unwrap().record;
+            record.id = status.into();
+            record.status = status.into();
+        }
+        let mut records: Vec<_> = journal.records.into_iter().map(|e| e.record).collect();
+        let first = page(records.clone(), None, 2, false).unwrap();
+        assert_eq!(first.total, 4);
+        assert_eq!(first.records.len(), 2);
+        let second = page(records.clone(), first.next, 2, false).unwrap();
+        assert_eq!(second.total, 4);
+        assert_eq!(second.records.len(), 2);
+        assert_eq!(second.next, None);
+        let mut ids: Vec<_> = first
+            .records
+            .iter()
+            .chain(&second.records)
+            .map(|r| r.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["completed", "failed", "stopped", "unknown"]);
+        // Output resolution can still find every invocation, including live ones.
+        assert_eq!(page(records.clone(), None, 100, true).unwrap().total, 6);
+        records
+            .iter_mut()
+            .find(|r| r.id == "running")
+            .unwrap()
+            .status = "completed".into();
+        let refreshed = page(records, None, 100, false).unwrap();
+        assert_eq!(refreshed.total, 5);
+        assert!(refreshed.records.iter().any(|r| r.id == "running"));
+    }
+
     #[test]
     fn reused_provider_output_paths_never_resnapshot_finished_records() {
         let mut journal = Journal::default();

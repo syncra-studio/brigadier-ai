@@ -59,7 +59,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   // Ended app tasks leave immediately; the native records remain in History.
   const activities = [...rows, ...appTaskRows(cliTasks, entries, clock.now), ...workerAppTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
-  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs]), cliTasks.map((task) => [task.id, task.startedAtMs]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs])])]);
+  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs, preview.state]), cliTasks.map((task) => [task.id, task.startedAtMs, task.status]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs, task.status])])]);
   const historyCount = useBackgroundHistoryCount(conversationId, changed);
   const ticking = activities.length > 0;
   useEffect(() => {
@@ -67,16 +67,18 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
     const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
     return () => clearInterval(timer);
   }, [ticking]);
-  if (activities.length === 0 && historyCount === 0) return null;
+  if (activities.length === 0 && !historyCount) return null;
   return (
-    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length}>
+    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible={activities.length > 0}
+      action={
+        <TooltipIconButton data-slot="background-history-link" tooltip="Background history" aria-label="Background history" size="icon-xs"
+          onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
+          <Clock />
+        </TooltipIconButton>
+      }>
       {activities.map((activity) => (
         <BackgroundRow key={`${activity.id}:${activity.startedAtMs}`} conversationId={conversationId} activity={activity} now={clock.now} />
       ))}
-      <SummaryRowButton data-slot="background-history-link" icon={<Clock />} meta={historyCount === null ? undefined : String(historyCount)}
-        onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
-        History
-      </SummaryRowButton>
     </SummarySection>
   );
 }
