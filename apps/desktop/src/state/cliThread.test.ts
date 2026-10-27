@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import type { FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
+import { turnCommands } from "@/app/conversation/turnCommands";
+import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
 import { applyThreadNews, loadThreadView, mergeEntries, useCliThread } from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
@@ -161,5 +162,75 @@ test("a delta waiting for the frame when a read of its thread lands shows once",
     delete page.document;
     delete page.requestAnimationFrame;
     delete page.cancelAnimationFrame;
+  }
+});
+
+/** Whether the block of the turn started at 1000 reads as finished: its turn over, nothing holding it. */
+const finished = (view: ThreadView | undefined) => !!view && view.turns.at(-1)?.end !== null && turnCommands(view, view.turns, [1000]) === 0;
+
+test("a background command's end and the turn it starts land together: the block it held is never seen finished between", async () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const call: FileEntry = at({ type: "command", itemId: "toolu_watch", command: "gh run watch 12", cwd: null, status: "completed", exitCode: 0, output: null, durationMs: null }, 1200);
+  const watch: BackgroundTask = {
+    id: "bwatch", itemId: "toolu_watch", kind: "shell", label: "gh run watch 12", status: "completed", startedAtMs: 1250, endedAtMs: 3000, outputFile: null, summary: null, lastLine: null,
+  };
+  const user = at({ type: "message", itemId: "u1", role: "user", text: "Watch CI" }, 1000);
+  // The turn ended while the command ran; the command ended (exit 0) with no turn open, and its
+  // end owes the turn the CLI starts for it (D21): the block stays held, its work open.
+  const ended: ThreadView = {
+    entries: [user, call],
+    turns: [{ userMessage: "u1", startedAtMs: 1000, endedAtMs: 2000, end: "done", error: null, requests: [] }],
+    background: [watch],
+    jobs: { waking: true },
+  };
+  // The CLI's turn for it began: the engine's thread reads that turn as open again.
+  const reopened: ThreadView = { ...ended, turns: [{ ...ended.turns[0]!, endedAtMs: null, end: null }], jobs: {} };
+  let land: (() => void) | null = null;
+  let answer = ended;
+  let held = false;
+  mockIPC((cmd) => {
+    if (cmd !== "ipc_request") return null;
+    const response = { method: "threadView", view: answer };
+    return held ? new Promise((resolve) => (land = () => resolve(response))) : response;
+  });
+  const seen: boolean[] = [];
+  const unsubscribe = useCliThread.subscribe((state) => seen.push(finished(state.views["wake"])));
+  try {
+    await loadThreadView("wake");
+    assert.equal(finished(useCliThread.getState().views["wake"]), false);
+    // The engine says, in one piece of news, that the turn opened and that nothing is owed now.
+    answer = reopened;
+    held = true;
+    applyThreadNews({ conversationId: "wake", entries: [], opened: true, jobs: {} });
+    await settle();
+    assert.equal(finished(useCliThread.getState().views["wake"]), false, "the hold is gone before the turn it owed shows open");
+    (land as (() => void) | null)?.();
+    await settle();
+    assert.deepEqual(useCliThread.getState().views["wake"]?.turns, reopened.turns);
+    assert.deepEqual(useCliThread.getState().views["wake"]?.jobs, {});
+
+    // The same while a read is already under way (the command's own end's): that read predates
+    // the turn, so the news waits for the read after it.
+    useCliThread.setState({ views: { wake: ended } });
+    answer = ended;
+    land = null;
+    const reading = loadThreadView("wake");
+    await settle();
+    const first = land as (() => void) | null;
+    applyThreadNews({ conversationId: "wake", entries: [], opened: true, jobs: {} });
+    await settle();
+    answer = reopened;
+    first?.();
+    await reading;
+    await settle();
+    assert.equal(finished(useCliThread.getState().views["wake"]), false, "the earlier read lands with the newer hold");
+    (land as (() => void) | null)?.();
+    await settle();
+    assert.deepEqual(useCliThread.getState().views["wake"]?.turns, reopened.turns);
+    assert.deepEqual(seen.filter(Boolean), [], "never finished between");
+  } finally {
+    unsubscribe();
+    clearMocks();
+    useCliThread.setState({ views: {} });
   }
 });
