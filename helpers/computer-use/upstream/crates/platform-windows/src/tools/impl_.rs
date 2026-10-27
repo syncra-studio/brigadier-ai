@@ -3185,12 +3185,23 @@ impl Tool for LaunchAppTool {
             .await;
         }
 
-        // Match Swift text format 1:1.
+        let running = !windows_json.is_empty()
+            || (pid != 0
+                && tokio::task::spawn_blocking(move || {
+                    crate::win32::list_processes()
+                        .iter()
+                        .any(|process| process.pid == pid)
+                })
+                .await
+                .unwrap_or(false));
         let (foreground_note, foreground_failed) = foreground_guard
             .as_ref()
             .map(|guard| guard.report())
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+        if !running {
+            summary.push_str(" Windows did not expose a running app or its window; opening could not be confirmed.");
+        }
         if !windows_json.is_empty() {
             summary.push_str("\n\nWindows:");
             for w in &windows_json {
@@ -3219,18 +3230,18 @@ impl Tool for LaunchAppTool {
             "pid":       pid,
             "bundle_id": bundle_id_response,
             "name":      display,
-            "running":   pid != 0 || !windows_json.is_empty(),
+            "running":   running,
             "active":    unsafe {
                 let mut foreground_pid = 0;
                 windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), Some(&mut foreground_pid));
-                foreground_pid == pid
+                pid != 0 && foreground_pid == pid
             },
             "foreground_note": foreground_note,
             "windows":   windows_json,
         });
         let mut result = ToolResult::text(summary).with_structured(structured);
-        if foreground_failed {
+        if foreground_failed || !running {
             result.is_error = Some(true);
         }
         result

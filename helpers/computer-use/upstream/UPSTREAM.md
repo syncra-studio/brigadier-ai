@@ -67,6 +67,7 @@ Patches applied, in order:
 - `patches/0021-windows-exact-browser-launch.diff`: pass URLs only to the named browser (or the associated default executable), quote each argument, and return only a window whose visible UIA document confirms the requested URL.
 - `patches/0022-windows-targeted-page-reads.diff`: route Windows page URL hints to a unique visible UIA document, refuse missing or ambiguous targets and unbound CDP ports, and discard reads when the tab changes.
 - `patches/0023-windows-user-protocol-default.diff`: resolve protocol executables through the current user's default association instead of a plain shell class lookup.
+- `patches/0024-windows-launch-running-evidence.diff`: do not report a shell launcher stub or a zero process id as a confirmed running app; return an explicit unconfirmed-launch error instead.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
