@@ -974,3 +974,40 @@ mod live {
         println!("server log:\n{}", server.log.lock().unwrap().join("\n"));
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn fallback_spreads_only_the_cli_that_finished_before_reporting_success() {
+    let fake = fake::fake("spread");
+    let logins = Arc::new(McpLogins::default());
+    let spread = Arc::new(Mutex::new(Vec::new()));
+    let observed = spread.clone();
+    let _ = logins.spread.set(Arc::new(move |kind| {
+        observed.lock().unwrap().push(kind);
+        Ok(())
+    }));
+    let (open, _) = browser(fake.dir.clone(), true);
+    let id = logins.start(fake.clis.clone(), plugin_target(), open);
+    logins.set_fallback_flow("row", id.clone());
+    let progress = fake::wait(&logins, &id, |progress| progress.finished);
+    assert_eq!(progress.status(), McpSignInStatus::SignedIn);
+    let spread = spread.lock().unwrap();
+    assert_eq!(spread.len(), 2);
+    assert!(spread.contains(&ProviderKind::Claude));
+    assert!(spread.contains(&ProviderKind::Codex));
+    assert_eq!(logins.fallback_progress("row"), Some(progress));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_in() {
+    let fake = fake::fake("spread-error");
+    let logins = Arc::new(McpLogins::default());
+    let _ = logins
+        .spread
+        .set(Arc::new(|_| Err("Account store unavailable".into())));
+    let (open, _) = browser(fake.dir.clone(), true);
+    let id = logins.start(fake.clis.clone(), plugin_target(), open);
+    let progress = fake::wait(&logins, &id, |progress| progress.finished);
+    assert!(matches!(progress.status(), McpSignInStatus::Failed { .. }));
+}

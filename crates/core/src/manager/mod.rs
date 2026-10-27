@@ -68,6 +68,7 @@ mod kept_live_tests;
 mod lifecycle;
 mod local_files;
 mod long_sessions;
+pub mod mcp_gateway;
 mod mcp_login;
 mod mcp_secrets;
 mod outputs;
@@ -184,6 +185,7 @@ pub struct SessionManager {
     grants: Grants,
     /// Sign-ins to remote MCP servers shared between the agents, and their proxy.
     mcp_logins: Arc<mcp_login::McpLogins>,
+    mcp_gateway: Arc<mcp_gateway::McpGatewayService>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// The `/` menu's answers of CLIs that haven't started ([`cli_commands`]).
@@ -397,6 +399,8 @@ impl SessionManager {
             spawner,
             config,
             git,
+            mcp_gateway: mcp_gateway::McpGatewayService::new(&data_dir)
+                .expect("MCP gateway loopback listener"),
             data_dir,
             registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),

@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+axum = "0.8.9"
 brigadier-brain.workspace = true
 brigadier-cli.workspace = true
 brigadier-git.workspace = true
@@ -19,6 +20,7 @@ brigadier-sandbox.workspace = true
 brigadier-store.workspace = true
 base64.workspace = true
 blake3.workspace = true
+futures-util = "0.3.32"
 getrandom = "0.4.3"
 globset = "0.4.20"
 ignore = "0.4.33"
@@ -31,10 +33,12 @@ notify = "8.2.0"
 # A Word file attached to a Chat goes as its text.
 quick-xml = "0.42.0"
 regex = "1.13.1"
+reqwest = { version = "0.13.5", features = ["json", "form", "stream"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.11.0"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "process", "io-util", "net"] }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -58,6 +62,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
+# The daemon owns its MCP OAuth grants.
+security-framework = "3.7.0"
 
 [lints]
 workspace = true

@@ -119,8 +119,12 @@ impl CliEnv {
             .vars()
             .into_iter()
             .filter(|(key, _)| {
-                key.to_str()
-                    .is_none_or(|key| !auth_vars(kind).contains(&key) && key != home_var(kind))
+                key.to_str().is_none_or(|key| {
+                    !auth_vars(kind).contains(&key)
+                        && key != home_var(kind)
+                        && !(kind == ProviderKind::Claude
+                            && key == "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+                })
             })
             .collect();
         vars.push((home_var(kind).into(), home.as_os_str().to_owned()));

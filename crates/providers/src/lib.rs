@@ -29,6 +29,7 @@ pub mod leftovers;
 mod logging;
 pub mod login_mark;
 mod looked;
+pub mod mcp_oauth;
 pub mod model;
 pub mod policy;
 pub mod process;

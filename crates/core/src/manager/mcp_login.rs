@@ -1,17 +1,6 @@
-//! Signing in to a remote MCP server with each agent CLI's own `mcp login`, every agent at
-//! once (STRIP-DOWN-PLAN §9.4 X5): the CLI keeps the sign-in in its own store, so a plain
-//! `claude` or `codex` in a terminal is signed in too. Brigadier keeps no token, so the agents
-//! can't share one sign-in: each opens its own page.
-//!
-//! - Which agents need it, and under which name, comes from each CLI's own list (Claude names
-//!   a plugin's server `plugin:<plugin>:<server>`): the one Settings showed, when it has it, as
-//!   Claude's takes as long as its slowest server (30 s for one that hangs).
-//! - Each login prints its sign-in page's address (`--no-browser`); Brigadier opens it in the
-//!   browser and waits for the CLI to finish. One that needs a terminal runs in a PTY.
-//! - A sign-in can be cancelled (its CLIs are stopped) and its pages opened again.
-//!
-//! The lists are also what Settings shows: which agent still needs a sign-in, read again at most
-//! every [`LIST_FRESH`]. A CLI's own word that it signed in is taken at once, not read again.
+//! Fallback for MCP providers that refuse Brigadier's OAuth client. Each CLI signs in
+//! with its own client; its MCP grants spread only to that CLI's managed account homes.
+//! Gateway requests never run these commands or open a browser.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -175,6 +164,9 @@ type ListKey = (Agent, Option<PathBuf>);
 
 #[derive(Default)]
 pub(crate) struct McpLogins {
+    spread: std::sync::OnceLock<Spread>,
+    account_sync: Arc<Mutex<()>>,
+    fallback_flows: Mutex<HashMap<String, String>>,
     runs: Mutex<HashMap<String, Run>>,
     /// Told whenever a sign-in moves on.
     changed: Condvar,
@@ -191,7 +183,84 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+type Spread = Arc<dyn Fn(ProviderKind) -> Result<(), String> + Send + Sync>;
+
 impl McpLogins {
+    pub(crate) fn forget_fallback_accounts(
+        &self,
+        row: &str,
+        target: &Target,
+        resource: &str,
+        clis: &Clis,
+        runtime: &crate::runtime::Runtime,
+    ) -> Result<(), String> {
+        let flow = lock(&self.fallback_flows).remove(row);
+        if let Some(flow) = flow
+            && self
+                .progress(&flow)
+                .is_some_and(|progress| !progress.finished)
+        {
+            self.cancel(&flow)?;
+            if self
+                .finished(&flow, Duration::from_secs(10))
+                .is_none_or(|progress| !progress.finished)
+            {
+                return Err("The CLI sign-in is still stopping; retry sign-out".into());
+            }
+        }
+        let _guard = lock(&self.account_sync);
+        self.sign_out(clis, target)?;
+        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+            brigadier_providers::mcp_oauth::forget_resource(
+                kind,
+                runtime.cli_env(),
+                &runtime.account_homes(kind),
+                resource,
+            )
+            .map_err(|_| "Could not remove this MCP sign-in from its CLI accounts")?;
+        }
+        Ok(())
+    }
+    pub(crate) fn set_fallback_flow(&self, row: &str, flow: String) {
+        lock(&self.fallback_flows).insert(row.into(), flow);
+    }
+    pub(crate) fn fallback_progress(&self, row: &str) -> Option<McpSignInProgress> {
+        let flow = lock(&self.fallback_flows).get(row)?.clone();
+        self.progress(&flow)
+    }
+    pub(crate) fn enable_account_spread(self: &Arc<Self>, runtime: Arc<crate::runtime::Runtime>) {
+        let runtime = Arc::downgrade(&runtime);
+        let account_sync = self.account_sync.clone();
+        let spread: Spread = Arc::new(move |kind| {
+            let _guard = lock(&account_sync);
+            let Some(runtime) = runtime.upgrade() else {
+                return Ok(());
+            };
+            brigadier_providers::mcp_oauth::sync_accounts(
+                kind,
+                runtime.cli_env(),
+                &runtime.account_homes(kind),
+            )
+            .map_err(|_| "Could not spread this CLI's MCP sign-in to its accounts".into())
+        });
+        if self.spread.set(spread.clone()).is_err() {
+            return;
+        }
+        let me = Arc::downgrade(self);
+        // Follow refresh-token rotations made by native CLI sessions while fallback is used.
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(5));
+                if me.upgrade().is_none() {
+                    break;
+                }
+                for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+                    let _ = spread(kind);
+                }
+            }
+        });
+    }
+
     /// Starts signing every agent that needs it in to `target`, all at once, in the background
     /// (blocking threads): its id at once. One already going for the same server is kept: its
     /// pages open again and its id comes back.
@@ -332,6 +401,7 @@ impl McpLogins {
             },
         };
         let waiting = step.state == AgentSignInState::Waiting;
+        let already_signed_in = step.state == AgentSignInState::AlreadySignedIn;
         let server = step.server.clone();
         // In the agents' own order, whichever list came in first.
         let rank = |agent: ProviderKind| {
@@ -348,6 +418,12 @@ impl McpLogins {
             agents.insert(at, step);
         });
         if !waiting {
+            if already_signed_in
+                && let Some(spread) = self.spread.get()
+                && let Err(reason) = spread(agent)
+            {
+                self.set_state(id, agent, AgentSignInState::Failed { reason });
+            }
             return;
         }
         if cancel.load(Ordering::SeqCst) {
@@ -374,8 +450,14 @@ impl McpLogins {
             .and_then(|(binary, env)| login(&binary, &call, &env, &opened, cancel))
         {
             Ok(()) => {
-                self.signed(adapter.agent(), &server);
-                AgentSignInState::SignedIn
+                if let Some(spread) = self.spread.get()
+                    && let Err(reason) = spread(agent)
+                {
+                    AgentSignInState::Failed { reason }
+                } else {
+                    self.signed(adapter.agent(), &server);
+                    AgentSignInState::SignedIn
+                }
             }
             Err(_) if cancel.load(Ordering::SeqCst) => AgentSignInState::Cancelled,
             Err(reason) => AgentSignInState::Failed { reason },
@@ -500,6 +582,9 @@ impl McpLogins {
     /// Signs every agent that lists `target` out of it, with its CLI's own `mcp logout`.
     pub(crate) fn sign_out(&self, clis: &Clis, target: &Target) -> Result<(), String> {
         for adapter in adapters() {
+            if (clis.binary)(adapter.agent()).is_none() {
+                continue;
+            }
             let listed = self.list(clis, adapter, target.project.as_deref())?;
             let plugin = target.plugin.as_deref();
             for entry in listed

@@ -12,6 +12,7 @@ publish.workspace = true
 codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
 
 [dependencies]
+age = { version = "0.12.1", default-features = false }
 aho-corasick = "1.1.5"
 base64.workspace = true
 brigadier-sandbox.workspace = true

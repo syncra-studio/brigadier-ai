@@ -2544,11 +2544,18 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::GetPluginCatalog
         | Request::SetPluginChoice { .. }
-        | Request::SetPluginChoiceScope { .. }
-        | Request::StartPluginSignIn { .. }
-        | Request::GetPluginSignInStatus { .. }
-        | Request::SignOutPlugin { .. } => {
+        | Request::SetPluginChoiceScope { .. } => {
             return Err(brigadier_core::Error::Invalid("not yet".into()).into());
+        }
+        Request::StartPluginSignIn { row_id } => Response::StartPluginSignIn {
+            state: heap(|| daemon.sessions.start_plugin_sign_in(&row_id)).await?,
+        },
+        Request::GetPluginSignInStatus { row_id } => Response::GetPluginSignInStatus {
+            state: heap(|| daemon.sessions.get_plugin_sign_in_status(&row_id)).await?,
+        },
+        Request::SignOutPlugin { row_id } => {
+            heap(|| daemon.sessions.sign_out_plugin(&row_id)).await?;
+            Response::SignOutPlugin
         }
         Request::GetPlugins => {
             let mut plugins = daemon.sessions.plugins_view().await?;
