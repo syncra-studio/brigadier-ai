@@ -1928,9 +1928,15 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
         servers.insert(server.name.clone(), config);
     }
     // The user's own servers they switched off for Brigadier, a project's copied ones too
-    // (docs/research/phase7-probes.md (c)).
+    // (docs/research/phase7-probes.md (c)). Only names Codex itself defines: an entry with no
+    // transport for a server Codex never read (a Claude-only `.mcp.json` one) fails its config.
+    let known = effective
+        .pointer("/config/mcp_servers")
+        .and_then(Value::as_object);
     for name in &spec.switched_off.servers {
-        if !spec.mcp_servers.iter().any(|server| server.name == *name) {
+        if !spec.mcp_servers.iter().any(|server| server.name == *name)
+            && known.is_some_and(|known| known.contains_key(name))
+        {
             servers.insert(name.clone(), json!({ "enabled": false }));
         }
     }
@@ -4140,8 +4146,9 @@ mod tests {
                 &[("Authorization", "Bearer c")],
             ),
         ];
-        session.switched_off.servers = vec!["railway".into()];
-        let servers = mcp_config(&json!({}), &session);
+        session.switched_off.servers = vec!["railway".into(), "claude-only".into()];
+        let effective = json!({"config": {"mcp_servers": {"railway": {"command": "r"}}}});
+        let servers = mcp_config(&effective, &session);
         assert_eq!(servers["one"]["env"], json!({"TOKEN": "a"}));
         assert!(servers["one"].get("cwd").is_none());
         assert_eq!(servers["two"]["env"], json!({"TOKEN": "b"}));
@@ -4152,6 +4159,10 @@ mod tests {
                    "http_headers": {"Authorization": "Bearer c"}, "env_http_headers":{}})
         );
         assert_eq!(servers["railway"], json!({"enabled": false}));
+        assert!(
+            servers.get("claude-only").is_none(),
+            "a server Codex never read gets no transport-less entry: {servers:?}"
+        );
     }
 
     /// A naked worker (D13) goes without every server of the user's config but the one it was
