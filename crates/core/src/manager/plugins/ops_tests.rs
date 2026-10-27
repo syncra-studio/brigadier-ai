@@ -601,3 +601,136 @@ fn failed_secret_publication_restores_the_previous_store_and_remove_rejects_fore
     assert!(root.join("servers/other.json").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[tokio::test]
+async fn merged_pencil_launches_each_cli_definition_and_one_toggle_controls_both() {
+    use crate::manager::flow::{Flow, Options, Reply, Script};
+    use brigadier_providers::{McpTransport, ProviderKind};
+    use std::sync::Arc;
+
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start(
+        "merged-pencil-launch-and-toggle",
+        Options::default(),
+        script,
+    )
+    .await;
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"pencil":{"command":"/app/mcp-server","args":["--app","desktop","--agent","claudeCodeCLI"]}}}"#,
+    );
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[mcp_servers.pencil]\ncommand='/app/mcp-server'\nargs=['--app','desktop','--agent','codexCLI']\nstartup_timeout_sec=20\n",
+    );
+    let rows = flow.manager.plugin_catalog_rows();
+    let pencil: Vec<_> = rows.iter().filter(|row| row.name == "pencil").collect();
+    assert_eq!(pencil.len(), 1);
+    assert_eq!(pencil[0].definitions.len(), 2);
+    let row_id = &pencil[0].id;
+    assert!(!flow.manager.data_dir.join("plugins.json").exists());
+
+    for on in [true, false, true] {
+        // The first pass launches from the default; each subsequent pass flips this one row.
+        if !flow.specs().is_empty() {
+            flow.manager.set_plugin_choice(row_id, on).unwrap();
+            let saved = super::super::choices::Choices::load(&flow.manager.data_dir).unwrap();
+            assert_eq!(saved.0.len(), 1);
+            assert_eq!(saved.0[row_id].on, on);
+        }
+        for (provider, client) in [
+            (ProviderKind::Claude, "claudeCodeCLI"),
+            (ProviderKind::Codex, "codexCLI"),
+        ] {
+            let before = flow.specs().len();
+            let session = flow
+                .add_session("Pencil verification", None, provider)
+                .await;
+            flow.say_to(&session, "Check this launch.").await;
+            flow.idle_in(&session).await;
+            let specs = flow.specs();
+            let (_, spec) = specs[before..]
+                .iter()
+                .find(|(kind, _)| *kind == provider)
+                .expect("the CLI launched");
+            let pencil = spec
+                .mcp_servers
+                .iter()
+                .find(|server| server.name == "pencil");
+            if on {
+                let McpTransport::Stdio { command, args, .. } = &pencil.unwrap().transport else {
+                    panic!("pencil should be stdio")
+                };
+                assert_eq!(command, &PathBuf::from("/app/mcp-server"));
+                assert_eq!(args, &["--app", "desktop", "--agent", client]);
+                println!("{provider:?} on: launch args {args:?}");
+            } else {
+                assert!(pencil.is_none());
+                assert!(
+                    spec.switched_off
+                        .servers
+                        .iter()
+                        .any(|name| name == "pencil")
+                );
+                println!("{provider:?} off: pencil absent and native definition suppressed");
+            }
+        }
+    }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn first_toggle_persists_the_project_default_scope_through_the_manager() {
+    use crate::manager::flow::{Flow, Options, Reply, Script};
+    use std::sync::Arc;
+
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start(
+        "first-toggle-project-scope",
+        Options {
+            files: vec![(
+                ".mcp.json",
+                r#"{"mcpServers":{"proj-everything":{"url":"https://project.test/mcp"}}}"#,
+            )],
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    // Reproduce the live fixture: a global old sharing cache mirrors the project server.
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[plugins.\"proj-everything@brigadier\"]\nenabled=true\n",
+    );
+    let plugin = roots
+        .codex_home
+        .join("plugins/cache/brigadier/proj-everything/1.0.0");
+    write(
+        &plugin.join(".codex-plugin/plugin.json"),
+        r#"{"name":"proj-everything","mcpServers":"./.codex.mcp.json"}"#,
+    );
+    write(
+        &plugin.join(".codex.mcp.json"),
+        r#"{"mcpServers":{"proj-everything":{"url":"https://project.test/mcp"}}}"#,
+    );
+    let rows = flow.manager.plugin_catalog_rows();
+    let row = rows
+        .iter()
+        .find(|row| row.name == "proj-everything")
+        .unwrap();
+    assert_eq!(row.definitions.len(), 2);
+    let file = flow.manager.data_dir.join("plugins.json");
+    for on in [false, true] {
+        assert!(!file.exists(), "each toggle starts without a saved choice");
+        flow.manager.set_plugin_choice(&row.id, on).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved[&row.id]["on"], on);
+        assert_eq!(saved[&row.id]["scope"], serde_json::json!([flow.repo]));
+        println!("No saved choice -> on={on}: {}", saved[&row.id]);
+        std::fs::remove_file(&file).unwrap();
+    }
+    flow.stop().await;
+}

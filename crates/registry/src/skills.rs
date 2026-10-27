@@ -228,7 +228,12 @@ fn add(skills: &mut Vec<Skill>, path: &Path, folder_name: &str, root: &SkillRoot
         return;
     };
     let (name, description) = frontmatter(&text);
-    let name = name.unwrap_or_else(|| folder_name.to_owned());
+    let name = name.unwrap_or_else(|| {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
     // A copy (not a link) of a skill already found, file for file: the same skill.
     if let Some(known) = skills
         .iter_mut()
@@ -301,17 +306,101 @@ pub(crate) fn frontmatter(text: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     };
     let end = rest.find("\n---").map_or(rest.len(), |end| end + 1);
-    let Ok(docs) = yaml_rust2::YamlLoader::load_from_str(&rest[..end]) else {
-        return (None, None);
-    };
-    let Some(doc) = docs.first() else {
-        return (None, None);
-    };
+    let yaml = &rest[..end];
+    let docs = yaml_rust2::YamlLoader::load_from_str(yaml).unwrap_or_default();
     let field = |key: &str| {
-        doc[key]
-            .as_str()
+        docs.first()
+            .and_then(|doc| doc[key].as_str().map(str::to_owned))
+            .or_else(|| loose_field(yaml, key))
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     };
     (field("name"), field("description"))
+}
+
+/// Claude accepts plain descriptions containing `: `. Read fields independently when
+/// another field breaks strict YAML, preserving quoted and block scalars through YAML first.
+fn loose_field(yaml: &str, key: &str) -> Option<String> {
+    let mut lines = yaml.lines();
+    let value = lines.find_map(|line| line.strip_prefix(&format!("{key}:")))?;
+    let mut scalar = value.trim().to_owned();
+    for line in lines {
+        if !line.is_empty() && !line.starts_with([' ', '\t']) {
+            break;
+        }
+        scalar.push('\n');
+        scalar.push_str(line);
+    }
+    if let Ok(docs) = yaml_rust2::YamlLoader::load_from_str(&format!("{key}: {scalar}"))
+        && let Some(value) = docs.first().and_then(|doc| doc[key].as_str())
+    {
+        return Some(value.to_owned());
+    }
+    // Only plain scalars need this compatibility path, not malformed collections/quotes.
+    if scalar.starts_with(['\'', '"', '[', '{', '|', '>']) {
+        return None;
+    }
+    Some(scalar.lines().map(str::trim).collect::<Vec<_>>().join(" "))
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn loose_frontmatter_recovers_fields_without_consuming_body() {
+        for text in [
+            "---\nname: jira\ndescription: Jira-native: never reads\n---\nBody",
+            "---\r\nname: 'jira'\r\ndescription: Jira-native: never reads\r\n---\r\nBody",
+        ] {
+            assert_eq!(
+                frontmatter(text),
+                (Some("jira".into()), Some("Jira-native: never reads".into()))
+            );
+        }
+        assert_eq!(
+            frontmatter(
+                "---\nname: jira\ndescription: >\n  Jira-native: never reads\n  other files\ninvalid: x: y\n---\nBody"
+            ),
+            (
+                Some("jira".into()),
+                Some("Jira-native: never reads other files".into())
+            )
+        );
+    }
+
+    #[test]
+    fn plugin_relative_identity_never_becomes_the_fallback_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "skill-fallback-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skill = dir.join("skills/jira");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "No frontmatter").unwrap();
+        let mut found = Vec::new();
+        let plugin = Plugin {
+            agent: Agent::Claude,
+            id: "tools@market".into(),
+            name: "tools".into(),
+            root: dir.clone(),
+            project: None,
+        };
+        add_plugin(&mut found, &plugin);
+        assert_eq!(found[0].name, "jira");
+        assert!(found[0].id.ends_with(":skills/jira"));
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: jira\ndescription: Jira-native: never reads\n---\nBody",
+        )
+        .unwrap();
+        found.clear();
+        add_plugin(&mut found, &plugin);
+        assert_eq!(found[0].name, "jira");
+        assert_eq!(found[0].description, "Jira-native: never reads");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

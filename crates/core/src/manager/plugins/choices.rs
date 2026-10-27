@@ -40,7 +40,24 @@ pub struct Choice {
 impl Choice {
     pub fn default_for(row: &Row) -> Self {
         let mut projects = Vec::new();
-        for definition in &row.definitions {
+        // Retired sharing plugins are mirrors, not additional global sources. Their
+        // installed caches can outlive cleanup; only originals determine default scope.
+        let mirrored = |definition: &&brigadier_registry::catalog::Definition| {
+            definition
+                .provenance
+                .plugin
+                .as_deref()
+                .is_some_and(|id| id.ends_with("@brigadier"))
+        };
+        let has_original = row
+            .definitions
+            .iter()
+            .any(|definition| !mirrored(&definition));
+        for definition in row
+            .definitions
+            .iter()
+            .filter(|definition| !has_original || !mirrored(definition))
+        {
             let Some(project) = &definition.provenance.project else {
                 return Self {
                     on: true,
@@ -225,4 +242,70 @@ pub fn import_sharing_file(
     }
     choices.save(data_dir)?;
     Ok(choices)
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn project_mcp_default_and_toggles_keep_scope_in_the_page_and_on_disk() {
+        let home = std::env::temp_dir().join(format!("project-choice-{}", uuid::Uuid::new_v4()));
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let project = std::fs::canonicalize(project).unwrap();
+        std::fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{"proj-everything":{"command":"npx","args":["-y","everything"]}}}"#,
+        )
+        .unwrap();
+        let roots =
+            brigadier_registry::Roots::from_vars([("HOME".into(), home.display().to_string())])
+                .unwrap();
+        let mut rows =
+            brigadier_registry::Catalog::read_rows(&roots, std::slice::from_ref(&project));
+        // The live fixture still has an old global Codex sharing copy of this server.
+        let mut mirror = rows[0].definitions[0].clone();
+        mirror.provenance.agent = Some(brigadier_registry::Agent::Codex);
+        mirror.provenance.project = None;
+        mirror.provenance.plugin = Some("proj-everything@brigadier".into());
+        rows[0].definitions.insert(0, mirror);
+        let row = rows
+            .iter()
+            .find(|row| row.name == "proj-everything")
+            .unwrap();
+        let expected = Scope::Projects(vec![project]);
+        let mut choices = Choices::default();
+        assert_eq!(
+            super::super::CatalogView::new(&rows, &choices).rows[0]
+                .choice
+                .scope,
+            expected
+        );
+        for on in [false, true] {
+            let mut choice = choices.choice(row);
+            choice.on = on;
+            choices.0.insert(row.id.clone(), choice);
+            choices.save(&home.join("data")).unwrap();
+            choices = Choices::load(&home.join("data")).unwrap();
+            let view = super::super::CatalogView::new(&rows, &choices);
+            assert_eq!(view.rows[0].choice.scope, expected);
+            assert_eq!(view.rows[0].choice.on, on);
+        }
+        // Real global originals still make a row global, and a legacy-only library row
+        // still has its previous default. Neither case is confused with a project mirror.
+        let mut global = row.clone();
+        global.definitions[0].provenance.plugin = None;
+        assert_eq!(
+            Choice::default_for(&global).scope,
+            Scope::Global(Global::Global)
+        );
+        let mut legacy_only = row.clone();
+        legacy_only.definitions.truncate(1);
+        assert_eq!(
+            Choice::default_for(&legacy_only).scope,
+            Scope::Global(Global::Global)
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }

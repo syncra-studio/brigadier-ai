@@ -74,11 +74,12 @@ export const usePlugins = create<{
   view: PluginsView;
   adapter: PluginsAdapter | null;
   error: string | null;
+  loading: boolean;
   /** Reads the page again now. */
   refresh: () => void;
   /** Reads the page again, done once it's read. */
   reload: () => Promise<void>;
-}>(() => ({ view: EMPTY, adapter: null, error: null, refresh: () => {}, reload: async () => {} }));
+}>(() => ({ view: EMPTY, adapter: null, error: null, loading: true, refresh: () => {}, reload: async () => {} }));
 
 /** Installs `adapter` and follows its changes; a read older than the last one, or for an old connection, is dropped. */
 export function connectPlugins(adapter: PluginsAdapter): () => void {
@@ -88,13 +89,14 @@ export function connectPlugins(adapter: PluginsAdapter): () => void {
     const current = ++generation;
     try {
       const view = await adapter.read();
-      if (active && current === generation) usePlugins.setState({ view, error: null });
+      if (active && current === generation) usePlugins.setState({ view, error: null, loading: false });
     } catch (cause) {
-      if (active && current === generation) usePlugins.setState({ error: cause instanceof Error ? cause.message : String(cause) });
+      if (active && current === generation) usePlugins.setState({ error: cause instanceof Error ? cause.message : String(cause), loading: false });
     }
   };
   usePlugins.setState({
     adapter,
+    loading: true,
     refresh: () => void refresh(),
     reload: refresh,
   });
