@@ -110,3 +110,38 @@ mod tests {
         assert!(!url_matches("https://example.com", "", false));
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PageReadRoute {
+    Legacy,
+    MatchedDocument,
+    RefuseUnboundPort,
+}
+
+pub(crate) fn page_read_route(has_url_hint: bool, has_cdp_port: bool) -> PageReadRoute {
+    if has_cdp_port {
+        PageReadRoute::RefuseUnboundPort
+    } else if has_url_hint {
+        PageReadRoute::MatchedDocument
+    } else {
+        PageReadRoute::Legacy
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+    #[test]
+    fn targeted_reads_never_use_legacy_window_fallback() {
+        assert_eq!(page_read_route(false, false), PageReadRoute::Legacy);
+        assert_eq!(page_read_route(true, false), PageReadRoute::MatchedDocument);
+        assert_eq!(
+            page_read_route(true, true),
+            PageReadRoute::RefuseUnboundPort
+        );
+        assert_eq!(
+            page_read_route(false, true),
+            PageReadRoute::RefuseUnboundPort
+        );
+    }
+}

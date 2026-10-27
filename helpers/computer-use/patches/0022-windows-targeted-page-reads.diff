@@ -1,0 +1,237 @@
+Why: route Windows page URL hints to a unique visible UIA document, refuse missing or ambiguous targets and unbound CDP ports, and discard reads when the tab changes.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+index 68b96e610..a57c6bb3f 100644
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -110,3 +110,38 @@ mod tests {
+         assert!(!url_matches("https://example.com", "", false));
+     }
+ }
++
++#[derive(Debug, PartialEq, Eq)]
++pub(crate) enum PageReadRoute {
++    Legacy,
++    MatchedDocument,
++    RefuseUnboundPort,
++}
++
++pub(crate) fn page_read_route(has_url_hint: bool, has_cdp_port: bool) -> PageReadRoute {
++    if has_cdp_port {
++        PageReadRoute::RefuseUnboundPort
++    } else if has_url_hint {
++        PageReadRoute::MatchedDocument
++    } else {
++        PageReadRoute::Legacy
++    }
++}
++
++#[cfg(test)]
++mod page_tests {
++    use super::*;
++    #[test]
++    fn targeted_reads_never_use_legacy_window_fallback() {
++        assert_eq!(page_read_route(false, false), PageReadRoute::Legacy);
++        assert_eq!(page_read_route(true, false), PageReadRoute::MatchedDocument);
++        assert_eq!(
++            page_read_route(true, true),
++            PageReadRoute::RefuseUnboundPort
++        );
++        assert_eq!(
++            page_read_route(false, true),
++            PageReadRoute::RefuseUnboundPort
++        );
++    }
++}
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 403b7e875..7c32883e7 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -10492,9 +10492,7 @@ pub fn build_registry_with_provider(
+     }; // touch struct so it stays in this crate for now
+        // Cross-platform `page` tool definition lives in mcp-server; Windows plugs
+        // in its UIA TextPattern + FindAll backend (CDP for execute_javascript).
+-    r.register(Box::new(cua_driver_core::page::PageTool::new(
+-        std::sync::Arc::new(super::page::WindowsPageBackend::new()),
+-    )));
++    r.register(Box::new(super::page::WindowsPageTool::new()));
+     let browser_engine = cua_driver_core::browser::BrowserEngine::new_with_runtime_services(
+         std::sync::Arc::new(crate::browser_platform::WindowsBrowserPlatform::new(
+             state.cursor_registry.clone(),
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+index 6d82874e3..6f58a0418 100644
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -44,6 +44,123 @@ use windows::Win32::UI::Accessibility::{
+     UIA_TextPatternId, UIA_ValueValuePropertyId, UIA_CONTROLTYPE_ID,
+ };
+ 
++/// Windows read dispatcher: URL hints must reach the document selector, never
++/// the cross-platform legacy read path which has no target parameters.
++pub(super) struct WindowsPageTool {
++    legacy: cua_driver_core::page::PageTool,
++}
++
++impl WindowsPageTool {
++    pub(super) fn new() -> Self {
++        Self {
++            legacy: cua_driver_core::page::PageTool::new(std::sync::Arc::new(
++                WindowsPageBackend::new(),
++            )),
++        }
++    }
++}
++
++#[async_trait]
++impl cua_driver_core::tool::Tool for WindowsPageTool {
++    fn def(&self) -> &cua_driver_core::tool::ToolDef {
++        self.legacy.def()
++    }
++
++    async fn invoke(&self, args: serde_json::Value) -> cua_driver_core::protocol::ToolResult {
++        use super::browser_target::{page_read_route, PageReadRoute};
++        use cua_driver_core::protocol::ToolResult;
++        let action = args
++            .get("action")
++            .and_then(serde_json::Value::as_str)
++            .unwrap_or("");
++        if !matches!(action, "get_text" | "query_dom") {
++            return self.legacy.invoke(args).await;
++        }
++        match page_read_route(args.get("target_url_contains").is_some(), args.get("cdp_port").is_some()) {
++            PageReadRoute::Legacy => return self.legacy.invoke(args).await,
++            PageReadRoute::RefuseUnboundPort => return ToolResult::error(
++                "Windows page reads cannot bind the supplied CDP port to this window. No page was read. Omit cdp_port to read the URL-matched document through UI Automation."
++            ),
++            PageReadRoute::MatchedDocument => {}
++        }
++        let Some(hint) = args
++            .get("target_url_contains")
++            .and_then(serde_json::Value::as_str)
++            .filter(|hint| !hint.trim().is_empty())
++        else {
++            return ToolResult::error(
++                "target_url_contains must be a nonempty URL substring. No page was read.",
++            );
++        };
++        let Some(pid) = args
++            .get("pid")
++            .and_then(serde_json::Value::as_u64)
++            .and_then(|pid| u32::try_from(pid).ok())
++            .filter(|pid| *pid != 0)
++        else {
++            return ToolResult::error(
++                "A valid pid is required for a targeted page read. No page was read.",
++            );
++        };
++        let Some(hwnd) = args
++            .get("window_id")
++            .and_then(serde_json::Value::as_u64)
++            .filter(|hwnd| *hwnd != 0)
++        else {
++            return ToolResult::error(
++                "A valid window_id is required for a targeted page read. No page was read.",
++            );
++        };
++        if crate::win32::window_owner_pid(hwnd) != Some(pid) {
++            return ToolResult::error("The page window does not belong to the named pid. Refresh list_windows; no page was read.");
++        }
++        let hint = hint.to_owned();
++        let selector = args
++            .get("css_selector")
++            .and_then(serde_json::Value::as_str)
++            .unwrap_or("*")
++            .to_owned();
++        let attributes: Vec<String> = args
++            .get("attributes")
++            .and_then(serde_json::Value::as_array)
++            .map(|items| {
++                items
++                    .iter()
++                    .filter_map(serde_json::Value::as_str)
++                    .map(str::to_owned)
++                    .collect()
++            })
++            .unwrap_or_default();
++        let query = action == "query_dom";
++        let result = tokio::task::spawn_blocking(move || unsafe {
++            let (automation, document) =
++                super::launch_browser::matching_document(hwnd, &hint, false)?;
++            let before = super::launch_browser::document_url(&document);
++            let text = if query {
++                query_dom_document(&automation, &document, &selector, &attributes)?
++            } else {
++                text_pattern_dump(&document).unwrap_or_else(|_| walk_text_blocking(&document))
++            };
++            let (_, current) = super::launch_browser::matching_document(hwnd, &hint, false)?;
++            if crate::win32::window_owner_pid(hwnd) != Some(pid)
++                || super::launch_browser::document_url(&document) != before
++                || !automation.CompareElements(&document, &current)?.as_bool()
++            {
++                anyhow::bail!(
++                    "The matching tab changed during the read. Its text was discarded; retry."
++                );
++            }
++            Ok::<_, anyhow::Error>(text)
++        })
++        .await;
++        match result {
++            Ok(Ok(text)) => ToolResult::text(text),
++            Ok(Err(error)) => ToolResult::error(format!("Targeted page read refused: {error}")),
++            Err(error) => ToolResult::error(format!("Targeted page read failed: {error}")),
++        }
++    }
++}
++
+ pub struct WindowsPageBackend;
+ 
+ impl WindowsPageBackend {
+@@ -378,6 +495,15 @@ unsafe fn query_dom_blocking(
+     let (automation, root) = uia_root_for(hwnd)?;
+     let root_for_search = find_document_descendant(&automation, &root)?.unwrap_or(root);
+ 
++    query_dom_document(&automation, &root_for_search, selector, attributes)
++}
++
++unsafe fn query_dom_document(
++    automation: &IUIAutomation,
++    root_for_search: &IUIAutomationElement,
++    selector: &str,
++    attributes: &[String],
++) -> anyhow::Result<String> {
+     let parsed = parse_selector(selector)?;
+ 
+     if parsed.is_data_attr {
+@@ -743,3 +869,32 @@ fn control_type_for_role(role: &str) -> Option<UIA_CONTROLTYPE_ID> {
+ fn escape_attr(s: &str) -> String {
+     s.replace('"', "\\\"")
+ }
++
++#[cfg(test)]
++mod targeted_read_tests {
++    use super::*;
++    use cua_driver_core::tool::Tool;
++
++    #[tokio::test]
++    async fn targeted_read_refuses_bad_target_instead_of_legacy_read() {
++        for action in ["get_text", "query_dom"] {
++            let result = WindowsPageTool::new()
++                .invoke(serde_json::json!({
++                    "action": action, "pid": 0, "window_id": 0,
++                    "target_url_contains": "example.com"
++                }))
++                .await;
++            assert_eq!(result.is_error, Some(true));
++        }
++    }
++
++    #[tokio::test]
++    async fn explicit_port_is_never_silently_ignored_by_a_read() {
++        let result = WindowsPageTool::new()
++            .invoke(serde_json::json!({
++                "action": "get_text", "pid": 0, "window_id": 0, "cdp_port": 9222
++            }))
++            .await;
++        assert_eq!(result.is_error, Some(true));
++    }
++}
