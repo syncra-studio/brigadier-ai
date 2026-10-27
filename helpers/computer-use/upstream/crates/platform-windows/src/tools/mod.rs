@@ -16,6 +16,8 @@ mod launch_focus;
 #[cfg(any(target_os = "windows", test))]
 mod launch_policy;
 #[cfg(target_os = "windows")]
+mod launch_termination;
+#[cfg(target_os = "windows")]
 pub(crate) mod page;
 #[cfg(target_os = "windows")]
 pub(crate) mod page_bookmark;

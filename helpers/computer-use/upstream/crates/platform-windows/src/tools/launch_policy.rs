@@ -37,3 +37,85 @@ mod tests {
         assert_eq!(executable_name("File Explorer"), "explorer");
     }
 }
+
+/// A shared frame host is a window container, never the app's process identity.
+pub(crate) fn confirmed_hosted_app_pid(
+    activation_pid: u32,
+    frame_host_pid: u32,
+    child_pid: Option<u32>,
+) -> Option<u32> {
+    child_pid.filter(|child| *child != 0 && *child != frame_host_pid && *child == activation_pid)
+}
+
+pub(crate) fn is_shared_frame_host(executable: &str) -> bool {
+    executable_name(executable) == "applicationframehost"
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TerminationObservation {
+    Terminated,
+    AlreadyExited,
+    ExitUnconfirmed,
+    Rejected,
+}
+
+pub(crate) fn termination_observation(
+    request_accepted: bool,
+    exit_confirmed: bool,
+) -> TerminationObservation {
+    match (request_accepted, exit_confirmed) {
+        (true, true) => TerminationObservation::Terminated,
+        (false, true) => TerminationObservation::AlreadyExited,
+        (true, false) => TerminationObservation::ExitUnconfirmed,
+        (false, false) => TerminationObservation::Rejected,
+    }
+}
+
+#[cfg(test)]
+mod hosted_termination_tests {
+    use super::*;
+    #[test]
+    fn each_frame_maps_to_its_own_launched_app_without_owning_the_shared_host() {
+        assert_eq!(
+            confirmed_hosted_app_pid(29628, 28908, Some(29628)),
+            Some(29628)
+        );
+        assert_eq!(
+            confirmed_hosted_app_pid(1508, 28908, Some(1508)),
+            Some(1508)
+        );
+        assert_eq!(confirmed_hosted_app_pid(29628, 28908, Some(1508)), None);
+        assert_eq!(confirmed_hosted_app_pid(28908, 28908, Some(28908)), None);
+        assert_eq!(confirmed_hosted_app_pid(29628, 28908, None), None);
+        assert_eq!(confirmed_hosted_app_pid(0, 28908, Some(0)), None);
+    }
+    #[test]
+    fn frame_host_is_protected_by_executable_identity_not_a_cached_pid() {
+        assert!(is_shared_frame_host(
+            r"C:\Windows\System32\ApplicationFrameHost.EXE"
+        ));
+        assert!(!is_shared_frame_host(
+            r"C:\Program Files\WindowsApps\CalculatorApp.exe"
+        ));
+        assert!(!is_shared_frame_host("ApplicationFrameHostHelper.exe"));
+    }
+    #[test]
+    fn a_queued_termination_or_wait_timeout_never_confirms_process_exit() {
+        assert_eq!(
+            termination_observation(true, false),
+            TerminationObservation::ExitUnconfirmed
+        );
+        assert_eq!(
+            termination_observation(false, false),
+            TerminationObservation::Rejected
+        );
+        assert_eq!(
+            termination_observation(true, true),
+            TerminationObservation::Terminated
+        );
+        assert_eq!(
+            termination_observation(false, true),
+            TerminationObservation::AlreadyExited
+        );
+    }
+}

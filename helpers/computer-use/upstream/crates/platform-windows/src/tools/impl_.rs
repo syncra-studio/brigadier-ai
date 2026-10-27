@@ -2901,18 +2901,9 @@ impl Tool for LaunchAppTool {
             }
         }
 
-        // UWP / packaged-app host-window resolution. `launch_uwp` returns the
-        // real packaged-app pid (e.g. CalculatorApp.exe), but a UWP app's
-        // top-level window — the HWND a caller must actually drive — is owned
-        // by `ApplicationFrameHost.exe`, not by that process. The app process
-        // only owns a `CoreWindow` reparented as a child of the AFH frame, so
-        // `list_windows(Some(app_pid))` is empty and the generic retry loop
-        // below would either spin out to a stub-fallback miss or return no
-        // windows at all (the original "launch_app of a UWP app returns empty
-        // windows[] / a pid you can't drive" bug). Map app_pid → its AFH host
-        // frame and report `(frame_hwnd, afh_pid)` so the returned handles
-        // resolve in `get_window_state` and element actions land. Retry: the
-        // frame can lag the activation by a few hundred ms.
+        // Retain the activation's real app pid while returning its shared frame
+        // HWND. Window attribution validates that pair through the hosted
+        // CoreWindow. Only the app process may become runtime-owned/killable.
         if aumid_for_uwp.is_some() {
             for _ in 0..10 {
                 let host =
@@ -2920,6 +2911,14 @@ impl Tool for LaunchAppTool {
                         .await
                         .unwrap_or(None);
                 if let Some(w) = host {
+                    let child_pid = crate::win32::resolve_uwp_app_pid(w.pid, w.hwnd);
+                    let Some(app_pid) =
+                        super::launch_policy::confirmed_hosted_app_pid(pid, w.pid, child_pid)
+                    else {
+                        return ToolResult::error(
+                            "Windows did not confirm the Store app process inside its frame. The shared ApplicationFrameHost will not be used as the app pid. Refresh list_windows before acting."
+                        ).with_structured(json!({"code": "hosted_app_identity_unconfirmed", "launched_pid": pid}));
+                    };
                     windows_json = vec![json!({
                         "window_id": w.hwnd, "title": w.title,
                         "bounds": { "x": w.x, "y": w.y, "width": w.width, "height": w.height },
@@ -2927,10 +2926,7 @@ impl Tool for LaunchAppTool {
                         "z_index": 0,
                         "is_on_screen": true,
                     })];
-                    // Report the AFH pid: that's the pid that owns the frame
-                    // HWND, so `get_window_state(resolved_pid, window_id)`
-                    // validates and `list_windows(Some(resolved_pid))` lists it.
-                    resolved_pid = w.pid;
+                    resolved_pid = app_pid;
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -9695,7 +9691,7 @@ impl Tool for KillAppTool {
                 first; only escalate to `kill_app` when polite close didn't terminate."
                 .into(),
             input_schema: json!({"type":"object","required":["pid"],"properties":{
-                "pid":{"type":"integer","description":"PID of the process to terminate."}
+                "pid":{"type":"integer","description":"Own app process ID returned by launch_app or list_windows. ApplicationFrameHost is shared and must never be terminated."}
             },"additionalProperties":false}),
             read_only: false,
             destructive: true,
@@ -9756,59 +9752,26 @@ impl Tool for KillAppTool {
             }
         };
 
-        // Run the syscalls on a blocking thread — TerminateProcess + the
-        // WaitForSingleObject confirmation are both blocking, and we don't
-        // want to stall the tokio reactor.
-        let outcome = tokio::task::spawn_blocking(move || -> Result<(), String> {
-            use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-            use windows::Win32::System::Threading::{
-                OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-                PROCESS_TERMINATE,
-            };
-
-            // SAFETY: OpenProcess returns a Result<HANDLE> in windows-rs;
-            // PROCESS_TERMINATE | PROCESS_SYNCHRONIZE lets us both kill the
-            // target AND wait for the OS to fully reap it (so the caller's
-            // follow-up list_apps reflects the change immediately).
-            let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid_v) }
-                .map_err(|e| {
-                format!(
-                    "OpenProcess(pid={pid_v}, PROCESS_TERMINATE|PROCESS_SYNCHRONIZE) failed: {e}. \
-                     The process may not exist, or the daemon lacks the right to terminate it. \
-                     Try listing processes first to confirm the pid is correct."
-                )
-            })?;
-
-            let term_result = unsafe { TerminateProcess(h, 1) };
-
-            // WaitForSingleObject so the caller can assume the process is
-            // really gone on return. 2-second cap — TerminateProcess is
-            // synchronous in practice but the OS still needs a moment to
-            // reap kernel structures. WAIT_TIMEOUT is treated as a soft
-            // success (the kill request landed; the process may take a
-            // little longer to disappear from list_apps).
-            let wait_status = unsafe { WaitForSingleObject(h, 2000) };
-            let _ = unsafe { CloseHandle(h) };
-
-            match (term_result, wait_status) {
-                (Ok(()), s) if s == WAIT_OBJECT_0 => Ok(()),
-                (Ok(()), _) => Ok(()), // killed, wait timed out — caller can re-check
-                (Err(e), _) => Err(format!(
-                    "TerminateProcess(pid={pid_v}) failed: {e}. The handle was opened \
-                     successfully but the kill itself was rejected; this is unusual for \
-                     PROCESS_TERMINATE rights and may indicate a protected-process target \
-                     (PPL, e.g. csrss / system services)."
-                )),
-            }
+        let expected_start = args
+            .get("_protected_process_fingerprint")
+            .and_then(|fingerprint| fingerprint.get("start_time"))
+            .and_then(Value::as_u64);
+        let outcome = tokio::task::spawn_blocking(move || {
+            super::launch_termination::terminate_verified(pid_v, expected_start)
         })
         .await;
 
         match outcome {
-            Ok(Ok(())) => ToolResult::text(format!("✅ Terminated pid {pid_v}.")),
-            Ok(Err(e)) => ToolResult::error(format!("kill_app: {e}")),
-            Err(join_err) => {
-                ToolResult::error(format!("kill_app: blocking-task join error: {join_err}"))
-            }
+            Ok(Ok(termination_accepted)) => ToolResult::text(format!(
+                "Confirmed app process {pid_v} has exited."
+            )).with_structured(json!({
+                "pid": pid_v, "status": "exited", "confirmed": true,
+                "termination_accepted": termination_accepted,
+            })),
+            Ok(Err(error)) => ToolResult::error(format!("kill_app: {error}")),
+            Err(error) => ToolResult::error(format!(
+                "kill_app: termination confirmation failed: {error}. Verify whether the app is still running before retrying."
+            )),
         }
     }
 }

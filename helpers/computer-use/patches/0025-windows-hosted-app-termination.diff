@@ -1,0 +1,403 @@
+Why: return the verified hosted Store app pid from launch, retain runtime ownership on that process, protect ApplicationFrameHost at termination, and require confirmed process exit instead of treating wait timeouts as success.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index e30c6f400..0fb9079ec 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2901,18 +2901,9 @@ impl Tool for LaunchAppTool {
+             }
+         }
+ 
+-        // UWP / packaged-app host-window resolution. `launch_uwp` returns the
+-        // real packaged-app pid (e.g. CalculatorApp.exe), but a UWP app's
+-        // top-level window — the HWND a caller must actually drive — is owned
+-        // by `ApplicationFrameHost.exe`, not by that process. The app process
+-        // only owns a `CoreWindow` reparented as a child of the AFH frame, so
+-        // `list_windows(Some(app_pid))` is empty and the generic retry loop
+-        // below would either spin out to a stub-fallback miss or return no
+-        // windows at all (the original "launch_app of a UWP app returns empty
+-        // windows[] / a pid you can't drive" bug). Map app_pid → its AFH host
+-        // frame and report `(frame_hwnd, afh_pid)` so the returned handles
+-        // resolve in `get_window_state` and element actions land. Retry: the
+-        // frame can lag the activation by a few hundred ms.
++        // Retain the activation's real app pid while returning its shared frame
++        // HWND. Window attribution validates that pair through the hosted
++        // CoreWindow. Only the app process may become runtime-owned/killable.
+         if aumid_for_uwp.is_some() {
+             for _ in 0..10 {
+                 let host =
+@@ -2920,6 +2911,14 @@ impl Tool for LaunchAppTool {
+                         .await
+                         .unwrap_or(None);
+                 if let Some(w) = host {
++                    let child_pid = crate::win32::resolve_uwp_app_pid(w.pid, w.hwnd);
++                    let Some(app_pid) =
++                        super::launch_policy::confirmed_hosted_app_pid(pid, w.pid, child_pid)
++                    else {
++                        return ToolResult::error(
++                            "Windows did not confirm the Store app process inside its frame. The shared ApplicationFrameHost will not be used as the app pid. Refresh list_windows before acting."
++                        ).with_structured(json!({"code": "hosted_app_identity_unconfirmed", "launched_pid": pid}));
++                    };
+                     windows_json = vec![json!({
+                         "window_id": w.hwnd, "title": w.title,
+                         "bounds": { "x": w.x, "y": w.y, "width": w.width, "height": w.height },
+@@ -2927,10 +2926,7 @@ impl Tool for LaunchAppTool {
+                         "z_index": 0,
+                         "is_on_screen": true,
+                     })];
+-                    // Report the AFH pid: that's the pid that owns the frame
+-                    // HWND, so `get_window_state(resolved_pid, window_id)`
+-                    // validates and `list_windows(Some(resolved_pid))` lists it.
+-                    resolved_pid = w.pid;
++                    resolved_pid = app_pid;
+                     break;
+                 }
+                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+@@ -9695,7 +9691,7 @@ impl Tool for KillAppTool {
+                 first; only escalate to `kill_app` when polite close didn't terminate."
+                 .into(),
+             input_schema: json!({"type":"object","required":["pid"],"properties":{
+-                "pid":{"type":"integer","description":"PID of the process to terminate."}
++                "pid":{"type":"integer","description":"Own app process ID returned by launch_app or list_windows. ApplicationFrameHost is shared and must never be terminated."}
+             },"additionalProperties":false}),
+             read_only: false,
+             destructive: true,
+@@ -9756,59 +9752,26 @@ impl Tool for KillAppTool {
+             }
+         };
+ 
+-        // Run the syscalls on a blocking thread — TerminateProcess + the
+-        // WaitForSingleObject confirmation are both blocking, and we don't
+-        // want to stall the tokio reactor.
+-        let outcome = tokio::task::spawn_blocking(move || -> Result<(), String> {
+-            use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+-            use windows::Win32::System::Threading::{
+-                OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+-                PROCESS_TERMINATE,
+-            };
+-
+-            // SAFETY: OpenProcess returns a Result<HANDLE> in windows-rs;
+-            // PROCESS_TERMINATE | PROCESS_SYNCHRONIZE lets us both kill the
+-            // target AND wait for the OS to fully reap it (so the caller's
+-            // follow-up list_apps reflects the change immediately).
+-            let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid_v) }
+-                .map_err(|e| {
+-                format!(
+-                    "OpenProcess(pid={pid_v}, PROCESS_TERMINATE|PROCESS_SYNCHRONIZE) failed: {e}. \
+-                     The process may not exist, or the daemon lacks the right to terminate it. \
+-                     Try listing processes first to confirm the pid is correct."
+-                )
+-            })?;
+-
+-            let term_result = unsafe { TerminateProcess(h, 1) };
+-
+-            // WaitForSingleObject so the caller can assume the process is
+-            // really gone on return. 2-second cap — TerminateProcess is
+-            // synchronous in practice but the OS still needs a moment to
+-            // reap kernel structures. WAIT_TIMEOUT is treated as a soft
+-            // success (the kill request landed; the process may take a
+-            // little longer to disappear from list_apps).
+-            let wait_status = unsafe { WaitForSingleObject(h, 2000) };
+-            let _ = unsafe { CloseHandle(h) };
+-
+-            match (term_result, wait_status) {
+-                (Ok(()), s) if s == WAIT_OBJECT_0 => Ok(()),
+-                (Ok(()), _) => Ok(()), // killed, wait timed out — caller can re-check
+-                (Err(e), _) => Err(format!(
+-                    "TerminateProcess(pid={pid_v}) failed: {e}. The handle was opened \
+-                     successfully but the kill itself was rejected; this is unusual for \
+-                     PROCESS_TERMINATE rights and may indicate a protected-process target \
+-                     (PPL, e.g. csrss / system services)."
+-                )),
+-            }
++        let expected_start = args
++            .get("_protected_process_fingerprint")
++            .and_then(|fingerprint| fingerprint.get("start_time"))
++            .and_then(Value::as_u64);
++        let outcome = tokio::task::spawn_blocking(move || {
++            super::launch_termination::terminate_verified(pid_v, expected_start)
+         })
+         .await;
+ 
+         match outcome {
+-            Ok(Ok(())) => ToolResult::text(format!("✅ Terminated pid {pid_v}.")),
+-            Ok(Err(e)) => ToolResult::error(format!("kill_app: {e}")),
+-            Err(join_err) => {
+-                ToolResult::error(format!("kill_app: blocking-task join error: {join_err}"))
+-            }
++            Ok(Ok(termination_accepted)) => ToolResult::text(format!(
++                "Confirmed app process {pid_v} has exited."
++            )).with_structured(json!({
++                "pid": pid_v, "status": "exited", "confirmed": true,
++                "termination_accepted": termination_accepted,
++            })),
++            Ok(Err(error)) => ToolResult::error(format!("kill_app: {error}")),
++            Err(error) => ToolResult::error(format!(
++                "kill_app: termination confirmation failed: {error}. Verify whether the app is still running before retrying."
++            )),
+         }
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+index 4a4a573d0..c11e84d92 100644
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -37,3 +37,85 @@ mod tests {
+         assert_eq!(executable_name("File Explorer"), "explorer");
+     }
+ }
++
++/// A shared frame host is a window container, never the app's process identity.
++pub(crate) fn confirmed_hosted_app_pid(
++    activation_pid: u32,
++    frame_host_pid: u32,
++    child_pid: Option<u32>,
++) -> Option<u32> {
++    child_pid.filter(|child| *child != 0 && *child != frame_host_pid && *child == activation_pid)
++}
++
++pub(crate) fn is_shared_frame_host(executable: &str) -> bool {
++    executable_name(executable) == "applicationframehost"
++}
++
++#[derive(Debug, PartialEq, Eq)]
++pub(crate) enum TerminationObservation {
++    Terminated,
++    AlreadyExited,
++    ExitUnconfirmed,
++    Rejected,
++}
++
++pub(crate) fn termination_observation(
++    request_accepted: bool,
++    exit_confirmed: bool,
++) -> TerminationObservation {
++    match (request_accepted, exit_confirmed) {
++        (true, true) => TerminationObservation::Terminated,
++        (false, true) => TerminationObservation::AlreadyExited,
++        (true, false) => TerminationObservation::ExitUnconfirmed,
++        (false, false) => TerminationObservation::Rejected,
++    }
++}
++
++#[cfg(test)]
++mod hosted_termination_tests {
++    use super::*;
++    #[test]
++    fn each_frame_maps_to_its_own_launched_app_without_owning_the_shared_host() {
++        assert_eq!(
++            confirmed_hosted_app_pid(29628, 28908, Some(29628)),
++            Some(29628)
++        );
++        assert_eq!(
++            confirmed_hosted_app_pid(1508, 28908, Some(1508)),
++            Some(1508)
++        );
++        assert_eq!(confirmed_hosted_app_pid(29628, 28908, Some(1508)), None);
++        assert_eq!(confirmed_hosted_app_pid(28908, 28908, Some(28908)), None);
++        assert_eq!(confirmed_hosted_app_pid(29628, 28908, None), None);
++        assert_eq!(confirmed_hosted_app_pid(0, 28908, Some(0)), None);
++    }
++    #[test]
++    fn frame_host_is_protected_by_executable_identity_not_a_cached_pid() {
++        assert!(is_shared_frame_host(
++            r"C:\Windows\System32\ApplicationFrameHost.EXE"
++        ));
++        assert!(!is_shared_frame_host(
++            r"C:\Program Files\WindowsApps\CalculatorApp.exe"
++        ));
++        assert!(!is_shared_frame_host("ApplicationFrameHostHelper.exe"));
++    }
++    #[test]
++    fn a_queued_termination_or_wait_timeout_never_confirms_process_exit() {
++        assert_eq!(
++            termination_observation(true, false),
++            TerminationObservation::ExitUnconfirmed
++        );
++        assert_eq!(
++            termination_observation(false, false),
++            TerminationObservation::Rejected
++        );
++        assert_eq!(
++            termination_observation(true, true),
++            TerminationObservation::Terminated
++        );
++        assert_eq!(
++            termination_observation(false, true),
++            TerminationObservation::AlreadyExited
++        );
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_termination.rs b/crates/platform-windows/src/tools/launch_termination.rs
+new file mode 100644
+index 000000000..f33fd4f1d
+--- /dev/null
++++ b/crates/platform-windows/src/tools/launch_termination.rs
+@@ -0,0 +1,154 @@
++//! Terminate one proven app process, never a shared application frame host.
++use windows::core::PWSTR;
++use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0};
++use windows::Win32::System::Threading::{
++    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
++    WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
++    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
++};
++
++struct ProcessHandle(HANDLE);
++impl Drop for ProcessHandle {
++    fn drop(&mut self) {
++        let _ = unsafe { CloseHandle(self.0) };
++    }
++}
++
++/// A true return means Windows accepted termination and confirmed exit; false
++/// means it confirmed the process exited independently. A timeout is an error.
++pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Result<bool, String> {
++    let process = ProcessHandle(unsafe {
++        OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
++    }.map_err(|error| format!(
++        "Windows could not open app process {pid} for verified termination: {error}. No termination was attempted."
++    ))?);
++
++    let mut path = vec![0u16; 32768];
++    let mut path_len = path.len() as u32;
++    unsafe {
++        QueryFullProcessImageNameW(
++            process.0,
++            PROCESS_NAME_WIN32,
++            PWSTR(path.as_mut_ptr()),
++            &mut path_len,
++        )
++    }
++    .map_err(|error| {
++        format!("Windows could not identify process {pid}: {error}. No termination was attempted.")
++    })?;
++    if path_len == 0 || path_len as usize > path.len() {
++        return Err(
++            "Windows returned no usable executable identity. No termination was attempted.".into(),
++        );
++    }
++    let executable = String::from_utf16_lossy(&path[..path_len as usize]);
++    if super::launch_policy::is_shared_frame_host(&executable) {
++        return Err("ApplicationFrameHost is shared by Store apps and will never be terminated. Use the Store app's own pid from launch_app or list_windows.".into());
++    }
++
++    if let Some(expected) = expected_start {
++        let mut created = FILETIME::default();
++        let mut exited = FILETIME::default();
++        let mut kernel = FILETIME::default();
++        let mut user = FILETIME::default();
++        unsafe { GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user) }
++            .map_err(|error| format!("Windows could not verify the lifetime of process {pid}: {error}. No termination was attempted."))?;
++        let actual = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
++        if actual != expected {
++            return Err("The app process identity changed before termination. No termination was attempted; refresh list_apps.".into());
++        }
++    }
++
++    if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
++        return Ok(false);
++    }
++    let request = unsafe { TerminateProcess(process.0, 1) };
++    let wait = unsafe { WaitForSingleObject(process.0, 2000) };
++    use super::launch_policy::{termination_observation, TerminationObservation};
++    match termination_observation(request.is_ok(), wait == WAIT_OBJECT_0) {
++        TerminationObservation::Terminated => Ok(true),
++        TerminationObservation::AlreadyExited => Ok(false),
++        TerminationObservation::ExitUnconfirmed => Err(format!(
++            "Termination was requested for app process {pid}, but Windows has not confirmed its exit (wait status {:#x}). It may still be running; verify before retrying.", wait.0
++        )),
++        TerminationObservation::Rejected => Err(format!(
++            "Windows refused to terminate app process {pid}: {}. Its exit could not be confirmed.",
++            request.unwrap_err()
++        )),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::os::windows::process::CommandExt;
++    use std::process::{Child, Command};
++
++    struct ChildGuard(Child);
++    impl Drop for ChildGuard {
++        fn drop(&mut self) {
++            let _ = self.0.kill();
++            let _ = self.0.wait();
++        }
++    }
++
++    #[test]
++    #[ignore = "fixture subprocess used only by the verified-termination tests"]
++    fn owned_process_fixture() {
++        if std::env::var_os("CUA_DRIVER_TERMINATION_TEST_CHILD").is_some() {
++            std::thread::sleep(std::time::Duration::from_secs(30));
++        }
++    }
++
++    fn fixture() -> ChildGuard {
++        ChildGuard(
++            Command::new(std::env::current_exe().unwrap())
++                .args([
++                    "--exact",
++                    "tools::launch_termination::tests::owned_process_fixture",
++                    "--ignored",
++                ])
++                .env("CUA_DRIVER_TERMINATION_TEST_CHILD", "1")
++                .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
++                .spawn()
++                .unwrap(),
++        )
++    }
++
++    #[test]
++    fn shared_host_executable_is_refused_without_terminating_it() {
++        let root = tempfile::tempdir().unwrap();
++        let executable = root.path().join("ApplicationFrameHost.exe");
++        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
++        let mut child = ChildGuard(
++            Command::new(executable)
++                .args([
++                    "--exact",
++                    "tools::launch_termination::tests::owned_process_fixture",
++                    "--ignored",
++                ])
++                .env("CUA_DRIVER_TERMINATION_TEST_CHILD", "1")
++                .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
++                .spawn()
++                .unwrap(),
++        );
++        let error = terminate_verified(child.0.id(), None).unwrap_err();
++        assert!(error.contains("ApplicationFrameHost is shared"));
++        assert!(child.0.try_wait().unwrap().is_none());
++    }
++
++    #[test]
++    fn verifies_exit_of_the_exact_child_process() {
++        let mut child = fixture();
++        assert!(terminate_verified(child.0.id(), None).unwrap());
++        assert!(child.0.try_wait().unwrap().is_some());
++    }
++
++    #[test]
++    fn changed_process_lifetime_is_refused_without_killing_the_child() {
++        let mut child = fixture();
++        let error = terminate_verified(child.0.id(), Some(0)).unwrap_err();
++        assert!(error.contains("identity changed"));
++        assert!(child.0.try_wait().unwrap().is_none());
++    }
++}
+diff --git a/crates/platform-windows/src/tools/mod.rs b/crates/platform-windows/src/tools/mod.rs
+index 55127584e..fdf755731 100644
+--- a/crates/platform-windows/src/tools/mod.rs
++++ b/crates/platform-windows/src/tools/mod.rs
+@@ -16,6 +16,8 @@ mod launch_focus;
+ #[cfg(any(target_os = "windows", test))]
+ mod launch_policy;
+ #[cfg(target_os = "windows")]
++mod launch_termination;
++#[cfg(target_os = "windows")]
+ pub(crate) mod page;
+ #[cfg(target_os = "windows")]
+ pub(crate) mod page_bookmark;
