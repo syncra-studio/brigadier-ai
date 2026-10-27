@@ -131,11 +131,22 @@ function listsOf(news: ThreadNews): Lists {
   };
 }
 
+/** What the stream said for a read to add once it lands. */
+type Heard = { heard: FileEntry[]; lists: Lists };
+
 /**
  * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks,
  * MCP servers and the session's workers when they changed), and whether a turn ended meanwhile.
  */
-const reads = new Map<string, { heard: FileEntry[]; lists: Lists; again: boolean }>();
+const reads = new Map<string, Heard & { again: boolean }>();
+
+/**
+ * What the stream said from a turn's start or end on, held for the read of the thread that
+ * follows it: its lists come with the turns that read brings, never before them. A background
+ * command's end clears its hold in the same news that opens the turn it starts, and drawn alone
+ * the hold's end read as the block's end: its work folded, then opened again (D21).
+ */
+const owed = new Map<string, Heard>();
 
 function setView(conversationId: string, view: ThreadView): void {
   useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: view } }));
@@ -153,7 +164,8 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     going.again = true;
     return;
   }
-  const read: { heard: FileEntry[]; lists: Lists; again: boolean } = { heard: [], lists: {}, again: false };
+  const read = { ...(owed.get(conversationId) ?? { heard: [], lists: {} }), again: false };
+  owed.delete(conversationId);
   reads.set(conversationId, read);
   try {
     const { view } = await request({ method: "threadView", conversationId });
@@ -203,15 +215,21 @@ function flushNews(): void {
   const turned = new Set<string>();
   for (const news of batch) {
     const id = news.conversationId;
-    if (news.opened || news.ended) turned.add(id);
     const read = reads.get(id);
-    if (read) {
-      read.heard.push(...news.entries);
-      Object.assign(read.lists, listsOf(news));
+    const view = next[id] ?? views[id];
+    // A turn's start or end reads the thread again, after any read under way: it, and what comes
+    // after it, wait for that read.
+    if ((news.opened || news.ended) && (read || view)) {
+      turned.add(id);
+      if (!owed.has(id)) owed.set(id, { heard: [], lists: {} });
+    }
+    const into = owed.get(id) ?? read;
+    if (into) {
+      into.heard.push(...news.entries);
+      Object.assign(into.lists, listsOf(news));
       continue;
     }
     // A thread not read yet is read whole when it opens.
-    const view = next[id] ?? views[id];
     const lists = listsOf(news);
     if (!view || (news.entries.length === 0 && Object.keys(lists).length === 0)) continue;
     next[id] = {
@@ -221,7 +239,7 @@ function flushNews(): void {
     };
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
-  for (const id of turned) if (reads.has(id) || useCliThread.getState().views[id]) void loadThreadView(id);
+  for (const id of turned) void loadThreadView(id);
 }
 
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
