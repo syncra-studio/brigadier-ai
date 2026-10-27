@@ -46,7 +46,7 @@ export function livePlugins(): PluginsAdapter {
     read: async () => {
       const { catalog } = await request({ method: "getPluginCatalog" });
       for (const row of catalog.rows) {
-        if (row.kind === "server" && row.definitions.some((definition) => definition.agent !== null)) {
+        if (row.kind === "server" && row.signIn.type !== "notRequired" && row.definitions.some((definition) => definition.agent !== null)) {
           try {
             row.signIn = (await request({ method: "getPluginSignInStatus", rowId: row.id })).state;
           } catch (cause) {
