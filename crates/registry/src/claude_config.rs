@@ -209,30 +209,6 @@ pub fn set_off_flags(file: &Path, flags: &[OffFlag], settle: Duration) -> Result
     Err("Claude Code rewrote its settings at the same moment; try again.".to_owned())
 }
 
-/// Read and validate a config under Claude's lock without writing it.
-pub fn check_flags(file: &Path, flags: &[OffFlag]) -> Result<(), String> {
-    rewrite_locked(file, |text| {
-        if text.trim().is_empty() && file.exists() {
-            return Err(unreadable(file, "the settings file is empty"));
-        }
-        let mut checked = if text.trim().is_empty() {
-            "{}".to_owned()
-        } else {
-            text.to_owned()
-        };
-        for flag in flags {
-            checked = splice::set_flag(
-                &checked,
-                &key_text(&project_key(&flag.folder)),
-                &flag.name,
-                flag.off,
-            )?;
-        }
-        Ok(None)
-    })
-    .map(|_| ())
-}
-
 /// Whether `file` has every flag of `keyed` as it should be.
 fn holds(file: &Path, keyed: &[(String, &OffFlag)]) -> Result<bool, String> {
     let config = read_config(file)?.unwrap_or(Value::Null);

@@ -19,7 +19,7 @@ const EXIT: Duration = Duration::from_secs(5);
 
 /// Writes `value` at `key_path` (`plugins."x@lib".enabled`) in the user's config through
 /// `program app-server`; a JSON `null` removes the key (or table).
-pub(super) fn write_value(
+pub(crate) fn write_value(
     program: &Path,
     env: &[(String, String)],
     key_path: &str,
@@ -48,7 +48,7 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| super::apply::spawn_error(&program.display().to_string(), &err))?;
+            .map_err(|err| super::spawn_error(&program.display().to_string(), &err))?;
         let stdin = child.stdin.take();
         let (tx, lines) = mpsc::channel();
         if let Some(stdout) = child.stdout.take() {
@@ -144,7 +144,7 @@ impl Server {
     fn stderr_line(&mut self) -> Option<String> {
         let _ = wait(&mut self.child, EXIT);
         let text = self.stderr.recv_timeout(Duration::from_millis(200)).ok()?;
-        super::apply::stderr_line(&text)
+        super::stderr_line(&text)
     }
 
     /// Closes its input, which ends it; kills it if it lingers.

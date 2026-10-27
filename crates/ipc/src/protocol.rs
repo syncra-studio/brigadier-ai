@@ -1191,9 +1191,6 @@ pub enum Request {
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
-    /// Settings › Plugins: every skill and MCP server the agents have, each shared with every
-    /// agent, where each is on and what needs the user.
-    GetPlugins,
     /// Provenance-preserving catalog and the durable choices used by the resolver.
     GetPluginCatalog,
     SetPluginChoice {
@@ -1213,34 +1210,13 @@ pub enum Request {
     SignOutPlugin {
         row_id: String,
     },
-    /// Turns Settings › Plugins item `key` on or off for every agent, keeping its projects for
-    /// when it is on again. Refused (in the job's error) for a locked item. Answers with a job
-    /// ([`Request::GetPluginJob`]).
-    SwitchPlugin {
-        key: String,
-        on: bool,
-    },
-    /// Puts item `key` on in every project (`projectIds` null: All projects), or in exactly
-    /// projects `projectIds`, for every agent; an item switched off keeps it for when it is on.
-    /// Refused for a locked item. Answers with a job.
-    SetPluginScope {
-        key: String,
-        project_ids: Option<Vec<String>>,
-    },
-    /// Share with every agent: item `key`, which the user removed from the other agents or
-    /// whose sharing failed, is shared now. Answers with a job.
-    SharePlugin {
-        key: String,
-    },
     /// What pasted `text` would add (a skill, an MCP server), before anything is added;
     /// `name` names a server the paste doesn't.
     CheckPluginAdd {
         text: String,
         name: Option<String>,
     },
-    /// Adds what `text` holds for every agent: in every project (`projectIds` null), or in
-    /// exactly projects `projectIds`. `values` sets or adds the env (or headers) of the one
-    /// server pasted; they go to the Keychain. Answers with a job.
+    /// Adds plain content to Brigadier's data-dir Library and saves its scope choice.
     AddPlugin {
         text: String,
         name: Option<String>,
@@ -1249,24 +1225,14 @@ pub enum Request {
         #[ts(optional)]
         values: Option<std::collections::BTreeMap<String, String>>,
     },
-    /// Brings another app's server (`key`: an `elsewhere` entry's, `other:<id>`) to every agent,
-    /// as [`Request::AddPlugin`] does a pasted one: its values to the Keychain, that app's file
-    /// only read. In every project (`projectIds` null) or exactly `projectIds`; `name` replaces
-    /// its own name on a clash (a clash without one fails the job, saying why). Afterwards it
-    /// is an item, no longer in `elsewhere`. Answers with a job.
+    /// Imports a detected offer into Brigadier's Library; the source stays untouched.
     ImportPlugin {
         key: String,
         name: Option<String>,
         project_ids: Option<Vec<String>>,
     },
-    /// Removes what Brigadier made for item `key`: its copies (the agents' own entry stays as
-    /// it is, and it isn't shared again until [`Request::SharePlugin`]), or an item added
-    /// through Brigadier from every agent. Answers with a job.
+    /// Removes a Library item; native detected items can only be switched off.
     RemovePlugin {
-        key: String,
-    },
-    /// Brings Library item `key` to its source's newest version. Answers with a job.
-    UpdatePlugin {
         key: String,
     },
     /// What item `key` is set up with: its skill files (path and text) to open, or its
@@ -1275,54 +1241,12 @@ pub enum Request {
         key: String,
     },
     /// Saves `contents` as item `key`'s skill file `path` if it still holds `expected` (its
-    /// text when opened); its copies then follow, in a job.
+    /// text when opened).
     SavePluginSkill {
         key: String,
         path: String,
         contents: String,
         expected: String,
-    },
-    /// How a Settings › Plugins job goes, each agent's part.
-    GetPluginJob {
-        id: String,
-    },
-    /// Signs every agent that has the remote MCP server `serverId` (a catalog id, of
-    /// `projectId`'s catalog when given; a project the user doesn't trust is refused) and needs it in to it, one after another, each with its CLI's
-    /// own `mcp login`; each sign-in page opens in the user's browser. Answers at once with the
-    /// sign-in's id; how it goes comes from [`Request::GetMcpSignIn`] (all agents at once) and
-    /// [`Request::GetMcpSignInProgress`] (agent by agent).
-    SignInMcpServer {
-        server_id: String,
-        project_id: Option<ProjectId>,
-    },
-    /// How sign-in `id` ([`Request::SignInMcpServer`]) went. Never carries a token.
-    GetMcpSignIn {
-        id: String,
-    },
-    /// How sign-in `id` goes, agent by agent.
-    GetMcpSignInProgress {
-        id: String,
-    },
-    /// Stops sign-in `id`: the agent signing in now is stopped (its CLI ends), the ones after
-    /// it are skipped, and [`Request::GetMcpSignIn`] reports it cancelled.
-    CancelMcpSignIn {
-        id: String,
-    },
-    /// Opens sign-in `id`'s page in the user's browser again, while it waits.
-    ReopenMcpSignIn {
-        id: String,
-    },
-    /// Signs every agent that has the server `serverId` (of `projectId`'s catalog when given)
-    /// out of it, with its CLI's own `mcp logout`.
-    SignOutMcpServer {
-        server_id: String,
-        project_id: Option<ProjectId>,
-    },
-    /// Reads each agent's own list of servers again (for `projectId`'s folder when given), so
-    /// the next [`Request::GetPlugins`] shows who needs a sign-in to `serverId` as of now.
-    AskMcpSignInAgain {
-        server_id: String,
-        project_id: Option<ProjectId>,
     },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
     /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
@@ -2031,9 +1955,6 @@ pub enum Response {
     GetAccounts {
         accounts: AccountsView,
     },
-    GetPlugins {
-        plugins: brigadier_core::manager::plugins::PluginsView,
-    },
     GetPluginCatalog {
         catalog: brigadier_core::manager::plugins::CatalogView,
     },
@@ -2046,15 +1967,6 @@ pub enum Response {
         state: brigadier_core::manager::plugins::CatalogSignIn,
     },
     SignOutPlugin,
-    SwitchPlugin {
-        job: String,
-    },
-    SetPluginScope {
-        job: String,
-    },
-    SharePlugin {
-        job: String,
-    },
     CheckPluginAdd {
         check: brigadier_core::manager::plugins::ops::PluginAddCheck,
     },
@@ -2067,31 +1979,12 @@ pub enum Response {
     RemovePlugin {
         job: String,
     },
-    UpdatePlugin {
-        job: String,
-    },
     GetPluginItem {
         item: brigadier_core::manager::plugins::PluginItemDetails,
     },
     SavePluginSkill {
         outcome: brigadier_core::manager::plugins::PluginSkillSave,
     },
-    GetPluginJob {
-        job: brigadier_core::manager::plugins::ops::PluginJobView,
-    },
-    SignInMcpServer {
-        id: String,
-    },
-    GetMcpSignIn {
-        status: brigadier_core::manager::McpSignInStatus,
-    },
-    GetMcpSignInProgress {
-        progress: brigadier_core::manager::McpSignInProgress,
-    },
-    CancelMcpSignIn,
-    ReopenMcpSignIn,
-    SignOutMcpServer,
-    AskMcpSignInAgain,
     AddAccount {
         account: AccountEntry,
         terminal: TerminalInfo,

@@ -2563,20 +2563,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| daemon.sessions.sign_out_plugin(&row_id)).await?;
             Response::SignOutPlugin
         }
-        Request::GetPlugins => {
-            let mut plugins = daemon.sessions.plugins_view().await?;
-            plugin_icons(&daemon.site_icons, &mut plugins).await;
-            Response::GetPlugins { plugins }
-        }
-        Request::SwitchPlugin { key, on } => Response::SwitchPlugin {
-            job: daemon.sessions.switch_plugin(key, on),
-        },
-        Request::SetPluginScope { key, project_ids } => Response::SetPluginScope {
-            job: daemon.sessions.set_plugin_scope(key, project_ids)?,
-        },
-        Request::SharePlugin { key } => Response::SharePlugin {
-            job: daemon.sessions.share_plugin(key),
-        },
         Request::CheckPluginAdd { text, name } => Response::CheckPluginAdd {
             check: daemon.sessions.check_plugin_add(text, name).await?,
         },
@@ -2607,9 +2593,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.sessions.remove_library_item(key).await?;
             Response::RemovePlugin { job: String::new() }
         }
-        Request::UpdatePlugin { key } => Response::UpdatePlugin {
-            job: daemon.sessions.update_plugin(key),
-        },
         Request::GetPluginItem { key } => Response::GetPluginItem {
             item: daemon.sessions.catalog_item_details(key)?,
         },
@@ -2623,56 +2606,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .sessions
                 .save_catalog_skill(key, path, contents, expected)?,
         },
-        Request::GetPluginJob { id } => Response::GetPluginJob {
-            job: daemon.sessions.plugin_job_view(&id)?,
-        },
-        Request::SignInMcpServer {
-            server_id,
-            project_id,
-        } => Response::SignInMcpServer {
-            id: daemon
-                .sessions
-                .sign_in_mcp_server(
-                    &server_id,
-                    project_id,
-                    std::sync::Arc::new(crate::connect::open_in_browser),
-                )
-                .await?,
-        },
-        Request::GetMcpSignIn { id } => Response::GetMcpSignIn {
-            status: daemon.sessions.mcp_sign_in(&id)?,
-        },
-        Request::GetMcpSignInProgress { id } => Response::GetMcpSignInProgress {
-            progress: daemon.sessions.mcp_sign_in_progress(&id)?,
-        },
-        Request::CancelMcpSignIn { id } => {
-            daemon.sessions.cancel_mcp_sign_in(&id)?;
-            Response::CancelMcpSignIn
-        }
-        Request::ReopenMcpSignIn { id } => {
-            daemon.sessions.reopen_mcp_sign_in(&id)?;
-            Response::ReopenMcpSignIn
-        }
-        Request::SignOutMcpServer {
-            server_id,
-            project_id,
-        } => {
-            daemon
-                .sessions
-                .sign_out_mcp_server(&server_id, project_id)
-                .await?;
-            Response::SignOutMcpServer
-        }
-        Request::AskMcpSignInAgain {
-            server_id,
-            project_id,
-        } => {
-            daemon
-                .sessions
-                .ask_mcp_sign_in_again(&server_id, project_id)
-                .await?;
-            Response::AskMcpSignInAgain
-        }
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },
@@ -2968,31 +2901,6 @@ fn computer_error(message: String) -> IpcError {
 
 /// Each remote server's site icon on the page, as far as it is known within a moment: a lookup
 /// still running goes on and is cached, so the next read has it.
-async fn plugin_icons(
-    icons: &Arc<SiteIcons>,
-    view: &mut brigadier_core::manager::plugins::PluginsView,
-) {
-    let lookups: Vec<(usize, tokio::task::JoinHandle<Option<String>>)> = view
-        .items
-        .iter()
-        .enumerate()
-        .filter_map(|(at, item)| {
-            let url = item.url.as_deref()?;
-            let rest = url.strip_prefix("https://")?;
-            let host = rest.split(['/', '?', '#']).next()?;
-            let origin = format!("https://{host}");
-            let icons = icons.clone();
-            Some((at, tokio::spawn(async move { icons.icon(&origin).await })))
-        })
-        .collect();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
-    for (at, lookup) in lookups {
-        if let Ok(Ok(icon)) = tokio::time::timeout_at(deadline, lookup).await {
-            view.items[at].icon = icon;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

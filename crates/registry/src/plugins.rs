@@ -334,58 +334,6 @@ struct Install {
     root: PathBuf,
     /// A `project` or `local` install's project (or, in an older record, its own folder).
     project: Option<PathBuf>,
-    /// A `project` install: the form the project commits.
-    shared: bool,
-}
-
-/// Whether Claude Code has plugin `id` installed for every project (its user scope), on or off.
-pub(crate) fn claude_installed(roots: &Roots, id: &str) -> bool {
-    claude_installs(roots)
-        .iter()
-        .any(|install| install.id == id && install.project.is_none())
-}
-
-/// Where Claude Code has plugin `id` installed for one project only: each project's folder,
-/// and whether it is a `project` (shared) install rather than a `local` one.
-pub(crate) fn claude_installed_in_projects(roots: &Roots, id: &str) -> Vec<(PathBuf, bool)> {
-    claude_installs(roots)
-        .into_iter()
-        .filter(|install| install.id == id)
-        .filter_map(|install| Some((install.project?, install.shared)))
-        .collect()
-}
-
-/// How `project`'s own Claude settings (shared, then local) switch plugin `id`, when they do.
-pub(crate) fn claude_project_switch(project: &Path, id: &str) -> Option<bool> {
-    let settings = project.join(".claude");
-    claude_switches(&[
-        settings.join("settings.json"),
-        settings.join("settings.local.json"),
-    ])
-    .get(id)
-    .copied()
-}
-
-/// How the Codex config `file` (a project's) switches plugin `id`, when it names it.
-pub(crate) fn codex_file_switch(file: &Path, id: &str) -> Option<bool> {
-    let config: toml::Table = toml::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
-    let switch = config.get("plugins")?.get(id)?;
-    Some(switch.get("enabled").and_then(toml::Value::as_bool) != Some(false))
-}
-
-/// Whether Codex has plugin `id` installed (its cache holds a version), on or off.
-pub(crate) fn codex_installed(roots: &Roots, id: &str) -> bool {
-    split_id(id).is_some_and(|(plugin, marketplace)| {
-        active_version(
-            &roots
-                .codex_home
-                .join("plugins")
-                .join("cache")
-                .join(marketplace)
-                .join(plugin),
-        )
-        .is_some()
-    })
 }
 
 fn claude_installs(roots: &Roots) -> Vec<Install> {
@@ -433,7 +381,6 @@ fn claude_installs(roots: &Roots) -> Vec<Install> {
                 id: id.clone(),
                 root,
                 project,
-                shared: scope == Some("project"),
             });
         }
     }

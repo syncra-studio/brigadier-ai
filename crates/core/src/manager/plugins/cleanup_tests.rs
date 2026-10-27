@@ -1,23 +1,15 @@
-use super::super::ops::{PluginStep, Secrets};
+use super::super::cleanup_context::Secrets;
 use super::*;
-use brigadier_registry::library::{Library, SecretSink};
-use brigadier_registry::{Roots, Secret};
+use brigadier_registry::Roots;
+use brigadier_registry::library::Library;
 use serde_json::json;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
 struct NoSecrets;
-impl SecretSink for NoSecrets {
-    fn store(&self, _: &str, _: &str, _: &Secret) -> Result<(), String> {
-        panic!("cleanup must not store secrets")
-    }
-}
 impl Secrets for NoSecrets {
     fn load(&self, _: &str) -> Result<BTreeMap<String, String>, String> {
         Ok(BTreeMap::new())
-    }
-    fn forget(&self, _: &str) -> Result<(), String> {
-        panic!("cleanup must not erase secrets")
     }
 }
 struct Home {
@@ -61,7 +53,7 @@ impl Home {
         runner: Runner<'_>,
     ) -> Result<(), String> {
         let projects = vec![self.path.join("project")];
-        let report = |_: Agent, _: PluginStep| {};
+
         let binary = |_: Agent| None;
         let ctx = Ctx {
             roots: &self.roots,
@@ -70,7 +62,6 @@ impl Home {
             secrets: &NoSecrets,
             projects: &projects,
             claude_configs: &[],
-            report: &report,
             binary: &binary,
         };
         Cleanup {
@@ -596,7 +587,7 @@ fn cleanup_handles_divergent_account_homes_and_their_worktree_records() {
     );
     let configs = [claude.join(".claude.json")];
     let codex_homes = [codex.clone()];
-    let report = |_: Agent, _: PluginStep| {};
+
     let binary = |_: Agent| None;
     let ctx = Ctx {
         roots: &home.roots,
@@ -605,7 +596,6 @@ fn cleanup_handles_divergent_account_homes_and_their_worktree_records() {
         secrets: &NoSecrets,
         projects: &[],
         claude_configs: &configs,
-        report: &report,
         binary: &binary,
     };
     let calls = Cell::new(0);
@@ -740,4 +730,84 @@ fn cleanup_library_destination_symlink_is_reported_without_following_it() {
     assert!(error.contains("symlink"));
     assert_eq!(std::fs::read(external).unwrap(), b"user data");
     assert!(!finished(&home.data));
+}
+
+// Keep the legacy native-server restore regression after retiring ops' old writers.
+#[test]
+fn cleanup_legacy_server_restore_is_idempotent_and_keeps_saved_values() {
+    struct Saved;
+    impl Secrets for Saved {
+        fn load(&self, _: &str) -> Result<BTreeMap<String, String>, String> {
+            Ok(BTreeMap::from([("TOKEN".into(), "saved-value".into())]))
+        }
+    }
+    let home = Home::new();
+    let project = home.path.join("project");
+    home.write(
+        ".codex/config.toml",
+        format!(
+            "[projects.{}]\ntrust_level='trusted'\n",
+            serde_json::to_string(&project).unwrap()
+        ),
+    );
+    let projects = [project.clone()];
+    let ctx = Ctx {
+        roots: &home.roots,
+        env: &[],
+        library: &home.library,
+        secrets: &Saved,
+        projects: &projects,
+        claude_configs: &[],
+        binary: &|_| None,
+    };
+    let original = Original::Server {
+        agent: ProviderKind::Codex,
+        name: "legacy".into(),
+        project: Some(project.clone()),
+        transport: SavedTransport::Stdio {
+            command: "/opt/mcp".into(),
+            args: vec!["two words".into()],
+            env: vec!["TOKEN".into()],
+            cwd: None,
+        },
+        secrets: "legacy/original-0".into(),
+    };
+    let restore = |agent, _: &Path, steps: &[Step]| {
+        assert_eq!(agent, Agent::Codex);
+        // Project-file restoration executes no agent CLI; use the actual migrated editor.
+        assert!(
+            steps
+                .iter()
+                .all(|step| matches!(step, Step::ProjectFile { .. }))
+        );
+        brigadier_registry::adapter::apply(
+            adapter(agent),
+            &home.roots,
+            &Catalog::read(&home.roots, None),
+            steps,
+            &[],
+            None,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    };
+    original.restore(&ctx, &restore).unwrap();
+    let file = project.join(".codex/config.toml");
+    let before = std::fs::read(&file).unwrap();
+    original.restore(&ctx, &restore).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        Saved.load("legacy/original-0").unwrap()["TOKEN"],
+        "saved-value"
+    );
+    home.write(
+        &file,
+        "[mcp_servers.legacy]\ncommand='somebody-elses-command'\n",
+    );
+    assert!(original.restore(&ctx, &restore).is_err());
+    assert!(
+        std::fs::read_to_string(file)
+            .unwrap()
+            .contains("somebody-elses-command")
+    );
 }

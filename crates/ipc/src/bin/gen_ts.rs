@@ -35,6 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_import_extension(None::<String>);
     ClientFrame::export_all(&config)?;
     ServerFrame::export_all(&config)?;
+    // The catalog page adapts rows into these shared display types.
+    brigadier_core::manager::plugins::PluginsView::export_all(&config)?;
     Diagnostics::export_all(&config)?;
     brigadier_core::DomainEvent::export_all(&config)?;
     BridgeEvent::export_all(&config)?;

@@ -2,7 +2,7 @@
 //! with its own client; its MCP grants spread only to that CLI's managed account homes.
 //! Gateway requests never run these commands or open a browser.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -175,8 +175,6 @@ pub(crate) struct McpLogins {
     /// When each CLI said it signed in to a server, by the name it lists: a list read from
     /// before then doesn't undo it. Taken with `lists` held.
     signed_in: Mutex<HashMap<(Agent, String), Instant>>,
-    /// Lists being read in the background.
-    reading: Mutex<HashSet<ListKey>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -550,33 +548,6 @@ impl McpLogins {
                     .map(drop)
             })
         })
-    }
-
-    /// `agent`'s last list for `project`, as read; one older than [`LIST_FRESH`] (or none) is
-    /// read again in the background.
-    pub(crate) fn listed(
-        self: &Arc<Self>,
-        clis: &Clis,
-        agent: Agent,
-        project: Option<&Path>,
-    ) -> Option<Vec<Listed>> {
-        let key = (agent, project.map(Path::to_owned));
-        let known = lock(&self.lists).get(&key).cloned();
-        if known
-            .as_ref()
-            .is_none_or(|(at, _)| at.elapsed() > LIST_FRESH)
-            && lock(&self.reading).insert(key.clone())
-        {
-            let (me, clis) = (self.clone(), clis.clone());
-            std::thread::spawn(move || {
-                let adapter = brigadier_registry::adapter::adapter(key.0);
-                if let Err(err) = me.list(&clis, adapter, key.1.as_deref()) {
-                    tracing::debug!(agent = adapter.label(), error = %err, "listing MCP servers");
-                }
-                lock(&me.reading).remove(&key);
-            });
-        }
-        known.map(|(_, listed)| listed)
     }
 
     /// Signs every agent that lists `target` out of it, with its CLI's own `mcp logout`.

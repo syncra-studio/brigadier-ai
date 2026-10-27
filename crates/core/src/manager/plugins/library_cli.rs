@@ -4,15 +4,13 @@
 use std::path::Path;
 use std::time::Duration;
 
-use brigadier_cli::protocol::{
-    CliReply, ErrorCode, LibraryAgentResult, LibraryItem, LibraryOutput,
-};
+use brigadier_cli::protocol::{CliReply, ErrorCode, LibraryItem, LibraryOutput};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::CatalogSignIn;
 use crate::manager::SessionManager;
 use crate::manager::cli::CliCaller;
-use crate::manager::mcp_login::{AgentSignInState, McpSignInProgress};
 
 /// How long `login` waits for the user to sign in, every agent at once.
 const SIGN_IN_WAIT: Duration = Duration::from_secs(15 * 60);
@@ -43,49 +41,6 @@ fn tag(value: impl serde::Serialize) -> String {
             .to_owned(),
         _ => String::new(),
     }
-}
-
-fn legacy_login_item(row: &super::LibraryRow) -> LibraryItem {
-    LibraryItem {
-        name: row.name.clone(),
-        kind: tag(row.kind),
-        detail: row.detail.clone(),
-        everywhere: row.everywhere,
-        on_in: row.on_in.clone(),
-        off_in: row.off_in.clone(),
-        agents: row
-            .agents
-            .iter()
-            .map(
-                |(agent, state)| brigadier_cli::protocol::LibraryAgentState {
-                    agent: tag(super::provider(*agent)),
-                    state: tag(state),
-                },
-            )
-            .collect(),
-        attention: row.attention.clone(),
-    }
-}
-
-fn sign_in_agents(progress: &McpSignInProgress) -> Vec<LibraryAgentResult> {
-    progress
-        .agents
-        .iter()
-        .map(|agent| {
-            let (outcome, message) = match &agent.state {
-                AgentSignInState::SignedIn => ("done", None),
-                AgentSignInState::AlreadySignedIn => ("done", Some("Already signed in.".into())),
-                AgentSignInState::Failed { reason } => ("failed", Some(reason.clone())),
-                AgentSignInState::Cancelled => ("failed", Some("Cancelled.".into())),
-                _ => ("skipped", None),
-            };
-            LibraryAgentResult {
-                agent: tag(agent.agent),
-                outcome: outcome.to_owned(),
-                message,
-            }
-        })
-        .collect()
 }
 
 impl SessionManager {
@@ -153,6 +108,10 @@ impl SessionManager {
         if let Err(error) = answer {
             return failed(error.to_string());
         }
+        self.cli_library_output(action)
+    }
+
+    fn cli_library_output(&self, action: &str) -> CliReply {
         let catalog = match self.plugin_catalog() {
             Ok(catalog) => catalog,
             Err(error) => return failed(error.to_string()),
@@ -212,46 +171,45 @@ impl SessionManager {
 
     /// `login <name>`: every agent that needs it signs in to the Library server `name`, all at
     /// once, in the user's browser; the answer comes the moment the last one did.
-    async fn cli_library_login(&self, project: Option<String>, name: String) -> CliReply {
-        let rows = match self.library_rows(project.clone()).await {
-            Ok(rows) => rows,
-            Err(err) => return failed(err.to_string()),
+    async fn cli_library_login(&self, _project: Option<String>, name: String) -> CliReply {
+        let catalog = match self.plugin_catalog() {
+            Ok(catalog) => catalog,
+            Err(error) => return failed(error.to_string()),
         };
-        let Some(entry) = rows.iter().find(|entry| entry.name == name) else {
+        let root = self.data_dir.join("library");
+        let Some(row) = catalog.rows.iter().find(|row| {
+            row.name == name
+                && row
+                    .definitions
+                    .iter()
+                    .any(|definition| Path::new(&definition.file).starts_with(&root))
+        }) else {
             return failed(format!("{name} isn't in your Library"));
         };
-        let Some((server, found_in)) = entry.server_id.clone() else {
-            return failed(format!("{name} doesn't sign in"));
+        let mut state = match self.start_plugin_sign_in(&row.id).await {
+            Ok(state) => state,
+            Err(error) => return failed(error.to_string()),
         };
-        // The catalog that has the server: the project's, when only it does.
-        let project = found_in.or(project);
-        let Some(open) = self.sign_in_browser.get().cloned() else {
-            return failed("Brigadier can't open a browser here");
-        };
-        let id = match self
-            .sign_in_mcp_server(&server, project.map(crate::model::ProjectId), open)
-            .await
-        {
-            Ok(id) => id,
-            Err(err) => return failed(err.to_string()),
-        };
-        let (logins, waited) = (self.mcp_logins.clone(), id.clone());
-        let progress =
-            match tokio::task::spawn_blocking(move || logins.finished(&waited, SIGN_IN_WAIT)).await
-            {
-                Ok(Some(progress)) if progress.finished => progress,
-                Ok(Some(_)) => {
-                    let _ = self.cancel_mcp_sign_in(&id);
-                    return failed("the sign-in waited 15 minutes for the browser and stopped");
+        let deadline = tokio::time::Instant::now() + SIGN_IN_WAIT;
+        loop {
+            match state {
+                CatalogSignIn::SignedIn | CatalogSignIn::NotRequired => {
+                    return self.cli_library_output("login");
                 }
-                Ok(None) => return failed(format!("no sign-in `{id}`")),
-                Err(err) => return failed(format!("the sign-in stopped: {err}")),
+                CatalogSignIn::CliFallback { ref agents } if agents.is_empty() => {
+                    return self.cli_library_output("login");
+                }
+                CatalogSignIn::Failed { message } => return failed(message),
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return failed("the sign-in waited 15 minutes for the browser and stopped");
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            state = match self.get_plugin_sign_in_status(&row.id).await {
+                Ok(state) => state,
+                Err(error) => return failed(error.to_string()),
             };
-        CliReply::ok(&LibraryOutput {
-            action: "login".to_owned(),
-            items: rows.iter().map(legacy_login_item).collect(),
-            agents: sign_in_agents(&progress),
-            warning: None,
-        })
+        }
     }
 }

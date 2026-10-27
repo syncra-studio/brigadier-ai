@@ -1,26 +1,17 @@
-//! Each agent CLI's own skills, MCP and plugin handling behind one interface, so a new CLI is
-//! one adapter and nothing above it names an agent (proposed in the plugins redesign plan).
-//!
-//! An adapter never changes a config by itself: it *plans* the CLI's own commands (and, where a
-//! CLI has none but reads a per-project file, that file's edit), and [`apply()`] carries a plan
-//! out. Reading stays the [`Catalog`]'s: an adapter says which of its sources are its own.
-//!
-//! Where an item lives:
-//! - [`Place::Everywhere`]: the user's own scope, for every project.
-//! - [`Place::Project`]: one project only, "just me" (kept out of the repository) unless
-//!   `shared`, which writes the form the team commits.
-
-mod app_server;
-mod apply;
+//! Native MCP sign-in/list adapters and one-time legacy restoration support.
 mod claude;
 pub mod codex;
+mod migration;
+mod process;
 
 use std::path::{Path, PathBuf};
 
 use crate::item::{ServerSpec, TransportSpec};
 use crate::{Agent, Catalog, Roots, Source};
 
-pub use apply::{Applied, ApplyError, CLI_TIMEOUT, apply, check_steps, output_within, wait_within};
+pub use migration::{Applied, ApplyError, apply};
+pub use process::{output_within, wait_within};
+pub const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 pub use claude::Claude;
 pub use codex::Codex;
 
@@ -32,28 +23,6 @@ pub enum Place {
     /// One project only. `shared`: saved in the form the project commits, for the whole team;
     /// otherwise for this user only and kept out of the repository.
     Project { path: PathBuf, shared: bool },
-}
-
-/// How an agent can keep an item to one project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectScope {
-    /// Its own commands take a project scope.
-    Native,
-    /// It has no command for it but reads a project file, which Brigadier writes (D8). It
-    /// reads that file only in projects it trusts.
-    ProjectFile,
-    /// It can't.
-    Unsupported,
-}
-
-/// What an agent's CLI can do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Capabilities {
-    /// It installs plugins from a local marketplace (the Library).
-    pub plugins: bool,
-    pub project_scope: ProjectScope,
-    /// Its `mcp login` needs a terminal: Brigadier runs it in one.
-    pub login_needs_terminal: bool,
 }
 
 /// One run of an agent's CLI.
@@ -119,13 +88,6 @@ pub enum Step {
         edit: TomlEdit,
         shared: bool,
     },
-    /// Claude Code's per-project off flags (`disabledMcpServers`, what `/mcp` writes) in each of
-    /// its config `files`: the user's own and each extra account's; none named, the user's own
-    /// ([`crate::Roots::claude_json`]).
-    ClaudeFlags {
-        files: Vec<PathBuf>,
-        flags: Vec<crate::claude_config::OffFlag>,
-    },
 }
 
 /// One MCP server as a CLI's own list reports it.
@@ -182,94 +144,23 @@ pub struct Unsupported(pub String);
 /// One agent CLI's skills, MCP servers and plugins.
 pub trait AgentAdapter: Send + Sync {
     fn agent(&self) -> Agent;
-
-    /// The product name shown to the user.
     fn label(&self) -> &'static str;
-
-    /// The binary name looked up on the login shell's PATH.
     fn program(&self) -> &'static str;
-
-    fn capabilities(&self) -> Capabilities;
-
-    /// Whether `source` is this agent's own configuration (its plugins' too).
     fn owns(&self, source: Source) -> bool;
-
-    /// The environment that points the CLI at `roots`' home for it (`CLAUDE_CONFIG_DIR`,
-    /// `CODEX_HOME`).
     fn home_env(&self, roots: &Roots) -> Vec<(String, String)>;
-
-    /// Whether it reads `project`'s own files: it trusts the project.
     fn trusts(&self, catalog: &Catalog, project: &Path) -> bool;
-
-    /// Adds a local marketplace (a folder) to the CLI.
-    fn add_marketplace(&self, dir: &Path) -> CliCall;
-
-    /// Whether plugin `id` is installed for every project (on or off there).
-    fn installed(&self, roots: &Roots, id: &str) -> bool;
-
-    /// Where plugin `id` has an install of its own for one project only, which
-    /// [`Self::remove_plugin`] at that place takes away. None by default: the CLI installs for
-    /// every project and only switches it per project.
-    fn installed_in_projects(&self, _roots: &Roots, _id: &str) -> Vec<Place> {
-        Vec::new()
-    }
-
-    /// Whether `project`'s own settings switch plugin `id` on, whether or not it is on for
-    /// every project too: there it stays on once it is off for every project.
-    fn switched_on_in(&self, project: &Path, id: &str) -> bool;
-
-    /// Reads local marketplace `name` again, when the CLI keeps a copy of it.
-    fn refresh_marketplace(&self, name: &str) -> Option<CliCall>;
-
-    /// Installs plugin `id` (`<plugin>@<marketplace>`) at `place`.
-    fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
-
-    /// Brings installed plugin `id` at `place` to its marketplace's version.
-    fn update_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
-
-    /// Uninstalls plugin `id` from `place`.
-    fn remove_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
-
-    /// Adds MCP server `name` to the user's own config (`Everywhere`) or the project's,
-    /// as `spec` describes it: what Undo puts back.
+    /// Used only to restore originals during the one-time migration.
     fn add_server(
         &self,
         name: &str,
         spec: &ServerSpec,
         place: &Place,
     ) -> Result<Vec<Step>, Unsupported>;
-
-    /// Removes the user's own MCP server `name` (not a plugin's) from `place`.
-    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported>;
-
-    /// Turns installed plugin `id` on or off at `place`: off in one project for one that is on
-    /// everywhere, on in one project for one that is off everywhere.
-    fn set_plugin(&self, id: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported>;
-
-    /// Turns the user's own MCP server `name` (not a plugin's) on or off at `place`.
-    fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported>;
-
-    /// Signs the CLI in to the server it lists as `name` (the name its own list reports) in
-    /// `project` (or anywhere), where [`Self::list_servers`] found it. It prints the sign-in
-    /// page's address rather than opening a browser: Brigadier opens it.
     fn login(&self, name: &str, project: Option<&Path>) -> CliCall;
-
-    /// Forgets the CLI's own sign-in to the server it lists as `name` in `project` (or
-    /// anywhere).
     fn logout(&self, name: &str, project: Option<&Path>) -> CliCall;
-
-    /// Lists the MCP servers the CLI loads in `project` (or anywhere), as it reports them.
     fn list_servers(&self, project: Option<&Path>) -> CliCall;
-
-    /// Reads [`Self::list_servers`]' output.
     fn parse_servers(&self, output: &str) -> Vec<Listed>;
-
-    /// Whether the name its list reports, `listed`, is server `server`, of plugin `plugin`
-    /// (its name, without the marketplace) when it comes with one.
     fn is_server(&self, listed: &str, server: &str, plugin: Option<&str>) -> bool;
-
-    /// Writes `edit` in the user's own config through the CLI's own config writer, run as
-    /// `program` with `env`. Only an agent whose plans hold [`Step::UserConfig`] has one.
     fn write_user_config(
         &self,
         roots: &Roots,

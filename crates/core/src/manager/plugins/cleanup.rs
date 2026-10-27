@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use toml_edit::{DocumentMut, Item};
 
-use super::ops::Ctx;
-use super::share::Sharing;
+use super::cleanup_context::Ctx;
+use super::cleanup_state::Sharing;
 
 const CHECKPOINT: &str = "cleanup.json";
 
@@ -37,14 +37,6 @@ pub(super) fn finished(data: &Path) -> bool {
         .ok()
         .flatten()
         .is_some_and(|state| state.done)
-}
-
-/// An interrupted migration must never be followed by the old writer. Development
-/// data dirs are isolated even when they inherit the installed app's HOME.
-pub(super) fn sharing_disabled(data: &Path) -> bool {
-    std::env::var_os("BRIGADIER_DATA_DIR").is_some()
-        || brigadier_sandbox::default_data_dir().ok().as_deref() != Some(data)
-        || data.join(CHECKPOINT).exists()
 }
 
 impl super::super::SessionManager {
@@ -74,7 +66,7 @@ impl super::super::SessionManager {
             .collect();
         let codex_homes = self.runtime.account_homes(ProviderKind::Codex);
         let result = tokio::task::spawn_blocking(move || {
-            super::jobs::with_ctx(&setup, &|_, _| {}, |ctx| {
+            super::cleanup_context::with_ctx(&setup, |ctx| {
                 let import = |old: &Sharing| {
                     let mut projects = sharing_projects(old)?;
                     projects.extend(ctx.projects.iter().cloned());

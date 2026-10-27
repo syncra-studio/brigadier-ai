@@ -1,14 +1,7 @@
-//! Codex: its own `plugin` and `mcp` commands, which know only the user's config. For one
-//! project it reads `<project>/.codex/config.toml` in projects it trusts, which Brigadier writes
-//! (D8): an item only in some projects is off in the user's config (through Codex's own config
-//! writer) and on in each of those projects' files.
-
+//! Codex MCP sign-in, listing, project-file discovery, and original restoration.
 use std::path::Path;
 
-use super::{
-    AgentAdapter, ApplyError, Capabilities, CliCall, Listed, Place, ProjectScope, Step, TomlEdit,
-    Unsupported, app_server, apply,
-};
+use super::{AgentAdapter, ApplyError, CliCall, Listed, Place, Step, TomlEdit, Unsupported};
 use crate::item::ServerSpec;
 use crate::{Agent, Catalog, Roots, Source};
 
@@ -22,15 +15,7 @@ pub fn project_file(project: &Path) -> std::path::PathBuf {
 }
 
 /// `enabled` of `[<table>."<name>"]`.
-fn enabled(table: &str, name: &str) -> Vec<String> {
-    vec![table.to_owned(), name.to_owned(), "enabled".to_owned()]
-}
-
 /// The edit of `key` at `place`: the user's config, or the project's file.
-fn edit(place: &Place, key: Vec<String>, value: Option<bool>) -> Step {
-    table(place, key, value.map(toml::Value::Boolean))
-}
-
 /// `key` set to `value` (removed for `None`) at `place`.
 fn table(place: &Place, key: Vec<String>, value: Option<toml::Value>) -> Step {
     let edit = TomlEdit { key, value };
@@ -45,6 +30,10 @@ fn table(place: &Place, key: Vec<String>, value: Option<toml::Value>) -> Step {
 }
 
 impl AgentAdapter for Codex {
+    fn trusts(&self, catalog: &Catalog, project: &Path) -> bool {
+        catalog.codex_trusted.iter().any(|path| path == project)
+    }
+
     fn agent(&self) -> Agent {
         Agent::Codex
     }
@@ -55,14 +44,6 @@ impl AgentAdapter for Codex {
 
     fn program(&self) -> &'static str {
         PROGRAM
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            plugins: true,
-            project_scope: ProjectScope::ProjectFile,
-            login_needs_terminal: false,
-        }
     }
 
     fn owns(&self, source: Source) -> bool {
@@ -81,56 +62,6 @@ impl AgentAdapter for Codex {
                 roots.codex_home.display().to_string(),
             )]
         }
-    }
-
-    fn trusts(&self, catalog: &Catalog, project: &Path) -> bool {
-        catalog.codex_trusted.iter().any(|path| path == project)
-    }
-
-    fn add_marketplace(&self, dir: &Path) -> CliCall {
-        CliCall::new(PROGRAM, &["plugin", "marketplace", "add"]).arg(dir.display().to_string())
-    }
-
-    fn installed(&self, roots: &Roots, id: &str) -> bool {
-        crate::plugins::codex_installed(roots, id)
-    }
-
-    fn switched_on_in(&self, project: &Path, id: &str) -> bool {
-        crate::plugins::codex_file_switch(&project_file(project), id) == Some(true)
-    }
-
-    fn refresh_marketplace(&self, _: &str) -> Option<CliCall> {
-        // It reads a local marketplace as it is.
-        None
-    }
-
-    fn update_plugin(&self, id: &str, _: &Place) -> Result<Vec<Step>, Unsupported> {
-        // Adding it again copies the new version into its cache; where it is on is unchanged.
-        Ok(vec![Step::Run(
-            CliCall::new(PROGRAM, &["plugin", "add"]).arg(id),
-        )])
-    }
-
-    fn install_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        let add = Step::Run(CliCall::new(PROGRAM, &["plugin", "add"]).arg(id));
-        Ok(match place {
-            Place::Everywhere => vec![add],
-            // Its install is the user's: off there, on in the project.
-            Place::Project { .. } => vec![
-                add,
-                edit(&Place::Everywhere, enabled("plugins", id), Some(false)),
-                edit(place, enabled("plugins", id), Some(true)),
-            ],
-        })
-    }
-
-    fn remove_plugin(&self, id: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        Ok(match place {
-            Place::Everywhere => vec![Step::Run(
-                CliCall::new(PROGRAM, &["plugin", "remove"]).arg(id),
-            )],
-            Place::Project { .. } => vec![edit(place, enabled("plugins", id), None)],
-        })
     }
 
     fn add_server(
@@ -157,27 +88,6 @@ impl AgentAdapter for Codex {
             vec!["mcp_servers".to_owned(), name.to_owned()],
             Some(value),
         )])
-    }
-
-    fn remove_server(&self, name: &str, place: &Place) -> Result<Vec<Step>, Unsupported> {
-        Ok(match place {
-            Place::Everywhere => vec![Step::Run(
-                CliCall::new(PROGRAM, &["mcp", "remove"]).arg(name),
-            )],
-            Place::Project { .. } => vec![table(
-                place,
-                vec!["mcp_servers".to_owned(), name.to_owned()],
-                None,
-            )],
-        })
-    }
-
-    fn set_plugin(&self, id: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {
-        Ok(vec![edit(place, enabled("plugins", id), Some(on))])
-    }
-
-    fn set_server(&self, name: &str, place: &Place, on: bool) -> Result<Vec<Step>, Unsupported> {
-        Ok(vec![edit(place, enabled("mcp_servers", name), Some(on))])
     }
 
     fn login(&self, name: &str, project: Option<&Path>) -> CliCall {
@@ -217,12 +127,17 @@ impl AgentAdapter for Codex {
             None => {
                 let config = std::fs::read_to_string(roots.codex_home.join("config.toml")).ok();
                 (
-                    apply::removal_key(config.as_deref(), &edit.key),
+                    super::migration::removal_key(config.as_deref(), &edit.key),
                     serde_json::Value::Null,
                 )
             }
         };
-        app_server::write_value(program, env, &apply::key_path(&key), value)
+        super::migration::codex_writer::write_value(
+            program,
+            env,
+            &super::migration::key_path(&key),
+            value,
+        )
     }
 
     /// A JSON array of servers, `auth_status` `not_logged_in` for one that needs a sign-in
