@@ -364,7 +364,8 @@ computer use needs a signed build to keep its macOS permissions across rebuilds
 ([helpers/computer-use/README.md](../helpers/computer-use/README.md)).
 
 Releases come from `.github/workflows/nightly.yml`. Every night it signs, notarizes and publishes
-main as the `nightly` prerelease, which installed nightly builds update from. A `v*` tag whose
+main as the `nightly` prerelease, which installed nightly builds update from, with the Windows
+installer beside the macOS archive when the Windows build passed. A `v*` tag whose
 version matches `tauri.conf.json` (`v0.1.0-alpha` for `0.1.0`) builds the universal app the same
 way and publishes that tag's release, marked latest, with the DMG, the updater archive, its feed
 (`latest.json`) and `SHA256SUMS`; installed release builds update from it. A released tag is never
@@ -406,8 +407,14 @@ one in the build machine's certificate store, or `bundle.windows.signCommand` fo
 service). The nightly's Windows job uploads the installer and its `SHA256SUMS` as the `installer-Windows`
 artifact on every run. With the updater key secrets (`TAURI_SIGNING_PRIVATE_KEY`,
 `UPDATER_PUBKEY`) it builds it with the nightly's or the tag's version and feed, and adds the
-updater's `.sig` and a `windows-x86_64` feed entry (`latest-windows.json`). The publish and
-release jobs don't take them, so no Windows file is published.
+updater's `.sig` and a `windows-x86_64` feed entry (`latest-windows.json`). Every platform's
+nightly takes its version stamp from the gate job, so the macOS and Windows builds of one run
+carry the same version. The publish job uploads the installer to the `nightly` prerelease and
+adds its entry to `latest.json` when its version is the macOS build's; installed Windows
+nightlies then update themselves. The updater checks the installer's updater signature and runs
+it in passive mode (`/UPDATE`, a progress window only) as the app exits; the download carries no
+mark of the web, so SmartScreen doesn't hold it. The installer reopens the app only after
+**Restart to update**. A tag's release still takes the macOS files only.
 
 `scripts/install.ps1` is install.sh's counterpart: `irm <raw URL>/install.ps1 | iex`, or
 `powershell -File scripts\install.ps1`. It downloads `SHA256SUMS` and
