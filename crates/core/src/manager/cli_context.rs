@@ -6,25 +6,25 @@
 //! A worker reads its session's ledger and checkpoint, read-only, and then its own ledger. Its
 //! transcript is its own records only.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::plugins::resolve::{Resolved, Role as PluginRole};
+use crate::accounts::AccountRef;
 use brigadier_cli::protocol::{
     CliReply, ContextEntry, ContextFile, ContextItem, ContextOutput, ContextPart, ContextPartSize,
     ErrorCode,
 };
-use brigadier_providers::{McpStatus, ProviderKind};
-use brigadier_registry::{Catalog, Session, Skill, SkillRoot};
+use brigadier_providers::{McpStatus, McpTransport};
 
 use super::SessionManager;
 use super::cli::CliCaller;
 use super::cli_ledger::{Entry, Kind, Ledger, LedgerFile};
-use super::integrations::{RESERVED, agent};
 use super::long_sessions::checkpoint;
 use super::records::{RecordRead, RecordSearch};
 use crate::model::{ConversationId, MessageRole, Setup};
 use crate::tools::Role;
-use crate::work::{Approval, ApprovalSubject, CardState, PlainWorker, Question, Task};
+use crate::work::{Approval, ApprovalSubject, CardState, Question, Task};
 use crate::{Error, Result};
 
 /// The transcript items `context transcript` gives when not told how many.
@@ -44,7 +44,7 @@ struct Whose {
     own_record: Option<PathBuf>,
     /// How the records name its own transcript.
     key: String,
-    provider: ProviderKind,
+    account: AccountRef,
     /// Where its CLI works, when it has a checkout.
     checkout: Option<PathBuf>,
     /// The project's repository, while the user trusts it: the setup its CLI loads.
@@ -54,29 +54,6 @@ struct Whose {
 impl Whose {
     fn worker(&self) -> bool {
         self.task.is_some()
-    }
-}
-
-/// What a worker was given of its agent's setup: `None` for its agent's whole setup, else only
-/// the names listed. The one place a worker's grants are read (D18).
-pub(crate) struct WorkerGrants {
-    pub skills: Option<Vec<String>>,
-    pub mcps: Option<Vec<String>>,
-}
-
-/// The skills and MCP servers worker `plain` was started with: a `brigadier start` worker is
-/// naked (D13), with no skills and only the servers it was granted (D18); any other its
-/// agent's whole setup.
-pub(crate) fn worker_grants(plain: Option<&PlainWorker>) -> WorkerGrants {
-    match plain {
-        Some(plain) => WorkerGrants {
-            skills: Some(Vec::new()),
-            mcps: Some(plain.mcps.clone()),
-        },
-        None => WorkerGrants {
-            skills: None,
-            mcps: None,
-        },
     }
 }
 
@@ -117,40 +94,50 @@ impl SessionManager {
         let conversation = self.core.conversation(&caller.conversation_id)?;
         let folder = self.session_dir(&conversation.id);
         let repo = self.trusted_repo(&conversation.id);
-        let thread_provider = match &conversation.setup {
-            Some(Setup::Session { orchestrator, .. }) => orchestrator.provider,
-            Some(Setup::Chat { model, .. }) => model.provider,
-            None => ProviderKind::Claude,
+        let choice = match &conversation.setup {
+            Some(Setup::Session { orchestrator, .. }) => orchestrator.clone(),
+            Some(Setup::Chat { model, .. }) => model.clone(),
+            None => self.default_chat_choice(),
         };
         let thread_checkout = self
             .recorded_workspace(&conversation.id)
             .map(|workspace| workspace.path);
         let Some(task_id) = &caller.task_id else {
+            let live = self.convs_lock().get(&conversation.id).cloned();
+            let account = match live {
+                Some(live) => live.cli().await.map(|cli| cli.account.clone()),
+                None => None,
+            }
+            .unwrap_or_else(|| self.runtime.account_for(&choice));
             return Ok(Whose {
                 key: conversation.id.short().to_owned(),
                 conversation: conversation.id,
                 task: None,
                 session_record: folder.record(),
                 own_record: None,
-                provider: thread_provider,
+                account,
                 checkout: thread_checkout,
                 repo,
             });
         };
         let task = self.task_by_id(&conversation.id, task_id).await?;
         let worker = folder.worker(&task);
+        let account = match self.existing_task_live(task_id) {
+            Some(live) => live.cli().await.map(|cli| cli.account.clone()),
+            None => None,
+        }
+        .unwrap_or_else(|| self.runtime.account_for(&task.route.choice));
         Ok(Whose {
             key: self.worker_records_key(&conversation.id, task_id).await?,
             conversation: conversation.id,
             session_record: folder.record(),
             own_record: Some(worker.join("record")),
-            provider: task.route.choice.provider,
+            account,
             checkout: task
                 .workspace
                 .as_ref()
                 .and_then(|workspace| workspace.worktree.as_ref())
-                .map(PathBuf::from)
-                .or(thread_checkout),
+                .map(PathBuf::from),
             repo,
             task: Some(task),
         })
@@ -308,7 +295,7 @@ impl SessionManager {
                 };
             }
             ContextPart::Mcps => {
-                output.items = self.context_mcps(whose).await;
+                output.items = self.context_mcps(whose).await?;
                 output.text = items_text(
                     &output.items,
                     "MCP servers",
@@ -461,32 +448,49 @@ impl SessionManager {
         })
     }
 
-    /// `context skills [<name>]`: the skills of the caller's agent's setup, or one whole.
-    async fn context_skills(&self, whose: &Whose, name: Option<&str>) -> Result<ContextOutput> {
-        let registry = self.registry();
-        let (repo, cwd) = (whose.repo.clone(), self.setup_folder(whose));
-        let provider = whose.provider;
-        let kept = whose
-            .task
-            .as_ref()
-            .and_then(|task| worker_grants(task.plain.as_ref()).skills);
-        let name = name.map(str::to_owned);
-        let worker = whose.worker();
-        super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            let session = Session {
-                agent: agent(provider),
-                cwd: &cwd,
-                project: repo.as_deref(),
-                in_checkout: true,
-            };
-            skills_output(&catalog, &session, kept.as_deref(), name.as_deref(), worker)
-        })
-        .await
+    /// Resolve exactly as launch does, including grants-only workers and effective homes.
+    async fn context_resolved(&self, whose: &Whose) -> Result<Resolved> {
+        let cwd = self.setup_folder(whose);
+        let trusted = self.repo_trust(&whose.conversation) == Some(true);
+        let all = self
+            .resolve_plugins(
+                &whose.account,
+                whose.repo.as_deref(),
+                &cwd,
+                trusted,
+                PluginRole::Thread,
+            )
+            .await?;
+        if let Some(plain) = whose.task.as_ref().and_then(|task| task.plain.as_ref()) {
+            let grants: Vec<_> = all
+                .servers
+                .into_iter()
+                .filter(|server| plain.mcps.contains(&server.name))
+                .collect();
+            self.resolve_plugins(
+                &whose.account,
+                whose.repo.as_deref(),
+                &cwd,
+                trusted,
+                PluginRole::Worker { grants: &grants },
+            )
+            .await
+        } else {
+            Ok(all)
+        }
     }
 
-    /// `context mcps`: the MCP servers of the setup, and which the caller has.
-    async fn context_mcps(&self, whose: &Whose) -> Vec<ContextItem> {
+    /// `context skills [<name>]`: only selected skills; read the selected version by its
+    /// display name, row identity, or exact provider invocation.
+    async fn context_skills(&self, whose: &Whose, name: Option<&str>) -> Result<ContextOutput> {
+        let resolved = self.context_resolved(whose).await?;
+        let (name, worker) = (name.map(str::to_owned), whose.worker());
+        super::blocking(move || skills_output(&resolved, name.as_deref(), worker)).await
+    }
+
+    /// Status annotates the resolved set; stale CLI reports never add or remove items.
+    async fn context_mcps(&self, whose: &Whose) -> Result<Vec<ContextItem>> {
+        let resolved = self.context_resolved(whose).await?;
         let reported: Option<HashMap<String, McpStatus>> = self
             .core
             .board(&whose.conversation)
@@ -494,38 +498,18 @@ impl SessionManager {
             .ok()
             .and_then(|board| {
                 let task = whose.task.as_ref().map(|task| task.id.0.as_str());
-                board.mcp_servers_of(task).map(|agent| {
-                    agent
-                        .servers
-                        .iter()
-                        .map(|server| (server.name.clone(), server.status))
-                        .collect()
-                })
+                board
+                    .mcp_servers_of(task)
+                    .filter(|agent| agent.provider == whose.account.provider)
+                    .map(|agent| {
+                        agent
+                            .servers
+                            .iter()
+                            .map(|server| (server.name.clone(), server.status))
+                            .collect()
+                    })
             });
-        let grants = whose
-            .task
-            .as_ref()
-            .and_then(|task| worker_grants(task.plain.as_ref()).mcps);
-        let registry = self.registry();
-        let (repo, cwd) = (whose.repo.clone(), self.setup_folder(whose));
-        let provider = whose.provider;
-        super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            let session = Session {
-                agent: agent(provider),
-                cwd: &cwd,
-                project: repo.as_deref(),
-                in_checkout: true,
-            };
-            Ok(mcp_items(
-                &catalog,
-                &session,
-                reported.as_ref(),
-                grants.as_deref(),
-            ))
-        })
-        .await
-        .unwrap_or_default()
+        Ok(mcp_items(&resolved, reported.as_ref()))
     }
 
     /// `context project`: the checkout's own instruction files, whole (D17), and the project's
@@ -591,23 +575,19 @@ impl SessionManager {
         whose
             .checkout
             .clone()
-            .or_else(|| whose.repo.clone())
-            .unwrap_or_else(|| self.session_dir(&whose.conversation).root().to_path_buf())
+            .or_else(|| {
+                whose
+                    .task
+                    .as_ref()
+                    .and_then(|task| task.workspace.as_ref())
+                    .map(|workspace| PathBuf::from(&workspace.scratch))
+            })
+            .unwrap_or_else(|| self.session_dir(&whose.conversation).work())
     }
 }
 
-/// The skills of `session`'s agent's setup, each by the name `context skills <name>` takes,
-/// or skill `name`'s whole `SKILL.md`. `kept`: a worker's only skills, where it has only some.
-fn skills_output(
-    catalog: &Catalog,
-    session: &Session<'_>,
-    kept: Option<&[String]>,
-    name: Option<&str>,
-    worker: bool,
-) -> Result<ContextOutput> {
-    let named = skill_names(&catalog.skills, session, |skill| {
-        catalog.skill_native(skill, session)
-    });
+/// Context is a view of the current resolver result, not a second catalog policy.
+fn skills_output(resolved: &Resolved, name: Option<&str>, worker: bool) -> Result<ContextOutput> {
     let mut output = ContextOutput {
         part: "skills".into(),
         text: String::new(),
@@ -618,26 +598,16 @@ fn skills_output(
         models: None,
     };
     if let Some(name) = name {
-        // Its printed name, its id, or a name only one skill of the catalog has.
-        let unique = |skill: &Skill| {
-            skill.name == name && catalog.skills.iter().filter(|s| s.name == name).count() == 1
-        };
-        let skill = named
+        let skill = resolved
+            .skills
             .iter()
-            .find(|(_, shown)| shown == name)
-            .map(|(skill, _)| *skill)
-            .or_else(|| {
-                catalog
-                    .skills
-                    .iter()
-                    .find(|skill| skill.id == name || unique(skill))
-            })
+            .find(|skill| skill.display == name || skill.invocation == name || skill.row_id == name)
             .ok_or_else(|| {
                 Error::Invalid(format!(
                     "no skill {name:?} here; `brigadier context skills` lists them"
                 ))
             })?;
-        let text = std::fs::read_to_string(skill.skill_md())
+        let text = std::fs::read_to_string(&skill.path)
             .map_err(|err| Error::Invalid(format!("couldn't read the skill {name:?}: {err}")))?;
         output.text = if text.ends_with('\n') {
             text
@@ -646,122 +616,43 @@ fn skills_output(
         };
         return Ok(output);
     }
-    output.items = named
-        .into_iter()
-        .map(|(skill, shown)| ContextItem {
-            has: kept.is_none_or(|kept| {
-                kept.iter()
-                    .any(|kept| *kept == skill.name || *kept == skill.id || *kept == shown)
-            }),
-            name: shown,
+    output.items = resolved
+        .skills
+        .iter()
+        .map(|skill| ContextItem {
+            name: skill.display.clone(),
             kind: "skill".into(),
-            detail: skill.description.clone(),
+            has: true,
             status: None,
+            detail: if skill.invocation == skill.display {
+                skill.path.display().to_string()
+            } else {
+                format!("{}; invoke as {}", skill.path.display(), skill.invocation)
+            },
         })
         .collect();
     output.text = items_text(&output.items, "Skills", "No skills in this setup.", worker);
     Ok(output)
 }
 
-/// The MCP servers of the catalog, `session`'s agent's first, and which the caller has: what
-/// its CLI `reported` when it reported any, else what it was given, a worker its `grants`
-/// (D18); a server of another agent never. What its CLI runs that no config names follows.
 fn mcp_items(
-    catalog: &Catalog,
-    session: &Session<'_>,
+    resolved: &Resolved,
     reported: Option<&HashMap<String, McpStatus>>,
-    grants: Option<&[String]>,
 ) -> Vec<ContextItem> {
-    let mut items: Vec<ContextItem> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut servers: Vec<_> = catalog
+    resolved
         .servers
         .iter()
-        .filter(|server| !RESERVED.contains(&server.name.as_str()))
-        .map(|server| (catalog.server_native(server, session), server))
-        .collect();
-    servers.sort_by_key(|(native, _)| !native);
-    for (native, server) in servers {
-        let name = if native {
-            server.native_name()
-        } else {
-            server.name.clone()
-        };
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        let status = reported.and_then(|reported| reported.get(&name));
-        let has = native
-            && match (reported, grants) {
-                (Some(_), _) => status.is_some(),
-                (None, Some(grants)) => grants.contains(&name),
-                (None, None) => true,
-            };
-        let detail = match &server.plugin {
-            Some(plugin) => format!("{}, plugin {}", server.source.label(), plugin.name),
-            None => server.source.label().to_owned(),
-        };
-        items.push(ContextItem {
-            name,
+        .map(|server| ContextItem {
+            name: server.name.clone(),
             kind: "server".into(),
-            detail: if native {
-                detail
-            } else {
-                format!("{detail}; not your agent's")
-            },
-            has,
-            status: status.map(|status| status_word(*status).to_owned()),
-        });
-    }
-    let mut extra: Vec<_> = reported
-        .into_iter()
-        .flatten()
-        .filter(|(name, _)| !seen.contains(*name))
-        .collect();
-    extra.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, status) in extra {
-        items.push(ContextItem {
-            name: name.clone(),
-            kind: "server".into(),
-            detail: "Given by Brigadier".into(),
             has: true,
-            status: Some(status_word(*status).to_owned()),
-        });
-    }
-    items
-}
-
-/// The skills `native` takes, each with the name printed for it: a plugin's as its agent shows
-/// it (`<plugin>:<name>`), else its own; a name two skills share, their ids.
-fn skill_names<'a>(
-    skills: &'a [Skill],
-    session: &Session<'_>,
-    native: impl Fn(&Skill) -> bool,
-) -> Vec<(&'a Skill, String)> {
-    let named: Vec<_> = skills
-        .iter()
-        .filter(|skill| native(skill))
-        .map(|skill| {
-            let plugin = skill.roots.iter().find_map(|root| match root {
-                SkillRoot::Plugin(plugin) if root.native(session) => Some(plugin),
-                _ => None,
-            });
-            let name = match plugin {
-                Some(plugin) => plugin.skill_name(&skill.name),
-                None => skill.name.clone(),
-            };
-            (skill, name)
-        })
-        .collect();
-    let mut uses: HashMap<String, usize> = HashMap::new();
-    for (_, name) in &named {
-        *uses.entry(name.clone()).or_default() += 1;
-    }
-    named
-        .into_iter()
-        .map(|(skill, name)| match uses.get(&name) {
-            Some(1) => (skill, name),
-            _ => (skill, skill.id.clone()),
+            detail: match &server.transport {
+                McpTransport::Http { .. } => "HTTP".into(),
+                McpTransport::Stdio { .. } => "stdio".into(),
+            },
+            status: reported
+                .and_then(|reported| reported.get(&server.name))
+                .map(|status| status_word(*status).to_owned()),
         })
         .collect()
 }
@@ -995,7 +886,11 @@ fn tokens(text: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use brigadier_registry::{Agent, Roots};
+    use super::super::plugins::{
+        choices::Choices,
+        resolve::{self, Context},
+    };
+    use brigadier_registry::{Agent, Catalog, Roots};
 
     use super::*;
 
@@ -1063,10 +958,22 @@ mod tests {
             Self(home)
         }
 
-        fn catalog(&self) -> Catalog {
+        fn resolved(&self, agent: Agent, choices: &Choices, role: PluginRole<'_>) -> Resolved {
             let roots =
                 Roots::from_vars([("HOME".to_owned(), self.0.display().to_string())]).unwrap();
-            Catalog::read(&roots, Some(&self.0.join("repo")))
+            let repo = self.0.join("repo");
+            let rows = Catalog::read_rows(&roots, std::slice::from_ref(&repo));
+            resolve::resolve(Context {
+                agent,
+                account_home: &roots,
+                project_root: Some(&repo),
+                cwd: &repo,
+                trusted: true,
+                role,
+                rows: &rows,
+                choices,
+                gateway: None,
+            })
         }
     }
 
@@ -1087,105 +994,112 @@ mod tests {
     }
 
     #[test]
-    fn skills_list_each_skill_folder_by_a_name_that_prints_it() {
+    fn skills_report_selected_versions_with_plain_names_and_exact_invocations() {
         let home = Home::new("skills");
-        let catalog = home.catalog();
-        let repo = home.0.join("repo");
-        let session = Session {
-            agent: Agent::Claude,
-            cwd: &repo,
-            project: Some(&repo),
-            in_checkout: true,
-        };
-        let listed = skills_output(&catalog, &session, None, None, false).unwrap();
-        let shown = names(&listed.items, true);
-        // One plugin, two skills, each by its agent's name; the two `review`s by their ids.
-        assert!(shown.contains(&"tools:lint".to_owned()), "{shown:?}");
-        assert!(shown.contains(&"tools:format".to_owned()), "{shown:?}");
-        assert!(!shown.contains(&"review".to_owned()), "{shown:?}");
-        let reviews: Vec<_> = shown
-            .iter()
-            .filter(|name| name.contains("review"))
-            .collect();
-        assert_eq!(reviews.len(), 2, "{shown:?}");
+        let resolved = home.resolved(Agent::Claude, &Choices::default(), PluginRole::Thread);
+        let listed = skills_output(&resolved, None, false).unwrap();
+        assert_eq!(names(&listed.items, true), ["format", "lint", "review"]);
+        assert!(listed.items.iter().all(|item| item.has));
         assert!(
-            listed.text.contains("- tools:lint: lint things"),
-            "{}",
-            listed.text
+            listed
+                .items
+                .iter()
+                .find(|item| item.name == "lint")
+                .unwrap()
+                .detail
+                .contains("tools:lint")
         );
-        for name in &shown {
-            let one = skills_output(&catalog, &session, None, Some(name), false).unwrap();
-            assert!(one.text.starts_with("---\nname: "), "{name}: {}", one.text);
+        let review = skills_output(&resolved, Some("review"), false).unwrap();
+        assert!(review.text.contains("The project's way."));
+        assert!(!review.text.contains("Read it twice."));
+        for skill in &resolved.skills {
+            for name in [&skill.display, &skill.invocation, &skill.row_id] {
+                assert_eq!(
+                    skills_output(&resolved, Some(name), false)
+                        .unwrap()
+                        .text
+                        .trim_end(),
+                    std::fs::read_to_string(&skill.path).unwrap().trim_end()
+                );
+            }
         }
-        let lint = skills_output(&catalog, &session, None, Some("tools:lint"), false).unwrap();
-        assert!(lint.text.contains("Run the linter."), "{}", lint.text);
-        assert!(lint.items.is_empty());
-        // A name only one skill has prints it too.
-        let format = skills_output(&catalog, &session, None, Some("format"), false).unwrap();
-        assert!(format.text.contains("Run the formatter."));
-        assert!(skills_output(&catalog, &session, None, Some("nope"), false).is_err());
-
-        // A worker given only some skills has those, and can still read the others.
-        let kept = ["tools:lint".to_owned()];
-        let lean = skills_output(&catalog, &session, Some(&kept), None, true).unwrap();
-        assert_eq!(names(&lean.items, true), ["tools:lint"]);
-        assert!(names(&lean.items, false).contains(&"tools:format".to_owned()));
+        assert!(skills_output(&resolved, Some("not-resolved"), false).is_err());
+        let root = Roots::from_vars([("HOME".into(), home.0.display().to_string())]).unwrap();
+        let rows = Catalog::read_rows(&root, &[home.0.join("repo")]);
+        let lint = rows.iter().find(|row| row.name == "lint").unwrap();
+        let mut choices = Choices::default();
+        choices.0.insert(
+            lint.id.clone(),
+            super::super::plugins::choices::Choice {
+                on: false,
+                scope: super::super::plugins::choices::Scope::Global(
+                    super::super::plugins::choices::Global::Global,
+                ),
+            },
+        );
+        let off = home.resolved(Agent::Claude, &choices, PluginRole::Thread);
+        assert!(
+            !names(&skills_output(&off, None, false).unwrap().items, true)
+                .contains(&"lint".to_owned())
+        );
+        assert!(skills_output(&off, Some("tools:lint"), false).is_err());
     }
 
     #[test]
-    fn mcps_say_which_servers_the_caller_has() {
+    fn mcps_include_injected_servers_and_ignore_stale_report_membership() {
         let home = Home::new("mcps");
-        let catalog = home.catalog();
-        let repo = home.0.join("repo");
-        let session = Session {
-            agent: Agent::Claude,
-            cwd: &repo,
-            project: Some(&repo),
-            in_checkout: true,
-        };
-        // The session's thread has its agent's whole setup; Codex's server is not its.
-        let thread = mcp_items(&catalog, &session, None, None);
-        assert_eq!(names(&thread, true), ["pencil", "railway"]);
-        assert_eq!(names(&thread, false), ["calc"]);
-        // A worker given none has none; one given pencil has only pencil, not its session's
-        // railway (D18).
-        let none = mcp_items(&catalog, &session, None, Some(&[]));
-        assert!(names(&none, true).is_empty(), "{none:?}");
-        assert_eq!(names(&none, false), ["calc", "pencil", "railway"]);
-        let one = mcp_items(&catalog, &session, None, Some(&["pencil".to_owned()]));
-        assert_eq!(names(&one, true), ["pencil"]);
-        assert_eq!(names(&one, false), ["calc", "railway"]);
-        // What its CLI reported wins, Brigadier's own server among it.
-        let reported = HashMap::from([
-            ("pencil".to_owned(), McpStatus::NeedsAuth),
-            ("brigadier-computer".to_owned(), McpStatus::Connected),
-        ]);
-        let heard = mcp_items(&catalog, &session, Some(&reported), None);
-        assert_eq!(names(&heard, true), ["brigadier-computer", "pencil"]);
-        assert_eq!(names(&heard, false), ["calc", "railway"]);
-        let pencil = heard.iter().find(|item| item.name == "pencil").unwrap();
-        assert_eq!(pencil.status.as_deref(), Some("needsAuth"));
-        assert_eq!(heard.last().unwrap().detail, "Given by Brigadier");
+        for agent in [Agent::Claude, Agent::Codex] {
+            let resolved = home.resolved(agent, &Choices::default(), PluginRole::Thread);
+            let expected = vec!["calc".to_owned(), "pencil".to_owned(), "railway".to_owned()];
+            assert_eq!(names(&mcp_items(&resolved, None), true), expected);
+            let reported = HashMap::from([
+                ("pencil".into(), McpStatus::NeedsAuth),
+                ("stale-native".into(), McpStatus::Connected),
+            ]);
+            let listed = mcp_items(&resolved, Some(&reported));
+            assert_eq!(names(&listed, true), expected);
+            assert_eq!(
+                listed
+                    .iter()
+                    .find(|item| item.name == "pencil")
+                    .unwrap()
+                    .status
+                    .as_deref(),
+                Some("needsAuth")
+            );
+            assert!(
+                listed
+                    .iter()
+                    .find(|item| item.name == "calc")
+                    .unwrap()
+                    .status
+                    .is_none()
+            );
+        }
     }
 
     #[test]
-    fn a_worker_has_no_skills_and_only_its_granted_servers() {
-        let naked = PlainWorker {
-            quota_policy: None,
-            permission: crate::model::PermissionLevel::Ask,
-            inherited: false,
-            local: false,
-            repo: None,
-            base: None,
-            mcps: vec!["pencil".into()],
-            computer_use: false,
-            closed: false,
-            auto_resumed: false,
-        };
-        let grants = worker_grants(Some(&naked));
-        assert_eq!(grants.mcps, Some(vec!["pencil".to_owned()]));
-        assert_eq!(grants.skills, Some(Vec::new()));
-        let grants = worker_grants(None);
-        assert_eq!((grants.mcps, grants.skills), (None, None));
+    fn worker_context_contains_only_grants_and_cannot_read_ungranted_skills() {
+        let home = Home::new("worker");
+        let thread = home.resolved(Agent::Claude, &Choices::default(), PluginRole::Thread);
+        let grants: Vec<_> = thread
+            .servers
+            .into_iter()
+            .filter(|server| server.name == "pencil")
+            .collect();
+        let worker = home.resolved(
+            Agent::Claude,
+            &Choices::default(),
+            PluginRole::Worker { grants: &grants },
+        );
+        assert_eq!(names(&mcp_items(&worker, None), true), ["pencil"]);
+        assert!(skills_output(&worker, None, true).unwrap().items.is_empty());
+        assert!(skills_output(&worker, Some("tools:lint"), true).is_err());
+        let none = home.resolved(
+            Agent::Claude,
+            &Choices::default(),
+            PluginRole::Worker { grants: &[] },
+        );
+        assert!(mcp_items(&none, None).is_empty());
     }
 }

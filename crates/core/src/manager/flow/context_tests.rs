@@ -295,3 +295,214 @@ async fn a_thread_and_its_worker_pull_their_context() {
     assert_eq!(std::fs::read_to_string(ledger).unwrap(), LEDGER);
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
+    use brigadier_providers::ProviderKind;
+    for provider in ProviderKind::ALL {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let script: Script = {
+            let captured = captured.clone();
+            Arc::new(move |turn| {
+                let captured = captured.clone();
+                Box::pin(async move {
+                    if turn.is_orchestrator() {
+                        let skills = brigadier(&turn, context(Some(ContextPart::Skills))).await;
+                        let mcps = brigadier(&turn, context(Some(ContextPart::Mcps))).await;
+                        captured.lock().unwrap().extend([skills, mcps]);
+                    }
+                    Reply::text("Read context.")
+                })
+            })
+        };
+        let flow = Flow::start(
+            &format!("context-resolver-{provider:?}"),
+            Options {
+                thread: provider,
+                ..Options::default()
+            },
+            script,
+        )
+        .await;
+        write(
+            &flow.repo.join(".git/info/exclude"),
+            ".mcp.json\n.claude/\n",
+        );
+        write(
+            &flow.repo.join(".mcp.json"),
+            r#"{"mcpServers":{"project-api":{"command":"/not-started"}}}"#,
+        );
+        write(
+            &flow.repo.join(".claude/skills/project-skill/SKILL.md"),
+            "---\nname: project-skill\n---\nProject skill.\n",
+        );
+        let roots = flow.manager.registry().roots().clone();
+        write(
+            &roots.codex_home.join("config.toml"),
+            "[mcp_servers.codex-only]\ncommand='/not-started'\n",
+        );
+        write(
+            &roots.codex_home.join("skills/codex-only/SKILL.md"),
+            "---\nname: codex-only\n---\nCodex source skill.\n",
+        );
+        flow.manager.registry().refresh();
+        flow.say("Read the context.").await;
+        flow.settled().await;
+        let output = captured.lock().unwrap().clone();
+        assert_eq!(output.len(), 2);
+        let specs = flow.thread_specs();
+        let spec = &specs[0].1;
+        assert!(!spec.cwd.join(".mcp.json").exists());
+        assert!(
+            spec.mcp_servers
+                .iter()
+                .any(|server| server.name == "project-api")
+        );
+        for name in ["project-api", "codex-only"] {
+            assert!(
+                output[1]["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["name"] == name && item["has"] == true),
+                "{provider:?}: {}",
+                output[1]
+            );
+        }
+        for name in ["project-skill", "codex-only"] {
+            assert!(
+                output[0]["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["name"] == name && item["has"] == true),
+                "{provider:?}: {}",
+                output[0]
+            );
+        }
+        let resolved = flow
+            .manager
+            .resolve_plugins(
+                &flow.manager.runtime.launch_account(provider, None),
+                Some(&flow.repo),
+                &spec.cwd,
+                true,
+                crate::manager::plugins::resolve::Role::Thread,
+            )
+            .await
+            .unwrap();
+        let names = |value: &Value| {
+            value["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["name"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&output[0]),
+            resolved
+                .skills
+                .iter()
+                .map(|skill| skill.display.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            names(&output[1]),
+            resolved
+                .servers
+                .iter()
+                .map(|server| server.name.clone())
+                .collect::<Vec<_>>()
+        );
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versions() {
+    use brigadier_providers::ProviderKind;
+    for provider in ProviderKind::ALL {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let script: Script = {
+            let captured = captured.clone();
+            Arc::new(move |turn| {
+                let captured = captured.clone();
+                Box::pin(async move {
+                    if turn.is_orchestrator() {
+                        let output = brigadier(
+                            &turn,
+                            CliRequest::Context {
+                                part: Some(ContextPart::Skills),
+                                name: Some("same".into()),
+                                grep: None,
+                                last: None,
+                                item: None,
+                            },
+                        )
+                        .await;
+                        captured
+                            .lock()
+                            .unwrap()
+                            .push((turn.account.clone(), output));
+                    }
+                    Reply::text("Read skill.")
+                })
+            })
+        };
+        let flow = Flow::start(
+            &format!("context-account-{provider:?}"),
+            Options {
+                thread: provider,
+                ..Options::default()
+            },
+            script,
+        )
+        .await;
+        flow.add_accounts(&[(provider, "context-extra")], false)
+            .await;
+        let roots = flow.manager.registry().roots().clone();
+        write(
+            &roots.claude_dir.join("skills/same/SKILL.md"),
+            "---\nname: same\n---\nPRIMARY_CLAUDE\n",
+        );
+        write(
+            &roots.codex_home.join("skills/same/SKILL.md"),
+            "---\nname: same\n---\nPRIMARY_CODEX\n",
+        );
+        let extra = flow.manager.runtime.account_home("context-extra");
+        write(
+            &extra.join("skills/same/SKILL.md"),
+            "---\nname: same\n---\nEXTRA_ACCOUNT_VERSION\n",
+        );
+        flow.manager.registry().refresh();
+        let mut setup = flow
+            .core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .setup
+            .unwrap();
+        let crate::model::Setup::Session { orchestrator, .. } = &mut setup else {
+            panic!("session");
+        };
+        orchestrator.account = Some("context-extra".into());
+        flow.manager
+            .set_setup(flow.conversation.clone(), setup)
+            .await
+            .unwrap();
+        flow.say("Read the skill.").await;
+        flow.settled().await;
+        let output = captured.lock().unwrap().clone();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].0.as_deref(), Some("context-extra"));
+        assert!(
+            output[0].1["text"]
+                .as_str()
+                .unwrap()
+                .contains("EXTRA_ACCOUNT_VERSION"),
+            "{provider:?}: {}",
+            output[0].1
+        );
+        flow.stop().await;
+    }
+}

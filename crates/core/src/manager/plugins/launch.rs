@@ -73,7 +73,7 @@ impl SessionManager {
             .collect();
         let project = registered_root(&registered, project, cwd);
         let (cwd, data_dir) = (cwd.to_owned(), self.data_dir.clone());
-        let secrets = CliSecretReader {
+        let secrets = CliSecretStore {
             cli: self.brigadier_cli(),
             env: roots.vars.clone(),
         };
@@ -87,7 +87,7 @@ impl SessionManager {
             let mut rows = Catalog::read_rows_with_library(&roots, &registered, &data_dir);
             let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
             let warnings = if grants.is_none() {
-                fill_library_headers(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
+                fill_library_values(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
             } else {
                 Vec::new()
             };
@@ -424,12 +424,50 @@ mod overlay_tests {
     }
 }
 
-/// Read through the credential-owning executable, never the daemon's own Keychain identity.
-struct CliSecretReader {
-    cli: PathBuf,
-    env: std::collections::BTreeMap<String, String>,
+fn cli_secret_input(value: &str) -> String {
+    format!("{value}\r\n")
 }
-impl brigadier_cli::secrets::Store for CliSecretReader {
+
+/// The credential-owning executable performs every Keychain operation.
+pub(super) struct CliSecretStore {
+    pub(super) cli: PathBuf,
+    pub(super) env: std::collections::BTreeMap<String, String>,
+}
+impl CliSecretStore {
+    fn write(&self, args: &[&str], value: Option<String>) -> std::result::Result<(), String> {
+        use std::io::Write;
+        let mut child = std::process::Command::new(&self.cli)
+            .args(args)
+            .envs(&self.env)
+            .stdin(if value.is_some() {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| "couldn't update the server's saved credentials".to_owned())?;
+        let writer = value.zip(child.stdin.take()).map(|(value, mut stdin)| {
+            std::thread::spawn(move || stdin.write_all(value.as_bytes()))
+        });
+        let output =
+            brigadier_registry::adapter::wait_within(child, std::time::Duration::from_secs(30))
+                .map_err(|_| "couldn't update the server's saved credentials".to_owned())?;
+        if let Some(writer) = writer {
+            writer
+                .join()
+                .map_err(|_| "couldn't update the server's saved credentials".to_owned())?
+                .map_err(|_| "couldn't update the server's saved credentials".to_owned())?;
+        }
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err("couldn't update the server's saved credentials".into())
+        }
+    }
+}
+impl brigadier_cli::secrets::Store for CliSecretStore {
     fn get(&self, server: &str) -> std::result::Result<brigadier_cli::secrets::Values, String> {
         let mut command = std::process::Command::new(&self.cli);
         command
@@ -447,61 +485,173 @@ impl brigadier_cli::secrets::Store for CliSecretReader {
         serde_json::from_slice(&output.stdout)
             .map_err(|_| "the server's saved credentials weren't readable".into())
     }
-    fn put(&self, _: &str, _: &brigadier_cli::secrets::Values) -> std::result::Result<(), String> {
-        Err("launch secret access is read-only".into())
+    fn put(
+        &self,
+        server: &str,
+        values: &brigadier_cli::secrets::Values,
+    ) -> std::result::Result<(), String> {
+        if values.is_empty() {
+            return self.write(&["secret", "remove", server], None);
+        }
+        let before = self.get(server)?;
+        for (name, value) in values {
+            // The CLI trims one terminal CRLF for interactive input. Supply that suffix
+            // ourselves so multiline values, including their final newline, round-trip.
+            self.write(
+                &["secret", "set", server, name],
+                Some(cli_secret_input(value)),
+            )?;
+        }
+        for name in before.keys().filter(|name| !values.contains_key(*name)) {
+            self.write(&["secret", "remove", server, name], None)?;
+        }
+        Ok(())
     }
 }
 
-fn fill_library_headers(
+/// Fill only credential references owned by the data-dir library. The reference identity
+/// stays stable when values change; missing values exclude that definition before resolution.
+pub(super) fn fill_library_values(
     rows: &mut [brigadier_registry::catalog::Row],
     data_dir: &Path,
     choices: &Choices,
     project: Option<&Path>,
     store: &dyn brigadier_cli::secrets::Store,
 ) -> Vec<super::resolve::ResolveWarning> {
-    use brigadier_registry::catalog::Content;
-    use brigadier_registry::{Secret, Transport};
     let mut warnings = Vec::new();
     for row in rows {
         let choice = choices.choice(row);
         if !choice.on || !choice.scope.contains(project) {
             continue;
         }
+        let mut missing = false;
         row.definitions.retain_mut(|definition| {
-            let owned = definition.provenance.file.starts_with(data_dir.join("library"))
-                || definition.provenance.plugin.as_ref().is_some_and(|id| id.ends_with("@brigadier"));
-            if !owned {return true;}
-            let Content::Server(server)=&mut definition.content else {return true;};
-            let Transport::Http{headers,..}=&mut server.transport else{return true;};
-            let raw:serde_json::Value=std::fs::read(&definition.provenance.file).ok().and_then(|bytes|serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-            let entry=raw.get("mcpServers").and_then(|all|all.get(&server.name)).or_else(||raw.get(&server.name)).unwrap_or(&raw);
-            let helper=entry.get("headersHelper").or_else(||entry.get("http_headers_helper")).and_then(serde_json::Value::as_str);
-            let Some(id)=helper.and_then(|helper| {
-                let words:Vec<_>=helper.split_whitespace().collect();
-                let tail=words.len().checked_sub(3).map(|at|&words[at..])?;
-                (tail[0]=="secret" && tail[1]=="headers").then_some(tail[2].to_owned())
-            }) else{return true;};
-            let mut expected:Vec<String>=definition.provenance.file.parent().and_then(|path|std::fs::read(path.join(".brigadier.json")).ok())
-                .and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .and_then(|meta|meta.get("values").and_then(serde_json::Value::as_array).cloned())
-                .unwrap_or_default().iter().filter_map(|value|value.as_str().map(str::to_owned)).collect();
-            // Flat entries may declare empty placeholders; legacy packages keep their
-            // expected names in .brigadier.json. Neither holds the credential values.
-            expected.extend(headers.iter().filter(|(_, value)| value.expose().is_empty()).map(|(name, _)| name.clone()));
-            let loaded=store.get(&id);
-            if let Ok(values)=loaded && !values.is_empty() && expected.iter().all(|name|values.get(name).is_some_and(|value|!value.is_empty())) && values.values().all(|value|!value.is_empty()) {
-                for (name,value) in values {
-                    if let Some((_,old))=headers.iter_mut().find(|(key,_)|key==&name) {*old=Secret::new(value);} else {headers.push((name,Secret::new(value)));}
-                }
-                server.signs_in=false;
-                true
-            } else {
-                warnings.push(super::resolve::ResolveWarning {server:server.name.clone(),message:format!("MCP server {:?} was left out because its saved credentials are missing or unavailable. Add the missing values in Plugins before starting it again.",server.name)});
-                false
-            }
+            let keep = hydrate_library_definition(definition, data_dir, store).is_ok();
+            missing |= !keep;
+            keep
         });
+        if missing {
+            warnings.push(super::resolve::ResolveWarning {server:row.name.clone(), message:format!("MCP server {:?} was left out because its saved credentials are missing or unavailable. Add the missing values in Plugins before starting it again.",row.name)});
+        }
     }
     warnings
+}
+
+fn hydrate_library_definition(
+    definition: &mut brigadier_registry::catalog::Definition,
+    data_dir: &Path,
+    store: &dyn brigadier_cli::secrets::Store,
+) -> std::result::Result<(), ()> {
+    use brigadier_registry::catalog::Content;
+    use brigadier_registry::{Secret, Transport};
+    let owned = definition
+        .provenance
+        .file
+        .starts_with(data_dir.join("library"))
+        || definition
+            .provenance
+            .plugin
+            .as_ref()
+            .is_some_and(|id| id.ends_with("@brigadier"));
+    if !owned {
+        return Ok(());
+    }
+    let Content::Server(server) = &mut definition.content else {
+        return Ok(());
+    };
+    let raw: serde_json::Value = std::fs::read(&definition.provenance.file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or(())?;
+    let entry = raw
+        .get("mcpServers")
+        .and_then(|all| all.get(&server.name))
+        .or_else(|| raw.get(&server.name))
+        .unwrap_or(&raw);
+    let reference = entry.get("brigadierSecrets");
+    let helper = entry
+        .get("headersHelper")
+        .or_else(|| entry.get("http_headers_helper"))
+        .and_then(serde_json::Value::as_str);
+    let id = reference
+        .and_then(|reference| reference.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            let words: Vec<_> = helper?.split_whitespace().collect();
+            let at = words.len().checked_sub(3)?;
+            let tail = &words[at..];
+            (tail[0] == "secret" && tail[1] == "headers").then(|| tail[2].to_owned())
+        });
+    let Some(id) = id else {
+        return if reference.is_some() || helper.is_some() {
+            Err(())
+        } else {
+            Ok(())
+        };
+    };
+    let pairs = match &mut server.transport {
+        Transport::Stdio { env, .. } => env,
+        Transport::Http { headers, .. } => headers,
+    };
+    let mut expected: Vec<String> = pairs
+        .iter()
+        .filter(|(_, value)| value.expose().is_empty())
+        .map(|(name, _)| name.clone())
+        .collect();
+    if let Some(names) = reference
+        .and_then(|reference| reference.get("names"))
+        .and_then(serde_json::Value::as_array)
+    {
+        expected.extend(
+            names
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned)),
+        );
+    }
+    if let Some(meta) = definition
+        .provenance
+        .file
+        .parent()
+        .and_then(|path| std::fs::read(path.join(".brigadier.json")).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+    {
+        expected.extend(
+            meta.get("values")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_owned)),
+        );
+    }
+    let values = store.get(&id).map_err(|_| ())?;
+    if values.is_empty() || expected.iter().any(|name| !values.contains_key(name)) {
+        return Err(());
+    }
+    for (name, value) in &values {
+        if let Some((_, old)) = pairs.iter_mut().find(|(key, _)| key == name) {
+            *old = Secret::new(value.clone());
+        } else {
+            pairs.push((name.clone(), Secret::new(value.clone())));
+        }
+    }
+    if let Transport::Stdio {
+        command, args, cwd, ..
+    } = &mut server.transport
+    {
+        *command = brigadier_cli::secrets::expand(command, &values);
+        for arg in args {
+            *arg = brigadier_cli::secrets::expand(arg, &values);
+        }
+        if let Some(path) = cwd {
+            *path = PathBuf::from(brigadier_cli::secrets::expand(
+                &path.to_string_lossy(),
+                &values,
+            ));
+        }
+    }
+    server.signs_in = false;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -524,6 +674,44 @@ mod secret_tests {
             panic!("launch must never write credentials")
         }
     }
+    #[test]
+    fn cli_owned_store_input_preserves_empty_and_multiline_values() {
+        struct Writable(std::sync::Mutex<Values>);
+        impl Store for Writable {
+            fn get(&self, _: &str) -> std::result::Result<Values, String> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn put(&self, _: &str, values: &Values) -> std::result::Result<(), String> {
+                *self.0.lock().unwrap() = values.clone();
+                Ok(())
+            }
+        }
+        for value in ["", "line one\nline two\r\n"] {
+            let store = Writable(std::sync::Mutex::new(Values::new()));
+            let args = vec![
+                "secret".into(),
+                "set".into(),
+                "fixture/api".into(),
+                "VALUE".into(),
+            ];
+            let mut input = std::io::Cursor::new(cli_secret_input(value).into_bytes());
+            let (mut output, mut error) = (Vec::new(), Vec::new());
+            assert_eq!(
+                brigadier_cli::secrets::run_local(
+                    &args,
+                    &store,
+                    &mut input,
+                    &mut output,
+                    &mut error
+                ),
+                Some(0)
+            );
+            assert_eq!(store.get("fixture/api").unwrap()["VALUE"], value);
+            assert!(output.is_empty());
+            assert!(error.is_empty());
+        }
+    }
+
     fn write(path: &Path, value: serde_json::Value) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, value.to_string()).unwrap();
@@ -567,9 +755,7 @@ mod secret_tests {
         };
         let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
         assert_eq!(rows.len(), 1);
-        assert!(
-            fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store).is_empty()
-        );
+        assert!(fill_library_values(&mut rows, &dir, &Choices::default(), None, &store).is_empty());
         for agent in [Agent::Claude, Agent::Codex] {
             let resolved = resolve::resolve(Context {
                 agent,
@@ -589,7 +775,7 @@ mod secret_tests {
         assert_eq!(*store.reads.borrow(), ["fixture/api"]);
         store.values.borrow_mut().remove("X-Workspace");
         let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
-        let warnings = fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store);
+        let warnings = fill_library_values(&mut rows, &dir, &Choices::default(), None, &store);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].server, "api");
         assert!(!warnings[0].message.contains("in-memory-only-token"));
@@ -618,7 +804,7 @@ mod secret_tests {
         );
         let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
         assert_eq!(
-            fill_library_headers(&mut rows, &dir, &Choices::default(), None, &store).len(),
+            fill_library_values(&mut rows, &dir, &Choices::default(), None, &store).len(),
             1
         );
         std::fs::remove_dir_all(dir).unwrap();

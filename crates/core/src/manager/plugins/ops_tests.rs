@@ -165,7 +165,14 @@ fn add_remove_only_write_the_data_dir_library_and_catalog_resolves_both_agents()
     assert!(warning.is_none());
     let file = root.join("servers/docs.json");
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(saved["mcpServers"]["docs"]["env"]["TOKEN"], "typed");
+    assert_eq!(saved["mcpServers"]["docs"]["env"]["TOKEN"], "");
+    let id = saved["mcpServers"]["docs"]["brigadierSecrets"]["id"]
+        .as_str()
+        .unwrap();
+    let (namespace, server) = id.split_once('/').unwrap();
+    assert_eq!(server, "docs");
+    assert!(uuid::Uuid::parse_str(namespace.strip_prefix("docs-").unwrap()).is_ok());
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("typed"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -378,4 +385,219 @@ fn migrated_library_packages_are_catalog_sources_and_only_their_library_copy_is_
     );
     assert_eq!(bytes_under(&source), source_bytes);
     let _ = std::fs::remove_dir_all(home);
+}
+
+#[derive(Default)]
+struct MemoryStore {
+    values: std::sync::Mutex<BTreeMap<String, brigadier_cli::secrets::Values>>,
+    refuse_forget: std::sync::atomic::AtomicBool,
+}
+impl brigadier_cli::secrets::Store for MemoryStore {
+    fn get(&self, id: &str) -> Result<brigadier_cli::secrets::Values, String> {
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default())
+    }
+    fn put(&self, id: &str, values: &brigadier_cli::secrets::Values) -> Result<(), String> {
+        if values.is_empty() && self.refuse_forget.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("store unavailable".into());
+        }
+        let mut kept = self.values.lock().unwrap();
+        if values.is_empty() {
+            kept.remove(id);
+        } else {
+            kept.insert(id.into(), values.clone());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn stored_env_and_headers_never_enter_json_and_launch_recovers_them_for_both_agents() {
+    use brigadier_cli::secrets::Store;
+    let home = home("secret-round-trip");
+    let roots = roots(&home);
+    let data = home.join("data");
+    let root = data.join("library");
+    let items=add_parse::parse(r#"{"mcpServers":{"runner":{"command":"/not-started","args":["--token","${TOKEN}"],"env":{"TOKEN":"env-only-in-memory-8391","EMPTY":""}},"web":{"type":"http","url":"https://fixture.invalid/mcp","headers":{"Authorization":"Bearer header-only-in-memory-9173"}}}}"#,None,&home).unwrap();
+    let store = MemoryStore::default();
+    add_plain(&root, &items, None).unwrap();
+    let mut transaction = StoredValues::new(&store);
+    transaction.save_items(&items, &root).unwrap();
+    transaction.commit();
+    for bytes in bytes_under(&root).values() {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains("env-only-in-memory-8391"));
+        assert!(!text.contains("header-only-in-memory-9173"));
+    }
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("servers/web.json")).unwrap()).unwrap();
+    let web_id = saved["mcpServers"]["web"]["brigadierSecrets"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let runner: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("servers/runner.json")).unwrap()).unwrap();
+    let runner_id = runner["mcpServers"]["runner"]["brigadierSecrets"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        saved["mcpServers"]["web"]["headersHelper"],
+        format!("brigadier secret headers {web_id}")
+    );
+    assert_eq!(saved["mcpServers"]["web"]["headers"]["Authorization"], "");
+    let mut rows = Catalog::read_rows_with_library(&roots, &[], &data);
+    let warnings = super::super::launch::fill_library_values(
+        &mut rows,
+        &data,
+        &super::super::choices::Choices::default(),
+        None,
+        &store,
+    );
+    assert!(warnings.is_empty());
+    for agent in [Agent::Claude, Agent::Codex] {
+        let resolved = super::super::resolve::resolve(super::super::resolve::Context {
+            agent,
+            account_home: &roots,
+            project_root: None,
+            cwd: &home,
+            trusted: false,
+            role: super::super::resolve::Role::Thread,
+            rows: &rows,
+            choices: &super::super::choices::Choices::default(),
+            gateway: None,
+        });
+        assert_eq!(resolved.servers.len(), 2);
+        let env: BTreeMap<_, _> = resolved
+            .servers
+            .iter()
+            .find(|server| server.name == "runner")
+            .unwrap()
+            .env
+            .iter()
+            .cloned()
+            .collect();
+        assert_eq!(
+            env,
+            BTreeMap::from([
+                ("TOKEN".into(), "env-only-in-memory-8391".into()),
+                ("EMPTY".into(), String::new())
+            ])
+        );
+        let brigadier_providers::McpTransport::Stdio { args, .. } = &resolved
+            .servers
+            .iter()
+            .find(|server| server.name == "runner")
+            .unwrap()
+            .transport
+        else {
+            panic!("stdio server");
+        };
+        assert_eq!(
+            args.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["--token", "env-only-in-memory-8391"]
+        );
+        assert_eq!(
+            resolved
+                .servers
+                .iter()
+                .find(|server| server.name == "web")
+                .unwrap()
+                .env,
+            [(
+                "Authorization".into(),
+                "Bearer header-only-in-memory-9173".into()
+            )]
+        );
+    }
+    let other_root = home.join("other-data/library");
+    let other_items=add_parse::parse(r#"{"mcpServers":{"web":{"url":"https://other.invalid/mcp","headers":{"Authorization":"Bearer other-instance-value"}}}}"#,None,&home).unwrap();
+    add_plain(&other_root, &other_items, None).unwrap();
+    let mut other_transaction = StoredValues::new(&store);
+    other_transaction
+        .save_items(&other_items, &other_root)
+        .unwrap();
+    other_transaction.commit();
+    let other_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(other_root.join("servers/web.json")).unwrap())
+            .unwrap();
+    let other_id = other_json["mcpServers"]["web"]["brigadierSecrets"]["id"]
+        .as_str()
+        .unwrap();
+    assert_ne!(web_id, other_id);
+    assert_eq!(
+        store.get(&web_id).unwrap()["Authorization"],
+        "Bearer header-only-in-memory-9173"
+    );
+    assert_eq!(
+        store.get(other_id).unwrap()["Authorization"],
+        "Bearer other-instance-value"
+    );
+    store
+        .refuse_forget
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(remove_with_secrets(&root, "web", &store).is_err());
+    assert!(root.join("servers/web.json").exists());
+    assert!(!store.get(&web_id).unwrap().is_empty());
+    store
+        .refuse_forget
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    remove_with_secrets(&root, "web", &store).unwrap();
+    remove_with_secrets(&root, "runner", &store).unwrap();
+    assert!(store.get(&web_id).unwrap().is_empty());
+    assert!(store.get(&runner_id).unwrap().is_empty());
+    assert_eq!(
+        store.get(other_id).unwrap()["Authorization"],
+        "Bearer other-instance-value"
+    );
+    remove_with_secrets(&other_root, "web", &store).unwrap();
+    assert!(!root.join("servers/web.json").exists());
+    assert!(!root.join("servers/runner.json").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn failed_secret_publication_restores_the_previous_store_and_remove_rejects_foreign_references() {
+    use brigadier_cli::secrets::Store;
+    let home = home("secret-rollback");
+    let root = home.join("data/library");
+    let store = MemoryStore::default();
+    let items = add_parse::parse(
+        r#"{"runner":{"command":"x","env":{"TOKEN":"replacement-value"}}}"#,
+        None,
+        &home,
+    )
+    .unwrap();
+    add_plain(&root, &items, None).unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("servers/runner.json")).unwrap()).unwrap();
+    let id = raw["mcpServers"]["runner"]["brigadierSecrets"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = BTreeMap::from([("TOKEN".into(), "existing-token-value".into())]);
+    store.put(&id, &before).unwrap();
+    {
+        let mut transaction = StoredValues::new(&store);
+        transaction.save_items(&items, &root).unwrap();
+    }
+    assert_eq!(store.get(&id).unwrap(), before);
+    store.put("runner/runner", &before).unwrap();
+    write(
+        &root.join("servers/other.json"),
+        r#"{"mcpServers":{"other":{"command":"x","brigadierSecrets":{"id":"runner/runner","names":["TOKEN"]}}}}"#,
+    );
+    assert!(
+        remove_with_secrets(&root, "other", &store)
+            .unwrap_err()
+            .contains("another library item")
+    );
+    assert_eq!(store.get("runner/runner").unwrap(), before);
+    assert!(root.join("servers/other.json").exists());
+    std::fs::remove_dir_all(home).unwrap();
 }

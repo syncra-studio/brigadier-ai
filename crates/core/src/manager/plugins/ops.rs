@@ -235,7 +235,7 @@ fn server_value(spec: &ServerSpec) -> serde_json::Value {
     let values = |pairs: &[(String, Secret)]| {
         pairs
             .iter()
-            .map(|(name, value)| (name.clone(), json!(value.expose())))
+            .map(|(name, _)| (name.clone(), json!("")))
             .collect::<serde_json::Map<_, _>>()
     };
     let mut value = match &spec.transport {
@@ -249,6 +249,25 @@ fn server_value(spec: &ServerSpec) -> serde_json::Value {
             json!({"type":"http","url":url,"headers":values(headers)})
         }
     };
+    let names: Vec<_> = match &spec.transport {
+        TransportSpec::Stdio { env, .. } => env,
+        TransportSpec::Http { headers, .. } => headers,
+    }
+    .iter()
+    .map(|(name, _)| name.clone())
+    .collect();
+    if !names.is_empty() {
+        let id = format!(
+            "{}-{}/{}",
+            spec.name,
+            uuid::Uuid::new_v4().simple(),
+            spec.name
+        );
+        value["brigadierSecrets"] = json!({"id":id,"names":names});
+        if matches!(spec.transport, TransportSpec::Http { .. }) {
+            value["headersHelper"] = json!(format!("brigadier secret headers {id}"));
+        }
+    }
     if let Some(oauth) = &spec.oauth {
         value["oauth"] = json!({"clientId":oauth.client_id});
     }
@@ -495,6 +514,10 @@ impl crate::manager::SessionManager {
         let data_dir = self.data_dir.clone();
         let home = self.registry().roots().home.clone();
         let registry = self.registry();
+        let store = super::launch::CliSecretStore {
+            cli: self.brigadier_cli(),
+            env: registry.roots().vars.clone(),
+        };
         super::super::blocking(move || {
             let mut items = add_parse::parse(&text, name.as_deref(), &home)
                 .map_err(|e| crate::Error::Invalid(e.to_string()))?;
@@ -541,6 +564,10 @@ impl crate::manager::SessionManager {
                     );
                 }
             }
+            let mut saved = StoredValues::new(&store);
+            saved
+                .save_items(&items, &staged_library)
+                .map_err(crate::Error::Invalid)?;
             choices.save(&data_dir).map_err(crate::Error::Invalid)?;
             for folder in ["skills", "servers", "origins"] {
                 let from = staged_library.join(folder);
@@ -571,7 +598,8 @@ impl crate::manager::SessionManager {
                         .map_err(|e| crate::Error::Invalid(e.to_string()))?;
                 }
             }
-            std::fs::remove_dir_all(staging).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+            saved.commit();
+            let _ = std::fs::remove_dir_all(staging);
             registry.refresh();
             Ok(())
         })
@@ -657,8 +685,20 @@ impl crate::manager::SessionManager {
                     client_id: id.clone(),
                 }),
         };
-        self.add_library_item(server_value(&spec).to_string(), None, project_ids, None)
-            .await
+        let values = match &spec.transport {
+            TransportSpec::Stdio { env, .. } => env,
+            TransportSpec::Http { headers, .. } => headers,
+        }
+        .iter()
+        .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+        .collect();
+        self.add_library_item(
+            server_value(&spec).to_string(),
+            None,
+            project_ids,
+            Some(values),
+        )
+        .await
     }
 
     pub async fn remove_library_item(&self, key: String) -> crate::Result<()> {
@@ -694,8 +734,13 @@ impl crate::manager::SessionManager {
                 .unwrap_or_else(|| row.name.clone())
         };
         let registry = self.registry();
+        let store = super::launch::CliSecretStore {
+            cli: self.brigadier_cli(),
+            env: registry.roots().vars.clone(),
+        };
         super::super::blocking(move || {
-            remove_plain(&root, &name).map_err(crate::Error::Invalid)?;
+            let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+            remove_with_secrets(&root, &name, &store).map_err(crate::Error::Invalid)?;
             registry.refresh();
             Ok(())
         })
@@ -809,3 +854,163 @@ impl crate::manager::SessionManager {
 #[cfg(test)]
 #[path = "ops_tests.rs"]
 mod tests;
+
+/// Roll back failed Add/Remove operations without putting credential values in a file.
+struct StoredValues<'a> {
+    store: &'a dyn brigadier_cli::secrets::Store,
+    before: Vec<(String, brigadier_cli::secrets::Values)>,
+    committed: bool,
+}
+impl<'a> StoredValues<'a> {
+    fn new(store: &'a dyn brigadier_cli::secrets::Store) -> Self {
+        Self {
+            store,
+            before: Vec::new(),
+            committed: false,
+        }
+    }
+    fn replace(
+        &mut self,
+        id: String,
+        values: brigadier_cli::secrets::Values,
+    ) -> Result<(), String> {
+        let before = self.store.get(&id)?;
+        self.before.push((id.clone(), before));
+        self.store.put(&id, &values)
+    }
+    fn save_items(&mut self, items: &[Item], root: &Path) -> Result<(), String> {
+        for item in items {
+            let Item::Server(spec) = item else {
+                continue;
+            };
+            let pairs = match &spec.transport {
+                TransportSpec::Stdio { env, .. } => env,
+                TransportSpec::Http { headers, .. } => headers,
+            };
+            if pairs.is_empty() {
+                continue;
+            }
+            let file = root.join("servers").join(format!("{}.json", spec.name));
+            let raw: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(file)
+                    .map_err(|_| "Couldn't read the staged library reference".to_owned())?,
+            )
+            .map_err(|_| "Couldn't read the staged library reference".to_owned())?;
+            let id = raw
+                .get("mcpServers")
+                .and_then(|servers| servers.get(&spec.name))
+                .and_then(|server| server.pointer("/brigadierSecrets/id"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or("Missing library credential reference")?;
+            self.replace(
+                id.to_owned(),
+                pairs
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+                    .collect(),
+            )?;
+        }
+        Ok(())
+    }
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+impl Drop for StoredValues<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            for (id, values) in self.before.iter().rev() {
+                if self.store.put(id, values).is_err() {
+                    tracing::warn!(
+                        server = id,
+                        "couldn't restore the library credential store after a failed change"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn library_secret_ids(root: &Path, name: &str) -> Result<Vec<String>, String> {
+    valid_library_name(name)?;
+    if root
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err("The library folder cannot be a symbolic link.".into());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let files = [
+        root.join("servers").join(format!("{name}.json")),
+        root.join("plugins").join(name).join(".mcp.json"),
+        root.join("plugins").join(name).join(".codex.mcp.json"),
+    ];
+    for file in files.iter().filter(|path| path.exists()) {
+        let actual = std::fs::canonicalize(file).map_err(|e| e.to_string())?;
+        let base = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+        if !actual.starts_with(base)
+            || file
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+        {
+            return Err("The library item points outside the library.".into());
+        }
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?)
+                .map_err(|_| "Couldn't read the library credential reference".to_owned())?;
+        let entries = raw
+            .get("mcpServers")
+            .unwrap_or(&raw)
+            .as_object()
+            .ok_or("Invalid library server file")?;
+        for entry in entries.values() {
+            let id = entry
+                .pointer("/brigadierSecrets/id")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    entry
+                        .get("headersHelper")
+                        .or_else(|| entry.get("http_headers_helper"))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|helper| helper.split_whitespace().last())
+                })
+                .or_else(|| {
+                    let args = entry.get("args")?.as_array()?;
+                    if args.first()?.as_str() == Some("mcp") && args.get(1)?.as_str() == Some("run")
+                    {
+                        args.get(2)?.as_str()
+                    } else {
+                        None
+                    }
+                });
+            if let Some(id) = id {
+                if id.split_once('/').is_none_or(|(plugin, server)| {
+                    let owned_namespace = plugin == name
+                        || plugin
+                            .strip_prefix(&format!("{name}-"))
+                            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok());
+                    !owned_namespace || server.is_empty() || server.contains('/')
+                }) {
+                    return Err("The credential reference belongs to another library item.".into());
+                }
+                ids.insert(id.to_owned());
+            }
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn remove_with_secrets(
+    root: &Path,
+    name: &str,
+    store: &dyn brigadier_cli::secrets::Store,
+) -> Result<(), String> {
+    let ids = library_secret_ids(root, name)?;
+    let mut saved = StoredValues::new(store);
+    for id in ids {
+        saved.replace(id, BTreeMap::new())?;
+    }
+    remove_plain(root, name)?;
+    saved.commit();
+    Ok(())
+}

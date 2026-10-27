@@ -21,6 +21,7 @@ use crate::model::{ConversationId, ProjectId};
 use crate::{Error, Result};
 
 /// Brigadier's own servers' names, which a worker keeps.
+#[cfg(test)]
 pub(crate) const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
 
 fn provider(agent: Agent) -> ProviderKind {
