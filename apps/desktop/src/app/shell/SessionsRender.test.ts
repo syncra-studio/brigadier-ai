@@ -115,11 +115,11 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   for (const row of seen.rows) {
     assert.equal(row.words === null, row.status === null, `${row.title}: a plain state word, none when finished`);
     assert.equal(row.mark, row.status?.startsWith("working:") ? "spinner" : row.status?.startsWith("needsYou:") ? "unread" : null, `${row.title}: its mark`);
-    assert.equal(row.error, row.status?.startsWith("failed:"));
+    assert.equal(row.error, row.status?.startsWith("failed:") ?? false);
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
   // The title tells sessions apart: the state takes at most two fifths of the row.
-  assert.equal(seen.widths.length, 13);
+  assert.equal(seen.widths.length, 8, "the eight rows with a state word; finished rows have none");
   for (const row of seen.widths) {
     assert.ok(row.titleShare >= 55, `${row.title}: the title keeps most of the row (${row.titleShare}%)`);
     assert.ok(row.stateWhole, `${row.title}: the state's words show whole`);
@@ -134,10 +134,11 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
   // A long title beside its state word ends in "…" before the word, never faded under it (issue 551).
-  for (const cut of [seen.cut, seen.cutStopped]) {
-    assert.deepEqual(cut, { overflows: true, ellipsis: "ellipsis", mask: "none", clear: true, word: cut.word }, JSON.stringify(cut));
-  }
-  assert.equal(seen.cut.word, null, "a finished row has no word to cut before");
+  assert.deepEqual(seen.cutStopped, { overflows: true, ellipsis: "ellipsis", mask: "none", clear: true, word: "Stopped" }, JSON.stringify(seen.cutStopped));
+  // A finished row has no word: its long title fades out at the end as usual.
+  assert.equal(seen.cut.word, null);
+  assert.equal(seen.cut.overflows, true);
+  assert.notEqual(seen.cut.mask, "none");
   // A session's workers show in the session itself (context card, Workers panel, thread), never
   // under its row, though "Header" runs two.
   assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
