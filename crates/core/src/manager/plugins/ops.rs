@@ -493,11 +493,6 @@ impl crate::manager::SessionManager {
             .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        if choices.is_removed(row_id) {
-            return Err(crate::Error::Invalid(
-                "Restore this plugin before changing its choice.".into(),
-            ));
-        }
         let mut choice = choices.choice(row);
         if let Some(on) = on {
             choice.on = on;
@@ -760,14 +755,6 @@ impl crate::manager::SessionManager {
             Ok(())
         })
         .await
-    }
-
-    pub fn restore_plugin(&self, key: &str) -> crate::Result<()> {
-        let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-        let mut choices =
-            super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        choices.restore(key).map_err(crate::Error::Invalid)?;
-        choices.save(&self.data_dir).map_err(crate::Error::Invalid)
     }
 
     pub fn catalog_item_details(&self, key: String) -> crate::Result<super::PluginItemDetails> {

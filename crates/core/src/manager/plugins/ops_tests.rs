@@ -740,14 +740,14 @@ async fn first_toggle_persists_the_project_default_scope_through_the_manager() {
 }
 
 #[tokio::test]
-async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
+async fn hide_persists_without_changing_files_and_suppresses_both_agents() {
     use super::super::choices::Choices;
     use crate::manager::flow::{Flow, Options, Reply, Script};
     use brigadier_providers::ProviderKind;
     use std::sync::Arc;
 
     let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
-    let flow = Flow::start("hide-restore-native-plugins", Options::default(), script).await;
+    let flow = Flow::start("hide-native-plugins", Options::default(), script).await;
     let roots = flow.manager.registry().roots().clone();
     write(
         &roots.claude_json,
@@ -769,7 +769,6 @@ async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
     assert_eq!(server.definitions.len(), 2);
     assert_eq!(skill.definitions.len(), 2);
     flow.manager.set_plugin_choice(&skill.id, true).unwrap();
-    let prior = Choices::load(&flow.manager.data_dir).unwrap();
     let original_version = flow.manager.plugin_catalog().unwrap().version;
     let before_claude = bytes_under(&roots.claude_dir);
     let before_codex = bytes_under(&roots.codex_home);
@@ -793,24 +792,6 @@ async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
             .iter()
             .all(|row| row.name != "hidden-server" && row.name != "hidden-skill")
     );
-    assert_eq!(view.removed.len(), 2);
-    for row in [server, skill] {
-        let removed = view
-            .removed
-            .iter()
-            .find(|removed| removed.id == row.id)
-            .unwrap();
-        assert_eq!(removed.name, row.name);
-        assert_eq!(
-            removed.kind,
-            if row.kind == brigadier_registry::catalog::Kind::Server {
-                PluginKind::Server
-            } else {
-                PluginKind::Skill
-            }
-        );
-        assert_eq!(removed.agents, [ProviderKind::Claude, ProviderKind::Codex]);
-    }
     let survivor = view.rows.iter().find(|row| row.name == "survivor").unwrap();
     assert_eq!(
         survivor.definitions[0].endpoint.as_deref(),
@@ -822,13 +803,12 @@ async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
         "hiding must not overwrite the default on choice"
     );
     assert!(saved.0[&skill.id].on);
-    assert_eq!(
-        super::super::CatalogView::new(&rows, &saved).removed,
-        view.removed
+    assert!(
+        super::super::CatalogView::new(&rows, &saved)
+            .rows
+            .iter()
+            .all(|row| row.name != "hidden-server" && row.name != "hidden-skill")
     );
-    assert!(flow.manager.set_plugin_choice(&server.id, true).is_err());
-    assert!(flow.manager.restore_plugin("unknown").is_err());
-
     for provider in [ProviderKind::Claude, ProviderKind::Codex] {
         let before = flow.specs().len();
         let session = flow.add_session("Hidden items", None, provider).await;
@@ -875,43 +855,6 @@ async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
             );
         }
     }
-    for row in [server, skill] {
-        flow.manager.restore_plugin(&row.id).unwrap();
-    }
-    let view = flow.manager.plugin_catalog().unwrap();
-    assert!(view.removed.is_empty());
-    for row in [server, skill] {
-        let restored = view
-            .rows
-            .iter()
-            .find(|restored| restored.id == row.id)
-            .unwrap();
-        assert_eq!(restored.choice, prior.choice(row));
-    }
-    assert_eq!(view.version, original_version);
-    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-        let before = flow.specs().len();
-        let session = flow.add_session("Restored items", None, provider).await;
-        flow.say_to(&session, "Check restored launch.").await;
-        flow.idle_in(&session).await;
-        let specs = flow.specs();
-        let (_, spec) = specs[before..]
-            .iter()
-            .find(|(kind, _)| *kind == provider)
-            .unwrap();
-        assert!(
-            spec.mcp_servers
-                .iter()
-                .any(|server| server.name == "hidden-server")
-        );
-        assert!(
-            !spec
-                .switched_off
-                .skill_names
-                .iter()
-                .any(|name| name == "hidden-skill")
-        );
-    }
     assert_eq!(bytes_under(&roots.claude_dir), before_claude);
     assert_eq!(bytes_under(&roots.codex_home), before_codex);
     assert_eq!(std::fs::read(&roots.claude_json).unwrap(), before_json);
@@ -938,7 +881,6 @@ async fn library_remove_still_deletes_the_library_item() {
     flow.manager.remove_library_item(row.id).await.unwrap();
     assert!(!file.exists());
     let view = flow.manager.plugin_catalog().unwrap();
-    assert!(view.removed.is_empty());
     assert!(view.rows.iter().all(|row| row.name != "delete-me"));
     flow.stop().await;
 }

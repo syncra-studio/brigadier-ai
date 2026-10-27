@@ -1235,10 +1235,6 @@ pub enum Request {
     RemovePlugin {
         key: String,
     },
-    /// Restores a hidden machine-found item with its earlier on/off and scope choice.
-    RestorePlugin {
-        key: String,
-    },
     /// What item `key` is set up with: its skill files (path and text) to open, or its
     /// server's settings (no value, only their names).
     GetPluginItem {
@@ -1983,7 +1979,6 @@ pub enum Response {
     RemovePlugin {
         job: String,
     },
-    RestorePlugin,
     GetPluginItem {
         item: brigadier_core::manager::plugins::PluginItemDetails,
     },

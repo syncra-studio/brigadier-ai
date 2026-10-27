@@ -35,10 +35,10 @@ impl Scope {
 pub struct Choice {
     pub on: bool,
     pub scope: Scope,
-    /// Hiding preserves the saved on/off and scope for restoration.
+    /// Hidden from Brigadier; native files remain untouched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub removed: Option<super::RemovedPlugin>,
+    pub removed: Option<bool>,
 }
 
 impl Choice {
@@ -93,7 +93,7 @@ impl Choices {
             .get(&row.id)
             .cloned()
             .unwrap_or_else(|| Choice::default_for(row));
-        if choice.removed.is_some() {
+        if choice.removed == Some(true) {
             choice.on = false;
         }
         choice
@@ -102,46 +102,14 @@ impl Choices {
     pub fn is_removed(&self, id: &str) -> bool {
         self.0
             .get(id)
-            .is_some_and(|choice| choice.removed.is_some())
+            .is_some_and(|choice| choice.removed == Some(true))
     }
 
     pub fn hide(&mut self, row: &Row) {
-        let agents = [
-            brigadier_registry::Agent::Claude,
-            brigadier_registry::Agent::Codex,
-        ]
-        .into_iter()
-        .filter(|agent| {
-            row.definitions
-                .iter()
-                .any(|definition| definition.provenance.agent == Some(*agent))
-        })
-        .map(super::provider)
-        .collect();
-        let removed = super::RemovedPlugin {
-            id: row.id.clone(),
-            kind: if row.kind == Kind::Server {
-                super::PluginKind::Server
-            } else {
-                super::PluginKind::Skill
-            },
-            name: row.name.clone(),
-            agents,
-        };
         self.0
             .entry(row.id.clone())
             .or_insert_with(|| Choice::default_for(row))
-            .removed = Some(removed);
-    }
-
-    pub fn restore(&mut self, key: &str) -> Result<(), String> {
-        let choice = self
-            .0
-            .get_mut(key)
-            .filter(|choice| choice.removed.is_some())
-            .ok_or_else(|| format!("No hidden plugin {key}"))?;
-        choice.removed = None;
-        Ok(())
+            .removed = Some(true);
     }
 
     pub fn load(data_dir: &Path) -> Result<Self, String> {
@@ -307,7 +275,7 @@ mod regression_tests {
     use super::*;
 
     #[test]
-    fn hiding_survives_reload_and_a_missing_source_and_restores_the_earlier_off_scope() {
+    fn hiding_survives_reload_and_a_fresh_discovery_with_the_same_row_id() {
         let home = std::env::temp_dir().join(format!("hide-choice-{}", uuid::Uuid::new_v4()));
         let project = home.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -323,24 +291,20 @@ mod regression_tests {
         let row = &rows[0];
         // Existing plugins.json files have no removed field.
         let mut choices: Choices = serde_json::from_value(serde_json::json!({
-            row.id.clone(): {"on":false, "scope":[project]}
+            row.id.clone(): {"on":true, "scope":[project]}
         }))
         .unwrap();
-        let prior = choices.choice(row);
         choices.hide(row);
         choices.save(&home.join("data")).unwrap();
-        let mut reloaded = Choices::load(&home.join("data")).unwrap();
-        assert!(!reloaded.choice(row).on);
-        let missing = super::super::CatalogView::new(&[], &reloaded);
-        assert!(missing.rows.is_empty());
-        assert_eq!(missing.removed[0].id, row.id);
-        reloaded.restore(&row.id).unwrap();
-        reloaded.save(&home.join("data")).unwrap();
-        let restored = Choices::load(&home.join("data")).unwrap();
-        assert_eq!(restored.choice(row), prior);
-        let view = super::super::CatalogView::new(&rows, &restored);
-        assert_eq!(view.rows[0].id, row.id);
-        assert!(view.removed.is_empty());
+        let reloaded = Choices::load(&home.join("data")).unwrap();
+        let fresh = brigadier_registry::Catalog::read_rows(&roots, &[project]);
+        assert_eq!(fresh[0].id, row.id);
+        assert!(reloaded.is_removed(&fresh[0].id));
+        assert!(!reloaded.choice(&fresh[0]).on);
+        let view = super::super::CatalogView::new(&fresh, &reloaded);
+        assert!(view.rows.is_empty());
+        let serialized = serde_json::to_value(view).unwrap();
+        assert!(serialized.get("removed").is_none());
         std::fs::remove_dir_all(home).unwrap();
     }
 

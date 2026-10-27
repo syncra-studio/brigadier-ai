@@ -358,7 +358,6 @@ export type { RemovalBranch } from "./RemovalBranch";
 export type { RemovalConversation } from "./RemovalConversation";
 export type { RemovalWorktree } from "./RemovalWorktree";
 export type { RemoveProjectReport } from "./RemoveProjectReport";
-export type { RemovedPlugin } from "./RemovedPlugin";
 export type { ReplaceFile } from "./ReplaceFile";
 export type { ReplaceOutcome } from "./ReplaceOutcome";
 export type { ReplaceSkip } from "./ReplaceSkip";
