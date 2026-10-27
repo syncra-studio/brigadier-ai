@@ -23,7 +23,7 @@ export function HistoryTab({ conversationId }: { conversationId: string }) {
       <div className="max-w-thread mx-auto flex w-full flex-col gap-5 px-5 pt-6 pb-10">
         <h2 className="text-sm font-medium">Everything that ran this session{history.total !== null && ` · ${history.total}`}</h2>
         {!history.loaded && !history.error && <p role="status" className="text-muted-foreground text-sm">Loading background history…</p>}
-        {history.loaded && history.records.length === 0 && <p className="text-muted-foreground text-sm">Background commands, subagents and previews will appear here as they run.</p>}
+        {history.loaded && history.records.length === 0 && <p className="text-muted-foreground text-sm">Background commands, subagents and previews will appear here after they end.</p>}
         {history.error && <div role="alert" className="flex items-center gap-2 text-sm"><p className="text-destructive">Couldn't load background history: {history.error}</p><Button size="xs" variant="ghost" disabled={history.busy} onClick={() => void loadBackgroundHistory(conversationId)}>Retry</Button></div>}
         <Timeline events={history.records.map((record) => {
           const isOpen = opened.has(record.id);

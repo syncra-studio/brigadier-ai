@@ -37,12 +37,24 @@ test("Background lists what still runs, one line each with its state and Stop on
 test("a Background row leaves as soon as its process ends, failed, finished or stopped: no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
     running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
+    historyInHeader: boolean; historyLabel: string; clockIcon: string; headerOnly: boolean; idleTitle: string;
+    foldControls: number; rowCount: number; idleHeight: number; tooltip: string; historyTab: string;
   };
   assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11"]);
   // A crash, a non-zero exit, a clean exit and a Stop all take their row off at once.
   assert.deepEqual(seen.ended, []);
   assert.equal(seen.section, true, "History remains after all previews end");
   assert.equal(seen.restartOrDismiss, 0);
+  assert.equal(seen.historyInHeader, true);
+  assert.equal(seen.historyLabel, "Background history");
+  assert.match(seen.clockIcon, /<svg/);
+  assert.equal(seen.tooltip, "Background history");
+  assert.equal(seen.historyTab, "panel:backgroundHistory");
+  assert.equal(seen.headerOnly, true);
+  assert.equal(seen.idleTitle, "Background");
+  assert.equal(seen.foldControls, 0);
+  assert.equal(seen.rowCount, 0);
+  assert.equal(seen.idleHeight, 28);
 });
 
 type Look = { word: string | null; icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
@@ -68,8 +80,9 @@ test("Background rows: a spinner while a process is on its way, a green live dot
 
 test("commands leave Background for live strips while History remains after they finish", { timeout: 90000 }, async (t) => {
   for (const scenario of ["tasks", "workerTasks"]) {
-    const seen = JSON.parse(await renderFixtureLive(t, `activities.html?${scenario}=1`, "activities-result", 60000)) as { running: string[]; ended: string[]; history: boolean };
+    const seen = JSON.parse(await renderFixtureLive(t, `activities.html?${scenario}=1`, "activities-result", 60000)) as { running: string[]; ended: string[]; history: boolean; liveSection: boolean };
     assert.deepEqual(seen.running, []);
+    assert.equal(seen.liveSection, false, "live commands alone do not make a Background section");
     assert.deepEqual(seen.ended, []);
     assert.equal(seen.history, true);
   }
