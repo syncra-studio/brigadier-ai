@@ -258,7 +258,11 @@ fn choices_for_a_plain_library_row_survive_a_fresh_read() {
     let rows = Catalog::read_rows_with_library(&roots, &[], &data);
     let row = rows.iter().find(|row| row.name == "tidy").unwrap();
     let scope = Scope::Projects(vec![home.join("project-a"), home.join("project-b")]);
-    let choice = Choice { on: false, scope };
+    let choice = Choice {
+        removed: None,
+        on: false,
+        scope,
+    };
     Choices(BTreeMap::from([(row.id.clone(), choice.clone())]))
         .save(&data)
         .unwrap();
@@ -732,5 +736,209 @@ async fn first_toggle_persists_the_project_default_scope_through_the_manager() {
         println!("No saved choice -> on={on}: {}", saved[&row.id]);
         std::fs::remove_file(&file).unwrap();
     }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn hide_restore_preserves_choices_and_files_and_suppresses_both_agents() {
+    use super::super::choices::Choices;
+    use crate::manager::flow::{Flow, Options, Reply, Script};
+    use brigadier_providers::ProviderKind;
+    use std::sync::Arc;
+
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start("hide-restore-native-plugins", Options::default(), script).await;
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"hidden-server":{"command":"/app/mcp-server"},"survivor":{"command":"/app/keep","args":["--keep"]}}}"#,
+    );
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[mcp_servers.hidden-server]\ncommand='/app/mcp-server'\n",
+    );
+    for root in [&roots.claude_dir, &roots.codex_home] {
+        write(
+            &root.join("skills/hidden-skill/SKILL.md"),
+            "---\nname: hidden-skill\n---\nUser skill\n",
+        );
+    }
+    let rows = flow.manager.plugin_catalog_rows();
+    let server = rows.iter().find(|row| row.name == "hidden-server").unwrap();
+    let skill = rows.iter().find(|row| row.name == "hidden-skill").unwrap();
+    assert_eq!(server.definitions.len(), 2);
+    assert_eq!(skill.definitions.len(), 2);
+    flow.manager.set_plugin_choice(&skill.id, true).unwrap();
+    let prior = Choices::load(&flow.manager.data_dir).unwrap();
+    let original_version = flow.manager.plugin_catalog().unwrap().version;
+    let before_claude = bytes_under(&roots.claude_dir);
+    let before_codex = bytes_under(&roots.codex_home);
+    let before_json = std::fs::read(&roots.claude_json).unwrap();
+
+    for row in [server, skill] {
+        // Repeated Remove must retain the original choice, including an unsaved default.
+        flow.manager
+            .remove_library_item(row.id.clone())
+            .await
+            .unwrap();
+        flow.manager
+            .remove_library_item(row.id.clone())
+            .await
+            .unwrap();
+    }
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert_ne!(view.version, original_version);
+    assert!(
+        view.rows
+            .iter()
+            .all(|row| row.name != "hidden-server" && row.name != "hidden-skill")
+    );
+    assert_eq!(view.removed.len(), 2);
+    for row in [server, skill] {
+        let removed = view
+            .removed
+            .iter()
+            .find(|removed| removed.id == row.id)
+            .unwrap();
+        assert_eq!(removed.name, row.name);
+        assert_eq!(
+            removed.kind,
+            if row.kind == brigadier_registry::catalog::Kind::Server {
+                PluginKind::Server
+            } else {
+                PluginKind::Skill
+            }
+        );
+        assert_eq!(removed.agents, [ProviderKind::Claude, ProviderKind::Codex]);
+    }
+    let survivor = view.rows.iter().find(|row| row.name == "survivor").unwrap();
+    assert_eq!(
+        survivor.definitions[0].endpoint.as_deref(),
+        Some("/app/keep --keep")
+    );
+    let saved = Choices::load(&flow.manager.data_dir).unwrap();
+    assert!(
+        saved.0[&server.id].on,
+        "hiding must not overwrite the default on choice"
+    );
+    assert!(saved.0[&skill.id].on);
+    assert_eq!(
+        super::super::CatalogView::new(&rows, &saved).removed,
+        view.removed
+    );
+    assert!(flow.manager.set_plugin_choice(&server.id, true).is_err());
+    assert!(flow.manager.restore_plugin("unknown").is_err());
+
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let before = flow.specs().len();
+        let session = flow.add_session("Hidden items", None, provider).await;
+        flow.say_to(&session, "Check launch.").await;
+        flow.idle_in(&session).await;
+        let specs = flow.specs();
+        let (_, spec) = specs[before..]
+            .iter()
+            .find(|(kind, _)| *kind == provider)
+            .unwrap();
+        assert!(
+            spec.mcp_servers
+                .iter()
+                .all(|server| server.name != "hidden-server")
+        );
+        assert!(
+            spec.switched_off
+                .servers
+                .iter()
+                .any(|name| name == "hidden-server")
+        );
+        assert!(
+            spec.switched_off
+                .skill_names
+                .iter()
+                .any(|name| name == "hidden-skill")
+        );
+        let own = if provider == ProviderKind::Claude {
+            &roots.claude_dir
+        } else {
+            &roots.codex_home
+        };
+        assert!(
+            spec.switched_off
+                .skill_files
+                .contains(&own.join("skills/hidden-skill/SKILL.md"))
+        );
+        for overlay in spec.skill_plugins.iter().chain(&spec.add_dirs) {
+            assert!(!overlay.join("skills/hidden-skill/SKILL.md").exists());
+            assert!(
+                !overlay
+                    .join(".claude/skills/hidden-skill/SKILL.md")
+                    .exists()
+            );
+        }
+    }
+    for row in [server, skill] {
+        flow.manager.restore_plugin(&row.id).unwrap();
+    }
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert!(view.removed.is_empty());
+    for row in [server, skill] {
+        let restored = view
+            .rows
+            .iter()
+            .find(|restored| restored.id == row.id)
+            .unwrap();
+        assert_eq!(restored.choice, prior.choice(row));
+    }
+    assert_eq!(view.version, original_version);
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let before = flow.specs().len();
+        let session = flow.add_session("Restored items", None, provider).await;
+        flow.say_to(&session, "Check restored launch.").await;
+        flow.idle_in(&session).await;
+        let specs = flow.specs();
+        let (_, spec) = specs[before..]
+            .iter()
+            .find(|(kind, _)| *kind == provider)
+            .unwrap();
+        assert!(
+            spec.mcp_servers
+                .iter()
+                .any(|server| server.name == "hidden-server")
+        );
+        assert!(
+            !spec
+                .switched_off
+                .skill_names
+                .iter()
+                .any(|name| name == "hidden-skill")
+        );
+    }
+    assert_eq!(bytes_under(&roots.claude_dir), before_claude);
+    assert_eq!(bytes_under(&roots.codex_home), before_codex);
+    assert_eq!(std::fs::read(&roots.claude_json).unwrap(), before_json);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn library_remove_still_deletes_the_library_item() {
+    use crate::manager::flow::{Flow, Options, Reply, Script};
+    use std::sync::Arc;
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("Ready.") }));
+    let flow = Flow::start("delete-library-row", Options::default(), script).await;
+    let file = flow
+        .manager
+        .data_dir
+        .join("library/skills/delete-me/SKILL.md");
+    write(&file, "---\nname: delete-me\n---\nLibrary skill");
+    let row = flow
+        .manager
+        .plugin_catalog_rows()
+        .into_iter()
+        .find(|row| row.name == "delete-me")
+        .unwrap();
+    flow.manager.remove_library_item(row.id).await.unwrap();
+    assert!(!file.exists());
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert!(view.removed.is_empty());
+    assert!(view.rows.iter().all(|row| row.name != "delete-me"));
     flow.stop().await;
 }

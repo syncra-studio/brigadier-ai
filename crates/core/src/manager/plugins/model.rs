@@ -6,8 +6,19 @@ use brigadier_registry::{Server, Transport};
 #[serde(rename_all = "camelCase")]
 pub struct CatalogView {
     pub rows: Vec<CatalogRow>,
+    pub removed: Vec<RemovedPlugin>,
     /// Hash of catalog + choices for later menu cache invalidation.
     pub version: String,
+}
+
+/// Machine-found items hidden from Brigadier; native files remain untouched.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPlugin {
+    pub id: String,
+    pub kind: PluginKind,
+    pub name: String,
+    pub agents: Vec<brigadier_providers::ProviderKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
@@ -69,7 +80,7 @@ impl CatalogView {
         choices: &super::choices::Choices,
     ) -> Self {
         use brigadier_registry::catalog::{Content, Kind};
-        let rows: Vec<_> = rows.iter().map(|row| CatalogRow {
+        let rows: Vec<_> = rows.iter().filter(|row| !choices.is_removed(&row.id)).map(|row| CatalogRow {
             id: row.id.clone(), kind: if row.kind == Kind::Server { PluginKind::Server } else { PluginKind::Skill },
             name: row.name.clone(), different_per_agent: row.different_per_agent,
             choice: choices.choice(row),
@@ -86,9 +97,15 @@ impl CatalogView {
                 CatalogDefinition { agent: origin.agent.map(super::provider), file: origin.file.to_string_lossy().into_owned(), plugin: origin.plugin.clone(), project: origin.project.as_ref().map(|path| path.to_string_lossy().into_owned()), native: origin.native.clone(), aliases: origin.aliases.clone(), fingerprint: origin.fingerprint.clone(), transport, endpoint }
             }).collect(),
         }).collect();
-        let bytes = serde_json::to_vec(&rows).expect("catalog rows are serializable");
+        let removed: Vec<_> = choices
+            .0
+            .values()
+            .filter_map(|choice| choice.removed.clone())
+            .collect();
+        let bytes = serde_json::to_vec(&(&rows, &removed)).expect("catalog rows are serializable");
         Self {
             rows,
+            removed,
             version: brigadier_registry::catalog::fingerprint(&bytes),
         }
     }

@@ -2593,6 +2593,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.sessions.remove_library_item(key).await?;
             Response::RemovePlugin { job: String::new() }
         }
+        Request::RestorePlugin { key } => {
+            daemon.sessions.restore_plugin(&key)?;
+            Response::RestorePlugin
+        }
         Request::GetPluginItem { key } => Response::GetPluginItem {
             item: daemon.sessions.catalog_item_details(key)?,
         },

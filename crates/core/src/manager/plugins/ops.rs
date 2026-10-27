@@ -434,7 +434,11 @@ impl crate::manager::SessionManager {
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
         let mut view = super::CatalogView::new(&rows, &choices);
         // Commands are display data only; env/header values never enter the page model.
-        for (row, source) in view.rows.iter_mut().zip(&rows) {
+        for row in &mut view.rows {
+            let source = rows
+                .iter()
+                .find(|source| source.id == row.id)
+                .expect("catalog source");
             for (definition, source) in row.definitions.iter_mut().zip(&source.definitions) {
                 if let brigadier_registry::catalog::Content::Server(server) = &source.content
                     && let Some(command) = &server.written.command
@@ -489,6 +493,11 @@ impl crate::manager::SessionManager {
             .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+        if choices.is_removed(row_id) {
+            return Err(crate::Error::Invalid(
+                "Restore this plugin before changing its choice.".into(),
+            ));
+        }
         let mut choice = choices.choice(row);
         if let Some(on) = on {
             choice.on = on;
@@ -558,6 +567,7 @@ impl crate::manager::SessionManager {
                     choices.0.insert(
                         row.id.clone(),
                         super::choices::Choice {
+                            removed: None,
                             on: true,
                             scope: projects.clone().map_or(
                                 super::choices::Scope::Global(super::choices::Global::Global),
@@ -719,9 +729,11 @@ impl crate::manager::SessionManager {
                 .iter()
                 .any(|definition| definition.provenance.file.starts_with(&root))
             {
-                return Err(crate::Error::Invalid(
-                    "Detected items can only be turned off, never deleted.".into(),
-                ));
+                let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+                let mut choices =
+                    super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+                choices.hide(row);
+                return choices.save(&self.data_dir).map_err(crate::Error::Invalid);
             }
             row.definitions
                 .iter()
@@ -748,6 +760,14 @@ impl crate::manager::SessionManager {
             Ok(())
         })
         .await
+    }
+
+    pub fn restore_plugin(&self, key: &str) -> crate::Result<()> {
+        let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+        let mut choices =
+            super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+        choices.restore(key).map_err(crate::Error::Invalid)?;
+        choices.save(&self.data_dir).map_err(crate::Error::Invalid)
     }
 
     pub fn catalog_item_details(&self, key: String) -> crate::Result<super::PluginItemDetails> {

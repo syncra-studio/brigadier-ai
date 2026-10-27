@@ -685,6 +685,7 @@ mod tests {
         choices.0.insert(
             catalog.row().into(),
             Choice {
+                removed: None,
                 on: false,
                 scope: Scope::Global(Global::Global),
             },
@@ -694,6 +695,7 @@ mod tests {
         choices.0.insert(
             catalog.row().into(),
             Choice {
+                removed: None,
                 on: true,
                 scope: Scope::Projects(vec![catalog.project.clone()]),
             },
@@ -914,6 +916,7 @@ mod tests {
             choices.0.insert(
                 hello.source.clone().unwrap(),
                 plugins::choices::Choice {
+                    removed: None,
                     on: false,
                     scope: plugins::choices::Scope::Global(plugins::choices::Global::Global),
                 },

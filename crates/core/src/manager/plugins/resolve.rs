@@ -448,6 +448,7 @@ mod tests {
         let choices = Choices(BTreeMap::from([(
             rows[0].id.clone(),
             Choice {
+                removed: None,
                 on: true,
                 scope: Scope::Projects(vec![fixture.worktree.clone()]),
             },
@@ -513,6 +514,7 @@ mod tests {
                     (
                         row.id.clone(),
                         Choice {
+                            removed: None,
                             on: false,
                             scope: Scope::Global(Global::Global),
                         },
@@ -651,6 +653,7 @@ mod tests {
         assert_eq!(
             Choice::default_for(skill),
             Choice {
+                removed: None,
                 on: true,
                 scope: Scope::Projects(vec![fixture.project.clone()])
             }
@@ -739,6 +742,7 @@ mod tests {
                     (
                         row.id.clone(),
                         Choice {
+                            removed: None,
                             on: true,
                             scope: Scope::Global(Global::Global),
                         },

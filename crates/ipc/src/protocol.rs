@@ -1231,8 +1231,12 @@ pub enum Request {
         name: Option<String>,
         project_ids: Option<Vec<String>>,
     },
-    /// Removes a Library item; native detected items can only be switched off.
+    /// Deletes a Library item, or hides a machine-found item from Brigadier.
     RemovePlugin {
+        key: String,
+    },
+    /// Restores a hidden machine-found item with its earlier on/off and scope choice.
+    RestorePlugin {
         key: String,
     },
     /// What item `key` is set up with: its skill files (path and text) to open, or its
@@ -1979,6 +1983,7 @@ pub enum Response {
     RemovePlugin {
         job: String,
     },
+    RestorePlugin,
     GetPluginItem {
         item: brigadier_core::manager::plugins::PluginItemDetails,
     },

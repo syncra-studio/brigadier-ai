@@ -35,6 +35,10 @@ impl Scope {
 pub struct Choice {
     pub on: bool,
     pub scope: Scope,
+    /// Hiding preserves the saved on/off and scope for restoration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed: Option<super::RemovedPlugin>,
 }
 
 impl Choice {
@@ -61,6 +65,7 @@ impl Choice {
             let Some(project) = &definition.provenance.project else {
                 return Self {
                     on: true,
+                    removed: None,
                     scope: Scope::Global(Global::Global),
                 };
             };
@@ -71,6 +76,7 @@ impl Choice {
         projects.sort();
         Self {
             on: true,
+            removed: None,
             scope: Scope::Projects(projects),
         }
     }
@@ -82,10 +88,60 @@ pub struct Choices(pub BTreeMap<String, Choice>);
 
 impl Choices {
     pub fn choice(&self, row: &Row) -> Choice {
-        self.0
+        let mut choice = self
+            .0
             .get(&row.id)
             .cloned()
-            .unwrap_or_else(|| Choice::default_for(row))
+            .unwrap_or_else(|| Choice::default_for(row));
+        if choice.removed.is_some() {
+            choice.on = false;
+        }
+        choice
+    }
+
+    pub fn is_removed(&self, id: &str) -> bool {
+        self.0
+            .get(id)
+            .is_some_and(|choice| choice.removed.is_some())
+    }
+
+    pub fn hide(&mut self, row: &Row) {
+        let agents = [
+            brigadier_registry::Agent::Claude,
+            brigadier_registry::Agent::Codex,
+        ]
+        .into_iter()
+        .filter(|agent| {
+            row.definitions
+                .iter()
+                .any(|definition| definition.provenance.agent == Some(*agent))
+        })
+        .map(super::provider)
+        .collect();
+        let removed = super::RemovedPlugin {
+            id: row.id.clone(),
+            kind: if row.kind == Kind::Server {
+                super::PluginKind::Server
+            } else {
+                super::PluginKind::Skill
+            },
+            name: row.name.clone(),
+            agents,
+        };
+        self.0
+            .entry(row.id.clone())
+            .or_insert_with(|| Choice::default_for(row))
+            .removed = Some(removed);
+    }
+
+    pub fn restore(&mut self, key: &str) -> Result<(), String> {
+        let choice = self
+            .0
+            .get_mut(key)
+            .filter(|choice| choice.removed.is_some())
+            .ok_or_else(|| format!("No hidden plugin {key}"))?;
+        choice.removed = None;
+        Ok(())
     }
 
     pub fn load(data_dir: &Path) -> Result<Self, String> {
@@ -203,11 +259,13 @@ pub fn import_sharing(old: &serde_json::Value, rows: &[Row]) -> Result<Choices, 
             .any(|name| keys.contains(&format!("lib:{name}")));
         let mut choice = explicit
             .map(|choice| Choice {
+                removed: None,
                 on: choice.on,
                 scope: scope(&choice.scope),
             })
             .or_else(|| {
                 remembered_off.map(|paths| Choice {
+                    removed: None,
                     on: false,
                     scope: scope(paths),
                 })
@@ -247,6 +305,44 @@ pub fn import_sharing_file(
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn hiding_survives_reload_and_a_missing_source_and_restores_the_earlier_off_scope() {
+        let home = std::env::temp_dir().join(format!("hide-choice-{}", uuid::Uuid::new_v4()));
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{"db":{"command":"db"}}}"#,
+        )
+        .unwrap();
+        let roots =
+            brigadier_registry::Roots::from_vars([("HOME".into(), home.display().to_string())])
+                .unwrap();
+        let rows = brigadier_registry::Catalog::read_rows(&roots, std::slice::from_ref(&project));
+        let row = &rows[0];
+        // Existing plugins.json files have no removed field.
+        let mut choices: Choices = serde_json::from_value(serde_json::json!({
+            row.id.clone(): {"on":false, "scope":[project]}
+        }))
+        .unwrap();
+        let prior = choices.choice(row);
+        choices.hide(row);
+        choices.save(&home.join("data")).unwrap();
+        let mut reloaded = Choices::load(&home.join("data")).unwrap();
+        assert!(!reloaded.choice(row).on);
+        let missing = super::super::CatalogView::new(&[], &reloaded);
+        assert!(missing.rows.is_empty());
+        assert_eq!(missing.removed[0].id, row.id);
+        reloaded.restore(&row.id).unwrap();
+        reloaded.save(&home.join("data")).unwrap();
+        let restored = Choices::load(&home.join("data")).unwrap();
+        assert_eq!(restored.choice(row), prior);
+        let view = super::super::CatalogView::new(&rows, &restored);
+        assert_eq!(view.rows[0].id, row.id);
+        assert!(view.removed.is_empty());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn project_mcp_default_and_toggles_keep_scope_in_the_page_and_on_disk() {

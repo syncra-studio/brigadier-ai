@@ -410,6 +410,7 @@ mod overlay_tests {
                         (
                             row.id.clone(),
                             Choice {
+                                removed: None,
                                 on,
                                 scope: Scope::Global(Global::Global),
                             },

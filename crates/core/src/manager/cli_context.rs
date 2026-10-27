@@ -1031,6 +1031,7 @@ mod tests {
         choices.0.insert(
             lint.id.clone(),
             super::super::plugins::choices::Choice {
+                removed: None,
                 on: false,
                 scope: super::super::plugins::choices::Scope::Global(
                     super::super::plugins::choices::Global::Global,
