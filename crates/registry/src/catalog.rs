@@ -6,6 +6,22 @@ use sha2::{Digest, Sha256};
 
 use crate::{Agent, Catalog, Server, SkillRoot, Source, Transport};
 
+/// Client labels used by Pencil's CLI integrations do not change the server process.
+/// Keep every other argument, including unrecognized --agent values, in its identity.
+fn server_args(args: &[String]) -> Vec<&str> {
+    let client = |value: &str| matches!(value, "claudeCodeCLI" | "codexCLI");
+    let mut normalized = Vec::new();
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "--agent" && args.peek().is_some_and(|value| client(value)) {
+            args.next();
+        } else if !arg.strip_prefix("--agent=").is_some_and(client) {
+            normalized.push(arg.as_str());
+        }
+    }
+    normalized
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     Server,
@@ -129,7 +145,19 @@ impl Server {
                     .iter()
                     .map(|(key, value)| (key, value.expose()))
                     .collect();
-                serde_json::json!({"kind":"stdio", "command":command, "args":args, "cwd":self.transport.working_dir(), "env":env})
+                // Old Brigadier sharing packages inherited the cache directory as a
+                // base, even though their original had no cwd. That packaging detail
+                // must not make the mirror a different server from its original.
+                let mirror = self
+                    .plugin
+                    .as_ref()
+                    .is_some_and(|plugin| plugin.id.ends_with("@brigadier"));
+                let cwd = if mirror && self.written.cwd.is_none() {
+                    None
+                } else {
+                    self.transport.working_dir()
+                };
+                serde_json::json!({"kind":"stdio", "command":command, "args":server_args(args), "cwd":cwd, "env":env})
             }
             Transport::Http { url, headers } => {
                 let headers: BTreeMap<_, _> = headers
@@ -147,7 +175,11 @@ impl Server {
             agent,
             file: self.file.clone(),
             plugin: self.plugin.as_ref().map(|plugin| plugin.id.clone()),
-            project: self.project.clone(),
+            project: self.project.clone().or_else(|| {
+                self.plugin
+                    .as_ref()
+                    .and_then(|plugin| plugin.project.clone())
+            }),
             native,
             aliases,
             fingerprint: fingerprint(identity.to_string().as_bytes()),
@@ -504,4 +536,109 @@ pub fn library(data_dir: &Path) -> Catalog {
         }
     }
     catalog
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn client_label_is_cosmetic_but_other_arguments_are_not() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let claude = args(&["--app", "desktop", "--agent", "claudeCodeCLI"]);
+        let codex = args(&["--app", "desktop", "--agent", "codexCLI"]);
+        assert_eq!(server_args(&claude), server_args(&codex));
+        assert_eq!(server_args(&claude), ["--app", "desktop"]);
+        assert_eq!(
+            server_args(&args(&["--agent=codexCLI"])),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            server_args(&args(&["--agent", "custom"])),
+            ["--agent", "custom"]
+        );
+    }
+
+    #[test]
+    fn project_server_provenance_and_equivalent_cli_processes() {
+        let home = std::env::temp_dir().join(format!(
+            "catalog-regression-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{"proj-everything":{"command":"npx","args":["-y","everything"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"mcpServers":{"pencil":{"command":"/app/mcp-server","args":["--app","desktop","--agent","claudeCodeCLI"],"env":{"Z":"z","A":"a"}}}}"#).unwrap();
+        let config = "[mcp_servers.pencil]\ncommand='/app/mcp-server'\nargs=['--app','desktop','--agent','codexCLI']\nenv={A='a',Z='z'}\nstartup_timeout_sec=20\n";
+        std::fs::write(home.join(".codex/config.toml"), config).unwrap();
+        let roots = crate::Roots::from_vars([("HOME".into(), home.display().to_string())]).unwrap();
+        let rows = Catalog::read_rows(&roots, std::slice::from_ref(&project));
+        let local = rows
+            .iter()
+            .find(|row| row.name == "proj-everything")
+            .unwrap();
+        assert!(
+            local
+                .definitions
+                .iter()
+                .all(|definition| definition.provenance.project.as_ref() == Some(&project))
+        );
+        let pencil: Vec<_> = rows.iter().filter(|row| row.name == "pencil").collect();
+        assert_eq!(pencil.len(), 1);
+        assert_eq!(pencil[0].definitions.len(), 2);
+        let Content::Server(original) = &pencil[0].definitions[0].content else {
+            panic!("server")
+        };
+        let mut mirror = original.as_ref().clone();
+        mirror.plugin = Some(crate::Plugin {
+            agent: Agent::Codex,
+            id: "pencil@brigadier".into(),
+            name: "pencil".into(),
+            root: home.join("cache"),
+            project: None,
+        });
+        if let Transport::Stdio { base, .. } = &mut mirror.transport {
+            *base = Some(home.join("cache"));
+        }
+        assert_eq!(
+            mirror.provenance().fingerprint,
+            original.provenance().fingerprint
+        );
+        // An explicit working directory is meaningful, including on a legacy package.
+        mirror.written.cwd = Some("/explicit".into());
+        if let Transport::Stdio { cwd, .. } = &mut mirror.transport {
+            *cwd = Some(PathBuf::from("/explicit"));
+        }
+        assert_ne!(
+            mirror.provenance().fingerprint,
+            original.provenance().fingerprint
+        );
+        mirror.plugin.as_mut().unwrap().project = Some(project.clone());
+        assert_eq!(mirror.provenance().project, Some(project.clone()));
+        // A different command or meaningful flag still gets a separate row.
+        for changed in [
+            config.replace("/app/mcp-server", "/other/server"),
+            config.replace("'desktop'", "'web'"),
+        ] {
+            std::fs::write(home.join(".codex/config.toml"), changed).unwrap();
+            let rows = Catalog::read_rows(&roots, &[]);
+            assert_eq!(rows.iter().filter(|row| row.name == "pencil").count(), 2);
+            assert!(rows.iter().all(|row| !row.name.contains('/')));
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }

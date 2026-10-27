@@ -7,6 +7,23 @@ import type { PluginProjectView, PluginsView } from "./types";
 /** The catalog's durable choices, rendered with the shared Settings grid. */
 export function catalogPage(catalog: CatalogView, projects: PluginProjectView[]): PluginsView {
   const offers = catalog.rows.filter((row) => row.definitions.every((definition) => definition.agent === null));
+  const rows = catalog.rows.filter((row) => !offers.includes(row));
+  const agentName = (row: CatalogView["rows"][number]) => {
+    const agents = new Set(row.definitions.map((definition) => definition.agent));
+    return agents.has("claude") && agents.has("codex") ? "Claude Code + Codex" : agents.has("claude") ? "Claude Code" : "Codex";
+  };
+  const names = rows.map((row) => {
+    if (rows.filter((other) => other.kind === row.kind && other.name === row.name).length === 1) return row.name;
+    const first = row.definitions[0];
+    const library = row.definitions.some((definition) => /\/library\/(skills|servers|plugins)\//.test(definition.file));
+    const source = projects.find((project) => project.path === first?.project)?.name ?? first?.plugin ?? (library ? "Library" : agentName(row));
+    return `${row.name} · ${source}`;
+  });
+  const qualified = names.map((name, index) => names.filter((other, position) => other === name && rows[position]!.kind === rows[index]!.kind).length > 1 ? `${name} · ${agentName(rows[index]!)}` : name);
+  const readableNames = qualified.map((name, index) => {
+    const duplicates = qualified.flatMap((other, position) => other === name && rows[position]!.kind === rows[index]!.kind ? [position] : []);
+    return duplicates.length > 1 ? `${name} (${duplicates.indexOf(index) + 1})` : name;
+  });
   return {
     projects,
     elsewhere: offers.map((row) => {
@@ -14,16 +31,14 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
       return { key: row.id, name: row.name, detail: definition.endpoint ?? definition.file, url: definition.transport === "http" ? definition.endpoint : null,
         foundIn: definition.file.includes("cursor") ? "Cursor" : "Claude Desktop", file: definition.file };
     }),
-    items: catalog.rows.filter((row) => !offers.includes(row)).map((row) => {
+    items: rows.map((row, index) => {
       const first = row.definitions[0];
       const paths = row.choice.scope === "global" ? null : row.choice.scope;
       const projectIds = projects.filter((project) => paths?.includes(project.path)).map((project) => project.id);
       const files = [...new Set(row.definitions.map((definition) => definition.file))];
       const library = files.some((file) => /\/library\/(skills|servers|plugins)\//.test(file));
       return {
-        key: row.id, kind: row.kind, name: catalog.rows.filter((other) => other.kind === row.kind && other.name === row.name).length > 1
-          ? `${row.name} · ${projects.find((project) => project.path === first?.project)?.name ?? first?.plugin ?? (library ? "Library" : first?.agent === "claude" ? "Claude Code" : first?.agent === "codex" ? "Codex" : "Library")}`
-          : row.name, description: "", detail: first?.endpoint ?? first?.file.replace(/\/SKILL\.md$/, "") ?? "",
+        key: row.id, kind: row.kind, name: readableNames[index]!, description: "", detail: first?.endpoint ?? first?.file.replace(/\/SKILL\.md$/, "") ?? "",
         url: first?.transport === "http" ? first.endpoint : null, icon: null,
         on: row.choice.on,
         scope: paths ? { type: "someProjects" as const, projectIds, folders: paths.filter((path) => !projects.some((project) => project.path === path)) } : { type: "allProjects" as const },
@@ -45,7 +60,7 @@ export function livePlugins(): PluginsAdapter {
   return {
     read: async () => {
       const { catalog } = await request({ method: "getPluginCatalog" });
-      for (const row of catalog.rows) {
+      await Promise.all(catalog.rows.map(async (row) => {
         if (row.kind === "server" && row.signIn.type !== "notRequired" && row.definitions.some((definition) => definition.agent !== null)) {
           try {
             row.signIn = (await request({ method: "getPluginSignInStatus", rowId: row.id })).state;
@@ -53,7 +68,7 @@ export function livePlugins(): PluginsAdapter {
             row.signIn = { type: "failed", message: cause instanceof Error ? cause.message : String(cause) };
           }
         }
-      }
+      }));
       return catalogPage(catalog, projects());
     },
     subscribe: (onChange) => {

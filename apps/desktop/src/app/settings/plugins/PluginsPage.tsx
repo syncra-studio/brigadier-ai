@@ -38,19 +38,20 @@ type Open =
   | { type: "file"; key: string };
 
 export function PluginsPage() {
-  const { view, adapter, error, refresh } = usePlugins();
+  const { view, adapter, error, refresh, loading } = usePlugins();
   useEffect(refresh, [refresh]);
-  return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} />;
+  return <PluginsScreen view={view} adapter={adapter} error={error} refresh={refresh} loading={loading} />;
 }
 
 const TABS: PluginKind[] = ["server", "skill"];
 const revealTab = (label: string | null): PluginKind => label === "Skills" ? "skill" : "server";
 
-function PluginsScreen({ view: read, adapter, error, refresh }: {
+function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   view: PluginsView;
   adapter: PluginsAdapter | null;
   error: string | null;
   refresh: () => void;
+  loading: boolean;
 }) {
   const [tab, setTab] = useState<PluginKind>(() => revealTab(useReveal.getState().label));
   const [query, setQuery] = useState("");
@@ -93,7 +94,7 @@ function PluginsScreen({ view: read, adapter, error, refresh }: {
     }
   }), []);
   const find = (key: string) => view.items.find((item) => item.key === key);
-  const busy = !adapter;
+  const busy = !adapter || loading;
 
   /**
    * Runs a change to item `key` that the agents take in the background, the item showing
@@ -143,6 +144,7 @@ function PluginsScreen({ view: read, adapter, error, refresh }: {
           tab={tab}
           query={query}
           busy={busy}
+          loading={loading}
           adapter={adapter}
           onTab={(next) => {
             setTab(next);
@@ -195,11 +197,12 @@ function PluginsScreen({ view: read, adapter, error, refresh }: {
   );
 }
 
-function ListBody({ view, tab, query, busy, adapter, onTab, onQuery, onOpen, onFlip, onAdd }: {
+function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, onOpen, onFlip, onAdd }: {
   view: PluginsView;
   tab: PluginKind;
   query: string;
   busy: boolean;
+  loading: boolean;
   adapter: PluginsAdapter | null;
   onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
@@ -212,7 +215,9 @@ function ListBody({ view, tab, query, busy, adapter, onTab, onQuery, onOpen, onF
   return (
     <div className="flex flex-col gap-5">
       <Toolbar tab={tab} query={query} count={count} adding={!!adapter} onTab={onTab} onQuery={onQuery} onAdd={onAdd} />
-      {count(tab) === 0 ? (
+      {loading ? (
+        <p role="status" className="text-foreground/65 text-label py-6 text-center">Loading plugins…</p>
+      ) : count(tab) === 0 ? (
         <EmptyTab tab={tab} onAdd={onAdd} />
       ) : items.length === 0 ? (
         <p data-slot="no-match" className="text-foreground/65 text-label py-6 text-center">Nothing matches “{query.trim()}”.</p>

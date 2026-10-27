@@ -241,13 +241,14 @@ pub fn apply_resolved(
     for plugin in std::mem::take(&mut spec.installed_skills) {
         if let Ok(entries) = std::fs::read_dir(plugin.join("skills")) {
             for entry in entries.flatten() {
-                if entry.path().join("SKILL.md").is_file() {
-                    brigadier_providers::accounts::link_to(
+                if entry.path().join("SKILL.md").is_file()
+                    && let Err(error) = brigadier_providers::accounts::link_to(
                         &entry.path(),
                         &skills.join(entry.file_name()),
                         true,
                     )
-                    .map_err(|error| Error::Invalid(error.to_string()))?;
+                {
+                    tracing::warn!(path = %entry.path().display(), %error, "Skipping skill that couldn't be staged");
                 }
             }
         }
@@ -259,19 +260,18 @@ pub fn apply_resolved(
                 Some(std::path::Component::Normal(_))
             )
         {
-            return Err(Error::Invalid(format!(
-                "invalid skill name {:?}",
-                skill.display
-            )));
+            tracing::warn!(name = %skill.display, "Skipping skill with invalid name");
+            continue;
         }
-        let source = skill
-            .path
-            .parent()
-            .ok_or_else(|| Error::Invalid("skill has no folder".into()))?;
-        brigadier_providers::accounts::link_to(source, &skills.join(&skill.display), true)
-            .map_err(|error| {
-                Error::Invalid(format!("couldn't stage skill {}: {error}", skill.display))
-            })?;
+        let Some(source) = skill.path.parent().filter(|_| skill.path.is_file()) else {
+            tracing::warn!(name = %skill.display, "Skipping skill with no readable SKILL.md folder");
+            continue;
+        };
+        if let Err(error) =
+            brigadier_providers::accounts::link_to(source, &skills.join(&skill.display), true)
+        {
+            tracing::warn!(name = %skill.display, %error, "Skipping skill that couldn't be staged");
+        }
     }
     match provider {
         brigadier_providers::ProviderKind::Claude => spec.add_dirs.push(overlay),
@@ -329,6 +329,48 @@ mod overlay_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
+    #[test]
+    fn broken_skills_do_not_block_either_agent_or_healthy_skills() {
+        use super::super::resolve::ResolvedSkill;
+        let dir = std::env::temp_dir().join(format!("launch-bad-skills-{}", uuid::Uuid::new_v4()));
+        let source = dir.join("source");
+        write(&source.join("SKILL.md"), "healthy skill");
+        let skill = |name: &str, path: PathBuf| ResolvedSkill {
+            row_id: name.into(),
+            display: name.into(),
+            invocation: name.into(),
+            path,
+            native: false,
+        };
+        let resolved = Resolved {
+            skills: vec![
+                skill("skills/jira", source.join("SKILL.md")),
+                skill("missing", dir.join("gone/SKILL.md")),
+                skill("bad\0name", source.join("SKILL.md")),
+                skill(".", source.join("SKILL.md")),
+                skill("healthy", source.join("SKILL.md")),
+            ],
+            ..Default::default()
+        };
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let session = dir.join(format!("{provider:?}"));
+            let mut spec = test_spec(&dir);
+            apply_resolved(&mut spec, &resolved, &session, provider).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(session.join("overlay/.claude/skills/healthy/SKILL.md"))
+                    .unwrap(),
+                "healthy skill"
+            );
+            assert!(!session.join("overlay/.claude/skills/missing").exists());
+            assert!(!session.join("overlay/.claude/skills/skills").exists());
+            match provider {
+                ProviderKind::Claude => assert_eq!(spec.add_dirs.len(), 1),
+                ProviderKind::Codex => assert_eq!(spec.skill_plugins.len(), 1),
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn excluded_project_items_are_staged_for_both_agents_and_divergent_account_homes() {
         let dir = std::env::temp_dir().join(format!("launch-overlay-{}", uuid::Uuid::new_v4()));
