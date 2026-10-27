@@ -3,40 +3,16 @@
     {
       "key": "01a173c1-bd75-7b53-86ba-ea386225df38",
       "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
-              "summary": "Ran an agent",
-              "rows": [
-                "Ran agent: echo hi"
-              ]
-            }
-          ]
-        }
-      ]
+      "folded": false,
+      "parts": []
     }
   ],
   "persisted": [
     {
       "key": "01a173c1-bd75-7b53-86ba-ea386225df38",
       "state": "done",
-      "folded": true,
-      "parts": [
-        {
-          "work": [
-            {
-              "group": "step:01a173c1-c2cc-70f0-b00c-9bdc3e1f7974",
-              "summary": "Ran an agent",
-              "rows": [
-                "Ran agent: echo hi"
-              ]
-            }
-          ]
-        }
-      ]
+      "folded": false,
+      "parts": []
     }
   ]
 }

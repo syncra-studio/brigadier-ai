@@ -73,6 +73,11 @@ export function isPlumbing(name: string): boolean {
 /** A subagent's start: Claude's `Agent` (once `Task`), Codex's `spawnAgent`. */
 const AGENTS = new Set(["Agent", "Task", "spawnAgent", "spawn_agent"]);
 
+/** A subagent's lifecycle is shown in its composer strip and History, outside the main work. */
+export function isSubagentStart(name: string): boolean {
+  return AGENTS.has(toolName(name));
+}
+
 /**
  * What a subagent or skill call is given on its row (B1): a Claude agent's description, a Codex
  * agent's prompt's first line, a skill's name; `undefined` for any other call.

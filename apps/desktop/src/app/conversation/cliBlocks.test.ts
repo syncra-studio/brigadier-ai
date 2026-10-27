@@ -38,7 +38,7 @@ const view: ThreadView = {
     // Brigadier's plumbing: no row.
     at(tool("t2", "ToolSearch", '{"query":"select:Read"}', "completed"), 1350),
     at(tool("agent", "Agent", '{"description":"Look around","prompt":"…"}', "completed", "Found it."), 1400),
-    // The subagent's own work: under its Agent row, not drawn.
+    // The subagent's lifecycle and child work stay out of the main thread.
     at({ type: "command", itemId: "sub-c", command: "ls", cwd: null, status: "completed", exitCode: 0, output: "a", durationMs: 5 }, 1450, { parent: "agent" }),
     user("s1", "Also check the docs", 1500, { steer: true }),
     at({ type: "fileChanges", itemId: "f1", changes: [{ path: "src/a.ts", kind: "update", diff: "-old\n+new\n+more" }], status: "completed" }, 1600),
@@ -114,12 +114,6 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
       kind: { type: "tool", itemId: "c1", name: "shell", detail: "pnpm test", status: "completed", throughPosition: 0, endedAtMs: 3300, exit: 0, item: "command" },
       position: 3,
       atMs: 1300,
-      requestId: "u1",
-    },
-    {
-      kind: { type: "tool", itemId: "agent", name: "Agent", detail: "Look around", status: "completed", throughPosition: 0, endedAtMs: 1400, item: "tool" },
-      position: 5,
-      atMs: 1400,
       requestId: "u1",
     },
     {
@@ -1198,7 +1192,7 @@ test("a /compact the user typed is their bubble by the engine's note, in a sessi
   assert.deepEqual(blocks.map((block) => (block.user?.kind === "message" ? block.user.text : null)), ["Grow", "/compact"]);
 });
 
-test("another session's message the engine noted as Brigadier's keeps its own bubble on a turn it starts", () => {
+test("an authored peer message keeps its bubble even when its delivery is marked by the engine", () => {
   const blocks = cliBlocks(
     {
       entries: [sent("p1", '[message from session "Docs" (c-1) · sm-0123456789ab]\nThe docs are done.', 1000, { by: "brigadier" }), reply1],

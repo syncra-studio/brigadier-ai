@@ -8,13 +8,6 @@
         {
           "work": [
             {
-              "group": "step:toolu_011E1g6VbebewGRL7iDU426f",
-              "summary": "Ran an agent",
-              "rows": [
-                "Ran agent: Run echo hi"
-              ]
-            },
-            {
               "item": "text"
             }
           ]
@@ -30,13 +23,6 @@
       "parts": [
         {
           "work": [
-            {
-              "group": "step:toolu_011E1g6VbebewGRL7iDU426f",
-              "summary": "Ran an agent",
-              "rows": [
-                "Ran agent: Run echo hi"
-              ]
-            },
             {
               "item": "text"
             }

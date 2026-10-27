@@ -1,4 +1,4 @@
-import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, isSubagentStart, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import {
   type Block,
   type BlockCompaction,
@@ -283,15 +283,10 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
 const PLAN_FILE = /(?:^|\/)\.claude\/plans\/[^/]+\.md$/;
 
 /**
- * Whether a CLI's line that its agent ended says what that agent's own row in `block` already
- * does ("Agent "Find the parser" finished"): no line then, as a Codex agent's end is none (D57).
+ * A CLI's subagent completion notice belongs to its strip and History, like its start call.
  */
-function agentRowSays(text: string, block: Block): boolean {
-  const name = /^Agent "([\s\S]*)" (?:finished|completed|failed|was stopped|stopped|was killed|killed)\b/.exec(text.trim())?.[1];
-  return (
-    name !== undefined &&
-    block.orchestratorSteps.some((step) => step.kind.type === "tool" && ["Agent", "Task"].includes(toolName(step.kind.name)) && step.kind.detail === name)
-  );
+function subagentNotice(text: string): boolean {
+  return /^Agent "[\s\S]*" (?:finished|completed|failed|was stopped|stopped|was killed|killed)\b/.test(text.trim());
 }
 
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
@@ -400,6 +395,7 @@ const madeSteps = new WeakMap<FileEntry, { made: string; step: ToolStep | null }
 
 /** `toolStep`, made once per entry and what it depends on: the thread is made again with each streamed word. */
 function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: readonly BackgroundTask[] | undefined): ToolStep | null {
+  if (entry.event.type === "toolCall" && isSubagentStart(entry.event.name)) return null;
   const itemId = "itemId" in entry.event ? entry.event.itemId : undefined;
   const task = itemId === undefined ? undefined : background?.find((each) => each.itemId === itemId);
   const made = `${turn?.end ?? ""}|${turn?.endedAtMs ?? ""}|${task?.status ?? ""}|${task?.endedAtMs ?? ""}`;
@@ -636,8 +632,8 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
 
 /**
  * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
- * (`board`). A subagent's own items (`parent`) are not drawn: the thread shows its Agent call's
- * row, as it does for a Claude subagent's work. `session`: the thread is a session's, where
+ * (`board`). Subagent lifecycle calls and their child items stay in their strip and History;
+ * their source entries are retained for those views. `session`: the thread is a session's, where
  * Brigadier compacts a long one itself. `typed`: the words of the user's own messages that no
  * turn read names yet.
  */
@@ -766,7 +762,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // of a request already shown (a background command's end), or steered in.
     const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
-    // Another session's message keeps its own rule: a bubble of its own on a turn it starts.
+    // Peer messages retain their authored content and sender; only automatic engine notices hide.
     const peer = !!asked && FROM_SESSION.test(asked.text);
     const says =
       !!asked && (said && !peer ? ours : !theirs && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore));
@@ -897,7 +893,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice":
-        if (waitEnded(event.text, view) || agentRowSays(event.text, current)) return;
+        if (waitEnded(event.text, view) || subagentNotice(event.text)) return;
         current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
         return;
       // A compaction is one divider: the stream's word that it runs (no file keeps it) is the
