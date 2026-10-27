@@ -6311,7 +6311,7 @@ mod tests {
             .await
             .unwrap();
         conv.state.lock().await.pending.push(message);
-        flow.manager.next_turn_now(&conv).await;
+        flow.manager.clone().next_turn(conv.clone()).await;
         {
             let state = conv.state.lock().await;
             assert_eq!(
@@ -6337,6 +6337,104 @@ mod tests {
             .await;
         flow.settled().await;
         assert_eq!(*inputs.lock().unwrap(), ["Start.", "Next."]);
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_seam_hold_interrupts_a_nudge_that_started_its_own_cli_turn() {
+        use super::super::flow::{FakeBehavior, Flow, Options, Reply};
+        use super::super::seam::{Phase, SeamConfig, SeamFile, read_seam, write_seam};
+
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let stopped = Arc::new(tokio::sync::Notify::new());
+        let (at_note, after_stop) = (reached.clone(), stopped.clone());
+        let flow = Flow::start(
+            "seam-autonomous-nudge",
+            Options {
+                behavior: Arc::new(FakeBehavior {
+                    session_file: true,
+                    ..FakeBehavior::default()
+                }),
+                ..Options::default()
+            },
+            Arc::new(move |turn| {
+                let (at_note, after_stop) = (at_note.clone(), after_stop.clone());
+                Box::pin(async move {
+                    if turn.input.starts_with(crate::thread_view::NUDGE_MARK) {
+                        at_note.notify_one();
+                        turn.stopped().await;
+                        after_stop.notify_one();
+                        Reply::text("")
+                    } else {
+                        Reply::text("Answered.")
+                    }
+                })
+            }),
+        )
+        .await;
+        flow.say("Start.").await;
+        flow.settled().await;
+        *flow.manager.seam.lock().unwrap() = SeamConfig {
+            tokens: 60_000,
+            hold: Duration::from_millis(50),
+            long: None,
+            tokens_set: false,
+        };
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        let record = flow.manager.session_dir(&conv.id).record();
+        // Replay the ordering when steer reaches a CLI that just ended its turn: the
+        // original TurnCompleted is processed before the nudge's own TurnStarted.
+        write_seam(
+            &record,
+            &SeamFile {
+                phase: Phase::Nudged {
+                    at_ms: now_ms(),
+                    tokens: 70_000,
+                    predecessor: Some(cli.session.native_id()),
+                },
+                ..SeamFile::default()
+            },
+        )
+        .unwrap();
+        conv.state.lock().await.seam.held = true;
+        cli.session
+            .steer(TurnInput::text(format!(
+                "{} write the note",
+                crate::thread_view::NUDGE_MARK
+            )))
+            .await
+            .unwrap();
+        reached.notified().await;
+        tokio::time::timeout(crate::test_patience(), async {
+            loop {
+                let state = conv.state.lock().await;
+                if state.unowned_turn {
+                    assert!(!state.busy);
+                    break;
+                }
+                drop(state);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the nudge started its own CLI turn");
+        flow.manager.arm_seam_hold(&conv).await;
+        tokio::time::timeout(Duration::from_secs(2), stopped.notified())
+            .await
+            .expect("the seam hold must interrupt the autonomous nudge");
+        tokio::time::timeout(crate::test_patience(), async {
+            while read_seam(&record).generation != 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the successor carried on after the nudge was interrupted");
+        flow.settled().await;
+        assert_eq!(
+            read_seam(&record).seams[0].end.death.as_deref(),
+            Some("it was still working a minute after a message came")
+        );
         flow.stop().await;
     }
 

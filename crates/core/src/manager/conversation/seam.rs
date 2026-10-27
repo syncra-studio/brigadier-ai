@@ -626,7 +626,12 @@ impl SessionManager {
                     return;
                 }
                 state.seam.force = true;
-                state.cli.clone().filter(|_| state.busy)
+                // A steer can start the nudge's own CLI turn after the previous one
+                // ended. It still runs, even with no request for the driver to adopt.
+                state
+                    .cli
+                    .clone()
+                    .filter(|_| state.busy || state.unowned_turn)
             };
             match cli {
                 // Its end closes the seam.
