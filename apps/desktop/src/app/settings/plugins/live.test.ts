@@ -28,7 +28,7 @@ function mockedWindow() {
   };
 }
 
-test("the first catalog stays loading while independent sign-in reads run in parallel", async () => {
+test("the first catalog shows rows before independent sign-in reads finish", async () => {
   const restore = mockedWindow();
   const previous = usePlugins.getState();
   const seen: string[] = [];
@@ -49,10 +49,11 @@ test("the first catalog stays loading while independent sign-in reads run in par
     catalogReply({ method: "getPluginCatalog", catalog: catalog(server("one"), server("two")) });
     await tick();
     assert.deepEqual(seen, ["one", "two"], "neither status read waits for the other");
-    assert.equal(usePlugins.getState().loading, true);
+    assert.equal(usePlugins.getState().loading, false);
+    assert.equal(usePlugins.getState().view.items.length, 2);
     pending[0]!({ method: "getPluginSignInStatus", state: { type: "signedIn" } });
     await tick();
-    assert.equal(usePlugins.getState().loading, true);
+    assert.equal(usePlugins.getState().loading, false);
     pending[1]!({ method: "getPluginSignInStatus", state: { type: "signedOut" } });
     await tick();
     assert.equal(usePlugins.getState().loading, false);
@@ -74,6 +75,69 @@ test("project scopes from the catalog render as projects, including when switche
     assert.deepEqual(view.items[0]!.scope, { type: "someProjects", projectIds: ["project"], folders: [] });
     assert.equal(view.items[0]!.on, on);
   }
+});
+
+test("reconnecting keeps cached rows and sign-in state visible through a failed background read", async () => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: catalog(server("cached")) };
+    return { method: request.method, state: { type: "signedIn" } };
+  });
+  let disconnect = connectPlugins(livePlugins());
+  try {
+    await tick();
+    assert.equal(usePlugins.getState().hasLoaded, true);
+    disconnect();
+    let fail!: (error: Error) => void;
+    mockIPC(() => new Promise((_resolve, reject) => { fail = reject; }));
+    disconnect = connectPlugins(livePlugins());
+    assert.equal(usePlugins.getState().loading, false);
+    assert.equal(usePlugins.getState().view.items[0]!.key, "cached");
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedIn");
+    fail(new Error("Temporarily offline"));
+    await tick();
+    assert.equal(usePlugins.getState().loading, false);
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedIn");
+    assert.equal(usePlugins.getState().error, "Temporarily offline");
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
+});
+
+test("an empty successful catalog is cached too", async () => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  mockIPC(() => ({ method: "getPluginCatalog", catalog: catalog() }));
+  let disconnect = connectPlugins(livePlugins());
+  try {
+    await tick();
+    disconnect();
+    mockIPC(() => new Promise(() => {}));
+    disconnect = connectPlugins(livePlugins());
+    assert.equal(usePlugins.getState().loading, false);
+    assert.deepEqual(usePlugins.getState().view.items, []);
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
+});
+
+test("a rebuilt daemon catalog is fetched in the background without showing loading", async (t) => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let current = { ...catalog(server("one")), version: "first" };
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    return request.method === "getPluginCatalog" ? { method: request.method, catalog: structuredClone(current) }
+      : { method: request.method, state: { type: "signedIn" } };
+  });
+  const disconnect = connectPlugins(livePlugins());
+  try {
+    await tick();
+    current = { ...catalog(server("one"), server("two")), version: "second" };
+    t.mock.timers.tick(1000);
+    await tick();
+    assert.equal(usePlugins.getState().loading, false);
+    assert.equal(usePlugins.getState().view.items.length, 2);
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
 });
 
 test("sign-in follows shared state and updates the grid within 500 ms", async (t) => {
@@ -115,7 +179,7 @@ test("sign-in follows shared state and updates the grid within 500 ms", async (t
     t.mock.timers.tick(500);
     await tick();
     assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Signed in");
-    assert.equal(reads, 1, "polling does not rebuild the catalog");
+    assert.equal(reads, 2, "status polling is independent of the one background catalog version check");
     const finishedPolls = polls;
     t.mock.timers.tick(2000);
     await tick();

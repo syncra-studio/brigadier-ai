@@ -2543,7 +2543,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             accounts: daemon.runtime.accounts_view(),
         },
         Request::GetPluginCatalog => Response::GetPluginCatalog {
-            catalog: daemon.sessions.plugin_catalog()?,
+            catalog: daemon.sessions.cached_plugin_catalog().await?,
         },
         Request::SetPluginChoice { row_id, on } => {
             daemon.sessions.set_plugin_choice(&row_id, on)?;
@@ -2576,6 +2576,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .sessions
                 .add_library_item(text, name, project_ids, values)
                 .await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
             Response::AddPlugin { job: String::new() }
         }
         Request::ImportPlugin {
@@ -2587,10 +2588,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .sessions
                 .import_library_item(key, name, project_ids)
                 .await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
             Response::ImportPlugin { job: String::new() }
         }
         Request::RemovePlugin { key } => {
             daemon.sessions.remove_library_item(key).await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
             Response::RemovePlugin { job: String::new() }
         }
         Request::GetPluginItem { key } => Response::GetPluginItem {

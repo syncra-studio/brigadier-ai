@@ -35,7 +35,7 @@ export function hasSkillToken(text: string, label: string): boolean {
 export function limitClaudeSkills(text: string, known: Iterable<Mention>): string {
   const labels = new Set(Array.from(known).flatMap((mention) => mention.type === "skill" ? [skillLabel(mention.rowId)] : []));
   const spans = Array.from(labels).flatMap((label) => skillTokenStarts(text, label).map((at) => ({ at, length: label.length }))).toSorted((a, b) => a.at - b.at);
-  for (const { at, length } of spans.slice(1).reverse()) text = text.slice(0, at) + text.slice(at + length);
+  for (const { at, length } of spans.slice(1).toReversed()) text = text.slice(0, at) + text.slice(at + length);
   return text;
 }
 

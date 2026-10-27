@@ -185,6 +185,7 @@ pub struct SessionManager {
     /// Sign-ins to remote MCP servers shared between the agents, and their proxy.
     mcp_logins: Arc<mcp_login::McpLogins>,
     mcp_gateway: Arc<mcp_gateway::McpGatewayService>,
+    plugin_catalog_cache: std::sync::OnceLock<plugins::cache::Cache>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// The `/` menu's answers of CLIs that haven't started ([`cli_commands`]).
@@ -400,6 +401,7 @@ impl SessionManager {
             git,
             mcp_gateway: mcp_gateway::McpGatewayService::new(&data_dir)
                 .expect("MCP gateway loopback listener"),
+            plugin_catalog_cache: std::sync::OnceLock::new(),
             data_dir,
             registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
@@ -466,6 +468,12 @@ impl SessionManager {
             activity: Arc::default(),
         });
         manager.install_worktree_remover();
+        let owner = Arc::downgrade(&manager);
+        manager.registry().on_change(move || {
+            if let Some(manager) = owner.upgrade() {
+                manager.invalidate_plugin_catalog();
+            }
+        });
         manager.install_titles();
         // Each step's future is polled from the heap: made in this frame, they took half a
         // MiB of an unoptimized build's stack at once.

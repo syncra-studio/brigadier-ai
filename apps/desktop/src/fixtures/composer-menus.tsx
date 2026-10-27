@@ -329,8 +329,8 @@ async function exercise(mode: "rich" | "plain") {
 }
 
 function CommandConsumer({ provider }: { provider: ProviderKind }) {
-  const [commands] = useCliCommands({ provider, projectId: null, repo: null });
-  return <span data-command-provider={provider}>{commands.some((command) => command.name === "grill-me") ? "ready" : "waiting"}</span>;
+  const [listedCommands] = useCliCommands({ provider, projectId: null, repo: null });
+  return <span data-command-provider={provider}>{listedCommands.some((command) => command.name === "grill-me") ? "ready" : "waiting"}</span>;
 }
 
 async function drive() {

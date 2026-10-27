@@ -24,8 +24,8 @@ function asked(target: CliTarget | null): Asked | null {
 
 /** A read-only refresh at mount and menu open, versioned by choices and catalog. */
 export function useCliCommands(target: CliTarget | null): [readonly CliCommand[], () => void] {
-  const question = asked(target);
-  const questionKey = question && JSON.stringify(question);
+  const initialQuestion = asked(target);
+  const questionKey = initialQuestion && JSON.stringify(initialQuestion);
   const settings = useApp((state) => state.settings);
   const accountKey = JSON.stringify([settings.accounts, target && "conversation" in target ? target.conversation.setup : null]);
   const identity = JSON.stringify([questionKey, accountKey]);

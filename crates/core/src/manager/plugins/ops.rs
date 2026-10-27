@@ -504,8 +504,12 @@ impl crate::manager::SessionManager {
             }
             choice.scope = scope;
         }
-        choices.0.insert(row_id.to_owned(), choice);
-        choices.save(&self.data_dir).map_err(crate::Error::Invalid)
+        choices.0.insert(row_id.to_owned(), choice.clone());
+        choices
+            .save(&self.data_dir)
+            .map_err(crate::Error::Invalid)?;
+        self.cache_plugin_choice(row_id, choice);
+        Ok(())
     }
 
     /// Completes before replying: Add/Import/Remove need no frontend job runner.

@@ -10,7 +10,7 @@ type Seen = {
   search: { placeholder: string; fits: boolean } | null;
   dialog: { text: string; editable: boolean; coloured: boolean; buttons: string[]; spills: boolean } | null;
 };
-const card = (seen: Seen, name: string) => {
+const findCard = (seen: Seen, name: string) => {
   const found = seen.cards.find((card) => card.name === name);
   assert.ok(found, `Missing ${name}`);
   return found;
@@ -25,17 +25,17 @@ test("plugins: durable catalog choices, editable detected items, per-agent note 
   }
   assert.equal(seen.L1!.title, "Plugins");
   assert.equal(seen.L1!.columns, 2);
-  assert.equal(card(seen.L1!, "Context7").chip, "Global");
-  assert.equal(card(seen.L1!, "Linear").chip, "3 projects");
-  assert.equal(card(seen.L1!, "Linear").line, "Must sign in");
-  assert.equal(card(seen.L1!, "Context7").line, "Signed in");
+  assert.equal(findCard(seen.L1!, "Context7").chip, "Global");
+  assert.equal(findCard(seen.L1!, "Linear").chip, "3 projects");
+  assert.equal(findCard(seen.L1!, "Linear").line, "Must sign in");
+  assert.equal(findCard(seen.L1!, "Context7").line, "Signed in");
   assert.ok(seen.L1!.cards.every((card) => !card.locked));
   assert.ok(seen.L2!.cards.every((card) => !card.locked));
-  assert.equal(card(seen.flipped!, "Context7").on, false);
-  assert.equal(card(seen.remounted!, "Context7").on, false, "toggle persists after remount and catalog reload");
-  assert.equal(card(seen.detectedOff!, "team-db").on, false);
-  assert.equal(card(seen.nativeSkillsOff!, "frontend-design").on, false, "~/.agents/skills is editable");
-  assert.equal(card(seen.nativeSkillsOff!, "pr-review").on, false, "~/.claude/skills is editable");
+  assert.equal(findCard(seen.flipped!, "Context7").on, false);
+  assert.equal(findCard(seen.remounted!, "Context7").on, false, "toggle persists after remount and catalog reload");
+  assert.equal(findCard(seen.detectedOff!, "team-db").on, false);
+  assert.equal(findCard(seen.nativeSkillsOff!, "frontend-design").on, false, "~/.agents/skills is editable");
+  assert.equal(findCard(seen.nativeSkillsOff!, "pr-review").on, false, "~/.claude/skills is editable");
   assert.deepEqual(seen.scoped!.projectSwitches, seen.scopeRemounted!.projectSwitches);
   assert.equal(seen.scopeRemounted!.projectSwitches.filter((row) => row.endsWith(" true")).length, 2);
   assert.ok(seen.scopeRemounted!.projectSwitches[0]!.endsWith(" true"));

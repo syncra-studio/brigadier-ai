@@ -1,4 +1,5 @@
 //! Read-only plugin catalog, data-dir Library actions, and one-time legacy cleanup.
+pub(super) mod cache;
 pub mod choices;
 mod cleanup;
 mod cleanup_context;

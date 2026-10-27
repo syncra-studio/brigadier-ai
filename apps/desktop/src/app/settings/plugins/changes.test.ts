@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { Changes } from "./changes";
 import { signInLine } from "./model";
 import type { PluginItemView, PluginsView } from "./types";
+import type { CatalogView, ProjectPrefs, Request } from "@/ipc/generated";
 
 const item = (key: string, on: boolean): PluginItemView => ({
   key,
@@ -186,18 +187,18 @@ test("live catalog adapter saves project roots and reads persisted choices on a 
   const paths = ["/fixture/project-a", "/fixture/project-b"];
   useApp.setState({ projects: { fixture: {
     id: "fixture", name: "Fixture", createdAtMs: 0, repos: paths.map((path) => ({ path, name: path.split("/").at(-1)! })),
-    prefs: {} as import("@/ipc/generated").ProjectPrefs,
+    prefs: {} as ProjectPrefs,
     trust: paths.map((path) => ({ path, trusted: true, decidedAtMs: 0 })),
   } } });
-  const catalog: import("@/ipc/generated").CatalogView = { version: "v1", rows: [{
+  const catalog: CatalogView = { version: "v1", rows: [{
     id: "server:detected", kind: "server", name: "detected", differentPerAgent: false,
     choice: { on: true, scope: "global" }, signIn: { type: "signedOut" },
     definitions: [{ agent: "claude", file: "/fixture/.claude.json", plugin: null, project: null, native: "detected", aliases: ["detected"], fingerprint: "one", transport: "http", endpoint: "https://fixture.test/mcp" }],
   }] };
-  const sent: import("@/ipc/generated").Request[] = [];
+  const sent: Request[] = [];
   mockIPC((command, payload) => {
     assert.equal(command, "ipc_request");
-    const { request } = payload as { request: import("@/ipc/generated").Request };
+    const { request } = payload as { request: Request };
     sent.push(request);
     if (request.method === "getPluginCatalog") return { method: request.method, catalog: structuredClone(catalog) };
     if (request.method === "getPluginSignInStatus") return { method: request.method, state: { type: "signedIn" } };

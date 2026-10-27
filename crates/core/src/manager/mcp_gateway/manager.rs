@@ -134,22 +134,32 @@ impl SessionManager {
             self.mcp_logins.set_fallback_flow(row_id, flow);
             return self.get_plugin_sign_in_status(row_id).await;
         }
-        Ok(self.mcp_gateway.start_sign_in(&resource, open).await)
+        let state = self.mcp_gateway.start_sign_in(&resource, open).await;
+        Ok(self.cache_plugin_sign_in(row_id, state))
     }
 
     pub async fn get_plugin_sign_in_status(&self, row_id: &str) -> Result<CatalogSignIn> {
+        // A disk-restored page can be displayed while one background discovery warms routing.
+        if cached_target(&self.mcp_gateway, row_id).is_none()
+            && let Some(state) = self.cached_plugin_sign_in(row_id)
+        {
+            return Ok(state);
+        }
         let (resource, _, library_only) = self.plugin_sign_in_target(row_id).await?;
         let state = self.mcp_gateway.status(&resource).await;
         if library_only && matches!(state, CatalogSignIn::CliFallback { .. }) {
-            return Ok(CatalogSignIn::CliSetupRequired {
-                agents: brigadier_providers::ProviderKind::ALL.to_vec(),
-            });
+            return Ok(self.cache_plugin_sign_in(
+                row_id,
+                CatalogSignIn::CliSetupRequired {
+                    agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                },
+            ));
         }
         if matches!(state, CatalogSignIn::CliFallback { .. })
             && let Some(progress) = self.mcp_logins.fallback_progress(row_id)
         {
             if !progress.finished && progress.agents.len() < 2 {
-                return Ok(state);
+                return Ok(self.cache_plugin_sign_in(row_id, state));
             }
             let agents = progress
                 .agents
@@ -163,12 +173,15 @@ impl SessionManager {
                 })
                 .map(|step| step.agent)
                 .collect();
-            return Ok(CatalogSignIn::CliFallback {
-                agents,
-                steps: progress.agents,
-            });
+            return Ok(self.cache_plugin_sign_in(
+                row_id,
+                CatalogSignIn::CliFallback {
+                    agents,
+                    steps: progress.agents,
+                },
+            ));
         }
-        Ok(state)
+        Ok(self.cache_plugin_sign_in(row_id, state))
     }
 
     pub async fn sign_out_plugin(&self, row_id: &str) -> Result<()> {
@@ -192,6 +205,8 @@ impl SessionManager {
         self.mcp_gateway
             .sign_out(&resource)
             .await
-            .map_err(|_| Error::Invalid("Cannot remove gateway Keychain grant".into()))
+            .map_err(|_| Error::Invalid("Cannot remove gateway Keychain grant".into()))?;
+        self.cache_plugin_sign_in(row_id, CatalogSignIn::SignedOut);
+        Ok(())
     }
 }

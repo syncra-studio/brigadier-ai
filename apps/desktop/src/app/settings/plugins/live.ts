@@ -1,18 +1,19 @@
-import type { PluginDraft, PluginsAdapter } from "./adapter";
+import { usePlugins, type PluginDraft, type PluginsAdapter } from "./adapter";
 import { pickFolder, request } from "@/ipc/client";
 import type { CatalogSignIn, CatalogView } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import type { PluginProjectView, PluginsView } from "./types";
 import { signingIn } from "./model";
 
+const agentName = (row: CatalogView["rows"][number]) => {
+  const agents = new Set(row.definitions.map((definition) => definition.agent));
+  return agents.has("claude") && agents.has("codex") ? "Claude Code + Codex" : agents.has("claude") ? "Claude Code" : "Codex";
+};
+
 /** The catalog's durable choices, rendered with the shared Settings grid. */
 export function catalogPage(catalog: CatalogView, projects: PluginProjectView[]): PluginsView {
   const offers = catalog.rows.filter((row) => row.definitions.every((definition) => definition.agent === null));
   const rows = catalog.rows.filter((row) => !offers.includes(row));
-  const agentName = (row: CatalogView["rows"][number]) => {
-    const agents = new Set(row.definitions.map((definition) => definition.agent));
-    return agents.has("claude") && agents.has("codex") ? "Claude Code + Codex" : agents.has("claude") ? "Claude Code" : "Codex";
-  };
   const names = rows.map((row) => {
     if (rows.filter((other) => other.kind === row.kind && other.name === row.name).length === 1) return row.name;
     const first = row.definitions[0];
@@ -46,11 +47,11 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
         differentPerAgent: row.differentPerAgent, signIn: row.signIn,
         problem: null, locked: null, removal: library ? "everything" as const : "none" as const, canShare: false, skillCount: row.kind === "skill" ? 1 : 0, files,
       };
-    }).sort((a, b) => a.name.localeCompare(b.name)),
+    }).toSorted((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
-function projects(): PluginProjectView[] {
+function currentProjects(): PluginProjectView[] {
   return Object.values(useApp.getState().projects).flatMap((project) => project.repos.filter((repo) => project.trust.some((trust) => trust.path === repo.path && trust.trusted)).map((repo) => ({
     id: repo.path, name: project.repos.length > 1 ? `${project.name} / ${repo.name}` : project.name, path: repo.path, notes: [],
   })));
@@ -58,11 +59,13 @@ function projects(): PluginProjectView[] {
 
 /** Mutations answer after saving. Every completion is followed by a fresh catalog read. */
 export function livePlugins(): PluginsAdapter {
-  let view: PluginsView | null = null;
+  let view: PluginsView | null = usePlugins.getState().hasLoaded ? usePlugins.getState().view : null;
   let changed: ((view?: PluginsView) => void) | null = null;
   let polling = false;
   let revision = 0;
   let reads = 0;
+  let catalogVersion: string | null = null;
+  let checkingCatalog = false;
   const states = new Map<string, { revision: number; state: CatalogSignIn }>();
   const mutations = new Map<string, Promise<void>>();
   const update = (rowId: string, signIn: CatalogSignIn) => {
@@ -90,6 +93,13 @@ export function livePlugins(): PluginsAdapter {
     finally { if (mutations.get(rowId) === operation) mutations.delete(rowId); }
     return [];
   };
+  const keepNewerStatuses = (catalog: CatalogView, before: number) => {
+    for (const row of catalog.rows) {
+      const latest = states.get(row.id);
+      const collectingSteps = row.signIn.type === "cliFallback" && row.signIn.agents.length > 0 && !row.signIn.steps.length;
+      if (latest && (latest.revision > before || mutations.has(row.id) || (collectingSteps && signingIn(latest.state)))) row.signIn = latest.state;
+    }
+  };
   const poll = async () => {
     if (polling || !view || !changed) return;
     polling = true;
@@ -111,6 +121,15 @@ export function livePlugins(): PluginsAdapter {
       const read = ++reads;
       const before = revision;
       const { catalog } = await request({ method: "getPluginCatalog" });
+      catalogVersion = catalog.version;
+      keepNewerStatuses(catalog, before);
+      // Show the cached daemon snapshot before waiting for independent sign-in status reads.
+      const page = catalogPage(catalog, currentProjects());
+      const shown = { ...page, items: page.items.map((item) => {
+        const latest = states.get(item.key);
+        return latest ? { ...item, signIn: latest.state } : item;
+      }) };
+      if (read === reads) { view = shown; changed?.(shown); }
       await Promise.all(catalog.rows.map(async (row) => {
         if (row.kind === "server" && row.signIn.type !== "notRequired" && row.definitions.some((definition) => definition.agent !== null)) {
           try {
@@ -121,24 +140,27 @@ export function livePlugins(): PluginsAdapter {
           }
         }
       }));
-      for (const row of catalog.rows) {
-        const latest = states.get(row.id);
-        const collectingSteps = row.signIn.type === "cliFallback" && row.signIn.agents.length > 0 && !row.signIn.steps.length;
-        if (latest && (latest.revision > before || mutations.has(row.id) || (collectingSteps && signingIn(latest.state)))) row.signIn = latest.state;
-      }
-      const fresh = catalogPage(catalog, projects());
+      keepNewerStatuses(catalog, before);
+      const fresh = catalogPage(catalog, currentProjects());
       if (read === reads) view = fresh;
       return fresh;
     },
     subscribe: (onChange) => {
       changed = onChange;
       const timer = setInterval(() => void poll(), 500);
+      const catalogTimer = setInterval(() => {
+        if (checkingCatalog || mutations.size) return;
+        checkingCatalog = true;
+        void request({ method: "getPluginCatalog" }).then(({ catalog }) => {
+          if (changed && catalog.version !== catalogVersion) onChange();
+        }).catch(() => {}).finally(() => { checkingCatalog = false; });
+      }, 1000);
       const focused = () => onChange();
       window.addEventListener("focus", focused);
       const unsubscribe = useApp.subscribe((state, previous) => {
         if (state.projects !== previous.projects) onChange();
       });
-      return () => { changed = null; clearInterval(timer); window.removeEventListener("focus", focused); unsubscribe(); };
+      return () => { changed = null; clearInterval(timer); clearInterval(catalogTimer); window.removeEventListener("focus", focused); unsubscribe(); };
     },
     switchPlugin: async (rowId, on) => { await request({ method: "setPluginChoice", rowId, on }); return []; },
     setScope: async (rowId, paths) => { await request({ method: "setPluginChoiceScope", rowId, scope: paths ?? "global" }); return []; },

@@ -97,13 +97,16 @@ export const SlashCommands: FC<{
   const [listed, refreshListed] = useCliCommands(conversation ? { conversation } : draft);
   const provider = conversation ? conversationProvider(conversation) : (draft?.provider ?? null);
   const text = useAuiState((state) => state.composer.text);
+  const limited = provider === "claude" && target ? limitClaudeSkills(text, target.mentions.known()) : text;
+  const [checkedText, setCheckedText] = useState<{ text: string; limited: string } | null>(null);
+  if (checkedText?.text !== text || checkedText.limited !== limited) {
+    setCheckedText({ text, limited });
+    if (limited !== text) setSkillHint("Claude accepts one skill per message. Kept the first skill.");
+  }
   useEffect(() => {
-    if (provider !== "claude" || !target) return;
-    const limited = limitClaudeSkills(text, target.mentions.known());
     if (limited === text) return;
     aui.composer().setText(limited);
-    setSkillHint("Claude accepts one skill per message. Kept the first skill.");
-  }, [provider, target, text, aui]);
+  }, [limited, text, aui]);
 
   const commands = useMemo<ComposerCommand[]>(() => {
     const model: ComposerCommand = {
@@ -284,9 +287,9 @@ export const SlashCommands: FC<{
 
   return (
     <>
-      <ComposerCommands commands={menu} onOpen={refreshListed} onPick={(command, text) => {
+      <ComposerCommands commands={menu} onOpen={refreshListed} onPick={(command, messageText) => {
         if (!command.chip) return true;
-        if (!target || !canPickSkill(provider, text, target.mentions.known())) {
+        if (!target || !canPickSkill(provider, messageText, target.mentions.known())) {
           setSkillHint("Claude accepts one skill per message. Remove the current skill first.");
           return false;
         }
