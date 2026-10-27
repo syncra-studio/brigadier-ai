@@ -12,6 +12,7 @@ import { chipFormatter, imageChip, pasteChip } from "@/components/conversation/e
 import { $exportComposer, $importComposer, CARET, COMPOSER_NODES } from "./composerMarkdown";
 
 const known = [
+  { label: "/proj-hello", type: "skill", id: "skill:skill:proj-hello:hash" },
   { label: "Release *draft*", type: "chat", id: "chat:c1" },
   { label: "notes `v2`", type: "chat", id: "chat:c2" },
   { label: "task-9", type: "task", id: "task:9" },
@@ -197,4 +198,14 @@ test("a pasted text or image kept between bare backticks (a draft or message fro
   const mixed = imported("see `run [Pasted text #1] @task-9 now`");
   assert.deepEqual(chips(mixed), ["paste:1"]);
   assert.equal(exported(mixed), "see `run `[Pasted text #1]` @task-9 now`");
+});
+
+
+test("skill chips retain the exact row identity through draft, queue and Markdown round trips", () => {
+  const markdown = "/proj-hello explain this";
+  assert.equal(roundTrip(markdown), markdown);
+  const segments = formatter.parse(markdown);
+  assert.deepEqual(segments[0], { kind: "mention", label: "/proj-hello", type: "skill", id: "skill:skill:proj-hello:hash" });
+  assert.equal(formatter.serialize(known[0]!), "/proj-hello");
+  assert.equal(roundTrip("`/proj-hello`"), "`/proj-hello`");
 });

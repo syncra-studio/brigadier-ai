@@ -1959,12 +1959,27 @@ impl ClaudeSession {
 
     async fn input_content(input: &TurnInput) -> Result<Vec<Value>> {
         let mut content = Vec::with_capacity(input.parts.len());
+        let skills: Vec<_> = input
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                crate::InputPart::Skill { invocation, .. } => Some(invocation),
+                _ => None,
+            })
+            .collect();
+        if skills.len() > 1 {
+            return Err(Error::Invalid(
+                "Claude accepts one skill per message".into(),
+            ));
+        }
+        if let Some(invocation) = skills.first() {
+            content.push(json!({ "type": "text", "text": format!("/{invocation}\n") }));
+        }
         for part in &input.parts_with_file_notes() {
             match part {
                 crate::InputPart::Text(text) if !text.trim().is_empty() => {
                     content.push(json!({ "type": "text", "text": text }));
                 }
-                // D: composer input serializes resolved skill references.
                 crate::InputPart::Skill { .. } => {}
                 crate::InputPart::Text(_) => {}
                 crate::InputPart::Image(file) => {
@@ -2378,6 +2393,30 @@ mod tests {
         assert!(files::session_missing(dir.path(), id));
         std::fs::write(project.join(format!("{id}.jsonl")), "{}\n").unwrap();
         assert!(!files::session_missing(dir.path(), id));
+    }
+
+    #[tokio::test]
+    async fn skill_input_precedes_message_frame_and_rejects_multiple_skills() {
+        let mut input = TurnInput {
+            parts: vec![
+                crate::InputPart::Text("[message frame]".into()),
+                crate::InputPart::Text("explain this".into()),
+                crate::InputPart::Skill {
+                    invocation: "overlay:proj-hello".into(),
+                    path: "/unused/SKILL.md".into(),
+                },
+            ],
+            files: Vec::new(),
+        };
+        let content = ClaudeSession::input_content(&input).await.unwrap();
+        assert_eq!(content[0]["text"], "/overlay:proj-hello\n");
+        assert_eq!(content[1]["text"], "[message frame]");
+        assert_eq!(content[2]["text"], "explain this");
+        input.parts.push(crate::InputPart::Skill {
+            invocation: "proj-agents".into(),
+            path: "/unused/other/SKILL.md".into(),
+        });
+        assert!(ClaudeSession::input_content(&input).await.is_err());
     }
 
     #[tokio::test]

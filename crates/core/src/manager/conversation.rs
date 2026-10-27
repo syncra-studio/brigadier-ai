@@ -1211,6 +1211,7 @@ impl SessionManager {
         self.admit()?;
         let text = self.normalize_fusion_message(&id, text)?;
         let conversation = self.core.conversation(&id)?;
+        self.skill_inputs(&id, &mentions, None).await?;
         match conversation.lifecycle {
             Lifecycle::Archived => {
                 return Err(Error::Invalid(
@@ -1270,11 +1271,16 @@ impl SessionManager {
                     .await?;
                 let steered = match &state.cli {
                     Some(cli) => {
-                        let (input, user) = self
-                            .turn_input(&conv, std::slice::from_ref(&message), &[])
-                            .await;
-                        self.note_sent(&conv.id, &input, &user);
-                        cli.session.steer(input).await.is_ok()
+                        match self
+                            .turn_input(&conv, std::slice::from_ref(&message), &[], &cli.account)
+                            .await
+                        {
+                            Ok((input, user)) => {
+                                self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                                cli.session.steer(input).await.is_ok()
+                            }
+                            Err(_) => false,
+                        }
                     }
                     None => false,
                 };
@@ -1491,11 +1497,16 @@ impl SessionManager {
             Some(cli) => {
                 // What waits for the next user message (a card's decision) goes with it.
                 let notes = std::mem::take(&mut state.notes);
-                let (input, user) = self
-                    .turn_input(conv, std::slice::from_ref(&message), &notes)
-                    .await;
-                self.note_sent(&conv.id, &input, &user);
-                let steered = cli.session.steer(input).await.is_ok();
+                let steered = match self
+                    .turn_input(conv, std::slice::from_ref(&message), &notes, &cli.account)
+                    .await
+                {
+                    Ok((input, user)) => {
+                        self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                        cli.session.steer(input).await.is_ok()
+                    }
+                    Err(_) => false,
+                };
                 if !steered {
                     state.notes.splice(0..0, notes);
                 }
@@ -2597,9 +2608,22 @@ impl SessionManager {
             .cloned()
             .collect();
         let only_typed_notes = user_notes.is_empty();
-        let (mut input, mut user) = self
-            .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
-            .await;
+        let (mut input, mut user) = match self
+            .turn_input(
+                &conv,
+                &unsent,
+                &[user_notes, notes.clone()].concat(),
+                &cli.account,
+            )
+            .await
+        {
+            Ok(input) => input,
+            Err(error) => {
+                self.fail_turn(&conv, users, envelopes, &error.to_string())
+                    .await;
+                return;
+            }
+        };
         if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
             prepend_said(
@@ -2654,7 +2678,7 @@ impl SessionManager {
         }
         // Who wrote what of the rest, the user's words and Brigadier's around them (L12).
         if !super::cli_thread::internal_input(&input) {
-            self.note_sent(&conv.id, &input, &user);
+            self.note_skill_sent(&conv.id, &input, &user, cli.provider);
         }
         {
             let mut state = conv.state.lock().await;
@@ -3273,7 +3297,8 @@ impl SessionManager {
         conv: &Arc<ConvLive>,
         users: &[Message],
         notes: &[String],
-    ) -> (TurnInput, Vec<(usize, usize)>) {
+        account: &crate::accounts::AccountRef,
+    ) -> Result<(TurnInput, Vec<(usize, usize)>)> {
         let mut parts = Vec::new();
         let mut files = Vec::new();
         let mut copied = HashMap::new();
@@ -3282,7 +3307,6 @@ impl SessionManager {
         let mut at = 0;
         for message in users {
             let user_text = self.full_text(message).await;
-            let frame = conv.take_frame(&message.id);
             let (inline, authored) = self
                 .message_input(
                     &FilesAt::Conversation(conv),
@@ -3293,8 +3317,10 @@ impl SessionManager {
                     &message.mentions,
                     &mut copied,
                     &mut files,
+                    Some(account),
                 )
-                .await;
+                .await?;
+            let frame = conv.take_frame(&message.id);
             if !ordered.is_empty() {
                 ordered.push(InputPart::Text("\n\n".into()));
             }
@@ -3329,7 +3355,7 @@ impl SessionManager {
             }
             ordered.push(InputPart::Text(parts.join("\n\n")));
         }
-        (merged_input(files, ordered), user)
+        Ok((merged_input(files, ordered), user))
     }
 
     /// What the user sent one of `owner`'s workers directly, as its CLI takes it: their words,
@@ -3381,8 +3407,9 @@ impl SessionManager {
                 mentions,
                 &mut copied,
                 &mut files,
+                None,
             )
-            .await;
+            .await?;
         Ok(merged_input(files, parts))
     }
 
@@ -3400,7 +3427,14 @@ impl SessionManager {
         mentions: &[Mention],
         copied: &mut HashMap<String, Option<InputFile>>,
         files: &mut Vec<InputFile>,
-    ) -> (Vec<InputPart>, Vec<(usize, usize)>) {
+        account: Option<&crate::accounts::AccountRef>,
+    ) -> Result<(Vec<InputPart>, Vec<(usize, usize)>)> {
+        let skills = self.skill_inputs(owner, mentions, account).await?;
+        if matches!(at, FilesAt::Worker(_)) && !skills.is_empty() {
+            return Err(Error::Invalid(
+                "worker messages cannot add skills that were not granted at launch".into(),
+            ));
+        }
         let plan = image_plan(user_text, attachments, copied);
         for attachment in &plan.copies {
             copied.insert(
@@ -3408,7 +3442,8 @@ impl SessionManager {
                 self.attachment_file(at, attachment).await,
             );
         }
-        let text = name_inline_images(user_text, attachments, copied, kind, files);
+        let words = super::cli_commands::without_skill_tokens(user_text, mentions);
+        let text = name_inline_images(&words, attachments, copied, kind, files);
         // Text pasted as a chip goes where it was pasted, marked as the user's paste.
         let mut pastes = Vec::new();
         for attachment in attachments {
@@ -3461,7 +3496,6 @@ impl SessionManager {
         }
         for mention in mentions {
             match mention {
-                // D: composer input resolves the row against the current resolver output.
                 Mention::Skill { .. } => {}
                 Mention::Task { id } => {
                     if let Ok(tasks) = self.core.tasks(owner).await
@@ -3490,7 +3524,8 @@ impl SessionManager {
                 }
             }
         }
-        (inline, user)
+        inline.extend(skills);
+        Ok((inline, user))
     }
 
     /// Another conversation the user @-mentioned, as context: its latest messages on the

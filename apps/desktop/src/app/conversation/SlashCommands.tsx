@@ -1,10 +1,12 @@
-import { useAui, useThreadList, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
-import { type FC, useContext, useMemo, useState } from "react";
+import { useAui, useAuiState, useThreadList, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
+import { type FC, useContext, useEffect, useMemo, useState } from "react";
 
-import { cliMenuCommands, conversationProvider } from "@/app/conversation/cliCommands";
+import { canPickSkill, cliMenuCommands, conversationProvider, limitClaudeSkills } from "@/app/conversation/cliCommands";
 import { useCliCommands } from "@/app/conversation/useCliCommands";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
+import { mentionOf } from "@/app/conversation/Mentions";
+import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { useAction } from "@/app/conversation/useAction";
@@ -81,6 +83,8 @@ export const SlashCommands: FC<{
   draft?: { provider: ProviderKind; projectId: string | null; repo: string | null } | null;
 }> = ({ conversation, groups, onOpenModel, permission = null, draft = null }) => {
   const aui = useAui();
+  const target = useContext(ComposerTargetContext);
+  const [skillHint, setSkillHint] = useState<string | null>(null);
   const status = useContext(StatusCardContext);
   const compactable = useCanCompact(conversation?.setup);
   const share = useBoard((s) =>
@@ -92,6 +96,14 @@ export const SlashCommands: FC<{
   const [forking, setForking] = useState(false);
   const [listed, refreshListed] = useCliCommands(conversation ? { conversation } : draft);
   const provider = conversation ? conversationProvider(conversation) : (draft?.provider ?? null);
+  const text = useAuiState((state) => state.composer.text);
+  useEffect(() => {
+    if (provider !== "claude" || !target) return;
+    const limited = limitClaudeSkills(text, target.mentions.known());
+    if (limited === text) return;
+    aui.composer().setText(limited);
+    setSkillHint("Claude accepts one skill per message. Kept the first skill.");
+  }, [provider, target, text, aui]);
 
   const commands = useMemo<ComposerCommand[]>(() => {
     const model: ComposerCommand = {
@@ -256,18 +268,34 @@ export const SlashCommands: FC<{
   }, [conversation, groups, answer, compactable, share, onOpenModel, permission, status, run, aui]);
   const menu = useMemo(
     () => [
-      ...commands,
+      ...commands.map((command) => ({ ...command, group: "Brigadier actions" })),
       ...cliMenuCommands(listed, commands, {
         name: provider ? PROVIDER_LABELS[provider] : undefined,
         icon: provider ? <ProviderGlyph provider={provider} className="size-icon-sm" /> : <Bolt />,
+        runCommand: (invocation) => {
+          if (invocation !== "thread/compact/start") return;
+          if (conversation) run(() => compact(conversation.id));
+          else setSkillHint("Send a message before compacting.");
+        },
       }),
     ],
-    [commands, listed, provider],
+    [commands, listed, provider, conversation, run],
   );
 
   return (
     <>
-      <ComposerCommands commands={menu} onOpen={refreshListed} />
+      <ComposerCommands commands={menu} onOpen={refreshListed} onPick={(command, text) => {
+        if (!command.chip) return true;
+        if (!target || !canPickSkill(provider, text, target.mentions.known())) {
+          setSkillHint("Claude accepts one skill per message. Remove the current skill first.");
+          return false;
+        }
+        const mention = mentionOf(command.chip);
+        if (mention) target.mentions.record(mention, command.chip.label);
+        setSkillHint(null);
+        return true;
+      }} />
+      {skillHint && <p role="status" className="text-muted-foreground absolute bottom-full start-0 mb-2 text-xs">{skillHint}</p>}
       {error && (
         <p role="alert" className="text-destructive absolute bottom-full start-0 mb-2 text-xs">
           {error}

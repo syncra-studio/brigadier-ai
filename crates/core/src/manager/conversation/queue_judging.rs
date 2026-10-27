@@ -189,13 +189,18 @@ impl SessionManager {
                 // The message the session reads, kept nowhere until it is judged.
                 let message = as_message(&conv.id, &item);
                 conv.frame(&item.id, deciding_frame(&shown));
-                let (input, user) = self
-                    .turn_input(conv, std::slice::from_ref(&message), &[])
+                let input = self
+                    .turn_input(conv, std::slice::from_ref(&message), &[], &cli.account)
                     .await;
                 conv.take_frame(&item.id);
-                self.note_sent(&conv.id, &input, &user);
-                // Never a new turn (run2-D46): with none running it waits plainly.
-                matches!(cli.session.steer_running(input).await, Ok(true))
+                match input {
+                    Ok((input, user)) => {
+                        self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                        // Never a new turn (run2-D46): with none running it waits plainly.
+                        matches!(cli.session.steer_running(input).await, Ok(true))
+                    }
+                    Err(_) => false,
+                }
             }
             None => false,
         };
