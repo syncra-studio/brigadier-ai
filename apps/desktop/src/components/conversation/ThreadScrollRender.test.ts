@@ -17,8 +17,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 150000)) as {
     error?: string;
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
-    button: { at8: Button; at9: Button };
-    switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number };
+    button: { within: Button; past: Button };
+    switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number; distance: number; restoredDistance: number };
     revealedBack: { offset: number; restoredOffset: number | null };
     fullscreen: {
       hiddenHeight: number;
@@ -37,7 +37,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
       topPadding: number;
       spring: { moved: number; at100: Around; at200: Around; settledMs: number; overshoot: boolean };
       placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number };
-      overflowed: { top: number; grew: number; distances: number[]; lastDistance: number; lastGap: number; button: Button; room: number };
+      filled: { top: number; tops: number[]; distance: number; button: Button; room: number };
       unfollowed: { top: number; tops: number[]; distance: number; button: Button };
       followed: { distances: number[]; grew: number };
       shrunkWindow: number;
@@ -67,28 +67,29 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   // does: text runs down to the composer and fades over its last line, and the scroll button
   // floats over it. At the bottom the last row, 32px above the composer, stays clear of the fade.
   near(firstOpen.bottomFade, 32, "fade above the composer");
-  near(firstOpen.buttonOverText, 16, "the scroll button's top, above the fade's top by");
+  near(firstOpen.buttonOverText, 24, "the scroll button's top, above the fade's top by");
 
-  // The button: hidden while the last row reaches at most 8px under the composer's top (the
-  // 32px gap above the composer is in view), shown past it; a 32px circle 16px above the
+  // The button: hidden within 24px of the bottom, shown past it; a 32px circle 24px above the
   // composer, centred on the column.
-  assert.equal(seen.button.at8.shown, false);
-  assert.equal(seen.button.at9.shown, true);
-  assert.equal(seen.button.at9.tabbable, true);
-  assert.deepEqual(seen.button.at9.size, [32, 32]);
-  near(seen.button.at9.aboveStack, 16, "button above the composer");
-  near(seen.button.at9.offCentre, 0, "button off the column's centre");
+  assert.equal(seen.button.within.shown, false);
+  assert.equal(seen.button.past.shown, true);
+  assert.equal(seen.button.past.tabbable, true);
+  assert.deepEqual(seen.button.past.size, [32, 32]);
+  near(seen.button.past.aboveStack, 24, "button above the composer");
+  near(seen.button.past.offCentre, 0, "button off the column's centre");
 
-  // A switch away and back restores the exact place, while the history and long replies load late:
-  // the row at the view's top at its offset. Never past it: the row is never above that offset.
+  // A switch away and back restores the place, while the history and long replies load late: its
+  // distance from the bottom, within the pixel fractional rows round the scroll height by, and
+  // the row at the view's top as close to its offset. Once shown, it never moves while they load.
   const { switchBack } = seen;
-  assert.equal(switchBack.restoredOffset, switchBack.offset);
-  assert.ok(switchBack.early.every((offset) => offset === null || offset >= switchBack.offset - 0.5), `no overshoot: ${switchBack.early.join(", ")}`);
-  assert.equal(switchBack.early.at(-1), switchBack.offset);
+  assert.ok(Math.abs(switchBack.restoredDistance - switchBack.distance) <= 1, `distance ${switchBack.restoredDistance}, was ${switchBack.distance}`);
+  assert.ok(switchBack.restoredOffset !== null && Math.abs(switchBack.restoredOffset - switchBack.offset) <= 1, `row at ${switchBack.restoredOffset}, was ${switchBack.offset}`);
+  const shown = switchBack.early.filter((offset) => offset !== null);
+  assert.ok(shown.every((offset) => offset === shown.at(-1)), `moved while loading: ${switchBack.early.join(", ")}`);
   // While its history loads the column stays empty, saying so only to a screen reader.
   assert.deepEqual([switchBack.loading, switchBack.placeholders], [true, 0]);
   // An old turn scrolled to, once mounted, is found again in its place.
-  assert.equal(seen.revealedBack.restoredOffset, seen.revealedBack.offset);
+  assert.ok(seen.revealedBack.restoredOffset !== null && Math.abs(seen.revealedBack.restoredOffset - seen.revealedBack.offset) <= 1, `old turn at ${seen.revealedBack.restoredOffset}, was ${seen.revealedBack.offset}`);
 
   // A fullscreen side panel hiding the thread and back: the same place, mid-scroll and at the bottom.
   const { fullscreen } = seen;
@@ -122,17 +123,17 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(composerGrows.grown.button.shown, false);
   assert.equal(composerGrows.scrolled.after, composerGrows.scrolled.before);
   near(composerGrows.atBottom.lastGap, 32, "last content to the notice");
-  near(composerGrows.atBottom.button.aboveStack, 16, "button above the notice");
+  near(composerGrows.atBottom.button.aboveStack, 24, "button above the notice");
   assert.equal(composerGrows.shrunk.distance, 0);
   near(seen.capsule.atBottom.capsuleInStack, 0, "capsule at the top of the footer");
   assert.equal(seen.capsule.atBottom.capsule, true);
   near(seen.capsule.atBottom.lastGap, 32, "last content to the capsule");
-  near(seen.capsule.button.aboveStack, 16, "button above the capsule");
+  near(seen.capsule.button.aboveStack, 24, "button above the capsule");
 
-  // A send: a critically damped spring of about half a second puts the turn's end a third of the
-  // way down the view (at least 240px), room below it down to the composer. The answer fills the
-  // room without moving the view and is followed past it. Scrolled away, it goes on under the
-  // composer; back at the bottom, it is followed again.
+  // A send: a critically damped spring of about half a second, to 1px above the bottom, puts the
+  // turn's end a third of the way down the view (at least 240px), room below it down to the
+  // composer. The answer fills the room without moving the view and runs on under the composer,
+  // the button showing; back at the bottom, it is followed.
   const { send } = seen;
   // The conversation view has Find: its bar's band (2.75rem + 1.5rem) stays above the first row.
   near(send.topPadding, 68, "the list's top padding");
@@ -145,18 +146,14 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(at100.before > 0.35 && at100.after < 0.75, `left around 100ms: ${at100.before} before, ${at100.after} from it on`);
   assert.ok(at200.before > 0.04 && at200.after < 0.25, `left around 200ms: ${at200.before} before, ${at200.after} from it on`);
   assert.ok(send.spring.settledMs >= 300 && send.spring.settledMs <= 700, `settled in ${send.spring.settledMs}ms`);
-  near(send.placed.turnEnd, send.placed.line, "sent turn's end");
+  near(send.placed.turnEnd, send.placed.line + 1, "sent turn's end");
   assert.ok(send.placed.line >= Math.max(240, send.placed.viewHeight / 4), `line at ${send.placed.line}`);
-  assert.equal(send.placed.distance, 0);
+  assert.equal(send.placed.distance, 1);
   assert.ok(send.placed.room > 0, "room under the sent turn");
-  assert.ok(send.overflowed.grew > 0, "followed past the room");
-  // The turn is followed once it reaches more than 1px past the view's bottom, so on its way
-  // there an answer under a pixel into the gap rounds the scroll height up a pixel (#306).
-  assert.ok(send.overflowed.distances.every((px) => px <= 1), `distances: ${send.overflowed.distances.join(", ")}`);
-  assert.equal(send.overflowed.lastDistance, 0);
-  near(send.overflowed.lastGap, 32, "followed answer to the composer");
-  assert.equal(send.overflowed.button.shown, false);
-  assert.equal(send.overflowed.room, 0);
+  assert.deepEqual(send.filled.tops, [send.filled.top], "the view moved while the answer filled the room");
+  assert.equal(send.filled.room, 0);
+  assert.ok(send.filled.distance > 24, `the answer ran on below: ${send.filled.distance}`);
+  assert.equal(send.filled.button.shown, true);
   assert.deepEqual(send.unfollowed.tops, [send.unfollowed.top]);
   assert.ok(send.unfollowed.distance > 200, "the answer went on under the composer");
   assert.equal(send.unfollowed.button.shown, true);
@@ -165,7 +162,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(send.followed.grew > 0);
   assert.equal(send.shrunkWindow, 0);
   assert.equal(send.grownWindow, 0);
-  assert.deepEqual(seen.resizeAtBottom, { placed: 0, shrunk: 0, grown: 0 });
+  assert.deepEqual(seen.resizeAtBottom, { placed: 1, shrunk: 0, grown: 0 });
 
   // Left right after a send and back once it answered: the bottom, without the room.
   const { returnAfterSend } = seen;

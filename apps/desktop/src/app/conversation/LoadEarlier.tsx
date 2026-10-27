@@ -2,13 +2,13 @@ import { type FC, useContext, useEffect, useState } from "react";
 
 import { ViewContext } from "@/app/conversation/viewContext";
 import { Button } from "@/components/controls";
-import { ThreadHistoryContext } from "@/components/conversation";
+import { ThreadHistoryContext, wantsEarlier } from "@/components/conversation";
 import { Spinner } from "@/components/icons";
 import { useApp } from "@/state/store";
 
 /**
- * Above the messages, while older pages wait in the database: they load as the user scrolls to
- * the top (a spinner while one does, Try again when it failed), or with "Load earlier messages"
+ * Above the messages, while older pages wait in the database: they load as the user scrolls up
+ * near the top (a spinner while one does, Try again when it failed), or with "Load earlier messages"
  * when nothing scrolls yet.
  */
 export const LoadEarlier: FC = () => {
@@ -21,20 +21,16 @@ export const LoadEarlier: FC = () => {
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
   const loadOlder = earlier?.loadOlder;
   const auto = hasMore && !loading && !earlier?.failed;
-  // Scrolled to the top, the next page loads: the thread keeps what shows where it is.
+  // Scrolled up by the user to within `EARLIER_PX` of the top, the next page loads: the thread
+  // keeps what shows where it is. Heard after the thread's own scroller (which captures).
   useEffect(() => {
     const viewport = sentinel?.closest("[data-slot=aui_thread-viewport]");
     if (!auto || !sentinel || !viewport || !loadOlder) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && viewport.scrollHeight > viewport.clientHeight) {
-          loadOlder().catch(() => {});
-        }
-      },
-      { root: viewport },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
+    const scrolled = () => {
+      if (wantsEarlier(viewport) && viewport.scrollHeight > viewport.clientHeight) loadOlder().catch(() => {});
+    };
+    viewport.addEventListener("scroll", scrolled, { passive: true });
+    return () => viewport.removeEventListener("scroll", scrolled);
   }, [auto, sentinel, loadOlder]);
   if (!earlier || !hasMore || !loadOlder) return null;
   if (loading) {

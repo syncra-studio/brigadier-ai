@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
-import { roomFor } from "@/components/conversation";
+import { roomFor, SCROLL_PAD_PX } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
@@ -341,10 +341,11 @@ const lastGap = () => round(stackTop() - rows().at(-1)!.getBoundingClientRect().
 /** The gap kept between the content's end and the floating footer. */
 const COMPOSER_GAP = 32;
 
-/** How far down the view a sent turn's end settles: the view's height above the gap, less the room. */
+/** How far down the view a sent turn's end settles at the bottom: the content's end, less the room. */
 function turnLine(): number {
-  const visible = stackTop() - COMPOSER_GAP - viewTop();
-  return round(visible - roomFor(visible));
+  // The room is measured above the footer and 16px; the content ends the composer gap above it.
+  const avail = stackTop() - viewTop() - SCROLL_PAD_PX;
+  return round(stackTop() - COMPOSER_GAP - viewTop() - roomFor(avail));
 }
 
 /** The share of the way still to go at the last frame before a time, and at the first frame from it on. */
@@ -473,20 +474,19 @@ const steps = {
       buttonOverText: round($(".thread-bottom-fade")!.getBoundingClientRect().top - $(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top),
     };
   },
-  /** The button's threshold and place: the last row 7px (within the 8px allowed, clear of sub-pixel rounding), then 9px, under the composer's top. */
+  /** The button's threshold and place: 23px from the bottom (within the 24px, clear of sub-pixel rounding), then 26px. */
   async button() {
-    await userScroll(max() - COMPOSER_GAP - 7);
+    await userScroll(max() - 23);
     await settle(250);
-    const at8 = buttonState();
-    await userScroll(max() - COMPOSER_GAP - 9);
+    const within = buttonState();
+    await userScroll(max() - 26);
     await settle(250);
-    const at9 = buttonState();
-    return { at8, at9 };
+    const past = buttonState();
+    return { within, past };
   },
   /**
-   * Mid-scroll, a session switch and back: the same place, with history and long text loading
-   * late. The place is the row at the view's top and its offset: the view's scrollTop isn't, as
-   * rows above it never mounted have estimated heights until they are.
+   * Mid-scroll, a session switch and back: the same distance from the bottom, with history and
+   * long text loading late; also, the row at the view's top at its offset then.
    */
   async switchBack() {
     await userScroll(Math.round(max() / 2));
@@ -494,6 +494,7 @@ const steps = {
     const anchor = rows().find((row) => row.getBoundingClientRect().bottom > viewTop())!;
     const id = anchor.dataset["messageId"];
     const offset = round(anchor.getBoundingClientRect().top - viewTop());
+    const left = distance();
     await open("other");
     // Gone from memory: it loads again, its long replies' full text after it.
     useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
@@ -524,7 +525,7 @@ const steps = {
     await settle(0);
     changes.disconnect();
     early.push(offsetNow());
-    return { offset, restoredOffset: offsetNow(), early, loading, placeholders };
+    return { offset, restoredOffset: offsetNow(), early, loading, placeholders, distance: left, restoredDistance: distance() };
   },
   /** An old turn scrolled to (mounted as it comes into view), then a switch and back: the same row at the same place. */
   async revealedBack() {
@@ -611,7 +612,7 @@ const steps = {
   },
   /**
    * A send from the bottom of a conversation: the spring to its place, its answer filling the
-   * room and then followed; scrolled away it isn't, until the user is back at the bottom.
+   * room and then running on below the view, not followed; back at the bottom, it is.
    */
   async send() {
     await open("other");
@@ -634,13 +635,11 @@ const steps = {
     const requestId = stored["other"]!.at(-1)!.requestId!;
     const top = Math.round(viewport().scrollTop);
     const streamed = await stream("other-streaming", requestId, 260);
-    // It filled the room without moving, then was followed: the view only ever went down.
-    const overflowed = {
+    // It filled the room and ran on below without the view moving.
+    const filled = {
       top,
-      grew: streamed.tops.at(-1)! - top,
-      distances: [...new Set(streamed.distances)],
-      lastDistance: streamed.distances.at(-1)!,
-      lastGap: lastGap(),
+      tops: [...new Set(streamed.tops)],
+      distance: distance(),
       button: buttonState(),
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
     };
@@ -663,7 +662,7 @@ const steps = {
       topPadding,
       spring,
       placed,
-      overflowed,
+      filled,
       unfollowed,
       followed: { distances: [...new Set(followed.distances)], grew: followed.tops.at(-1)! - followed.tops[0]! },
       shrunkWindow,

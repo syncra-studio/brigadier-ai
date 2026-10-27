@@ -119,10 +119,11 @@
 }
 
 /* The thread's scroll element: the browser's own scroll anchoring is off (the thread keeps its
-   place itself, see thread-scroll.ts), and focus scrolls keep clear of the floating footer. */
+   place itself, see thread-scroll.ts), and focus scrolls keep 16px clear of the floating footer
+   (SCROLL_PAD_PX there: the room under a sent turn is measured above it). */
 @utility thread-scroll-padding {
   overflow-anchor: none;
-  scroll-padding-bottom: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
+  scroll-padding-bottom: calc(var(--thread-footer-height, 0px) + var(--spacing) * 4);
 }
 
 /* The pad after the thread's content: the floating footer's height (--thread-footer-height, set
@@ -149,9 +150,9 @@
   background-image: linear-gradient(to bottom, var(--color-background), transparent);
 }
 
-/* 1rem above the floating footer's column: its composer, and what sits above it. */
+/* 24px above the floating footer's column: its composer, and what sits above it. */
 @utility above-composer {
-  bottom: calc(100% + var(--spacing) * 4);
+  bottom: calc(100% + var(--spacing) * 6);
 }
 
 /* The sidebar panel's width: where the user dragged it (--sidebar-width, set by the sidebar)

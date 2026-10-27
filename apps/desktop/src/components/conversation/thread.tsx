@@ -156,6 +156,19 @@ const ThreadScrollContext = createContext<ThreadScroller | null>(null);
 const ThreadKeyContext = createContext<string | null>(null);
 
 /** The key the thread around keeps its messages' parts under. */
+/**
+ * The final answer of the turn answering `requestIds` started (`started`): if it is the thread's
+ * newest turn, the thread stops watching its work and follows it only if it already did (see
+ * `ThreadScroller.answerStarted`).
+ */
+export function useThreadAnswerStarted(requestIds: readonly string[], started: boolean): void {
+  const scroller = useContext(ThreadScrollContext);
+  const ids = requestIds.join(" ");
+  useLayoutEffect(() => {
+    if (started && ids) scroller?.answerStarted(ids.split(" "));
+  }, [scroller, started, ids]);
+}
+
 export function useThreadKey(): string | null {
   return useContext(ThreadKeyContext);
 }
@@ -215,6 +228,8 @@ function useThreadScroll(
         setRoom: (px) => {
           spacer.style.height = `${px}px`;
         },
+        // A spacer for messages not mounted comes first when the rows don't start the thread.
+        before: () => group.firstElementChild instanceof HTMLElement && group.firstElementChild.dataset["slot"] === "aui_thread-gap",
       },
       saveKey,
     );
@@ -245,8 +260,10 @@ function useThreadScroll(
     // Heard before the message list hears it (a capturing listener on the view runs first): the
     // rows it mounts for where the view went change what is above, kept from where the view is.
     viewport.addEventListener("scroll", () => scroller.scrolled(), { ...options, capture: true });
-    for (const type of ["wheel", "touchstart", "touchmove", "touchend", "pointerdown", "keydown"]) {
-      viewport.addEventListener(type, scroller.input, options);
+    // Capturing too: a wheel, touch, press or key anywhere in it stops a move underway, even one
+    // whose target keeps it from going further (a nested scroller, a field).
+    for (const type of ["wheel", "touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "keydown"]) {
+      viewport.addEventListener(type, scroller.input, { ...options, capture: true });
     }
     // A focus moved in from outside (Tab from the composer, the latest response's pill) scrolls to it.
     viewport.addEventListener("focusin", scroller.focused, options);
