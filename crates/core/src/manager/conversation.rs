@@ -742,13 +742,17 @@ impl ConvLive {
     /// The CLI session while it runs a turn.
     pub(crate) async fn working_cli(&self) -> Option<Arc<Cli>> {
         let state = self.state.lock().await;
-        if state.busy { state.cli.clone() } else { None }
+        if state.busy || state.unowned_turn {
+            state.cli.clone()
+        } else {
+            None
+        }
     }
 
     /// The CLI session while it runs no turn and isn't being closed.
     pub(crate) async fn idle_cli(&self) -> Option<Arc<Cli>> {
         let state = self.state.lock().await;
-        if state.busy || state.closing || state.has_cli_jobs() {
+        if state.busy || state.unowned_turn || state.closing || state.has_cli_jobs() {
             return None;
         }
         state.cli.clone()
@@ -814,7 +818,8 @@ impl ConvLive {
         let (taken, _closing) = {
             let mut state = self.state.lock().await;
             let current = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli));
-            if !current || state.busy || state.closing || state.has_cli_jobs() {
+            if !current || state.busy || state.unowned_turn || state.closing || state.has_cli_jobs()
+            {
                 return;
             }
             let Ok(closing) = self.cli_closing.try_lock() else {
@@ -873,6 +878,7 @@ impl ConvLive {
     /// Whether the workspace can be reserved without interrupting pending or running work.
     fn workspace_free(state: &ConvState) -> bool {
         !(state.busy
+            || state.unowned_turn
             || state.closing
             || state.held
             || state.workspace_reserved
@@ -919,6 +925,7 @@ impl ConvLive {
     pub async fn is_busy(&self) -> bool {
         let state = self.state.lock().await;
         state.busy
+            || state.unowned_turn
             || state.hand_over.is_some()
             || !state.inbox.is_empty()
             || !state.pending.is_empty()
@@ -926,7 +933,8 @@ impl ConvLive {
 
     pub async fn idle_since_ms(&self) -> Option<i64> {
         let state = self.state.lock().await;
-        (!state.busy && state.cli.is_some()).then_some(state.last_activity_ms)
+        (!state.busy && !state.unowned_turn && state.cli.is_some())
+            .then_some(state.last_activity_ms)
     }
 
     /// The next CLI session must start from the transcript (its files are gone).
@@ -936,14 +944,17 @@ impl ConvLive {
 
     /// Whether a turn is starting or running.
     pub(super) async fn turn_running(&self) -> bool {
-        self.state.lock().await.busy
+        let state = self.state.lock().await;
+        state.busy || state.unowned_turn
     }
 
     /// Stops the running turn, if any; what it carried stays in the transcript.
     pub(super) async fn interrupt_turn(&self) {
         let cli = {
             let state = self.state.lock().await;
-            state.busy.then(|| state.cli.clone()).flatten()
+            (state.busy || state.unowned_turn)
+                .then(|| state.cli.clone())
+                .flatten()
         };
         if let Some(cli) = cli
             && let Err(err) = cli.session.interrupt().await
@@ -1048,7 +1059,7 @@ impl ConvLive {
     #[cfg(test)]
     pub(super) async fn idle(&self) -> bool {
         let state = self.state.lock().await;
-        !state.busy && state.inbox.is_empty() && state.pending.is_empty()
+        !state.busy && !state.unowned_turn && state.inbox.is_empty() && state.pending.is_empty()
     }
 
     /// What the driver holds for each request right now.
@@ -4727,7 +4738,7 @@ impl SessionManager {
                     };
                     // A turn of the CLI's own for a job's end, of a request or not: the turns
                     // still owed wait for its end, which looks again.
-                    if own {
+                    if !state.busy {
                         state.background_timer += 1;
                         state.unowned_turn = adopted.is_none();
                     }
@@ -6253,6 +6264,94 @@ fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_unowned_background_turn_cannot_hibernate_after_the_idle_timeout() {
+        use super::super::flow::{Flow, Options, Reply};
+
+        let flow = Flow::start(
+            "unowned-turn-hibernate",
+            Options::default(),
+            Arc::new(|_| Box::pin(async { Reply::text("Started.") })),
+        )
+        .await;
+        flow.say("Start the job.").await;
+        flow.settled().await;
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        // A resumed CLI can report a job whose original request has already ended.
+        // Its notification starts real work without a request for the manager to adopt.
+        flow.manager
+            .background_jobs(&conv, &cli, vec!["old-job".into()])
+            .await;
+        flow.manager
+            .on_conversation_event(&conv, &cli, ProviderEvent::TurnStarted { turn_id: None })
+            .await;
+        flow.manager.background_jobs(&conv, &cli, vec![]).await;
+        {
+            let mut state = conv.state.lock().await;
+            assert!(state.unowned_turn);
+            assert!(!state.busy);
+            state.last_activity_ms = now_ms() - 31 * 60_000;
+        }
+        assert!(conv.is_busy().await, "the CLI still runs its own turn");
+        assert_eq!(conv.idle_since_ms().await, None);
+        flow.manager.hibernate_idle().await;
+        assert_eq!(
+            flow.core.conversation(&conv.id).unwrap().lifecycle,
+            crate::model::Lifecycle::Active
+        );
+        assert!(flow.manager.hibernate(conv.id.clone()).await.is_err());
+        assert!(conv.live_cli().await.is_some());
+        assert!(conv.idle_cli().await.is_none());
+        flow.manager
+            .on_conversation_event(
+                &conv,
+                &cli,
+                ProviderEvent::TurnCompleted {
+                    turn_id: None,
+                    status: TurnStatus::Completed,
+                    duration_ms: None,
+                    usage: None,
+                },
+            )
+            .await;
+        assert!(!conv.is_busy().await);
+        assert!(conv.idle_since_ms().await.unwrap() > now_ms() - 60_000);
+        flow.manager.hibernate_idle().await;
+        assert!(
+            conv.live_cli().await.is_some(),
+            "the completed turn gets a fresh idle interval"
+        );
+        // Its last job can disappear before the next autonomous turn starts, too.
+        flow.manager
+            .on_conversation_event(&conv, &cli, ProviderEvent::TurnStarted { turn_id: None })
+            .await;
+        assert!(conv.is_busy().await);
+        assert!(conv.working_cli().await.is_some());
+        assert!(!conv.reserve_workspace().await);
+        conv.retire_cli_for(&cli, None).await;
+        assert!(conv.live_cli().await.is_some());
+        assert!(flow.manager.hibernate(conv.id.clone()).await.is_err());
+        flow.manager
+            .on_conversation_event(
+                &conv,
+                &cli,
+                ProviderEvent::TurnCompleted {
+                    turn_id: None,
+                    status: TurnStatus::Completed,
+                    duration_ms: None,
+                    usage: None,
+                },
+            )
+            .await;
+        flow.manager.hibernate(conv.id.clone()).await.unwrap();
+        assert_eq!(
+            flow.core.conversation(&conv.id).unwrap().lifecycle,
+            crate::model::Lifecycle::Hibernated
+        );
+        flow.stop().await;
+    }
 
     /// Brigadier's lines put before a turn's input (a hand-off, the word that the last turn
     /// stopped early, a reseed's transcript) move the user's words along: only theirs show.

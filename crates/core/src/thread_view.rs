@@ -704,16 +704,6 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 }
                 _ => None,
             });
-            let error = inside.iter().find_map(|entry| match &entry.event {
-                ProviderEvent::Error { error } if entry.parent.is_none() => {
-                    Some(error.message.clone())
-                }
-                _ => None,
-            });
-            let limit = inside.iter().rev().find_map(|entry| match &entry.event {
-                ProviderEvent::Error { error } if entry.parent.is_none() => limit_of(error),
-                _ => None,
-            });
             let noted = recorded.remove(id.as_str());
             // A turn no record names that began before the turn before it ended ran inside that
             // one, as the stream said it: Claude writes Brigadier's `/compact` after the
@@ -727,15 +717,45 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             });
             let cut = noted.as_ref().is_some_and(|(_, end, _)| end.is_none());
             let (requests, record, joins) = noted.unwrap_or_default();
+            // Internal inputs and background notifications continue the same visible turn.
+            // A prior attempt's error stays in the native file after an account switch;
+            // only errors since the preceding end can describe this continuation.
+            let running = last && running;
+            let completed = record.is_some_and(|record| record.end == Some(TurnEnd::Done));
+            let since = ends.get(id.as_str()).and_then(|ends| {
+                ends.iter()
+                    .rev()
+                    .find(|prior| {
+                        running || completed || record.is_none_or(|end| !std::ptr::eq(**prior, end))
+                    })
+                    .and_then(|prior| prior.ended_at_ms)
+            });
+            let current_errors = || {
+                inside
+                    .iter()
+                    .filter(|entry| {
+                        entry.parent.is_none()
+                            && entry.at_ms.zip(since).is_none_or(|(at, since)| at > since)
+                    })
+                    .filter_map(|entry| match &entry.event {
+                        ProviderEvent::Error { error } => Some(error),
+                        _ => None,
+                    })
+            };
+            let error = current_errors().next().map(|error| error.message.clone());
+            let limit = current_errors().rev().find_map(limit_of);
             if within.is_none() {
                 before = record;
             }
             turn.requests = requests;
             turn.joins = joins;
-            turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
+            turn.limit = record
+                .filter(|_| !running)
+                .and_then(|record| record.limit.clone())
+                .or(limit);
             if let Some(record) = record {
                 turn.end = record.end;
-                turn.error = record.error.clone().or(error);
+                turn.error = record.error.clone().filter(|_| !running).or(error);
                 turn.ended_at_ms = record.ended_at_ms;
             } else if last && running {
                 turn.ended_at_ms = None;
@@ -989,6 +1009,103 @@ mod tests {
             role,
             text: id.into(),
         })
+    }
+
+    #[test]
+    fn a_recovered_account_limit_does_not_describe_a_later_continuation() {
+        let at = |mut entry: FileEntry, at| {
+            entry.at_ms = Some(at);
+            entry
+        };
+        let limited = at(
+            entry(ProviderEvent::Error {
+                error: brigadier_providers::ProviderError {
+                    kind: ErrorKind::UsageLimit,
+                    message: "You've hit your session limit".into(),
+                    will_retry: false,
+                    limit: Some(LimitHit {
+                        window: Some("five_hour".into()),
+                        resets_at_ms: Some(1793100600000),
+                        kind: Default::default(),
+                    }),
+                    code: Some("rate_limit".into()),
+                },
+            }),
+            1793090676772,
+        );
+        // Background notifications and internal account-resume messages join the same
+        // visible user turn. Work's error remains in the shared native session file.
+        let entries = Arc::new(vec![
+            at(message("user", Role::User), 1793088360000),
+            limited,
+            at(
+                message("resumed-on-personal-2", Role::Assistant),
+                1793090870000,
+            ),
+            at(message("working", Role::Assistant), 1793092796552),
+        ]);
+        let record = |end, at| TurnRecord {
+            user_message: Some("user".into()),
+            end: Some(end),
+            ended_at_ms: Some(at),
+            error: None,
+            limit: None,
+            requests: Vec::new(),
+            context_window: None,
+            joins: false,
+        };
+        let recovered = record(TurnEnd::Done, 1793090876447);
+        let recovered_view = view(
+            vec![entries.clone()],
+            None,
+            std::slice::from_ref(&recovered),
+        );
+        assert_eq!(recovered_view.turns[0].error, None);
+        assert_eq!(recovered_view.turns[0].limit, None);
+        for end in [TurnEnd::Done, TurnEnd::Interrupted] {
+            let view = view(
+                vec![entries.clone()],
+                None,
+                &[recovered.clone(), record(end, 1793092845464)],
+            );
+            assert_eq!(view.turns[0].end, Some(end));
+            assert_eq!(view.turns[0].error, None, "{view:#?}");
+            assert_eq!(view.turns[0].limit, None, "{view:#?}");
+        }
+        let live = LiveTurn {
+            open: true,
+            continues: true,
+            user_message: Some("user".into()),
+            ..Default::default()
+        };
+        let running = view(
+            vec![entries.clone()],
+            Some(&live),
+            std::slice::from_ref(&recovered),
+        );
+        assert_eq!(running.turns[0].end, None);
+        assert_eq!(running.turns[0].error, None);
+        assert_eq!(running.turns[0].limit, None, "{running:#?}");
+        let mut fresh = entries.as_ref().clone();
+        fresh.push(at(
+            entry(ProviderEvent::Error {
+                error: brigadier_providers::ProviderError {
+                    kind: ErrorKind::Network,
+                    message: "Connection lost.".into(),
+                    will_retry: false,
+                    limit: None,
+                    code: None,
+                },
+            }),
+            1793092800000,
+        ));
+        let failed = view(
+            vec![Arc::new(fresh)],
+            None,
+            &[recovered, record(TurnEnd::Interrupted, 1793092845464)],
+        );
+        assert_eq!(failed.turns[0].error.as_deref(), Some("Connection lost."));
+        assert_eq!(failed.turns[0].limit, None);
     }
 
     fn command(id: &str, status: ItemStatus) -> FileEntry {

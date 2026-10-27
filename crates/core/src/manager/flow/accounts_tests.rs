@@ -155,6 +155,154 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
     flow.stop().await;
 }
 
+/// A 5-hour rejection skips the other full 5-hour account and the full weekly account,
+/// resumes on the fourth Claude account, then uses a Fallback row only if that one runs out.
+#[tokio::test]
+async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
+    use brigadier_providers::{QuotaSnapshot, QuotaSource, QuotaWindow};
+
+    let log = Log::default();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let limited = Arc::new(tokio::sync::Notify::new());
+    let fourth = Arc::new(tokio::sync::Notify::new());
+    let exhausted = Arc::new(tokio::sync::Notify::new());
+    let answer = logging(&log, |turn| match turn.provider {
+        ProviderKind::Claude => Reply::limited(),
+        ProviderKind::Codex => Reply::text("Done on Codex."),
+    });
+    let script: Script = {
+        let (started, limited, fourth, exhausted) = (
+            started.clone(),
+            limited.clone(),
+            fourth.clone(),
+            exhausted.clone(),
+        );
+        Arc::new(move |turn| {
+            let (started, limited, fourth, exhausted, answer) = (
+                started.clone(),
+                limited.clone(),
+                fourth.clone(),
+                exhausted.clone(),
+                answer.clone(),
+            );
+            Box::pin(async move {
+                if turn.provider == ProviderKind::Claude {
+                    if turn.account.is_none() {
+                        started.notify_one();
+                        limited.notified().await;
+                    } else if turn.account.as_deref() == Some("personal-2") {
+                        fourth.notify_one();
+                        exhausted.notified().await;
+                    }
+                }
+                answer(turn).await
+            })
+        })
+    };
+    let flow = Flow::start("four-account-limit", Options::default(), script).await;
+    flow.say("Finish the work once.").await;
+    tokio::time::timeout(*super::PATIENCE, started.notified())
+        .await
+        .unwrap();
+    flow.add_accounts(
+        &[
+            (ProviderKind::Claude, "personal"),
+            (ProviderKind::Claude, "work"),
+            (ProviderKind::Claude, "personal-2"),
+        ],
+        true,
+    )
+    .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    for (provider, account, windows) in [
+        (
+            ProviderKind::Claude,
+            None,
+            vec![("five_hour", 100.0), ("seven_day", 90.0)],
+        ),
+        (
+            ProviderKind::Claude,
+            Some("work"),
+            vec![("five_hour", 100.0), ("seven_day", 90.0)],
+        ),
+        (
+            ProviderKind::Claude,
+            Some("personal"),
+            vec![("five_hour", 0.0), ("seven_day", 100.0)],
+        ),
+        (
+            ProviderKind::Claude,
+            Some("personal-2"),
+            vec![("five_hour", 27.0), ("seven_day", 6.0)],
+        ),
+        (ProviderKind::Codex, None, vec![("primary", 47.0)]),
+    ] {
+        let now = crate::now_ms();
+        flow.manager
+            .runtime
+            .note_quota_snapshot(
+                &crate::accounts::AccountRef::new(provider, account.map(Into::into)),
+                QuotaSnapshot {
+                    provider,
+                    windows: windows
+                        .into_iter()
+                        .map(|(id, used_percent)| QuotaWindow {
+                            id: id.into(),
+                            label: id.into(),
+                            used_percent,
+                            resets_at_ms: Some(now + 3_600_000),
+                            window_minutes: Some(if id == "five_hour" { 300 } else { 10080 }),
+                            bucket: None,
+                            model: None,
+                        })
+                        .collect(),
+                    limit: None,
+                    observed_at_ms: now,
+                    source: QuotaSource::Read,
+                },
+            )
+            .await;
+    }
+    limited.notify_one();
+    tokio::time::timeout(*super::PATIENCE, fourth.notified())
+        .await
+        .unwrap();
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("personal-2"));
+    assert_eq!(
+        seen(&log).len(),
+        1,
+        "no full account or other provider was tried"
+    );
+    exhausted.notify_one();
+    flow.until("Codex finishes", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.state == RequestState::Done)
+    })
+    .await;
+    flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| (turn.provider, turn.account.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("personal-2")),
+            (ProviderKind::Codex, None),
+        ]
+    );
+    assert_eq!(turns[0].native_id, turns[1].native_id);
+    assert_ne!(turns[1].native_id, turns[2].native_id);
+    assert!(turns[1].input.contains(CONTINUE_ON_ACCOUNT));
+    assert!(notices(&flow).await.is_empty());
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_switch_notice_masks_an_account_named_by_its_email() {
     let log = Log::default();

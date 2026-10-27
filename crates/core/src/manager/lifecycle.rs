@@ -380,7 +380,7 @@ impl SessionManager {
         });
     }
 
-    async fn hibernate_idle(&self) {
+    pub(super) async fn hibernate_idle(&self) {
         let minutes = self.core.settings().hibernate_after_minutes;
         if minutes == 0 {
             return;
