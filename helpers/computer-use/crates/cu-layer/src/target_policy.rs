@@ -185,7 +185,17 @@ fn check_pid(
         return Err(refusal(tool, &identity, RefusalReason::Driver));
     }
     match identity {
-        Some(identity) => check(tool, &identity, allowed),
+        Some(identity) => {
+            check(tool, &identity, allowed)?;
+            let unlocked = identity
+                .bundle_id
+                .as_ref()
+                .is_some_and(|id| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(id)));
+            if !unlocked && process_hosts_terminal(pid) {
+                return Err(refusal(tool, &identity, RefusalReason::Terminal));
+            }
+            Ok(())
+        }
         None => {
             #[cfg(target_os = "macos")]
             {
@@ -378,6 +388,10 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
             | "com.github.wez.wezterm"
             | "co.zeit.hyper"
             | "co.vercel.hyper"
+            | "org.tabby"
+            | "com.electron.tabby"
+            | "com.waveterm.waveterm"
+            | "com.github.railsware.upterm"
     ) || bundle.starts_with("dev.warp.")
         || is_windows_or_linux_terminal(bundle)
         || matches!(
@@ -392,6 +406,10 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
                 | "alacritty"
                 | "wezterm"
                 | "hyper"
+                | "wmux"
+                | "tabby"
+                | "git bash"
+                | "wezterm-gui"
         )
         || (cfg!(not(target_os = "macos"))
             && matches!(
@@ -413,6 +431,14 @@ fn is_windows_or_linux_terminal(bundle: &str) -> bool {
     matches!(
         bundle,
         "windowsterminal"
+            | "wmux"
+            | "tabby"
+            | "hyper"
+            | "wezterm"
+            | "warp-preview"
+            | "warp-terminal"
+            | "git-bash"
+            | "git-cmd"
             | "wt"
             | "openconsole"
             | "conhost"
@@ -458,6 +484,121 @@ fn is_windows_or_linux_terminal(bundle: &str) -> bool {
             | "wslhost"
             | "env"
     ) || bundle.starts_with("microsoft.windowsterminal")
+}
+
+// Process evidence catches renamed/unlisted terminal hosts as well as the
+// maintained app identities above. Never attach to a console or inject input.
+#[derive(Debug)]
+struct ProcessFact {
+    pid: i64,
+    parent: i64,
+    executable: String,
+    has_tty: bool,
+}
+
+fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
+    let parents: std::collections::HashMap<i64, i64> = processes
+        .iter()
+        .map(|process| (process.pid, process.parent))
+        .collect();
+    processes.iter().any(|process| {
+        let executable = process.executable.to_ascii_lowercase();
+        let executable = executable.rsplit(['/', '\\']).next().unwrap_or(&executable);
+        let executable = executable.strip_suffix(".exe").unwrap_or(executable);
+        // conhost/OpenConsole include headless ConPTY servers. Unix shell
+        // children count only with a controlling PTY, not background scripts.
+        let evidence = if windows {
+            matches!(executable, "conhost" | "openconsole")
+                || is_windows_or_linux_terminal(executable)
+        } else {
+            process.has_tty && is_windows_or_linux_terminal(executable)
+        };
+        if !evidence {
+            return false;
+        }
+        let mut ancestor = process.pid;
+        // Bound traversal and tolerate exit races, cycles and reparenting.
+        for _ in 0..128 {
+            if ancestor == pid {
+                return true;
+            }
+            let Some(parent) = parents.get(&ancestor).copied() else {
+                return false;
+            };
+            if parent <= 0 || parent == ancestor {
+                return false;
+            }
+            ancestor = parent;
+        }
+        false
+    })
+}
+
+#[cfg(unix)]
+fn process_hosts_terminal(pid: i64) -> bool {
+    let Ok(output) = std::process::Command::new("/bin/ps")
+        .args(["-A", "-o", "pid=,ppid=,tty=,comm="])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let processes: Vec<ProcessFact> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let parent = fields.next()?.parse().ok()?;
+            let tty = fields.next()?;
+            Some(ProcessFact {
+                pid,
+                parent,
+                executable: fields.collect::<Vec<_>>().join(" "),
+                has_tty: !matches!(tty, "?" | "??" | "-"),
+            })
+        })
+        .collect();
+    hosts_terminal(pid, &processes, false)
+}
+
+#[cfg(windows)]
+fn process_hosts_terminal(pid: i64) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    // SAFETY: the snapshot is closed on every successful acquisition; each
+    // PROCESSENTRY32W has the required size and a live, fixed-size name buffer.
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return false;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut processes = Vec::new();
+        let mut next = Process32FirstW(snapshot, &mut entry);
+        while next.is_ok() {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            processes.push(ProcessFact {
+                pid: i64::from(entry.th32ProcessID),
+                parent: i64::from(entry.th32ParentProcessID),
+                executable: String::from_utf16_lossy(&entry.szExeFile[..len]),
+                has_tty: false,
+            });
+            next = Process32NextW(snapshot, &mut entry);
+        }
+        let _ = CloseHandle(snapshot);
+        hosts_terminal(pid, &processes, true)
+    }
 }
 
 /// Native launch aliases do not pass through the macOS `name`/`bundle_id`
@@ -617,6 +758,89 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn process(pid: i64, parent: i64, executable: &str, has_tty: bool) -> ProcessFact {
+        ProcessFact {
+            pid,
+            parent,
+            executable: executable.into(),
+            has_tty,
+        }
+    }
+
+    #[test]
+    fn console_and_pty_descendants_reveal_unknown_terminal_hosts() {
+        for host in ["conhost.exe", "OpenConsole.exe", "pwsh.exe"] {
+            let processes = [
+                process(10, 1, "renamed-host.exe", false),
+                process(11, 10, "broker.exe", false),
+                process(12, 11, host, false),
+            ];
+            assert!(hosts_terminal(10, &processes, true), "{host}");
+            assert!(!hosts_terminal(99, &processes, true));
+        }
+        let shell = [
+            process(20, 1, "unknown-gui", false),
+            process(21, 20, "/bin/zsh", true),
+        ];
+        assert!(hosts_terminal(20, &shell, false));
+        let script = [
+            process(20, 1, "ordinary-gui", false),
+            process(21, 20, "/bin/zsh", false),
+        ];
+        assert!(!hosts_terminal(20, &script, false));
+        assert!(!hosts_terminal(20, &[process(21, 21, "sh", true)], false));
+    }
+
+    #[test]
+    fn maintained_terminal_names_cover_all_three_platforms() {
+        for terminal in [
+            "wmux",
+            "wezterm",
+            "wezterm-gui",
+            "alacritty",
+            "tabby",
+            "hyper",
+            "warp",
+            "kitty",
+            "mintty",
+            "git-bash",
+            "cmd",
+            "pwsh",
+            "ghostty",
+            "gnome-terminal",
+            "konsole",
+            "xterm",
+            "foot",
+            "tilix",
+        ] {
+            assert!(is_terminal(terminal, terminal), "{terminal}");
+            let target = TargetIdentity {
+                name: terminal.into(),
+                bundle_id: Some(terminal.into()),
+                pid: None,
+            };
+            assert_eq!(classify(&target, &[]), Some(RefusalReason::Terminal));
+            assert_eq!(classify(&target, &[terminal.into()]), None);
+        }
+        for (bundle, name) in [
+            ("com.googlecode.iterm2", "iTerm2"),
+            ("com.mitchellh.ghostty", "Ghostty"),
+            ("com.github.wez.wezterm", "WezTerm"),
+        ] {
+            assert!(is_terminal(bundle, &name.to_ascii_lowercase()));
+        }
+        #[cfg(target_os = "macos")]
+        assert!(!is_terminal("com.apple.console", "console"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_snapshot_does_not_attach_a_console() {
+        // Only a read-only Toolhelp snapshot; the test harness has no terminal
+        // descendants and looking up a nonexistent PID cannot find a host.
+        assert!(!process_hosts_terminal(i64::from(u32::MAX)));
+    }
 
     #[test]
     fn store_frame_refusal_names_background_support_not_credentials() {
