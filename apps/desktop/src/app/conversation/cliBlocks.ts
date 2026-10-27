@@ -633,9 +633,10 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
  * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
  * (`board`). A subagent's own items (`parent`) are not drawn: the thread shows its Agent call's
  * row, as it does for a Claude subagent's work. `session`: the thread is a session's, where
- * Brigadier compacts a long one itself.
+ * Brigadier compacts a long one itself. `typed`: the words of the user's own messages that no
+ * turn read names yet.
  */
-export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest, session = false): Block[] {
+export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest, session = false, typed: readonly string[] = []): Block[] {
   const blocks: Block[] = [];
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
@@ -733,10 +734,20 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const unshown =
       !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || onlyWithdrawn(asked.text));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
-    // divider, never the command or what its summary must keep.
-    // Its checkpoint request before Codex compacts is Brigadier's too (run2-D9).
+    // divider, never the command or what its summary must keep, from the stream's first word of
+    // it on. Its checkpoint request before Codex compacts is Brigadier's too (run2-D9). Its turn
+    // names no request of the user's own: none, or a block's before it that a background
+    // command's end went on with. Not read yet, it names none: the user's own `/compact` is
+    // one of the words they sent.
+    const read = view.turns[turn];
     const compacting =
-      !!asked && session && brigadiers && (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK));
+      !!asked &&
+      session &&
+      startsTurn(entry) &&
+      (/^\/compact(\s|$)/.test(asked.text) || asked.text.startsWith(CHECKPOINT_MARK)) &&
+      (read
+        ? read.requests.every((request) => blocks.some((earlier) => earlier.requestIds.includes(request)))
+        : !typed.includes(asked.text.trim()));
     // Brigadier's word to a session's CLI is no bubble (run2-D44): its own turn's, or a turn
     // of a request already shown (a background command's end), or steered in.
     const carries = view.turns[turn]?.requests ?? [];
@@ -958,7 +969,9 @@ export function cliThreadTree(
   run: RunNow,
   session = false,
 ): ThreadTree {
-  const blocks = cliBlocks(view, conversationId, board, session);
+  const named = new Set(view.turns.flatMap((turn) => turn.requests));
+  const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
+  const blocks = cliBlocks(view, conversationId, board, session, typed);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
   // shows it as it was sent, its pasted chips, mentions and attachments with it.
   const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));
@@ -976,7 +989,6 @@ export function cliThreadTree(
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
   }
-  const named = new Set(view.turns.flatMap((turn) => turn.requests));
   // A turn whose message the stream said before the turns were read again names no request yet:
   // its message is the CLI's, under the CLI's id. It is the one Brigadier kept since the turn
   // before began that no turn carries, so its bubble stays the one shown while it was on its way,

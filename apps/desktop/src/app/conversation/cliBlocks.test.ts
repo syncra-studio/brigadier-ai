@@ -1015,3 +1015,64 @@ test("a message sent while the block still held for its workers goes on in that 
   assert.equal(after!.user?.kind === "message" && after!.user.text, "Thanks, now the docs");
   assert.deepEqual(after!.steers, []);
 });
+
+/** A session thread's nodes as drawn: each bubble's words, each block's key, its dividers' ids. */
+const drawn = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) =>
+    node.kind === "user" && node.block.user?.kind === "message" ? ["user", node.id, node.block.user.text] : ["block", node.id, node.block.compactions.map((each) => each.id)],
+  );
+
+test("Brigadier's /compact is no bubble from the stream's first word of it to the turns read again: the thread draws the same rows throughout", () => {
+  const asked = "/compact Besides your usual summary, keep these exactly";
+  const before: ThreadView = {
+    entries: [user("u1", "Grow", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Grown." }, 2000)],
+    turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }],
+  };
+  const kept = [{ ...stored("m1", 900), text: "Grow" }];
+  const run = { state: "running", error: null } as const;
+  const tree = (thread: ThreadView) => drawn(cliThreadTree(thread, "conv", kept, {}, [], NO_BOARD, run, true));
+  // The stream says the compaction, then the `/compact` Claude echoes; its turn is read only once it ends.
+  const running = { ...before, entries: [...before.entries, at({ type: "compactionStarted", automatic: false }, 3000)] };
+  const said = { ...before, entries: [...running.entries, compactionEnded(false, 3500), user("c1", asked, 3001)] };
+  const read: ThreadView = {
+    entries: [...before.entries, compactionEnded(false, 3500), user("c1", asked, 3001)],
+    turns: [...before.turns, turn("c1", 3001, 3600, "done")],
+  };
+  const rows = [["user", "m1", "Grow"], ["block", "request:u1", ["compaction:2"]]];
+  for (const [name, thread] of [["running", running], ["said", said], ["read", read]] as const) assert.deepEqual(tree(thread), rows, name);
+});
+
+test("Brigadier's /compact stays hidden once a background command's end goes on in its turn and carries the request before it", () => {
+  const asked = "/compact Besides your usual summary, keep these exactly";
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Watch CI", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Watching." }, 2000),
+        compactionEnded(false, 3500),
+        user("c1", asked, 3001),
+        at({ type: "taskNotice", itemId: "n1", text: "Background command \"gh run watch 12\" completed (exit code 0)" }, 5000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "CI passed." }, 5100),
+      ],
+      // The turns the command's end started go on under the `/compact`'s, with the request of the block that started it.
+      turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }, { ...turn("c1", 3001, 5200, "done"), requests: ["m1"] }],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind === "message" ? block.user.text : null]), [["u1", "Watch CI"]]);
+});
+
+test("a /compact the user typed in a session is their bubble, before and after its turn is read", () => {
+  const before: ThreadView = {
+    entries: [user("u1", "Grow", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Grown." }, 2000)],
+    turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }],
+  };
+  const kept = [{ ...stored("m1", 900), text: "Grow" }, { ...stored("m2", 3000), text: "/compact" }];
+  const run = { state: "running", error: null } as const;
+  const tree = (thread: ThreadView) => drawn(cliThreadTree(thread, "conv", kept, {}, [], NO_BOARD, run, true));
+  const said = { ...before, entries: [...before.entries, compactionEnded(false, 3500), user("c2", "/compact", 3001)] };
+  const read = { ...said, turns: [...before.turns, { ...turn("c2", 3001, 3600, "done"), requests: ["m2"] }] };
+  for (const thread of [said, read]) assert.deepEqual(tree(thread).filter(([kind]) => kind === "user").map(([, , text]) => text), ["Grow", "/compact"]);
+});

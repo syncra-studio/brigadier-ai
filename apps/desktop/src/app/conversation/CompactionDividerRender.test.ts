@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 type Seen = {
   failed: string | null;
@@ -62,4 +62,21 @@ test("a compaction mid-turn is a divider in the turn's place, outside its folded
   assert.equal(seen.inWork, 0);
   assert.deepEqual(seen.answers, ["The release notes are tidy."]);
   assert.equal(seen.interrupted, false);
+});
+
+test("Brigadier's compaction as the app hears it moves nothing at the thread's bottom: no /compact bubble or block shows for a frame and goes", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "compaction-divider.html?case=live", "compaction-divider-result", 90000)) as {
+    failed: string | null;
+    steps: { step: string; top: number; bottom: number; asked: boolean }[];
+    dividers: (string | null)[];
+  };
+  assert.equal(seen.failed, null);
+  const [before] = seen.steps;
+  // At its bottom, following: the divider coming in moves what is above it up, once; nothing comes and goes.
+  assert.ok(before && before.bottom <= 24, JSON.stringify(seen.steps));
+  for (const step of seen.steps) {
+    assert.equal(step.asked, false, `a /compact bubble at "${step.step}": ${JSON.stringify(seen.steps)}`);
+  }
+  seen.steps.slice(1).forEach((step, index) => assert.ok(step.top >= seen.steps[index]!.top, `the view went back up at "${step.step}": ${JSON.stringify(seen.steps)}`));
+  assert.deepEqual(seen.dividers, [REFRESHED]);
 });
