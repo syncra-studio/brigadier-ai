@@ -98,7 +98,7 @@ const type = (text: string) => fixtureInput({ type: "type", text });
 const menu = () => document.querySelector<HTMLElement>("[data-slot=composer-mentions]");
 async function clearComposer() {
   field()!.focus();
-  await key("a", ["Meta"]);
+  await key("a", [navigator.platform.startsWith("Mac") ? "Meta" : "Control"]);
   await key("Backspace");
   await until("the composer cleared", () => typed() === "");
 }
