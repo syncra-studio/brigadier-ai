@@ -2,20 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("plugin sign-in stays inline on cards and details, with Cancel, Sign in again and live callbacks", { timeout: 60000 }, async (t) => {
+test("plugin sign-in runs only on details, with Cancel, Sign in again and live callbacks", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "../src/app/settings/plugins/SignIn.fixture.html", "result", 20000)) as {
-    error?: string; warning: boolean; gridWaiting: boolean; gridStayedOpen: boolean; canceled: string;
+    error?: string; warning: boolean; gridWaiting: string; startsBeforeSignIn: number; initialWaiting: boolean; canceled: string;
     detailWaiting: boolean; beforeCallbackStarts: number; callbackMs: number; signedInButtons: string[];
-    againWaiting: boolean; canceledAgainButtons: string[]; grid: string; gridLine: boolean; gridButtons: string[]; fallback: string; setup: string; setupButtons: string[];
+    againWaiting: boolean; canceledAgainButtons: string[]; grid: string; gridLine: boolean; gridButtons: { label: string; role: string }[][]; fallback: string; fallbackWaiting: string; setup: string; setupButtons: string[];
     dialogs: number; banners: number;
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.warning, true, "Must sign in uses the existing warning token");
-  assert.equal(seen.gridWaiting, true, "card shows a spinner and Waiting for browser");
-  assert.equal(seen.gridStayedOpen, true, "card sign-in does not navigate");
+  assert.equal(seen.startsBeforeSignIn, 0, "opening details does not start sign-in");
+  assert.equal(seen.initialWaiting, true, "detail shows a spinner and Waiting for browser");
+  assert.equal(seen.gridWaiting, "Waiting for your browser…", "card keeps its sign-in status line");
   assert.equal(seen.canceled, "Must sign in");
   assert.equal(seen.detailWaiting, true);
-  assert.equal(seen.beforeCallbackStarts, 2, "opening the details does not start another flow");
+  assert.equal(seen.beforeCallbackStarts, 2, "two explicit detail-page sign-ins start two flows");
   assert.ok(seen.callbackMs <= 1000, `callback took ${seen.callbackMs} ms to display`);
   t.diagnostic(`callback to Signed in: ${seen.callbackMs} ms`);
   assert.deepEqual(seen.signedInButtons, ["Sign in again"]);
@@ -23,8 +24,15 @@ test("plugin sign-in stays inline on cards and details, with Cancel, Sign in aga
   assert.deepEqual(seen.canceledAgainButtons, ["Sign in again"], "Cancel keeps the saved sign-in");
   assert.equal(seen.grid, "");
   assert.equal(seen.gridLine, false, "a signed-in card has no status line");
-  assert.ok(!seen.gridButtons.some((label) => /Sign in|Sign out/.test(label)));
+  assert.equal(seen.gridButtons.length, 6);
+  for (const buttons of seen.gridButtons) {
+    assert.deepEqual(buttons, [
+      { label: "Open Test server", role: "button" },
+      { label: "Test server", role: "switch" },
+    ], "cards only have open and switch buttons in every sign-in state");
+  }
   assert.match(seen.fallback, /Uses each CLI's sign-in: Codex still need it/);
+  assert.match(seen.fallbackWaiting, /Codex: waiting for browser/);
   assert.match(seen.setup, /add it in that CLI/);
   assert.deepEqual(seen.setupButtons, [], "setup-only providers have no dead browser action");
   assert.equal(seen.dialogs, 0);

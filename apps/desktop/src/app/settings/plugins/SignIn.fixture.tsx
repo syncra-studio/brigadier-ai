@@ -50,19 +50,28 @@ const click = (selector: string, label: string) => {
 const waiting = (selector: string) => buttons(selector).some((button) => button.textContent === "Waiting for browser…" && button.disabled && !!button.querySelector("svg"));
 const row = '[data-slot="plugin-row"]';
 const detail = '[data-slot="sign-in-status"]';
+const cardButtons = () => buttons(row).map((button) => ({
+  label: button.getAttribute("aria-label"), role: button.getAttribute("role") ?? "button",
+}));
 async function run() {
   await wait(() => text('[data-slot="row-line"]') === "Must sign in");
   const warning = document.querySelector('[data-slot="row-line"]')?.classList.contains("text-warning");
-  click(row, "Sign in");
-  await wait(() => waiting(row));
-  const gridWaiting = waiting(row);
-  const gridStayedOpen = !!document.querySelector('[data-slot="plugins-grid"]');
-  click(row, "Cancel");
-  await wait(() => stops === 1 && text('[data-slot="row-line"]') === "Must sign in");
-  const canceled = text('[data-slot="row-line"]');
-  click(row, "Sign in");
-  await wait(() => waiting(row));
+  const gridButtons = [cardButtons()];
   click(row, "Open Test server");
+  await wait(() => text(`${detail} [role="status"]`) === "Not signed in");
+  const startsBeforeSignIn = starts;
+  click(detail, "Sign in");
+  await wait(() => waiting(detail));
+  const initialWaiting = waiting(detail);
+  click(detail, "Cancel");
+  await wait(() => stops === 1 && text(`${detail} [role="status"]`) === "Not signed in");
+  openSettings("plugins");
+  await wait(() => text('[data-slot="row-line"]') === "Must sign in");
+  const canceled = text('[data-slot="row-line"]');
+  gridButtons.push(cardButtons());
+  click(row, "Open Test server");
+  await wait(() => text(`${detail} [role="status"]`) === "Not signed in");
+  click(detail, "Sign in");
   await wait(() => waiting(detail));
   const detailWaiting = waiting(detail);
   const beforeCallbackStarts = starts;
@@ -81,26 +90,35 @@ async function run() {
   click(detail, "Sign in again");
   await wait(() => waiting(detail) && starts === 4);
   openSettings("plugins");
-  await wait(() => waiting(row));
+  await wait(() => text('[data-slot="row-line"]') === "Waiting for your browser…");
+  const gridWaiting = text('[data-slot="row-line"]');
+  gridButtons.push(cardButtons());
   state = { type: "signedIn" };
-  await wait(() => !document.querySelector(`${row} [data-slot="sign-in-actions"]`));
+  await wait(() => !!document.querySelector(row) && !document.querySelector('[data-slot="row-line"]'));
   const grid = text('[data-slot="row-line"]');
   const gridLine = !!document.querySelector('[data-slot="row-line"]');
-  const gridButtons = buttons(row).map((button) => button.textContent);
+  gridButtons.push(cardButtons());
   saved = false;
 
   state = { type: "cliFallback", agents: ["codex"], steps: [] };
   await usePlugins.getState().reload();
   await wait(() => text('[data-slot="row-line"]').includes("Uses each CLI's sign-in"));
   const fallback = text('[data-slot="row-line"]');
-  click(row, "Sign in");
-  await wait(() => waiting(row) && text('[data-slot="row-line"]').includes("Codex: waiting for browser"));
-  click(row, "Cancel");
-  await wait(() => stops === 3 && text('[data-slot="row-line"]') === "Must sign in");
+  gridButtons.push(cardButtons());
+  click(row, "Open Test server");
+  await wait(() => text(detail).includes("Uses each CLI's sign-in"));
+  click(detail, "Sign in");
+  await wait(() => waiting(detail) && text(detail).includes("Codex: waiting for browser"));
+  const fallbackWaiting = text(`${detail} [role="status"]`);
+  click(detail, "Cancel");
+  await wait(() => stops === 3 && text(`${detail} [role="status"]`) === "Not signed in");
+  openSettings("plugins");
+  await wait(() => text('[data-slot="row-line"]') === "Must sign in");
 
   state = { type: "cliSetupRequired", agents: ["claude", "codex"] };
   await usePlugins.getState().reload();
   await wait(() => text('[data-slot="row-line"]').includes("add it in that CLI"));
+  gridButtons.push(cardButtons());
   click(row, "Open Test server");
   await wait(() => text(detail).includes("add it in that CLI"));
   const setup = text(detail);
@@ -108,8 +126,8 @@ async function run() {
   const dialogs = document.querySelectorAll('[data-dialog="sign-in"]').length;
   const banners = document.querySelectorAll('[data-slot="banner"]').length;
   disconnect();
-  return { warning, gridWaiting, gridStayedOpen, canceled, detailWaiting, beforeCallbackStarts,
-    callbackMs, signedInButtons, againWaiting, canceledAgainButtons, grid, gridLine, gridButtons, fallback, setup, setupButtons, dialogs, banners };
+  return { warning, gridWaiting, startsBeforeSignIn, initialWaiting, canceled, detailWaiting, beforeCallbackStarts,
+    callbackMs, signedInButtons, againWaiting, canceledAgainButtons, grid, gridLine, gridButtons, fallback, fallbackWaiting, setup, setupButtons, dialogs, banners };
 }
 void run().then((result) => { document.getElementById("result")!.textContent = JSON.stringify(result); }, (error: unknown) => {
   disconnect(); document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) });

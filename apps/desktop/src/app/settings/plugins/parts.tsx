@@ -8,8 +8,6 @@ import { cn } from "@/lib/utils";
 import { brandOf } from "./brand";
 import type { Line, Tone } from "./model";
 import type { PluginItemView, PluginKind } from "./types";
-import type { PluginsAdapter } from "./adapter";
-import { SignInActions } from "./SignIn";
 
 /** The agents with a mark of their own; any other shows its name's first letter. */
 const GLYPHS: readonly string[] = ["claude", "codex"] satisfies ProviderKind[];
@@ -72,12 +70,11 @@ function ScopeChip({ text }: { text: string }) {
 }
 
 /** One item in the list's grid: its mark, name, line and where it's on; its switch at the corner. */
-export function PluginCard({ item, line, chip, busy, adapter, onOpen, onSwitch }: {
+export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
   item: PluginItemView;
   line: Line;
   chip: string | null;
   busy: boolean;
-  adapter: PluginsAdapter | null;
   onOpen: () => void;
   onSwitch: (on: boolean) => void;
 }) {
@@ -95,7 +92,6 @@ export function PluginCard({ item, line, chip, busy, adapter, onOpen, onSwitch }
             {chip && <span className="pt-1.5"><ScopeChip text={chip} /></span>}
           </span>
         </button>
-        <div className="pl-12"><SignInActions item={item} adapter={adapter} disabled={busy} /></div>
       </div>
       <SettingsSwitch label={item.name} checked={on} disabled={busy} onCheckedChange={onSwitch} />
     </SettingsCard>

@@ -225,7 +225,6 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
               line={lineOf(item)}
               chip={chipOf(view, item)}
               busy={busy}
-              adapter={adapter}
               onOpen={() => onOpen(item)}
               onSwitch={(on) => onFlip(item, on)}
             />
