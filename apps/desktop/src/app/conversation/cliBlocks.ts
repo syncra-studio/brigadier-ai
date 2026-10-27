@@ -37,13 +37,12 @@ const HANDOFF_END = "[End of the hand-off]";
 const CARRY_ON = "Carry on from the hand-off note.";
 
 /**
- * How Brigadier's own messages to the thread's CLI start (run2-D44: never a bubble): a card's
- * answer, a resume, a background command's result, a preview's end, a carry-on after a limit. The
- * CLI's reply to one still shows. Another session's message is not Brigadier's: it shows as that
- * session's (S30).
+ * Automatic engine messages to the CLI are no bubble: a card's answer, a resume, a background
+ * command's result, a preview's end, a carry-on after a limit, or the workers the user stopped.
+ * Peer messages retain their sender and authored content. The CLI's resulting work still shows.
  */
 const BRIGADIER_SAYS =
-  /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early)/;
+  /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early|worker\] The user stopped )/;
 
 /** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
 const CODEX_WAKE = /^\[your background command /;

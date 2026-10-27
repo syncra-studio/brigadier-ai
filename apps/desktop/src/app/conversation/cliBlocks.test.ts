@@ -1076,3 +1076,22 @@ test("a /compact the user typed in a session is their bubble, before and after i
   const read = { ...said, turns: [...before.turns, { ...turn("c2", 3001, 3600, "done"), requests: ["m2"] }] };
   for (const thread of [said, read]) assert.deepEqual(tree(thread).filter(([kind]) => kind === "user").map(([, , text]) => text), ["Grow", "/compact"]);
 });
+
+test("Brigadier's word that the user stopped workers, steered into the turn, is no bubble; the user's own steer is", () => {
+  const stopped = '[worker] The user stopped task-3 "Fix the flaky test". You didn\'t stop it and nothing failed. Don\'t message, steer or approve it.';
+  const [block] = cliBlocks(
+    {
+      entries: [
+        user("u1", "Fix the test", 1000),
+        user("s1", stopped, 1100, { steer: true }),
+        user("s2", "Also the docs", 1200, { steer: true }),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1300),
+      ],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(block?.steers.map((steer) => steer.text), ["Also the docs"]);
+});
