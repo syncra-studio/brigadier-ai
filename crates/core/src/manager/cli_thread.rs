@@ -636,9 +636,10 @@ impl SessionManager {
         self.core.conversation(id)?;
         let record = self.session_dir(id).record();
         let daemon_ids = daemon_context_ids(&record);
-        let files = read_lineage(&record)
-            .into_iter()
-            .filter_map(|session| {
+        // A fork's thread starts with its source's, up to the answer it forks (#648).
+        let forked = thread_view::read_forked(&record);
+        let files = std::iter::once(std::sync::Arc::new(forked.entries))
+            .chain(read_lineage(&record).into_iter().filter_map(|session| {
                 let file = session.file?;
                 let scoped_ids = daemon_ids
                     .iter()
@@ -657,9 +658,10 @@ impl SessionManager {
                         .cloned()
                         .collect(),
                 ))
-            })
+            }))
             .collect();
-        let records = thread_view::read_turns(&record);
+        let mut records = forked.turns;
+        records.extend(thread_view::read_turns(&record));
         let threads = self.cli_threads.lock().unwrap();
         let mut view = thread_view::view(files, threads.get(id), &records);
         view.seams = super::seam::marks(&record, &mut view.entries);

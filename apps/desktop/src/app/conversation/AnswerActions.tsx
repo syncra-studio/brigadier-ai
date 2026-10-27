@@ -90,7 +90,7 @@ export const AnswerActions: FC<{
       )}
       {!session && <BranchPicker />}
       {conversation && forkId && (
-        <ForkMenu conversationId={conversation.id} kind={conversation.kind} messageId={forkId} />
+        <ForkMenu conversationId={conversation.id} kind={conversation.kind} setup={conversation.setup} messageId={forkId} />
       )}
       {/* When it came: always under the latest answer, on hover under an older one. */}
       {atMs !== null && (

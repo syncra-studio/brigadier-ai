@@ -20,7 +20,7 @@ import { NavRow } from "@/components/controls/nav-row";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
-import type { Conversation, ConversationActivity, ConversationView, EventEnvelope, FileEntry, Project, Question, Request, ThreadView, WorkerRow } from "@/ipc/generated";
+import type { Conversation, ConversationActivity, ConversationView, Environment, EventEnvelope, FileEntry, Project, Question, Request, ThreadView, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 import { useLastOpened } from "@/state/lastOpened";
@@ -308,9 +308,15 @@ async function hoverRow() {
   return { idle, hovered, actions, menu, copy, navHoverBackground, after };
 }
 
+/** A session's setup working in `environment`. */
+const workingIn = (environment: Environment): Conversation["setup"] => ({
+  type: "session", repo: "/tmp/sessions-fixture", environment, permission: "ask", planMode: false, workersSeeUncommitted: null,
+  orchestrator: { provider: "claude", model: null, effort: null },
+});
+
 /**
- * A row's ⋯ with its session not open: Copy as Markdown, then Fork, of "Fix the login"; Fork of
- * "Tidy the docs", which has no answer.
+ * A row's ⋯ with its session not open: Copy as Markdown, then Fork, of "Fix the login", which
+ * works in its own worktree; Fork of "Tidy the docs", in the user's checkout, which has no answer.
  */
 let step = "";
 async function rowThread() {
@@ -319,6 +325,8 @@ async function rowThread() {
     write: async (written: ClipboardItem[]) => void copied.push(await (await written[0]!.getType("text/plain")).text()),
   } });
   const seen: Record<string, unknown> = { open: useApp.getState().selection.type };
+  // The Fork submenu's places, per session.
+  const places: Record<string, (string | undefined)[]> = {};
   const pick = async (title: string, path: string[]) => {
     step = `${title}: ${path.join(" › ")}`;
     // The menu before has gone, and the row is drawn.
@@ -333,6 +341,7 @@ async function rowThread() {
       if (index > 0) {
         await until(() => document.querySelectorAll("[role=menu]").length > index);
         await wait(300);
+        if (path[0] === "Fork") places[title] = [...[...document.querySelectorAll("[role=menu]")].at(-1)!.querySelectorAll("[role=menuitem]")].map((item) => item.textContent?.trim());
       }
       await fixtureClick(items().find((item) => item.textContent?.trim() === name)!);
     }
@@ -341,6 +350,11 @@ async function rowThread() {
   seen.menu = await pick("Fix the login", ["Copy", "Copy as Markdown"]);
   await until(() => copied.length > 0);
   seen.markdown = copied[0];
+  useApp.setState((state) => ({ conversations: {
+    ...state.conversations,
+    "w2-a": { ...state.conversations["w2-a"]!, setup: workingIn({ type: "newWorktree", base: "main", branch: "brigadier/w2/session", path: "/tmp/sessions-fixture/w2", start: null }) },
+    "w3-a": { ...state.conversations["w3-a"]!, setup: workingIn({ type: "localCheckout", branch: "main" }) },
+  } }));
   await pick("Fix the login", ["Fork", "Fork in a new worktree"]);
   await until(() => forks.length > 0);
   seen.forks = forks;
@@ -349,6 +363,7 @@ async function rowThread() {
   await until(() => toastTexts().some((text) => text?.startsWith("Nothing to fork")));
   seen.toasts = toastTexts();
   seen.forksAfter = forks.length;
+  seen.places = places;
   return seen;
 }
 

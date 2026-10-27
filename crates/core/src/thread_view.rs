@@ -640,16 +640,21 @@ fn add_unheld(mut entries: Vec<FileEntry>, live: &[FileEntry]) -> Vec<FileEntry>
     entries
 }
 
-/// The turns `entries` hold: each user message that isn't a steer starts one.
-fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<ThreadTurn> {
-    let starts: Vec<usize> = entries
+/// Where each turn of `entries` starts: at each user message that isn't a steer.
+fn turn_starts(entries: &[FileEntry]) -> Vec<usize> {
+    entries
         .iter()
         .enumerate()
         .filter(|(_, entry)| {
             entry.parent.is_none() && !entry.steer && user_message(entry).is_some()
         })
         .map(|(index, _)| index)
-        .collect();
+        .collect()
+}
+
+/// The turns `entries` hold: each user message that isn't a steer starts one.
+fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<ThreadTurn> {
+    let starts = turn_starts(entries);
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
     let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>, bool)> = HashMap::new();
@@ -815,6 +820,52 @@ fn user_message(entry: &FileEntry) -> Option<&str> {
         } => Some(item_id),
         _ => None,
     }
+}
+
+/// A fork's thread before its own CLI's (#648), in its `record/forked.json`: its source's, as
+/// the source's CLI kept it, up to the answer it forks. Its turns are records that end each as
+/// it ended in the source.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Forked {
+    pub entries: Vec<FileEntry>,
+    pub turns: Vec<TurnRecord>,
+}
+
+/// `view` up to the end of its last turn that carried `request`; none when no turn did.
+pub(crate) fn forked_at(view: &ThreadView, request: &str) -> Option<Forked> {
+    let last = view
+        .turns
+        .iter()
+        .rposition(|turn| turn.requests.iter().any(|id| id == request))?;
+    let end = turn_starts(&view.entries)
+        .get(last + 1)
+        .copied()
+        .unwrap_or(view.entries.len());
+    Some(Forked {
+        entries: view.entries[..end].to_vec(),
+        turns: view.turns[..=last]
+            .iter()
+            .map(|turn| TurnRecord {
+                user_message: Some(turn.user_message.clone()),
+                end: turn.end,
+                error: turn.error.clone(),
+                ended_at_ms: turn.ended_at_ms,
+                requests: turn.requests.clone(),
+                limit: turn.limit.clone(),
+                context_window: None,
+                joins: turn.joins,
+            })
+            .collect(),
+    })
+}
+
+/// The fork's thread before its own CLI's, from `record/forked.json`; none when it is no fork.
+pub(crate) fn read_forked(record: &Path) -> Forked {
+    std::fs::read(record.join("forked.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 /// The user message of the last turn `record/turns.jsonl` names, if any.

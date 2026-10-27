@@ -1,7 +1,7 @@
 import { useAui, useThreadListSource } from "@/components/conversation";
 import { type FC, useEffect } from "react";
 
-import { FORK_PLACES } from "@/app/conversation/ForkMenu";
+import { forkPlaces } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { branchMarkdown, latestAnswer, storedBranch } from "@/app/conversation/storedBranch";
 import { NameDialog } from "@/app/shell/NameDialog";
@@ -288,7 +288,7 @@ const ForkSub: FC<{ conversation: Conversation; onFork: (place: ForkPlace) => vo
       {conversation.kind === "chat" ? (
         <DropdownMenuItem onSelect={() => onFork("workspace")}>Fork chat</DropdownMenuItem>
       ) : (
-        FORK_PLACES.map(({ place, title }) => (
+        forkPlaces(conversation.setup).map(({ place, title }) => (
           <DropdownMenuItem key={place} onSelect={() => onFork(place)}>
             {title}
           </DropdownMenuItem>

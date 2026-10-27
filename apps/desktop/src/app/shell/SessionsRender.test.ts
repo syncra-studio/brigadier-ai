@@ -54,9 +54,10 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
   });
 }
 
-test("a row's ⋯, its session not open, reads the thread to copy it as Markdown and fork its latest answer; with no answer there is nothing to fork", { timeout: 60000 }, async (t) => {
+test("a row's ⋯, its session not open, reads the thread to copy it as Markdown and fork its latest answer; with no answer there is nothing to fork; a session in its own worktree forks only into a new one", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "sessions.html?rowThread=1", "sessions-result", 30000)) as {
     error?: string; open: string; menu: string[]; markdown: string; forks: unknown[]; read: string[]; toasts: string[]; forksAfter: number;
+    places: Record<string, string[]>;
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.open, "none", "no session is open");
@@ -67,6 +68,11 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   assert.deepEqual(seen.read, ["getConversation w2-a", "threadView w2-a"]);
   assert.ok(seen.toasts.includes("Nothing to fork yet: the session has no answer."), JSON.stringify(seen.toasts));
   assert.equal(seen.forksAfter, 1);
+  // #648: "the same folder" of a session in its own worktree is that worktree, which it keeps.
+  assert.deepEqual(seen.places, {
+    "Fix the login": ["Fork in a new worktree"],
+    "Tidy the docs": ["Fork in the same folder", "Fork in a new worktree"],
+  });
 });
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each

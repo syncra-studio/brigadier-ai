@@ -596,3 +596,95 @@ async fn brigadiers_compact_is_a_turn_of_its_own_never_one_more_of_the_turn_befo
     );
     flow.stop().await;
 }
+
+/// #648: a fork's thread is the source's, as its CLI kept it, up to the answer it forks: its
+/// messages and answers, each turn ended as it did, and nothing after. It stays so after a
+/// restart, and the fork's own turns follow it.
+#[tokio::test]
+async fn a_fork_shows_the_sources_thread_up_to_its_answer() {
+    use crate::model::{ForkPlace, MessageRole};
+    let mut flow = Flow::start(
+        "cli-thread-fork",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.input.contains("Two.") {
+                return Reply::text("Answered two.");
+            }
+            if turn.input.contains("Three.") {
+                return Reply::text("Answered three.");
+            }
+            Reply::text("Answered one.")
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let ended = |flow: &Flow, id: &crate::model::ConversationId, count: usize| {
+        let view = flow.manager.thread_view(id).unwrap();
+        view.turns.len() == count && view.turns.iter().all(|turn| turn.end.is_some())
+    };
+    for (n, text) in ["One.", "Two.", "Three."].into_iter().enumerate() {
+        flow.say(text).await;
+        eventually("the turn ends", || ended(&flow, &id, n + 1)).await;
+        flow.settled().await;
+    }
+    let messages = flow.core.all_messages(&id).await.unwrap();
+    let request = |text: &str| {
+        messages
+            .iter()
+            .find(|message| message.text == text)
+            .unwrap()
+            .request_id
+            .clone()
+            .unwrap()
+    };
+    let two = request("Two.");
+    let answer = messages
+        .iter()
+        .rfind(|message| {
+            message.role == MessageRole::Assistant && message.request_id.as_ref() == Some(&two)
+        })
+        .unwrap()
+        .id
+        .clone();
+    let source = flow.manager.thread_view(&id).unwrap();
+
+    let fork = flow
+        .manager
+        .fork(id.clone(), answer, ForkPlace::NewWorktree)
+        .await
+        .unwrap();
+    let view = flow.manager.thread_view(&fork.id).unwrap();
+    assert_eq!(
+        texts(&view),
+        ["One.", "Answered one.", "Two.", "Answered two."],
+        "{view:#?}"
+    );
+    assert_eq!(view.turns, source.turns[..2], "{view:#?}");
+    assert_eq!(view.turns[1].requests, [two]);
+    flow.restart().await;
+    assert_eq!(flow.manager.thread_view(&fork.id).unwrap(), view);
+
+    flow.say_to(&fork.id, "Four.").await;
+    eventually("the fork's own turn ends", || ended(&flow, &fork.id, 3)).await;
+    let after = flow.manager.thread_view(&fork.id).unwrap();
+    assert_eq!(
+        texts(&after)[..4],
+        ["One.", "Answered one.", "Two.", "Answered two."],
+        "{after:#?}"
+    );
+    assert!(
+        texts(&after).iter().any(|text| text == "Four."),
+        "{after:#?}"
+    );
+    assert!(
+        !texts(&after).iter().any(|text| text.contains("three")),
+        "{after:#?}"
+    );
+    flow.stop().await;
+}

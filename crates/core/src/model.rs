@@ -300,7 +300,8 @@ pub enum Environment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ForkPlace {
-    /// In the user's checkout, on a new branch from the fork's point.
+    /// In the user's checkout, on a new branch from the fork's point: only for a session
+    /// working there; one in its own worktree forks into a new worktree (#648).
     Workspace,
     /// In a worktree of its own, on a new branch from the fork's point.
     NewWorktree,
