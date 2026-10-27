@@ -68,6 +68,10 @@ Patches applied, in order:
 - `patches/0022-windows-targeted-page-reads.diff`: route Windows page URL hints to a unique visible UIA document, refuse missing or ambiguous targets and unbound CDP ports, and discard reads when the tab changes.
 - `patches/0023-windows-user-protocol-default.diff`: resolve protocol executables through the current user's default association instead of a plain shell class lookup.
 - `patches/0024-windows-launch-running-evidence.diff`: do not report a shell launcher stub or a zero process id as a confirmed running app; return an explicit unconfirmed-launch error instead.
+- `patches/0030-windows-semantic-click-readback.diff`: prefer UI Automation patterns and WindowPattern.Close for Windows clicks, with bounded window/control readback and honest unconfirmed outcomes.
+- `patches/0031-windows-winui-menu-path.diff`: resolve WinUI/XAML menu bars and detached owned popups in the background, invoke native patterns, and collapse menus opened by a failed call.
+- `patches/0032-windows-key-delivery-honesty.diff`: report Windows press_key and hotkey dispatch as unconfirmed on PostMessage, SendInput and UIA accelerator routes, including structured results.
+- `patches/0033-windows-input-deadlines.diff`: bound Windows semantic input with the existing UIA single-flight deadline, prevent late mutations and duplicate fallback, and test portable routing and close readback decisions.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

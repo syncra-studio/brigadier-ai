@@ -62,7 +62,8 @@ const SUBTREE_OP_TIMEOUT: Duration = Duration::from_secs(4);
 /// Health probes can tolerate the same budget without delaying window listing.
 const HEALTH_PROBE_TIMEOUT: Duration = SUBTREE_OP_TIMEOUT;
 
-enum UiaDeadlineError {
+#[derive(Debug)]
+pub(super) enum UiaDeadlineError {
     Timeout,
     Busy,
     Unavailable,
@@ -150,7 +151,7 @@ where
     run_uia_with_deadline_cancelable(stage, timeout, fallback, |_| f())
 }
 
-fn run_uia_with_deadline_cancelable<T, F>(
+pub(super) fn run_uia_with_deadline_cancelable<T, F>(
     stage: &'static str,
     timeout: Duration,
     fallback: &'static str,

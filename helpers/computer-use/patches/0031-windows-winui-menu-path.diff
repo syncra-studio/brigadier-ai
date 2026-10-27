@@ -1,0 +1,577 @@
+Why: resolve WinUI/XAML menu bars and detached owned popups in the background, invoke native patterns, and collapse menus opened by a failed call.
+
+--- a/crates/platform-windows/src/lib.rs
++++ b/crates/platform-windows/src/lib.rs
+@@ -50,6 +50,7 @@
+
+ // Input readback decisions are exercised on every host.
+ pub mod input_outcome;
++pub mod menu_path;
+
+ /// UIA / `WM_NCHITTEST` / `IDC_*` -> cursor shape tables for presence (pure,
+ /// every host).
+--- /dev/null
++++ b/crates/platform-windows/src/menu_path.rs
+@@ -0,0 +1,51 @@
++//! Exact labels for native menu paths, including WinUI's detached popups.
++pub fn label_matches(actual: &str, wanted: &str) -> bool {
++    fn label(value: &str) -> &str {
++        value
++            .split('\t')
++            .next()
++            .unwrap_or(value)
++            .trim()
++            .trim_end_matches('…')
++            .trim_end_matches("...")
++            .trim_end()
++    }
++    label(actual) == label(wanted)
++}
++
++pub fn candidate(
++    control: &str,
++    actual: &str,
++    wanted: &str,
++    top: bool,
++    in_menu: bool,
++    in_document: bool,
++) -> bool {
++    !in_document
++        && in_menu
++        && matches!(control, "MenuItem" | "Button")
++        && (!top || control == "MenuItem" || control == "Button")
++        && label_matches(actual, wanted)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn winui_labels_match_without_shortcut_or_ellipsis() {
++        assert!(label_matches("Save as…\tCtrl+Shift+S", "Save as"));
++        assert!(label_matches("Save as...", "Save as…"));
++        assert!(!label_matches("Save", "Save as"));
++        assert!(!label_matches("Close tab", "Close window"));
++    }
++    #[test]
++    fn detached_popup_does_not_need_the_menu_bars_ancestry() {
++        assert!(candidate(
++            "MenuItem", "Save as", "Save as", false, true, false
++        ));
++        assert!(candidate("Button", "File", "File", true, true, false));
++        assert!(!candidate("Text", "File", "File", true, true, false));
++        assert!(!candidate("Button", "File", "File", true, false, false));
++        assert!(!candidate("MenuItem", "File", "File", true, true, true));
++    }
++}
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -9075,21 +9075,6 @@
+     }))
+ }
+
+-/// Activate a window for a visible native-menu operation. Windows may reject
+-/// the first foreground request after the test/user session has been idle even
+-/// when we attach to the current foreground thread. A reserved no-name key has
+-/// no application meaning but makes this process the owner of the most recent
+-/// input, allowing a bounded retry without sending a real shortcut or text to
+-/// whichever application currently has focus.
+-fn activate_window_for_menu(hwnd: windows::Win32::Foundation::HWND) -> Result<bool, String> {
+-    let (activated, assisted) = unsafe { crate::input::force_foreground_assisted(hwnd) };
+-    if activated {
+-        Ok(assisted)
+-    } else {
+-        Err("invoke_menu: target window could not be activated".to_owned())
+-    }
+-}
+-
+ #[async_trait]
+ impl Tool for InvokeMenuTool {
+     fn def(&self) -> &ToolDef {
+@@ -9114,9 +9099,7 @@
+             EvidenceKind, RequestedDelivery,
+         };
+         use windows::Win32::Foundation::HWND;
+-        use windows::Win32::UI::WindowsAndMessaging::{
+-            GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
+-        };
++        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
+
+         let input: InvokeMenuInput = match parse_typed_input("invoke_menu", args) {
+             Ok(input) => input,
+@@ -9137,52 +9120,19 @@
+             return menu_refusal("invoke_menu: window_id does not belong to pid".into());
+         }
+
+-        let outcome = tokio::task::spawn_blocking(move || {
+-            // `HWND` wraps a raw pointer and is intentionally not `Send`.
+-            // Move the integer handle into the blocking worker and rebuild the
+-            // process-local wrapper there instead of carrying it across threads.
+-            let hwnd = HWND(hwnd_value as usize as *mut _);
+-            let prior = unsafe { GetForegroundWindow() };
+-            let needs_activation = prior != hwnd;
+-            let used_activation_retry = if needs_activation {
+-                activate_window_for_menu(hwnd)?
+-            } else {
+-                false
+-            };
+-            if needs_activation {
+-                std::thread::sleep(std::time::Duration::from_millis(100));
+-            }
+-            let result = crate::uia::invoke_menu_path(hwnd_value, &path);
+-            if needs_activation && !prior.0.is_null() {
+-                let _ = unsafe { crate::input::force_foreground_attached(prior) };
+-            }
+-            result.map(|()| used_activation_retry)
+-        })
+-        .await;
+-
++        let outcome =
++            tokio::task::spawn_blocking(move || crate::uia::invoke_menu_path(hwnd_value, &path))
++                .await;
+         match outcome {
+-            Ok(Ok(used_activation_retry)) => ToolResult::text(
+-                "Resolved the live native menu path and dispatched its final accessibility action; verify the command's semantic effect from fresh state.",
+-            )
+-            .with_action_record(
++            Ok(Ok(())) => ToolResult::text(
++                "Dispatched the final UI Automation menu action in the background; its effect is not confirmed. Read fresh state before retrying.",
++            ).with_action_record(
+                 ActionExecutionRecord::builder(
+-                    ActionEffect::Unverifiable,
+-                    ActionTransport::WindowsUiaInvoke,
+-                    RequestedDelivery::Foreground,
+-                )
+-                .actual_delivery(ActualDelivery::Foreground)
+-                .evidence(ActionEvidence {
+-                    kind: EvidenceKind::NativeApiResult,
+-                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action"
+-                        .into(),
+-                })
+-                .detail(if used_activation_retry {
+-                    "target activation required a bounded reserved-key foreground-lock retry"
+-                } else {
+-                    "target was already foreground or activated without a foreground-lock retry"
+-                })
+-                .build()
+-                .expect("invoke_menu record is valid"),
++                    ActionEffect::Unverifiable, ActionTransport::WindowsUiaInvoke, RequestedDelivery::Background,
++                ).actual_delivery(ActualDelivery::Background)
++                .evidence(ActionEvidence { kind: EvidenceKind::NativeApiResult,
++                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action".into(),
++                }).build().expect("invoke_menu record is valid"),
+             ),
+             Ok(Err(error)) => menu_refusal(error),
+             Err(error) => menu_refusal(format!("invoke_menu: blocking task failed: {error}")),
+--- /dev/null
++++ b/crates/platform-windows/src/uia/menu.rs
+@@ -0,0 +1,265 @@
++//! WinUI menu bars and detached MenuFlyout popups, scoped to one HWND.
++use windows::core::Interface;
++use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
++use windows::Win32::System::Com::{
++    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
++};
++use windows::Win32::UI::Accessibility::*;
++use windows::Win32::UI::WindowsAndMessaging::{
++    EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, GW_OWNER,
++};
++
++struct Apartment(bool);
++impl Drop for Apartment {
++    fn drop(&mut self) {
++        if self.0 {
++            unsafe { CoUninitialize() };
++        }
++    }
++}
++
++struct PopupScan {
++    owner: HWND,
++    pid: u32,
++    windows: Vec<HWND>,
++}
++unsafe extern "system" fn collect_popup(hwnd: HWND, data: LPARAM) -> BOOL {
++    let scan = &mut *(data.0 as *mut PopupScan);
++    let mut pid = 0;
++    GetWindowThreadProcessId(hwnd, Some(&mut pid));
++    if pid != scan.pid || !IsWindowVisible(hwnd).as_bool() {
++        return BOOL(1);
++    }
++    let mut cursor = hwnd;
++    for _ in 0..16 {
++        let Ok(owner) = GetWindow(cursor, GW_OWNER) else {
++            break;
++        };
++        if owner == scan.owner {
++            scan.windows.push(hwnd);
++            break;
++        }
++        if owner.0.is_null() {
++            break;
++        }
++        cursor = owner;
++    }
++    BOOL(1)
++}
++fn popups(hwnd: HWND) -> Vec<HWND> {
++    let mut pid = 0;
++    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++    let mut scan = PopupScan {
++        owner: hwnd,
++        pid,
++        windows: Vec::new(),
++    };
++    let _ = unsafe { EnumWindows(Some(collect_popup), LPARAM(&mut scan as *mut _ as isize)) };
++    scan.windows
++}
++
++fn menu_ancestry(uia: &IUIAutomation, element: &IUIAutomationElement, top: bool) -> (bool, bool) {
++    unsafe {
++        let Ok(walker) = uia.ControlViewWalker() else {
++            return (false, false);
++        };
++        let mut cursor = element.clone();
++        let mut in_menu = false;
++        for _ in 0..32 {
++            let Ok(parent) = walker.GetParentElement(&cursor) else {
++                break;
++            };
++            let kind = parent.CurrentControlType().ok();
++            if kind == Some(UIA_DocumentControlTypeId) {
++                return (false, true);
++            }
++            if kind == Some(UIA_MenuBarControlTypeId)
++                || (!top && kind == Some(UIA_MenuControlTypeId))
++            {
++                in_menu = true;
++            }
++            if kind == Some(UIA_WindowControlTypeId) {
++                break;
++            }
++            cursor = parent;
++        }
++        (in_menu, false)
++    }
++}
++
++fn find(
++    uia: &IUIAutomation,
++    scope: &IUIAutomationElement,
++    wanted: &str,
++    top: bool,
++    popup: bool,
++) -> Result<Vec<IUIAutomationElement>, String> {
++    unsafe {
++        let condition = uia.CreateTrueCondition().map_err(|e| e.to_string())?;
++        let all = scope
++            .FindAll(TreeScope_Subtree, &condition)
++            .map_err(|e| e.to_string())?;
++        let count = all.Length().map_err(|e| e.to_string())?;
++        if count > 5000 {
++            return Err("menu tree exceeded 5000 elements; narrow the target window".into());
++        }
++        let mut matches = Vec::new();
++        for i in 0..count {
++            let element = all.GetElement(i).map_err(|e| e.to_string())?;
++            if element
++                .CurrentIsOffscreen()
++                .map(|s| s.as_bool())
++                .unwrap_or(true)
++            {
++                continue;
++            }
++            let kind = element.CurrentControlType().ok();
++            let control = if kind == Some(UIA_MenuItemControlTypeId) {
++                "MenuItem"
++            } else if kind == Some(UIA_ButtonControlTypeId) {
++                "Button"
++            } else {
++                continue;
++            };
++            let name = element
++                .CurrentName()
++                .map(|s| s.to_string())
++                .unwrap_or_default();
++            let (in_menu, in_document) = menu_ancestry(uia, &element, top);
++            // An owned popup or a previously expanded item provides the menu scope
++            // even when XAML omits Menu/MenuBar ancestry in its fragment tree.
++            if crate::menu_path::candidate(
++                control,
++                &name,
++                wanted,
++                top,
++                in_menu || popup,
++                in_document,
++            ) {
++                matches.push(element);
++            }
++        }
++        Ok(matches)
++    }
++}
++
++pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
++    if path.is_empty() || path.len() > 16 {
++        return Err("menu path must contain 1 to 16 segments".into());
++    }
++    let _com = Apartment(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
++    let hwnd = HWND(hwnd as *mut _);
++    let uia: IUIAutomation =
++        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
++            .map_err(|e| e.to_string())?;
++    let root = unsafe { uia.ElementFromHandle(hwnd) }.map_err(|e| e.to_string())?;
++    let prior_popups = popups(hwnd);
++    let _no_activate = crate::input::NoActivateGuard::arm(hwnd);
++    let mut expanded: Vec<IUIAutomationElement> = Vec::new();
++    let mut opened: Vec<IUIAutomationExpandCollapsePattern> = Vec::new();
++    let result = (|| {
++        for (depth, wanted) in path.iter().enumerate() {
++            let mut found = Vec::new();
++            for attempt in 0..9 {
++                // Prefer the current expanded item's own descendants. WinUI may
++                // instead attach its popup to the window or an owned popup HWND.
++                if let Some(parent) = expanded.last() {
++                    found = find(&uia, parent, wanted, false, true)?;
++                }
++                if found.is_empty() {
++                    found = find(&uia, &root, wanted, depth == 0, false)?;
++                }
++                if found.is_empty() && depth > 0 {
++                    for popup in popups(hwnd)
++                        .into_iter()
++                        .filter(|p| !prior_popups.contains(p))
++                    {
++                        let scope =
++                            unsafe { uia.ElementFromHandle(popup) }.map_err(|e| e.to_string())?;
++                        found.extend(find(&uia, &scope, wanted, false, true)?);
++                    }
++                }
++                if !found.is_empty() || attempt == 8 || depth == 0 {
++                    break;
++                }
++                std::thread::sleep(std::time::Duration::from_millis(50));
++            }
++            let target = match found.as_slice() {
++                [element] => element,
++                [] => return Err(format!("menu path segment {} ({wanted}) was not found in the addressed window or its opened popup", depth + 1)),
++                _ => return Err(format!("menu path segment {} ({wanted}) is ambiguous", depth + 1)),
++            };
++            if !unsafe { target.CurrentIsEnabled() }
++                .map_err(|e| e.to_string())?
++                .as_bool()
++            {
++                return Err(format!(
++                    "menu path segment {} ({wanted}) is disabled",
++                    depth + 1
++                ));
++            }
++            if depth + 1 < path.len() {
++                let pattern: IUIAutomationExpandCollapsePattern =
++                    unsafe { target.GetCurrentPattern(UIA_ExpandCollapsePatternId) }
++                        .and_then(|p| p.cast())
++                        .map_err(|e| {
++                            format!("{wanted} has no usable ExpandCollapse pattern: {e}")
++                        })?;
++                let already_open = unsafe { pattern.CurrentExpandCollapseState() }.ok()
++                    == Some(ExpandCollapseState_Expanded);
++                if !already_open {
++                    // Remember before dispatch: even a provider returning an error
++                    // may have opened its popup and needs cleanup.
++                    opened.push(pattern.clone());
++                    super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
++                        pattern.Expand()
++                    })
++                    .map_err(|e| format!("could not expand {wanted}: {e}"))?;
++                }
++                expanded.push(target.clone());
++            } else {
++                super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
++                    if let Ok(p) = target.GetCurrentPattern(UIA_InvokePatternId) {
++                        p.cast::<IUIAutomationInvokePattern>()?.Invoke()
++                    } else {
++                        target
++                            .GetCurrentPattern(UIA_SelectionItemPatternId)?
++                            .cast::<IUIAutomationSelectionItemPattern>()?
++                            .Select()
++                    }
++                })
++                .map_err(|e| {
++                    format!("menu action for {wanted} failed: {e}; its effect is not confirmed")
++                })?;
++            }
++        }
++        Ok(())
++    })();
++    if let Err(error) = result {
++        let mut cleanup_failed = false;
++        for pattern in opened.iter().rev() {
++            cleanup_failed |= super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
++                pattern.Collapse()
++            })
++            .is_err();
++        }
++        return Err(format!(
++            "{error}. {}",
++            if cleanup_failed {
++                "Could not confirm all menus opened by this call collapsed; read fresh state."
++            } else {
++                "Collapsed menus opened by this call."
++            }
++        ));
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn an_invalid_window_cannot_invoke_a_menu() {
++        assert!(super::invoke(0, &["File".into(), "Save as".into()]).is_err());
++        assert!(super::invoke(0, &[]).is_err());
++    }
++}
+--- a/crates/platform-windows/src/uia/mod.rs
++++ b/crates/platform-windows/src/uia/mod.rs
+@@ -16,7 +16,6 @@
+ };
+ use windows::Win32::UI::Accessibility::{
+     CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
+-    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
+     IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, ToggleState_Off, ToggleState_On,
+     TreeScope, TreeScope_Children, TreeScope_Element, TreeScope_Subtree,
+     UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId,
+@@ -30,6 +29,7 @@
+
+ pub(crate) mod click;
+ pub mod fg_bypass;
++mod menu;
+ pub mod scroll;
+ pub mod snapshot;
+ pub mod windows_enum;
+@@ -106,49 +106,6 @@
+     walk_tree_bounded(hwnd, query, DEFAULT_MAX_TOTAL_ELEMENTS, DEFAULT_MAX_DEPTH)
+ }
+
+-fn is_menu_control(control_type: &str) -> bool {
+-    matches!(control_type, "Menu" | "MenuBar" | "MenuItem")
+-}
+-
+-fn exact_menu_path_matches(nodes: &[UiaNode], path: &[String]) -> Vec<usize> {
+-    let by_element_index: std::collections::HashMap<usize, usize> = nodes
+-        .iter()
+-        .enumerate()
+-        .filter_map(|(node_index, node)| node.element_index.map(|index| (index, node_index)))
+-        .collect();
+-
+-    nodes
+-        .iter()
+-        .enumerate()
+-        .filter_map(|(node_index, node)| {
+-            if !is_menu_control(&node.control_type)
+-                || node.enabled == Some(false)
+-                || node.name.as_deref().map(str::trim) != path.last().map(String::as_str)
+-            {
+-                return None;
+-            }
+-            let mut lineage = Vec::new();
+-            let mut cursor = Some(node_index);
+-            while let Some(current) = cursor {
+-                let ancestor = &nodes[current];
+-                if is_menu_control(&ancestor.control_type) {
+-                    if let Some(name) = ancestor.name.as_deref().map(str::trim) {
+-                        if !name.is_empty() {
+-                            lineage.push(name);
+-                        }
+-                    }
+-                }
+-                cursor = ancestor
+-                    .parent_element_index
+-                    .and_then(|index| by_element_index.get(&index).copied());
+-            }
+-            lineage.reverse();
+-            lineage.dedup();
+-            (lineage == path.iter().map(String::as_str).collect::<Vec<_>>()).then_some(node_index)
+-        })
+-        .collect()
+-}
+-
+ unsafe fn release_walk_nodes(nodes: Vec<UiaNode>) {
+     use windows::Win32::UI::Accessibility::IAccessible;
+     for node in nodes {
+@@ -163,73 +120,9 @@
+     }
+ }
+
+-unsafe fn invoke_menu_element(element_ptr: usize, final_segment: bool) -> Result<(), String> {
+-    let element =
+-        std::mem::ManuallyDrop::new(IUIAutomationElement::from_raw(element_ptr as *mut _));
+-    if !final_segment {
+-        if let Ok(pattern) = element.GetCurrentPattern(UIA_ExpandCollapsePatternId) {
+-            if let Ok(expand) = pattern.cast::<IUIAutomationExpandCollapsePattern>() {
+-                return expand
+-                    .Expand()
+-                    .map_err(|error| format!("ExpandCollapse.Expand failed: {error}"));
+-            }
+-        }
+-    }
+-    if let Ok(pattern) = element.GetCurrentPattern(UIA_InvokePatternId) {
+-        if let Ok(invoke) = pattern.cast::<IUIAutomationInvokePattern>() {
+-            return invoke
+-                .Invoke()
+-                .map_err(|error| format!("InvokePattern.Invoke failed: {error}"));
+-        }
+-    }
+-    if final_segment {
+-        if let Ok(pattern) = element.GetCurrentPattern(UIA_SelectionItemPatternId) {
+-            if let Ok(selection) = pattern.cast::<IUIAutomationSelectionItemPattern>() {
+-                return selection
+-                    .Select()
+-                    .map_err(|error| format!("SelectionItem.Select failed: {error}"));
+-            }
+-        }
+-    }
+-    Err("element exposes no usable native menu pattern".into())
+-}
+-
+-/// Resolve and invoke an exact application menu path from fresh UIA state at
+-/// every hop. No cached element index survives a menu mutation.
++/// Resolve Win32 and WinUI/XAML application menus without activating the target.
+ pub fn invoke_menu_path(hwnd: u64, path: &[String]) -> Result<(), String> {
+-    for depth in 0..path.len() {
+-        let result = walk_tree(hwnd, None);
+-        let matches = exact_menu_path_matches(&result.nodes, &path[..=depth]);
+-        let target_index = match matches.as_slice() {
+-            [index] => *index,
+-            [] => {
+-                unsafe { release_walk_nodes(result.nodes) };
+-                return Err(format!("menu path segment {depth} was not found"));
+-            }
+-            _ => {
+-                unsafe { release_walk_nodes(result.nodes) };
+-                return Err(format!("menu path segment {depth} is ambiguous"));
+-            }
+-        };
+-        let target = &result.nodes[target_index];
+-        let error = if target.enabled == Some(false) {
+-            Some(format!("menu path segment {depth} is disabled"))
+-        } else if target.msaa_role.is_some() {
+-            Some(format!(
+-                "menu path segment {depth} is exposed only through MSAA, not UI Automation"
+-            ))
+-        } else {
+-            unsafe { invoke_menu_element(target.element_ptr, depth + 1 == path.len()) }.err()
+-        };
+-        unsafe { release_walk_nodes(result.nodes) };
+-        if let Some(error) = error {
+-            return Err(format!("menu path segment {depth}: {error}"));
+-        }
+-        if depth + 1 != path.len() {
+-            std::thread::sleep(std::time::Duration::from_millis(80));
+-        }
+-    }
+-    Ok(())
++    menu::invoke(hwnd, path)
+ }
+
+ /// Walk the UIA tree with caller-supplied caps. `max_elements`/`max_depth`

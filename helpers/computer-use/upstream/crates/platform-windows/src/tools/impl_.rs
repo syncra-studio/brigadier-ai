@@ -3250,12 +3250,15 @@ impl Tool for LaunchAppTool {
 
 // ── click ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
 fn posted_pixel_click_result(pid: u32, click_word: &str) -> ToolResult {
-    ToolResult::text(format!("✅ Posted {click_word} to pid {pid}.")).with_structured(json!({
-        "path": "post_message",
-        "verified": false,
-        "effect": "unverifiable"
-    }))
+    ToolResult::text(format!("Posted (not confirmed) {click_word} to pid {pid}.")).with_structured(
+        json!({
+            "path": "post_message",
+            "verified": false,
+            "effect": "unverifiable"
+        }),
+    )
 }
 
 /// Only a completed miss permits another transport. A provider may finish an
@@ -3272,7 +3275,7 @@ fn finish_pixel_uia_attempt(
         PointInvokeOutcome::Invoked => {
             return Some(
                 ToolResult::text(format!(
-                    "✅ Performed UIA Invoke at ({sx},{sy}) for pid {pid}."
+                    "Dispatched (not confirmed) UIA Invoke at ({sx},{sy}) for pid {pid}."
                 ))
                 .with_structured(json!({
                     "path": "ax", "verified": false, "effect": "unverifiable"
@@ -3303,11 +3306,6 @@ fn finish_pixel_uia_attempt(
 }
 
 enum BackgroundElementClick {
-    Semantic {
-        message: String,
-        transport: ActionTransport,
-        failed_calls: Vec<ActionTransport>,
-    },
     Inject {
         x: i32,
         y: i32,
@@ -3320,6 +3318,7 @@ enum BackgroundElementClick {
     },
 }
 
+#[cfg(test)]
 fn background_element_click_result(
     message: String,
     transport: ActionTransport,
@@ -3555,7 +3554,7 @@ impl Tool for ClickTool {
                         _ => "click",
                     };
                     ToolResult::text(format!(
-                        "✅ Sent {click_word} via SendInput at screen ({sx},{sy}) on HWND 0x{hwnd_u:x} (desktop scope)."
+                        "Dispatched (not confirmed) {click_word} via SendInput at screen ({sx},{sy}) on HWND 0x{hwnd_u:x} (desktop scope)."
                     ))
                     // SendInput dispatched but is not driver-verifiable (no read-back).
                     .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" }))
@@ -3794,7 +3793,7 @@ impl Tool for ClickTool {
                 let half = if want_expand { "dropdown" } else { "press" };
                 return match send_result {
                     Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Performed SendInput click on MSAA [{idx}] {half} half at ({tx},{ty})."
+                        "Dispatched (not confirmed) SendInput click on MSAA [{idx}] {half} half at ({tx},{ty})."
                     ))
                     .with_structured(
                         json!({ "path": "msaa", "verified": false, "effect": "unverifiable" }),
@@ -3838,67 +3837,34 @@ impl Tool for ClickTool {
             );
             let btn = button.clone();
 
-            // An explicit accessibility action is a semantic request, not a
-            // pixel gesture hint. Route expand through ExpandCollapsePattern
-            // even when foreground delivery was allowed; this reliably opens
-            // WPF/WinUI menus and tree nodes whose visual click target is
-            // transient or scroll-adjusted.
-            if action_req.as_deref() == Some("expand") {
-                let expand = tokio::task::spawn_blocking({
+            // Semantic UIA patterns take precedence for an ordinary left click,
+            // including non-client Close and the common Save dialog's Save button.
+            if button == "left" && count == 1 && modifiers.is_empty() {
+                let semantic = tokio::task::spawn_blocking({
                     let admitted = admitted.clone();
-                    move || -> anyhow::Result<()> {
-                        let _admission = &admitted;
-                        use windows::core::Interface;
-                        use windows::Win32::UI::Accessibility::{
-                            IUIAutomationElement, IUIAutomationExpandCollapsePattern,
-                            UIA_ExpandCollapsePatternId,
+                    let expand_only = action_req.as_deref() == Some("expand");
+                    move || {
+                        let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) else {
+                            return Ok(None);
                         };
-
-                        let retained = admitted.as_ref().ok_or_else(|| {
-                            anyhow::anyhow!("element [{idx}] is not in the UIA cache")
-                        })?;
-                        if !retained.is_uia() {
-                            anyhow::bail!("element [{idx}] is not a UIA element");
-                        }
-                        let element = std::mem::ManuallyDrop::new(unsafe {
-                            IUIAutomationElement::from_raw(retained.as_ptr() as *mut _)
-                        });
-                        let pattern = unsafe {
-                            element
-                                .GetCurrentPattern(UIA_ExpandCollapsePatternId)
-                                .and_then(|value| {
-                                    value.cast::<IUIAutomationExpandCollapsePattern>()
-                                })
-                        }
-                        .map_err(|error| {
-                            anyhow::anyhow!("ExpandCollapsePattern unavailable: {error}")
-                        })?;
-                        let result =
-                            crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || unsafe {
-                                pattern.Expand()
-                            });
-                        std::mem::forget(element);
-                        result.map_err(|error| {
-                            anyhow::anyhow!("ExpandCollapse.Expand failed: {error}")
-                        })
+                        crate::uia::click::retained_click(hwnd, element.clone(), expand_only)
                     }
                 })
                 .await;
-                return match expand {
-                    Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Expanded UIA element [{idx}] via ExpandCollapsePattern."
-                    ))
-                    .with_structured(json!({ "path": "uia_expand_collapse", "verified": false, "effect": "unverifiable" })),
-                    Ok(Err(error)) => ToolResult::error(error.to_string()),
-                    Err(error) => ToolResult::error(format!("Task error: {error}")),
-                };
+                match semantic {
+                    Ok(Ok(Some(result))) => return result,
+                    Ok(Ok(None)) if action_req.as_deref() != Some("expand") => {}
+                    Ok(Ok(None)) => {
+                        return ToolResult::error(
+                            "Element exposes no ExpandCollapse pattern; no click was sent.",
+                        )
+                    }
+                    Ok(Err(error)) => return ToolResult::error(error.to_string()),
+                    Err(error) => {
+                        return ToolResult::error(format!("UIA click task failed: {error}"))
+                    }
+                }
             }
-
-            // delivery_mode:"foreground" — skip UIA Invoke and use SendInput at the
-            // cached element center. The caller explicitly chose foreground
-            // delivery; UIA Invoke would be background-safe (which they
-            // rejected) and might fail on elements that don't support
-            // InvokePattern anyway.
             if delivery == DeliveryMode::Foreground {
                 // Foreground delivery is a real SendInput tap at (cx,cy); if the
                 // element is off-screen, scroll it into view and re-resolve so the
@@ -3957,7 +3923,7 @@ impl Tool for ClickTool {
                 tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
                 return match send_result {
                     Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Performed SendInput click on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
+                        "Dispatched (not confirmed) SendInput click on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
                     ))
                     .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" })),
                     Ok(Err(e)) => ToolResult::error(e.to_string()),
@@ -3983,191 +3949,58 @@ impl Tool for ClickTool {
                     return r;
                 }
             }
-            // Chromium's UIA Invoke raises a fully occluded renderer, while a
-            // targeted PostMessage left click reaches the renderer without
-            // changing foreground, z-order, or the real cursor. Keep AX for
-            // target resolution and use the posted-message transport only for
-            // the empirically verified single-left-click shape.
-            if delivery == DeliveryMode::Background
-                && btn == "left"
-                && count == 1
-                && crate::input::is_chromium_target_window(hwnd)
-            {
-                let posted = tokio::task::spawn_blocking({
-                    let admitted = admitted.clone();
-                    move || {
-                        let _admission = &admitted;
-                        crate::input::post_click_screen(hwnd, cx, cy, count, &btn)
+            let result = tokio::task::spawn_blocking({
+                let admitted = admitted.clone();
+                move || -> anyhow::Result<BackgroundElementClick> {
+                    let _admission = &admitted;
+                    let failed_calls = Vec::new();
+                    // Direct Chromium UIA Invoke can return S_OK without firing a
+                    // DOM event while occluded. Try the honest coordinate actuator
+                    // first: it lands while visible and reports occlusion without
+                    // raising the window when hidden.
+                    if delivery == DeliveryMode::Background
+                        && crate::input::is_chromium_target_window(hwnd)
+                    {
+                        let (cx, cy) = resolve_onscreen_point_with_scroll(
+                            &admitted, hwnd, idx, cx, cy, "clicking",
+                        )
+                        .map_err(|result| anyhow::anyhow!(tool_result_text(result)))?;
+                        return Ok(BackgroundElementClick::Inject {
+                            x: cx,
+                            y: cy,
+                            failed_calls,
+                        });
                     }
-                })
-                .await;
-                return match posted {
-                    Ok(Ok(())) => background_element_click_result(
-                        format!(
-                            "✅ Posted click on Chromium element [{idx}] at screen ({cx},{cy}) \
-                         (background, no foreground swap)."
-                        ),
-                        ActionTransport::WindowsPostMessage,
-                        vec![],
-                    ),
-                    Ok(Err(error)) => ToolResult::error(error.to_string()),
-                    Err(error) => ToolResult::error(format!("Task error: {error}")),
-                };
-            }
-            // Try UIA Invoke first (it works for UWP / modern XAML / web
-            // content where PostMessage(WM_LBUTTONDOWN) hits the outer
-            // HWND but never reaches the inner XAML/composition element).
-            // Fall through to PostMessage when:
-            //   - element doesn't support InvokePattern (most text inputs,
-            //     non-interactive elements)
-            //   - right-click (UIA's ExpandCollapse / ShowContextMenu are
-            //     different patterns; keep PostMessage for now)
-            //   - count > 1 (double-click semantics aren't an Invoke
-            //     concept — PostMessage produces the actual WM_LBUTTONDBLCLK)
-            let use_uia_invoke = (btn == "left" || btn == "middle") && count == 1;
-            let result = tokio::task::spawn_blocking({ let admitted = admitted.clone(); move || -> anyhow::Result<BackgroundElementClick> {
-                let _admission = &admitted;
-                let mut failed_calls = Vec::new();
-                // Direct Chromium UIA Invoke can return S_OK without firing a
-                // DOM event while occluded. Try the honest coordinate actuator
-                // first: it lands while visible and reports occlusion without
-                // raising the window when hidden.
-                if delivery == DeliveryMode::Background
-                    && crate::input::is_chromium_target_window(hwnd)
-                {
-                    let (cx, cy) = resolve_onscreen_point_with_scroll(
-                        &admitted, hwnd, idx, cx, cy, "clicking",
-                    )
-                    .map_err(|result| anyhow::anyhow!(tool_result_text(result)))?;
-                    return Ok(BackgroundElementClick::Inject { x: cx, y: cy, failed_calls });
-                }
-                if use_uia_invoke {
-                    // Retain the element out of the cache (AddRef under the
-                    // cache lock) so it can't be freed by a concurrent
-                    // get_window_state on the same (pid, hwnd) while this click
-                    // is mid-flight (use-after-free → daemon crash). The guard
-                    // lives to the end of this `if let` block, past every UIA
-                    // pattern dispatch below; its Release fires when it drops.
-                    if let Some(element_guard) = admitted.as_ref() {
-                        let ptr = element_guard.as_ptr();
-                        use windows::Win32::UI::Accessibility::{
-                            IUIAutomationElement, IUIAutomationInvokePattern,
-                            IUIAutomationTogglePattern, IUIAutomationSelectionItemPattern,
-                            IUIAutomationExpandCollapsePattern,
-                            UIA_InvokePatternId, UIA_TogglePatternId,
-                            UIA_SelectionItemPatternId, UIA_ExpandCollapsePatternId,
-                        };
-                        use windows::core::Interface;
-                        let elem: IUIAutomationElement =
-                            unsafe { IUIAutomationElement::from_raw(ptr as *mut _) };
-
-                        // Try patterns in order of click-semantics specificity:
-                        //   1. Invoke      - buttons / hyperlinks (canonical)
-                        //   2. Toggle      - checkboxes (no Invoke)
-                        //   3. SelectionItem - radio buttons, listbox items
-                        //   4. ExpandCollapse - combo boxes, tree nodes
-                        // Each call is wrapped in the UWP foreground-steal bypass.
-                        //
-                        // Why this order: PR #1699's WinUI3 control parity tests
-                        // surfaced these pattern-dispatch gaps. Without these
-                        // fallthroughs, cua-driver couldn't drive WinUI3
-                        // CheckBox / RadioButton / ComboBox because PostMessage
-                        // doesn't reach their handlers (CoreInput dispatcher).
-                        let invoke_result = unsafe { elem.GetCurrentPattern(UIA_InvokePatternId) };
-                        if let Ok(pattern) = invoke_result {
-                            if let Ok(inv) = pattern.cast::<IUIAutomationInvokePattern>() {
-                                let outcome = crate::uia::fg_bypass::run_with_uwp_bypass(
-                                    hwnd as isize, || unsafe { inv.Invoke() });
-                                match outcome {
-                                    Ok(()) => {
-                                        std::mem::forget(elem);
-                                        return Ok(BackgroundElementClick::Semantic { message: format!(
-                                            "✅ Performed UIA Invoke on [{idx}] (screen ({cx},{cy}))."
-                                        ), transport: ActionTransport::WindowsUiaInvoke, failed_calls });
-                                    }
-                                    Err(e) => tracing::debug!(target: "click",
-                                        "UIA Invoke on [{idx}]: {e}, trying Toggle"),
-                                }
-                                failed_calls.push(ActionTransport::WindowsUiaInvoke);
-                            }
-                        }
-                        let toggle_result = unsafe { elem.GetCurrentPattern(UIA_TogglePatternId) };
-                        if let Ok(pattern) = toggle_result {
-                            if let Ok(tg) = pattern.cast::<IUIAutomationTogglePattern>() {
-                                let outcome = crate::uia::fg_bypass::run_with_uwp_bypass(
-                                    hwnd as isize, || unsafe { tg.Toggle() });
-                                if outcome.is_ok() {
-                                    std::mem::forget(elem);
-                                    return Ok(BackgroundElementClick::Semantic { message: format!(
-                                        "✅ Performed UIA Toggle on [{idx}] (screen ({cx},{cy}))."
-                                    ), transport: ActionTransport::WindowsUiaToggle, failed_calls });
-                                }
-                                failed_calls.push(ActionTransport::WindowsUiaToggle);
-                            }
-                        }
-                        let sel_result = unsafe { elem.GetCurrentPattern(UIA_SelectionItemPatternId) };
-                        if let Ok(pattern) = sel_result {
-                            if let Ok(si) = pattern.cast::<IUIAutomationSelectionItemPattern>() {
-                                let outcome = crate::uia::fg_bypass::run_with_uwp_bypass(
-                                    hwnd as isize, || unsafe { si.Select() });
-                                if outcome.is_ok() {
-                                    std::mem::forget(elem);
-                                    return Ok(BackgroundElementClick::Semantic { message: format!(
-                                        "✅ Performed UIA SelectionItem.Select on [{idx}] (screen ({cx},{cy}))."
-                                    ), transport: ActionTransport::WindowsUiaSelection, failed_calls });
-                                }
-                                failed_calls.push(ActionTransport::WindowsUiaSelection);
-                            }
-                        }
-                        let exp_result = unsafe { elem.GetCurrentPattern(UIA_ExpandCollapsePatternId) };
-                        if let Ok(pattern) = exp_result {
-                            if let Ok(ec) = pattern.cast::<IUIAutomationExpandCollapsePattern>() {
-                                let outcome = crate::uia::fg_bypass::run_with_uwp_bypass(
-                                    hwnd as isize, || unsafe { ec.Expand() });
-                                if outcome.is_ok() {
-                                    std::mem::forget(elem);
-                                    return Ok(BackgroundElementClick::Semantic { message: format!(
-                                        "✅ Performed UIA ExpandCollapse.Expand on [{idx}] (screen ({cx},{cy}))."
-                                    ), transport: ActionTransport::WindowsUiaExpandCollapse, failed_calls });
-                                }
-                                failed_calls.push(ActionTransport::WindowsUiaExpandCollapse);
-                            }
-                        }
-                        std::mem::forget(elem);
+                    if delivery == DeliveryMode::Background
+                        && crate::input::delivery::would_be_silently_dropped(
+                            hwnd,
+                            EventKind::MouseClick,
+                        )
+                    {
+                        let (cx, cy) = resolve_onscreen_point_with_scroll(
+                            &admitted, hwnd, idx, cx, cy, "clicking",
+                        )
+                        .map_err(|result| anyhow::anyhow!(tool_result_text(result)))?;
+                        return Ok(BackgroundElementClick::Inject {
+                            x: cx,
+                            y: cy,
+                            failed_calls,
+                        });
                     }
+                    Ok(BackgroundElementClick::Post {
+                        x: cx,
+                        y: cy,
+                        failed_calls,
+                    })
                 }
-                if delivery == DeliveryMode::Background
-                    && crate::input::delivery::would_be_silently_dropped(
-                        hwnd,
-                        EventKind::MouseClick,
-                    )
-                {
-                    let (cx, cy) = resolve_onscreen_point_with_scroll(
-                        &admitted,
-                        hwnd,
-                        idx,
-                        cx,
-                        cy,
-                        "clicking",
-                    )
-                    .map_err(|result| anyhow::anyhow!(tool_result_text(result)))?;
-                    return Ok(BackgroundElementClick::Inject { x: cx, y: cy, failed_calls });
-                }
-                Ok(BackgroundElementClick::Post { x: cx, y: cy, failed_calls })
-            } }).await;
+            })
+            .await;
             let plan = match result {
                 Ok(Ok(plan)) => plan,
                 Ok(Err(e)) => return ToolResult::error(e.to_string()),
                 Err(e) => return ToolResult::error(format!("Task error: {e}")),
             };
             let (x, y, failed_calls, inject) = match plan {
-                BackgroundElementClick::Semantic {
-                    message,
-                    transport,
-                    failed_calls,
-                } => {
-                    return background_element_click_result(message, transport, failed_calls);
-                }
                 BackgroundElementClick::Inject { x, y, failed_calls } => (x, y, failed_calls, true),
                 BackgroundElementClick::Post { x, y, failed_calls } => (x, y, failed_calls, false),
             };
@@ -4177,36 +4010,36 @@ impl Tool for ClickTool {
                 crate::recording_hooks::capture_dispatch_click_target(hwnd, pid, x, y);
             }
             let btn = button.clone();
-            let action_name = if btn == "right" {
-                "ShowMenu"
-            } else {
-                "PostMessage click"
-            };
             let sent = tokio::task::spawn_blocking({
                 let admitted = admitted.clone();
                 move || {
-                    let _admission = &admitted;
+                    let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
+                    let readback = crate::uia::click::Readback::new(hwnd, ptr);
                     if inject {
-                        crate::input::inject_click_screen(hwnd, x, y, count, &btn)
+                        crate::input::inject_click_screen(hwnd, x, y, count, &btn)?;
                     } else {
-                        crate::input::post_click_screen(hwnd, x, y, count, &btn)
+                        crate::input::post_click_screen(hwnd, x, y, count, &btn)?;
                     }
+                    let transport = if inject {
+                        ActionTransport::WindowsTargetedInjection
+                    } else {
+                        ActionTransport::WindowsPostMessage
+                    };
+                    Ok::<_, anyhow::Error>(readback.finish(
+                        ptr,
+                        if inject {
+                            "Targeted click"
+                        } else {
+                            "PostMessage click"
+                        },
+                        transport,
+                    ))
                 }
             })
             .await;
+            let _ = failed_calls;
             match sent {
-                Ok(Ok(())) => {
-                    let (message, transport) = if inject {
-                        (format!("✅ Injected click on [{idx}] (screen ({x},{y}), background, no foreground swap)."),
-                            ActionTransport::WindowsTargetedInjection)
-                    } else {
-                        (
-                            format!("✅ Performed {action_name} on [{idx}] (screen ({x},{y}))."),
-                            ActionTransport::WindowsPostMessage,
-                        )
-                    };
-                    background_element_click_result(message, transport, failed_calls)
-                }
+                Ok(Ok(result)) => result,
                 Ok(Err(error)) if inject => {
                     crate::input::delivery::background_unavailable_error_with_cause(
                         hwnd,
@@ -4315,7 +4148,7 @@ impl Tool for ClickTool {
                             _ => "click",
                         };
                         ToolResult::text(format!(
-                            "✅ Sent {click_word} via SendInput to pid {pid} at ({sx},{sy}) (delivery_mode:foreground)."
+                            "Dispatched (not confirmed) {click_word} via SendInput to pid {pid} at ({sx},{sy}) (delivery_mode:foreground)."
                         ))
                         .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" }))
                     }
@@ -4337,6 +4170,20 @@ impl Tool for ClickTool {
                     return r;
                 }
             }
+            if btn == "left" && count == 1 && modifiers.is_empty() {
+                match tokio::task::spawn_blocking(move || {
+                    crate::uia::click::at_point(hwnd, sx_i, sy_i)
+                })
+                .await
+                {
+                    Ok(Ok(Some(result))) => return result,
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => tracing::debug!("UIA point lookup unavailable: {error}"),
+                    Err(error) => {
+                        return ToolResult::error(format!("UIA point task failed: {error}"))
+                    }
+                }
+            }
             // Match the AX-addressed Chromium route above: the point remains
             // PX-resolved, but transport uses the background-safe posted
             // message path proven against the fully occluded fixture.
@@ -4349,20 +4196,18 @@ impl Tool for ClickTool {
                     let admitted = admitted.clone();
                     move || {
                         let _admission = &admitted;
-                        crate::input::post_click_screen(hwnd, sx_i, sy_i, count, &btn)
+                        let readback = crate::uia::click::Readback::new(hwnd, None);
+                        crate::input::post_click_screen(hwnd, sx_i, sy_i, count, &btn)?;
+                        Ok::<_, anyhow::Error>(readback.finish(
+                            None,
+                            "PostMessage pixel click",
+                            ActionTransport::WindowsPostMessage,
+                        ))
                     }
                 })
                 .await;
                 return match posted {
-                    Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Posted click to Chromium pid {pid} at ({sx},{sy}) \
-                         (background, no foreground swap)."
-                    ))
-                    .with_structured(json!({
-                        "path": "post_message",
-                        "verified": false,
-                        "effect": "unverifiable"
-                    })),
+                    Ok(Ok(result)) => result,
                     Ok(Err(error)) => ToolResult::error(error.to_string()),
                     Err(error) => ToolResult::error(format!("Task error: {error}")),
                 };
@@ -4384,7 +4229,7 @@ impl Tool for ClickTool {
                 .await;
                 return match inj {
                     Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Injected click to pid {pid} at ({sx},{sy}) (background, no foreground swap)."
+                        "Injected (not confirmed) click to pid {pid} at ({sx},{sy}) (background, no foreground swap)."
                     ))
                     .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" })),
                     Ok(Err(error)) => crate::input::delivery::background_unavailable_error_with_cause(
@@ -4431,7 +4276,7 @@ impl Tool for ClickTool {
                 .await;
                 return match inj {
                     Ok(Ok(())) => ToolResult::text(format!(
-                        "✅ Injected click to pid {pid} at ({sx},{sy}) (background, no foreground swap)."
+                        "Injected (not confirmed) click to pid {pid} at ({sx},{sy}) (background, no foreground swap)."
                     ))
                     .with_structured(json!({ "path": "pixel", "verified": false, "effect": "unverifiable" })),
                     Ok(Err(error)) => crate::input::delivery::background_unavailable_error_with_cause(
@@ -4456,20 +4301,18 @@ impl Tool for ClickTool {
                 let admitted = admitted.clone();
                 move || {
                     let _admission = &admitted;
-                    crate::input::post_click_screen(hwnd, sx_i, sy_i, count, &btn)
+                    let readback = crate::uia::click::Readback::new(hwnd, None);
+                    crate::input::post_click_screen(hwnd, sx_i, sy_i, count, &btn)?;
+                    Ok::<_, anyhow::Error>(readback.finish(
+                        None,
+                        "PostMessage pixel click",
+                        ActionTransport::WindowsPostMessage,
+                    ))
                 }
             })
             .await;
             match result {
-                Ok(Ok(())) => {
-                    // Match Swift text format: "✅ Posted click/double-click/triple-click to pid X."
-                    let click_word = match count {
-                        2 => "double-click",
-                        3 => "triple-click",
-                        _ => "click",
-                    };
-                    posted_pixel_click_result(pid, click_word)
-                }
+                Ok(Ok(result)) => result,
                 Ok(Err(e)) => ToolResult::error(e.to_string()),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),
             }
@@ -5358,6 +5201,33 @@ fn read_focused_value_uia(expect_pid: u32) -> Option<String> {
 
 // ── press_key ─────────────────────────────────────────────────────────────────
 
+fn unconfirmed_key_result(action: &str, path: &str) -> ToolResult {
+    ToolResult::text(crate::input_outcome::dispatch_summary(action, path))
+        .with_structured(json!({"path": path, "verified": false, "effect": "unverifiable"}))
+}
+
+#[cfg(test)]
+mod key_outcome_tests {
+    #[test]
+    fn windows_key_result_never_promotes_dispatch_to_success() {
+        use cua_driver_core::protocol::Content;
+        for path in ["PostMessage", "SendInput", "uia"] {
+            let result = super::unconfirmed_key_result("Ctrl+S", path);
+            assert_eq!(
+                result.structured_content.as_ref().unwrap()["verified"],
+                false
+            );
+            assert_eq!(
+                result.structured_content.as_ref().unwrap()["effect"],
+                "unverifiable"
+            );
+            assert!(result.content.iter().any(
+                |c| matches!(c, Content::Text { text, .. } if text.contains("not confirmed"))
+            ));
+        }
+    }
+}
+
 pub struct PressKeyTool {
     state: Arc<ToolState>,
 }
@@ -5423,13 +5293,12 @@ impl Tool for PressKeyTool {
             })
             .await
             {
-                Ok(Ok(())) => ToolResult::text(format!(
-                    "Sent {key_display} to the foreground application (scope:desktop)."
-                ))
-                .with_structured(json!({
-                    "scope": "desktop", "path": "SendInput", "key": key_display,
-                    "effect": "unverifiable"
-                })),
+                Ok(Ok(())) => {
+                    unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
+                        "scope": "desktop", "path": "SendInput", "key": key_display,
+                        "effect": "unverifiable", "verified": false
+                    }))
+                }
                 Ok(Err(error)) => ToolResult::error(error.to_string()),
                 Err(error) => ToolResult::error(format!("desktop key task failed: {error}")),
             };
@@ -5644,11 +5513,11 @@ impl Tool for PressKeyTool {
             })
             .await;
             return match send_result {
-                Ok(Ok(())) => ToolResult::text(format!(
-                    "✅ Sent {key_display} via SendInput on pid {raw_pid} (delivery_mode:foreground)."
-                )),
+                Ok(Ok(())) => {
+                    unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), "SendInput")
+                }
                 Ok(Err(e)) => ToolResult::error(e.to_string()),
-                Err(e)     => ToolResult::error(format!("Task error: {e}")),
+                Err(e) => ToolResult::error(format!("Task error: {e}")),
             };
         }
         let result = tokio::task::spawn_blocking({
@@ -5661,22 +5530,9 @@ impl Tool for PressKeyTool {
         })
         .await;
         match result {
-            Ok(Ok(())) => ToolResult::text(format!(
-                "📨 Sent {key_display} to pid {raw_pid} via PostMessage (not verified). \
-                 If it didn't land, retry with delivery_mode:\"foreground\"."
-            ))
-            .with_structured(serde_json::json!({
-                "path": "key_events",
-                "key": key_display,
-                "verified": false,
-                "verify": "unreadable",
-                "effect": "unverifiable",
-                "escalation": {
-                    "recommended": "foreground",
-                    "reason": "background key delivery could not be confirmed — re-call \
-                               with delivery_mode:\"foreground\" if a screenshot shows the key didn't land."
-                },
-            })),
+            Ok(Ok(())) => {
+                unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), "PostMessage")
+            }
             Ok(Err(e)) => ToolResult::error(e.to_string()),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
@@ -5793,13 +5649,12 @@ impl Tool for HotkeyTool {
             })
             .await
             {
-                Ok(Ok(())) => ToolResult::text(format!(
-                    "Sent {key_display} to the foreground application (scope:desktop)."
-                ))
-                .with_structured(json!({
-                    "scope": "desktop", "path": "SendInput", "keys": full_keys,
-                    "effect": "unverifiable"
-                })),
+                Ok(Ok(())) => {
+                    unconfirmed_key_result(&key_display, "SendInput").with_structured(json!({
+                        "scope": "desktop", "path": "SendInput", "keys": full_keys,
+                        "effect": "unverifiable", "verified": false
+                    }))
+                }
                 Ok(Err(error)) => ToolResult::error(error.to_string()),
                 Err(error) => ToolResult::error(format!("desktop hotkey task failed: {error}")),
             };
@@ -5951,10 +5806,10 @@ impl Tool for HotkeyTool {
             })
             .await;
             return match result {
-                Ok(Ok((true, _))) => ToolResult::text(format!(
-                    "✅ Pressed {key_display_for_result} on pid {raw_pid} via UIA \
-                     InvokePattern/TogglePattern (XAML / UWP target)."
-                )),
+                Ok(Ok((true, _))) => unconfirmed_key_result(
+                    &format!("{key_display_for_result} to pid {raw_pid}"),
+                    "uia",
+                ),
                 Ok(Ok((false, scanned))) => ToolResult::error(format!(
                     "hotkey on a modern XAML / UWP target (pid {raw_pid}, hwnd {hwnd}) \
                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
@@ -6058,10 +5913,7 @@ impl Tool for HotkeyTool {
             "PostMessage"
         };
         match result {
-            Ok(Ok(())) => ToolResult::text(format!(
-                "✅ Pressed {key_display} on pid {raw_pid} via {path} \
-                 (Win32 target)."
-            )),
+            Ok(Ok(())) => unconfirmed_key_result(&format!("{key_display} to pid {raw_pid}"), path),
             Ok(Err(e)) => ToolResult::error(e.to_string()),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
@@ -9302,21 +9154,6 @@ fn menu_refusal(message: String) -> ToolResult {
     }))
 }
 
-/// Activate a window for a visible native-menu operation. Windows may reject
-/// the first foreground request after the test/user session has been idle even
-/// when we attach to the current foreground thread. A reserved no-name key has
-/// no application meaning but makes this process the owner of the most recent
-/// input, allowing a bounded retry without sending a real shortcut or text to
-/// whichever application currently has focus.
-fn activate_window_for_menu(hwnd: windows::Win32::Foundation::HWND) -> Result<bool, String> {
-    let (activated, assisted) = unsafe { crate::input::force_foreground_assisted(hwnd) };
-    if activated {
-        Ok(assisted)
-    } else {
-        Err("invoke_menu: target window could not be activated".to_owned())
-    }
-}
-
 #[async_trait]
 impl Tool for InvokeMenuTool {
     fn def(&self) -> &ToolDef {
@@ -9341,9 +9178,7 @@ impl Tool for InvokeMenuTool {
             EvidenceKind, RequestedDelivery,
         };
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
 
         let input: InvokeMenuInput = match parse_typed_input("invoke_menu", args) {
             Ok(input) => input,
@@ -9364,52 +9199,19 @@ impl Tool for InvokeMenuTool {
             return menu_refusal("invoke_menu: window_id does not belong to pid".into());
         }
 
-        let outcome = tokio::task::spawn_blocking(move || {
-            // `HWND` wraps a raw pointer and is intentionally not `Send`.
-            // Move the integer handle into the blocking worker and rebuild the
-            // process-local wrapper there instead of carrying it across threads.
-            let hwnd = HWND(hwnd_value as usize as *mut _);
-            let prior = unsafe { GetForegroundWindow() };
-            let needs_activation = prior != hwnd;
-            let used_activation_retry = if needs_activation {
-                activate_window_for_menu(hwnd)?
-            } else {
-                false
-            };
-            if needs_activation {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let result = crate::uia::invoke_menu_path(hwnd_value, &path);
-            if needs_activation && !prior.0.is_null() {
-                let _ = unsafe { crate::input::force_foreground_attached(prior) };
-            }
-            result.map(|()| used_activation_retry)
-        })
-        .await;
-
+        let outcome =
+            tokio::task::spawn_blocking(move || crate::uia::invoke_menu_path(hwnd_value, &path))
+                .await;
         match outcome {
-            Ok(Ok(used_activation_retry)) => ToolResult::text(
-                "Resolved the live native menu path and dispatched its final accessibility action; verify the command's semantic effect from fresh state.",
-            )
-            .with_action_record(
+            Ok(Ok(())) => ToolResult::text(
+                "Dispatched the final UI Automation menu action in the background; its effect is not confirmed. Read fresh state before retrying.",
+            ).with_action_record(
                 ActionExecutionRecord::builder(
-                    ActionEffect::Unverifiable,
-                    ActionTransport::WindowsUiaInvoke,
-                    RequestedDelivery::Foreground,
-                )
-                .actual_delivery(ActualDelivery::Foreground)
-                .evidence(ActionEvidence {
-                    kind: EvidenceKind::NativeApiResult,
-                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action"
-                        .into(),
-                })
-                .detail(if used_activation_retry {
-                    "target activation required a bounded reserved-key foreground-lock retry"
-                } else {
-                    "target was already foreground or activated without a foreground-lock retry"
-                })
-                .build()
-                .expect("invoke_menu record is valid"),
+                    ActionEffect::Unverifiable, ActionTransport::WindowsUiaInvoke, RequestedDelivery::Background,
+                ).actual_delivery(ActualDelivery::Background)
+                .evidence(ActionEvidence { kind: EvidenceKind::NativeApiResult,
+                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action".into(),
+                }).build().expect("invoke_menu record is valid"),
             ),
             Ok(Err(error)) => menu_refusal(error),
             Err(error) => menu_refusal(format!("invoke_menu: blocking task failed: {error}")),
