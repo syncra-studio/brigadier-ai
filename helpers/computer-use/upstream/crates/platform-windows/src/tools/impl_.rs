@@ -519,11 +519,17 @@ impl Tool for ExactPidWindowTargetGuard {
                             "window_id": window_id,
                         }));
                 };
-                let owner_pid =
-                    tokio::task::spawn_blocking(move || crate::win32::window_owner_pid(window_id))
-                        .await
-                        .ok()
-                        .flatten();
+                let owner_pid = tokio::task::spawn_blocking(move || {
+                    let owner = crate::win32::window_owner_pid(window_id);
+                    if owner == Some(pid) {
+                        owner
+                    } else {
+                        crate::win32::window_app_pid(window_id)
+                    }
+                })
+                .await
+                .ok()
+                .flatten();
                 if let Err(result) = exact_window_ownership_result(pid, window_id, owner_pid) {
                     return result;
                 }

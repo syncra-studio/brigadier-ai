@@ -161,7 +161,7 @@ fn live_geometry(target: WindowsCaptureTarget) -> anyhow::Result<CaptureGeometry
             let mut owner_pid = 0_u32;
             unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner_pid)) };
             anyhow::ensure!(
-                owner_pid == pid,
+                owner_pid == pid || crate::win32::window_app_pid(window_id) == Some(pid),
                 "native window owner changed after capture"
             );
             crate::capture::screenshot_window_bytes(window_id)?

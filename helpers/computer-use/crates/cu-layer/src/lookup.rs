@@ -218,14 +218,9 @@ fn window_owner(window_id: u64) -> Option<u32> {
 /// The process that owns a top-level window (`HWND`).
 #[cfg(target_os = "windows")]
 fn window_owner(window_id: u64) -> Option<u32> {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
-    let mut pid = 0u32;
-    // SAFETY: a stale or foreign handle makes the call return 0, which is
-    // checked; `pid` is a valid out pointer.
-    let thread =
-        unsafe { GetWindowThreadProcessId(HWND(window_id as usize as *mut _), Some(&mut pid)) };
-    (thread != 0 && pid != 0).then_some(pid)
+    // A UWP frame's native owner hosts unrelated apps. Attribute this
+    // exact frame to the process owning its CoreWindow child.
+    platform_windows::win32::window_app_pid(window_id)
 }
 
 /// The executable `pid` runs, read from the kernel.

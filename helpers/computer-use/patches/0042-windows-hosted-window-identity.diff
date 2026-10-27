@@ -1,0 +1,200 @@
+diff --git a/crates/platform-windows/src/capture_admission.rs b/crates/platform-windows/src/capture_admission.rs
+index 0c2c86564..afab67e60 100644
+--- a/crates/platform-windows/src/capture_admission.rs
++++ b/crates/platform-windows/src/capture_admission.rs
+@@ -161,7 +161,7 @@ fn live_geometry(target: WindowsCaptureTarget) -> anyhow::Result<CaptureGeometry
+             let mut owner_pid = 0_u32;
+             unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner_pid)) };
+             anyhow::ensure!(
+-                owner_pid == pid,
++                owner_pid == pid || crate::win32::window_app_pid(window_id) == Some(pid),
+                 "native window owner changed after capture"
+             );
+             crate::capture::screenshot_window_bytes(window_id)?
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 94d1c6861..4b6064fab 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -519,11 +519,17 @@ impl Tool for ExactPidWindowTargetGuard {
+                             "window_id": window_id,
+                         }));
+                 };
+-                let owner_pid =
+-                    tokio::task::spawn_blocking(move || crate::win32::window_owner_pid(window_id))
+-                        .await
+-                        .ok()
+-                        .flatten();
++                let owner_pid = tokio::task::spawn_blocking(move || {
++                    let owner = crate::win32::window_owner_pid(window_id);
++                    if owner == Some(pid) {
++                        owner
++                    } else {
++                        crate::win32::window_app_pid(window_id)
++                    }
++                })
++                .await
++                .ok()
++                .flatten();
+                 if let Err(result) = exact_window_ownership_result(pid, window_id, owner_pid) {
+                     return result;
+                 }
+diff --git a/crates/platform-windows/src/win32/mod.rs b/crates/platform-windows/src/win32/mod.rs
+index f35010825..ba28d7485 100644
+--- a/crates/platform-windows/src/win32/mod.rs
++++ b/crates/platform-windows/src/win32/mod.rs
+@@ -12,4 +12,4 @@ pub(crate) use windows::{
+     foreground_matches_target_or_owned_window, list_windows_via_win32, list_windows_win32_first,
+     lookup_window_for_pid, resolve_uwp_app_pid, window_owner_pid, PidWindowLookup,
+ };
+-pub use windows::{list_windows, resolve_uwp_host_window, WindowInfo};
++pub use windows::{list_windows, resolve_uwp_host_window, window_app_pid, WindowInfo};
+diff --git a/crates/platform-windows/src/win32/windows.rs b/crates/platform-windows/src/win32/windows.rs
+index b13588d46..785ae04a4 100644
+--- a/crates/platform-windows/src/win32/windows.rs
++++ b/crates/platform-windows/src/win32/windows.rs
+@@ -23,6 +23,7 @@ use std::collections::HashSet;
+ use std::sync::Mutex;
+ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+ use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
++use windows::Win32::System::StationsAndDesktops::{EnumDesktopWindows, HDESK};
+ use windows::Win32::UI::WindowsAndMessaging::{
+     EnumChildWindows, EnumWindows, GetClassNameW, GetWindow, GetWindowRect, GetWindowTextLengthW,
+     GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, GW_OWNER,
+@@ -77,10 +78,14 @@ pub fn list_windows(filter_pid: Option<u32>) -> Vec<WindowInfo> {
+         }
+     }
+ 
+-    if let Some(fp) = filter_pid {
+-        merged.retain(|w| w.pid == fp);
+-    }
+-    merged
++    attribute_windows(merged, filter_pid, window_app_pid, window_owner_pid)
++}
++
++/// The app behind one exact window. Frame hosts are shared, so attribution
++/// must come from that frame's CoreWindow child, never a process-wide guess.
++pub fn window_app_pid(hwnd: u64) -> Option<u32> {
++    let owner = window_owner_pid(hwnd)?;
++    Some(resolve_uwp_app_pid(owner, hwnd).unwrap_or(owner))
+ }
+ 
+ /// Resolve one exact Win32 window without entering the global UIA tree.
+@@ -89,7 +94,13 @@ pub fn list_windows(filter_pid: Option<u32>) -> Vec<WindowInfo> {
+ /// the UIA union keeps an unrelated unresponsive provider from blocking that
+ /// ownership check.
+ pub(crate) fn find_window_by_pid_and_handle(pid: u32, hwnd: u64) -> Option<WindowInfo> {
+-    exact_window_from_probe(pid, hwnd, window_info_by_handle)
++    exact_window_from_probe(pid, hwnd, |hwnd| {
++        let mut window = window_info_by_handle(hwnd)?;
++        if window.pid != pid && window_app_pid(hwnd) == Some(pid) {
++            window.pid = pid;
++        }
++        Some(window)
++    })
+ }
+ 
+ /// Outcome of validating a caller-supplied `(pid, window_id)` pair.
+@@ -307,9 +318,25 @@ fn window_info_by_handle(hwnd: u64) -> Option<WindowInfo> {
+ }
+ 
+ pub(crate) fn list_windows_via_win32(filter_pid: Option<u32>) -> Vec<WindowInfo> {
+-    let mut windows = enumerate_via_enum_windows();
+-    if let Some(pid) = filter_pid {
+-        windows.retain(|window| window.pid == pid);
++    attribute_windows(
++        enumerate_via_enum_windows(),
++        filter_pid,
++        window_app_pid,
++        window_owner_pid,
++    )
++}
++
++fn attribute_windows(
++    mut windows: Vec<WindowInfo>,
++    filter: Option<u32>,
++    app_pid: impl Fn(u64) -> Option<u32>,
++    owner_pid: impl Fn(u64) -> Option<u32>,
++) -> Vec<WindowInfo> {
++    for window in &mut windows {
++        window.pid = app_pid(window.hwnd).unwrap_or(window.pid);
++    }
++    if let Some(pid) = filter {
++        windows.retain(|window| window.pid == pid || owner_pid(window.hwnd) == Some(pid));
+     }
+     windows
+ }
+@@ -324,8 +351,18 @@ fn enumerate_via_enum_windows() -> Vec<WindowInfo> {
+     let state_ptr = &state as *const Mutex<EnumState> as isize;
+     unsafe {
+         let _ = EnumWindows(Some(enum_windows_cb), LPARAM(state_ptr));
+-    }
+-    state.into_inner().unwrap().windows
++        // EnumWindows omits immersive windows on recent Windows versions.
++        // Enumerate this same desktop as well; no desktop switch or activation.
++        let _ = EnumDesktopWindows(HDESK::default(), Some(enum_windows_cb), LPARAM(state_ptr));
++    }
++    let mut seen = HashSet::new();
++    state
++        .into_inner()
++        .unwrap()
++        .windows
++        .into_iter()
++        .filter(|window| seen.insert(window.hwnd))
++        .collect()
+ }
+ 
+ unsafe extern "system" fn enum_windows_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+@@ -773,3 +810,53 @@ pub fn resolve_uwp_app_pid(host_pid: u32, frame_hwnd: u64) -> Option<u32> {
+     }
+     scan.app_pid
+ }
++
++#[cfg(test)]
++mod hosted_identity_tests {
++    use super::*;
++
++    fn frame(hwnd: u64) -> WindowInfo {
++        WindowInfo {
++            hwnd,
++            pid: 100,
++            title: "Hosted app".into(),
++            x: 0,
++            y: 0,
++            width: 100,
++            height: 100,
++            is_on_screen: true,
++            minimized: false,
++        }
++    }
++
++    #[test]
++    fn shared_frame_host_is_attributed_and_filtered_per_window() {
++        let frames = vec![frame(10), frame(20)];
++        let app = |hwnd| match hwnd {
++            10 => Some(1508),
++            20 => Some(29628),
++            _ => None,
++        };
++        let owner = |_| Some(100);
++        let all = attribute_windows(frames.clone(), None, app, owner);
++        assert_eq!(all.iter().map(|w| w.pid).collect::<Vec<_>>(), [1508, 29628]);
++        let settings = attribute_windows(frames.clone(), Some(1508), app, owner);
++        assert_eq!(settings.len(), 1);
++        assert_eq!(settings[0].hwnd, 10);
++        assert_eq!(settings[0].pid, 1508);
++        let calculator = attribute_windows(frames.clone(), Some(29628), app, owner);
++        assert_eq!(calculator[0].hwnd, 20);
++        // Old callers naming the native frame host can still discover both.
++        assert_eq!(
++            attribute_windows(frames.clone(), Some(100), app, owner).len(),
++            2
++        );
++        assert!(attribute_windows(frames, Some(999), app, owner).is_empty());
++    }
++
++    #[test]
++    fn missing_hosted_child_preserves_native_identity() {
++        let windows = attribute_windows(vec![frame(10)], Some(100), |_| None, |_| Some(100));
++        assert_eq!(windows[0].pid, 100);
++    }
++}

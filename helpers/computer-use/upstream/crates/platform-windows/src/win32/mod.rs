@@ -12,4 +12,4 @@ pub(crate) use windows::{
     foreground_matches_target_or_owned_window, list_windows_via_win32, list_windows_win32_first,
     lookup_window_for_pid, resolve_uwp_app_pid, window_owner_pid, PidWindowLookup,
 };
-pub use windows::{list_windows, resolve_uwp_host_window, WindowInfo};
+pub use windows::{list_windows, resolve_uwp_host_window, window_app_pid, WindowInfo};
