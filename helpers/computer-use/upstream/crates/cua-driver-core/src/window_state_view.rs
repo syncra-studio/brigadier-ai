@@ -562,6 +562,10 @@ fn retain_elements(
                 .and_then(Value::as_u64)
                 .is_some_and(|i| keep.contains(&i))
         });
+        // This is the number of rows in this response, not the complete
+        // snapshot. Typed consumers validate it against the projected array.
+        let returned = elements.len();
+        obj.insert("returned_element_count".into(), json!(returned));
     }
 }
 
@@ -1281,6 +1285,25 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn diff_element_counts_follow_the_returned_projection() {
+        let mut state = json!({
+            "pid": 9, "window_id": 7,
+            "elements": [{"element_index": 1, "role": "Button", "depth": 0}, {"element_index": 2, "role": "Button", "depth": 0}],
+            "returned_element_count": 2,
+            "total_element_count": 9,
+        });
+        let keep = [2].into_iter().collect();
+        retain_elements(&mut state, TreeFormat::Both, Some(&keep));
+        assert_eq!(state["returned_element_count"], 1);
+        assert_eq!(state["total_element_count"], 9);
+        cua_driver_contract::validate_success_output("get_window_state", state.clone()).unwrap();
+
+        retain_elements(&mut state, TreeFormat::Elements, Some(&Default::default()));
+        assert_eq!(state["returned_element_count"], 0);
+        cua_driver_contract::validate_success_output("get_window_state", state.clone()).unwrap();
     }
 
     #[test]

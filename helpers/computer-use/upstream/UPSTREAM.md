@@ -72,6 +72,7 @@ Patches applied, in order:
 - `patches/0031-windows-winui-menu-path.diff`: resolve WinUI/XAML menu bars and detached owned popups in the background, invoke native patterns, and collapse menus opened by a failed call.
 - `patches/0032-windows-key-delivery-honesty.diff`: report Windows press_key and hotkey dispatch as unconfirmed on PostMessage, SendInput and UIA accelerator routes, including structured results.
 - `patches/0033-windows-input-deadlines.diff`: bound Windows semantic input with the existing UIA single-flight deadline, prevent late mutations and duplicate fallback, and test portable routing and close readback decisions.
+- `patches/0040-diff-returned-element-count.diff`: refresh returned_element_count after projecting diff elements so typed observations accept changed and unchanged reads.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
