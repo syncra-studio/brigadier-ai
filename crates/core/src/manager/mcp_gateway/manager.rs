@@ -6,7 +6,77 @@ use super::super::{
 };
 use crate::{Error, Result};
 use brigadier_registry::{Catalog, Transport, catalog::Content};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
+
+type SignInTarget = (String, Target, bool);
+struct Targets {
+    owner: Weak<super::McpGatewayService>,
+    rows: HashMap<String, SignInTarget>,
+}
+static TARGETS: Mutex<Vec<Targets>> = Mutex::new(Vec::new());
+
+pub(super) fn remember_targets(
+    owner: &Arc<super::McpGatewayService>,
+    rows: &[brigadier_registry::catalog::Row],
+    data_dir: &std::path::Path,
+) {
+    let rows = rows
+        .iter()
+        .filter_map(|row| {
+            row.definitions.iter().find_map(|definition| {
+                if let Content::Server(server) = &definition.content
+                    && server.signs_in
+                    && let Transport::Http { url, .. } = &server.transport
+                {
+                    Some((
+                        row.id.clone(),
+                        (
+                            url.clone(),
+                            Target {
+                                server: server.name.clone(),
+                                plugin: server.plugin.as_ref().map(|plugin| plugin.name.clone()),
+                                project: definition.provenance.project.clone(),
+                            },
+                            row.definitions.iter().all(|definition| {
+                                definition
+                                    .provenance
+                                    .file
+                                    .starts_with(data_dir.join("library"))
+                            }),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    let mut targets = TARGETS.lock().unwrap_or_else(|p| p.into_inner());
+    targets.retain(|target| {
+        target.owner.strong_count() > 0 && !target.owner.ptr_eq(&Arc::downgrade(owner))
+    });
+    targets.push(Targets {
+        owner: Arc::downgrade(owner),
+        rows,
+    });
+}
+
+pub(super) fn cached_target(
+    owner: &Arc<super::McpGatewayService>,
+    row_id: &str,
+) -> Option<Result<SignInTarget>> {
+    TARGETS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .find(|target| target.owner.ptr_eq(&Arc::downgrade(owner)))
+        .map(|target| {
+            target.rows.get(row_id).cloned().ok_or_else(|| {
+                Error::Invalid("Unknown plugin row or this row does not use remote OAuth".into())
+            })
+        })
+}
 
 impl SessionManager {
     /// Pass this authority to the launch resolver. Every endpoint call mints a new secret.
@@ -14,46 +84,37 @@ impl SessionManager {
         &self.mcp_gateway
     }
 
-    async fn plugin_sign_in_target(&self, row_id: &str) -> Result<(String, Target, bool)> {
+    /// Cache only sign-in routing from the catalog already read for the page or a launch.
+    pub(crate) fn cache_plugin_sign_in_targets(&self, rows: &[brigadier_registry::catalog::Row]) {
+        remember_targets(&self.mcp_gateway, rows, &self.data_dir);
+    }
+
+    async fn plugin_sign_in_target(&self, row_id: &str) -> Result<SignInTarget> {
+        if let Some(target) = cached_target(&self.mcp_gateway, row_id) {
+            return target;
+        }
         let registry = self.registry();
         let projects = self.plugin_projects();
         let row_id = row_id.to_owned();
         let data_dir = self.data_dir.clone();
+        let gateway = self.mcp_gateway.clone();
         super::super::blocking(move || {
             let projects: Vec<_> = projects.into_iter().map(|(_, _, path)| path).collect();
             let rows = Catalog::read_rows_with_library(registry.roots(), &projects, &data_dir);
-            let row = rows
-                .iter()
-                .find(|row| row.id == row_id)
-                .ok_or_else(|| Error::Invalid("Unknown plugin row".into()))?;
-            for definition in &row.definitions {
-                if let Content::Server(server) = &definition.content
-                    && server.signs_in
-                    && let Transport::Http { url, .. } = &server.transport
-                {
-                    return Ok((
-                        url.clone(),
-                        Target {
-                            server: server.name.clone(),
-                            plugin: server.plugin.as_ref().map(|plugin| plugin.name.clone()),
-                            project: definition.provenance.project.clone(),
-                        },
-                        row.definitions.iter().all(|definition| {
-                            definition
-                                .provenance
-                                .file
-                                .starts_with(data_dir.join("library"))
-                        }),
-                    ));
-                }
-            }
-            Err(Error::Invalid("This row does not use remote OAuth".into()))
+            remember_targets(&gateway, &rows, &data_dir);
+            cached_target(&gateway, &row_id).expect("catalog cached")
         })
         .await
     }
 
     pub async fn start_plugin_sign_in(&self, row_id: &str) -> Result<CatalogSignIn> {
+        let started = std::time::Instant::now();
+        tracing::info!("MCP plugin sign-in requested");
         let (resource, target, library_only) = self.plugin_sign_in_target(row_id).await?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "MCP plugin sign-in target resolved"
+        );
         let open: Open = self
             .sign_in_browser
             .get()

@@ -4,6 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { CatalogRow, CatalogView, Request } from "@/ipc/generated";
 import { catalogPage, livePlugins } from "./live";
 import { connectPlugins, usePlugins } from "./adapter";
+import { lineOf } from "./model";
 
 const server = (id: string): CatalogRow => ({
   id, kind: "server", name: id, differentPerAgent: false,
@@ -73,6 +74,114 @@ test("project scopes from the catalog render as projects, including when switche
     assert.deepEqual(view.items[0]!.scope, { type: "someProjects", projectIds: ["project"], folders: [] });
     assert.equal(view.items[0]!.on, on);
   }
+});
+
+test("sign-in polls independently of the dialog and updates the grid within 500 ms", async (t) => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let status: CatalogRow["signIn"] = { type: "signedOut" };
+  let reads = 0;
+  let polls = 0;
+  let failNextPoll = false;
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") {
+      reads++;
+      return { method: request.method, catalog: catalog(server("one")) };
+    }
+    if (request.method === "startPluginSignIn") {
+      status = { type: "signingIn", flowId: "fixture-flow" };
+      return { method: request.method, state: status };
+    }
+    if (request.method === "getPluginSignInStatus") {
+      polls++;
+      if (failNextPoll) { failNextPoll = false; throw new Error("Temporary disconnect"); }
+      return { method: request.method, state: status };
+    }
+    throw new Error(`Unexpected request ${request.method}`);
+  });
+  const adapter = livePlugins();
+  const disconnect = connectPlugins(adapter);
+  try {
+    await tick();
+    await adapter.signIn!("one", "one", null);
+    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Waiting for your browser…");
+    failNextPoll = true;
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signingIn");
+    status = { type: "signedIn" };
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Signed in");
+    assert.equal(reads, 1, "polling does not rebuild the catalog");
+    const finishedPolls = polls;
+    t.mock.timers.tick(2000);
+    await tick();
+    assert.equal(polls, finishedPolls, "a completed flow stops polling");
+    await adapter.signIn!("one", "one", null);
+    disconnect();
+    t.mock.timers.tick(2000);
+    await tick();
+    assert.equal(polls, finishedPolls, "disconnect stops the timer");
+  } finally {
+    disconnect();
+    usePlugins.setState(previous);
+    restore();
+  }
+});
+
+test("an already signed-in start reply updates a stale Sign in row immediately", async () => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: catalog(server("one")) };
+    return { method: request.method, state: { type: request.method === "startPluginSignIn" ? "signedIn" : "signedOut" } };
+  });
+  const adapter = livePlugins();
+  const disconnect = connectPlugins(adapter);
+  try {
+    await tick();
+    await adapter.signIn!("one", "one", null);
+    assert.equal(lineOf(usePlugins.getState().view.items[0]!).text, "Signed in");
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
+});
+
+test("a catalog refresh started before the callback cannot overwrite the polled Signed in state", async (t) => {
+  const restore = mockedWindow();
+  const previous = usePlugins.getState();
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let status: CatalogRow["signIn"] = { type: "signedOut" };
+  let hold = false;
+  let reply!: (value: unknown) => void;
+  mockIPC((_command, payload) => {
+    const request = (payload as { request: Request }).request;
+    if (request.method === "getPluginCatalog") return { method: request.method, catalog: catalog(server("one")) };
+    if (request.method === "startPluginSignIn") status = { type: "signingIn", flowId: "fixture" };
+    if (hold && request.method === "getPluginSignInStatus") {
+      hold = false;
+      return new Promise((resolve) => { reply = resolve; });
+    }
+    return { method: request.method, state: status };
+  });
+  const adapter = livePlugins();
+  const disconnect = connectPlugins(adapter);
+  try {
+    await tick();
+    await adapter.signIn!("one", "one", null);
+    hold = true;
+    usePlugins.getState().refresh();
+    await tick();
+    status = { type: "signedIn" };
+    t.mock.timers.tick(500);
+    await tick();
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedIn");
+    reply({ method: "getPluginSignInStatus", state: { type: "signingIn", flowId: "fixture" } });
+    await tick();
+    assert.equal(usePlugins.getState().view.items[0]!.signIn?.type, "signedIn");
+  } finally { disconnect(); usePlugins.setState(previous); restore(); }
 });
 
 test("genuinely different servers get distinct readable agent labels without paths", () => {

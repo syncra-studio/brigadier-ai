@@ -270,7 +270,10 @@ impl McpGatewayService {
         resource: &str,
         open: Arc<dyn Fn(&str) + Send + Sync>,
     ) -> CatalogSignIn {
+        let started = std::time::Instant::now();
+        tracing::info!("MCP sign-in started");
         if oauth::url(resource).is_err() {
+            tracing::info!(reason = "Invalid MCP resource URL", "MCP sign-in failed");
             return CatalogSignIn::Failed {
                 message: "Invalid MCP resource URL".into(),
             };
@@ -283,6 +286,7 @@ impl McpGatewayService {
                 | CatalogSignIn::SignedIn
                 | CatalogSignIn::CliFallback { .. }
         ) {
+            tracing::info!("MCP sign-in already active or signed in");
             return credentials.state.clone();
         }
         credentials.generation += 1;
@@ -303,6 +307,10 @@ impl McpGatewayService {
             credentials.state = match result {
                 Ok(Some(grant)) => match gateway.store.save(&resource, &grant) {
                     Ok(()) => {
+                        tracing::info!(
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "MCP sign-in token saved"
+                        );
                         credentials.pending = None;
                         credentials.grant = Some(grant);
                         credentials.streams = CancellationToken::new();
@@ -311,11 +319,18 @@ impl McpGatewayService {
                         entry.fallback.store(false, Ordering::Release);
                         CatalogSignIn::SignedIn
                     }
-                    Err(_) => CatalogSignIn::Failed {
-                        message: "Cannot save gateway Keychain grant".into(),
-                    },
+                    Err(_) => {
+                        tracing::info!(
+                            reason = "Cannot save gateway Keychain grant",
+                            "MCP sign-in failed"
+                        );
+                        CatalogSignIn::Failed {
+                            message: "Cannot save gateway Keychain grant".into(),
+                        }
+                    }
                 },
                 Ok(None) => {
+                    tracing::info!("MCP sign-in requires CLI fallback");
                     entry.fallback.store(true, Ordering::Release);
                     CatalogSignIn::CliFallback {
                         steps: Vec::new(),
@@ -325,7 +340,10 @@ impl McpGatewayService {
                         ],
                     }
                 }
-                Err(message) => CatalogSignIn::Failed { message },
+                Err(message) => {
+                    tracing::info!(reason = %message, "MCP sign-in failed");
+                    CatalogSignIn::Failed { message }
+                }
             };
         });
         state
@@ -335,7 +353,12 @@ impl McpGatewayService {
         resource: &str,
         open: Arc<dyn Fn(&str) + Send + Sync>,
     ) -> Result<Option<Grant>, String> {
+        let started = std::time::Instant::now();
         let discovery = oauth::discover(&self.client, resource).await?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "MCP sign-in discovery completed"
+        );
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|_| "Cannot listen for OAuth redirect")?;
@@ -346,6 +369,7 @@ impl McpGatewayService {
                 .map_err(|_| "Cannot read OAuth redirect port")?
                 .port()
         );
+        let registration_started = std::time::Instant::now();
         let (id, secret) = match oauth::register(
             &self.client,
             &discovery.metadata,
@@ -357,6 +381,10 @@ impl McpGatewayService {
             oauth::Registration::Client { id, secret } => (id, secret),
             oauth::Registration::Refused => return Ok(None),
         };
+        tracing::info!(
+            elapsed_ms = registration_started.elapsed().as_millis() as u64,
+            "MCP sign-in registration completed"
+        );
         let verifier = oauth::random();
         let state = oauth::random();
         let mut authorize = oauth::url(&discovery.metadata.authorization_endpoint)?;
@@ -386,6 +414,10 @@ impl McpGatewayService {
                 .await;
         });
         open(authorize.as_str());
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "MCP sign-in browser opened"
+        );
         let code = tokio::time::timeout(std::time::Duration::from_secs(600), receiver).await;
         stop.cancel();
         let code = code
@@ -566,6 +598,10 @@ async fn callback_handler(
     axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
 ) -> (StatusCode, &'static str) {
     if query.get("state") != Some(&callback.state) {
+        tracing::info!(
+            reason = "Invalid OAuth state",
+            "MCP sign-in callback rejected"
+        );
         return (StatusCode::BAD_REQUEST, "Invalid OAuth state");
     }
     let result = query
@@ -579,6 +615,7 @@ async fn callback_handler(
         .unwrap_or_else(|p| p.into_inner())
         .take()
     {
+        tracing::info!("MCP sign-in callback received");
         let _ = sender.send(result);
     }
     (StatusCode::OK, "You can return to Brigadier.")

@@ -34,7 +34,7 @@ export type SkillSave = { type: "saved" } | { type: "changed"; current: string }
 export type PluginsAdapter = {
   read: () => Promise<PluginsView>;
   /** Calls `onChange` when the page may have changed (the agents' setup, the projects). */
-  subscribe: (onChange: () => void) => () => void;
+  subscribe: (onChange: (view?: PluginsView) => void) => () => void;
   /** The card's switch: the whole item, in every agent, keeping where it's set to be. */
   switchPlugin: (key: string, on: boolean) => Promise<PluginAgentResult[]>;
   /** Where it's on: every project (null), or only these projects (never none). */
@@ -100,7 +100,12 @@ export function connectPlugins(adapter: PluginsAdapter): () => void {
     refresh: () => void refresh(),
     reload: refresh,
   });
-  const unsubscribe = adapter.subscribe(() => void refresh());
+  const unsubscribe = adapter.subscribe((view) => {
+    if (!active) return;
+    if (view) {
+      usePlugins.setState({ view, error: null, loading: false });
+    } else void refresh();
+  });
   void refresh();
   return () => {
     active = false;

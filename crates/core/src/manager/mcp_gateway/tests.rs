@@ -9,6 +9,101 @@ use serde_json::{Value, json};
 use std::sync::atomic::AtomicUsize;
 use store::MemoryStore;
 
+/// Read-only catalog + public OAuth setup benchmark. Never opens a browser or exchanges a code.
+#[tokio::test]
+#[ignore = "requires explicit read-only catalog paths and a network connection"]
+async fn sign_in_latency_measurement() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+    let home = std::env::var("BRIGADIER_SIGN_IN_BENCH_HOME").unwrap();
+    let data = std::path::PathBuf::from(std::env::var("BRIGADIER_SIGN_IN_BENCH_DATA").unwrap());
+    let project =
+        std::path::PathBuf::from(std::env::var("BRIGADIER_SIGN_IN_BENCH_PROJECT").unwrap());
+    let roots = brigadier_registry::Roots::from_vars([("HOME".into(), home)]).unwrap();
+    let catalog_started = std::time::Instant::now();
+    let rows = brigadier_registry::Catalog::read_rows_with_library(&roots, &[project], &data);
+    let catalog_time = catalog_started.elapsed();
+    assert!(
+        rows.iter()
+            .any(|row| row.endpoint.as_deref() == Some("https://mcp.atlassian.com/v2/mcp"))
+    );
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    super::manager::remember_targets(&gateway, &rows, &data);
+    let row = rows
+        .iter()
+        .find(|row| row.endpoint.as_deref() == Some("https://mcp.atlassian.com/v2/mcp"))
+        .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let started = std::time::Instant::now();
+    let (resource, _, _) = super::manager::cached_target(&gateway, &row.id)
+        .unwrap()
+        .unwrap();
+    let lookup = started.elapsed();
+    let network = std::time::Instant::now();
+    gateway
+        .start_sign_in(
+            &resource,
+            Arc::new(move |_| {
+                let _ = sender.send(());
+            }),
+        )
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(60), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    eprintln!(
+        "sign-in measurement: cold catalog={catalog_time:?}, cached lookup={lookup:?}, OAuth setup={:?}, click-to-browser={:?}",
+        network.elapsed(),
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn sign_in_targets_use_the_page_snapshot_and_follow_catalog_refreshes() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    let flow = Flow::start(
+        "sign-in-target-cache",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let file = flow.manager.data_dir.join("library/servers/cached.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        r#"{"mcpServers":{"cached":{"type":"http","url":"https://cache.test/mcp"}}}"#,
+    )
+    .unwrap();
+    let row = flow
+        .manager
+        .plugin_catalog()
+        .unwrap()
+        .rows
+        .into_iter()
+        .find(|row| row.name == "cached")
+        .unwrap();
+    std::fs::remove_file(file).unwrap();
+    // A status request uses the page's routing snapshot without reading the filesystem again.
+    assert!(
+        flow.manager
+            .get_plugin_sign_in_status(&row.id)
+            .await
+            .is_ok()
+    );
+    // A fresh page read replaces that snapshot, including removals.
+    flow.manager.plugin_catalog().unwrap();
+    assert!(
+        flow.manager
+            .get_plugin_sign_in_status(&row.id)
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}
+
 #[derive(Default)]
 struct FixtureState {
     origin: String,

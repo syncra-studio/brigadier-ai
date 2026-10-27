@@ -422,7 +422,10 @@ impl crate::manager::SessionManager {
             .into_iter()
             .map(|(_, _, path)| path)
             .collect();
-        Catalog::read_rows_with_library(self.registry().roots(), &projects, &self.data_dir)
+        let rows =
+            Catalog::read_rows_with_library(self.registry().roots(), &projects, &self.data_dir);
+        self.cache_plugin_sign_in_targets(&rows);
+        rows
     }
 
     pub fn plugin_catalog(&self) -> crate::Result<super::CatalogView> {

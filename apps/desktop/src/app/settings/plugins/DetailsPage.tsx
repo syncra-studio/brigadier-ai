@@ -127,7 +127,7 @@ function Banners({ item, actions }: { item: PluginItemView; actions: DetailsActi
   return (
     <div data-slot="banners" className="flex flex-col gap-2">
       <Banner tone="info" text={signInLine(item.signIn)} className="rounded-control border-b-0">
-        {actions.onSignIn && item.signIn.type !== "signedIn" && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>Sign in</Button>}
+        {actions.onSignIn && item.signIn.type !== "signedIn" && <Button variant="soft" size="sm" disabled={actions.busy} onClick={actions.onSignIn}>{item.signIn.type === "signingIn" ? "Waiting for browser…" : "Sign in"}</Button>}
       </Banner>
     </div>
   );

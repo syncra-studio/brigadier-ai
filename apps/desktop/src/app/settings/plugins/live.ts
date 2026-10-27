@@ -1,6 +1,6 @@
 import type { PluginDraft, PluginsAdapter } from "./adapter";
 import { pickFolder, request } from "@/ipc/client";
-import type { CatalogView } from "@/ipc/generated";
+import type { CatalogSignIn, CatalogView } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import type { PluginProjectView, PluginsView } from "./types";
 
@@ -57,8 +57,37 @@ function projects(): PluginProjectView[] {
 
 /** Mutations answer after saving. Every completion is followed by a fresh catalog read. */
 export function livePlugins(): PluginsAdapter {
+  let view: PluginsView | null = null;
+  let changed: ((view?: PluginsView) => void) | null = null;
+  let polling = false;
+  let revision = 0;
+  let reads = 0;
+  const states = new Map<string, { revision: number; state: CatalogSignIn }>();
+  const waiting = (state: CatalogSignIn | undefined) => state?.type === "signingIn" ||
+    (state?.type === "cliFallback" && state.steps.some((step) => ["waiting", "starting", "inBrowser"].includes(step.state.type)));
+  const update = (rowId: string, signIn: CatalogSignIn) => {
+    states.set(rowId, { revision: ++revision, state: signIn });
+    if (!view) return;
+    view = { ...view, items: view.items.map((item) => item.key === rowId ? { ...item, signIn } : item) };
+    changed?.(view);
+  };
+  const poll = async () => {
+    if (polling || !view || !changed) return;
+    polling = true;
+    try {
+      await Promise.all(view.items.filter((item) => waiting(item.signIn)).map(async (item) => {
+        const before = states.get(item.key);
+        try {
+          const { state } = await request({ method: "getPluginSignInStatus", rowId: item.key });
+          if (changed && states.get(item.key) === before) update(item.key, state);
+        } catch { /* A transient IPC failure must not stop following the pending flow. */ }
+      }));
+    } finally { polling = false; }
+  };
   return {
     read: async () => {
+      const read = ++reads;
+      const before = revision;
       const { catalog } = await request({ method: "getPluginCatalog" });
       await Promise.all(catalog.rows.map(async (row) => {
         if (row.kind === "server" && row.signIn.type !== "notRequired" && row.definitions.some((definition) => definition.agent !== null)) {
@@ -69,15 +98,23 @@ export function livePlugins(): PluginsAdapter {
           }
         }
       }));
-      return catalogPage(catalog, projects());
+      for (const row of catalog.rows) {
+        const latest = states.get(row.id);
+        if (latest && latest.revision > before) row.signIn = latest.state;
+      }
+      const fresh = catalogPage(catalog, projects());
+      if (read === reads) view = fresh;
+      return fresh;
     },
     subscribe: (onChange) => {
+      changed = onChange;
+      const timer = setInterval(() => void poll(), 500);
       const focused = () => onChange();
       window.addEventListener("focus", focused);
       const unsubscribe = useApp.subscribe((state, previous) => {
         if (state.projects !== previous.projects) onChange();
       });
-      return () => { window.removeEventListener("focus", focused); unsubscribe(); };
+      return () => { changed = null; clearInterval(timer); window.removeEventListener("focus", focused); unsubscribe(); };
     },
     switchPlugin: async (rowId, on) => { await request({ method: "setPluginChoice", rowId, on }); return []; },
     setScope: async (rowId, paths) => { await request({ method: "setPluginChoiceScope", rowId, scope: paths ?? "global" }); return []; },
@@ -100,6 +137,7 @@ export function livePlugins(): PluginsAdapter {
     },
     signIn: async (rowId) => {
       const { state } = await request({ method: "startPluginSignIn", rowId });
+      update(rowId, state);
       if (state.type === "failed") throw new Error(state.message);
       return [];
     },

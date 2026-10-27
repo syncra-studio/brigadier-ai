@@ -118,18 +118,22 @@ export function SignInDialog({ item, serverId, projectId, adapter, refresh, onCl
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const waiting = item.signIn?.type === "signingIn";
+  const signedIn = item.signIn?.type === "signedIn";
   const start = () => {
+    if (starting || waiting || signedIn) return;
     setError(null);
-    void adapter.signIn?.(item.key, serverId, projectId).then(refresh, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+    setStarting(true);
+    void adapter.signIn?.(item.key, serverId, projectId).then(refresh, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setStarting(false));
   };
   useEffect(start, []);
-  useWatch(refresh, item.signIn?.type === "signingIn");
   return (
     <PluginDialog slot="sign-in" onClose={onClose} title={`Sign in to ${item.name}`} description="Sign in once for your Brigadier sessions.">
-      <p data-slot="sign-in-state" className="text-foreground/65 text-label">{item.signIn ? signInLine(item.signIn) : "Sign in"}</p>
+      <p data-slot="sign-in-state" role="status" className="text-foreground/65 text-label">{starting && !waiting && !signedIn ? "Opening your browser…" : item.signIn ? signInLine(item.signIn) : "Sign in"}</p>
       <ErrorLine error={error} />
       <div className="flex items-center gap-2">
-        <Button variant="ghost" onClick={start}>Open browser again</Button>
+        {!signedIn && <Button variant="ghost" disabled={starting || waiting} onClick={start}>{waiting ? "Waiting for your browser…" : "Try again"}</Button>}
         <span className="flex-1" />
         <Button onClick={onClose}>Done</Button>
       </div>
