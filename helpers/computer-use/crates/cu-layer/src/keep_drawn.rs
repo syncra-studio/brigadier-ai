@@ -230,9 +230,10 @@ impl Tool for KeepDrawnRead {
 /// What a read of a web app's window on another Space says about its
 /// screenshot.
 pub const OLDER_PICTURE: &str = "This window is on another Space than the user's, where macOS \
-    doesn't draw it, so the screenshot can be an older picture than the tree. Where they \
-    disagree, go by the tree, which was read from the app just now, and by your actions' \
-    answers.";
+    may stop drawing its web content. A screenshot may be stale, or omitted when macOS \
+    returns a black body. Accessibility text is still read from the app. Verify actions \
+    from fresh state; an accepted input request alone does not prove the effect. If you \
+    need a current picture, ask the user to move this window onto their current Space.";
 
 /// Adds [`OLDER_PICTURE`] to a read of a web app's (`web`) window that is
 /// on another Space, in place of the driver's own note about it.

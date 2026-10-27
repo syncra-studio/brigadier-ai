@@ -694,6 +694,12 @@ impl MenuRequest {
     }
 }
 
+fn needs_current_space(path: &[String], on_current_space: Option<bool>) -> bool {
+    on_current_space == Some(false)
+        && path.first().is_some_and(|name| name == "Window")
+        && path.len() > 1
+}
+
 /// Run a menu command in a background app without activating it. Presses
 /// the item through accessibility when macOS keeps it enabled; a disabled
 /// Save of a document window goes through the app's scripting interface
@@ -706,6 +712,21 @@ pub(super) async fn run_in_background(
     path: Vec<String>,
     request: MenuRequest,
 ) -> ToolResult {
+    if needs_current_space(
+        &path,
+        crate::windows::window_on_current_space_by_id(window_id),
+    ) {
+        return ToolResult::error(
+            "Not done: this window is on another Space. The Window menu cannot bring it \
+             onto the user's current Space in the background. Ask the user to move it to \
+             their current Space if that is needed; its accessibility text and controls \
+             can still be used without moving it.",
+        )
+        .with_structured(serde_json::json!({
+            "status": "refused", "code": "requires_current_space", "delivered": false,
+            "effect": "none"
+        }));
+    }
     let document = tokio::task::spawn_blocking(move || document_path_of_window(pid, window_id))
         .await
         .ok()
@@ -952,6 +973,26 @@ impl Tool for InvokeMenuTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regression_off_space_window_menu_never_claims_to_switch_spaces() {
+        assert!(needs_current_space(
+            &["Window".into(), "Scratch".into()],
+            Some(false)
+        ));
+        assert!(!needs_current_space(
+            &["File".into(), "Save".into()],
+            Some(false)
+        ));
+        assert!(!needs_current_space(
+            &["Window".into(), "Scratch".into()],
+            Some(true)
+        ));
+        assert!(!needs_current_space(
+            &["Window".into(), "Scratch".into()],
+            None
+        ));
+    }
 
     #[test]
     fn a_background_menu_refusal_names_the_code_and_the_route() {

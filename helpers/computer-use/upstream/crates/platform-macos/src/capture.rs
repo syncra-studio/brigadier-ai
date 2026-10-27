@@ -754,14 +754,53 @@ pub fn screenshot_window_bytes(window_id: u32) -> anyhow::Result<Vec<u8>> {
         window_id,
         off_space,
         |id| {
-            capture_window_with_backends(
+            let bytes = capture_window_with_backends(
                 id,
                 screenshot_window_bytes_sck,
                 screenshot_window_bytes_shell,
-            )
+            )?;
+            validate_off_space_picture(bytes, off_space)
         },
-        screenshot_window_bytes_skylight,
+        |id| validate_off_space_picture(screenshot_window_bytes_skylight(id)?, off_space),
     )
+}
+
+/// A nonempty backing store can contain only a title bar and a black body
+/// after macOS discards an off-Space renderer's surface. Alpha and PNG-size
+/// checks alone accept it. Do not expose that body as visual grounding.
+fn validate_off_space_picture(bytes: Vec<u8>, off_space: bool) -> anyhow::Result<Vec<u8>> {
+    if off_space {
+        let picture = image::load_from_memory(&bytes)?.to_rgba8();
+        if off_space_body_is_blank(picture.as_raw(), picture.width(), picture.height()) {
+            anyhow::bail!(
+                "off_space_picture_unavailable: macOS returned a black or transparent window \
+                 body on another Space; a usable picture cannot be confirmed. Accessibility \
+                 text and semantic actions are still available. If visual input is needed, \
+                 ask the user to bring this window onto their current Space, then read it again"
+            );
+        }
+    }
+    Ok(bytes)
+}
+
+fn off_space_body_is_blank(rgba: &[u8], width: u32, height: u32) -> bool {
+    if width < 20 || height < 20 || rgba.len() != width as usize * height as usize * 4 {
+        return false;
+    }
+    // Exclude the title bar, rounded edges and shadow. A window whose actual
+    // content is black is also ambiguous here; a refusal is safer than using
+    // an unprovable screenshot to ground a click.
+    let mut blank = 0usize;
+    let mut total = 0usize;
+    for y in height / 5..height * 19 / 20 {
+        for x in width / 20..width * 19 / 20 {
+            let offset = (y as usize * width as usize + x as usize) * 4;
+            let pixel = &rgba[offset..offset + 4];
+            blank += usize::from(pixel[3] == 0 || pixel[..3].iter().all(|&c| c <= 3));
+            total += 1;
+        }
+    }
+    total > 0 && blank * 100 >= total * 99
 }
 
 /// Route a window capture by Space.
@@ -1103,6 +1142,28 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc;
+
+    #[test]
+    fn regression_off_space_black_body_is_not_visual_grounding() {
+        let mut pixels = vec![0; 100 * 100 * 4];
+        for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+            pixel.copy_from_slice(if index / 100 < 20 {
+                &[240, 240, 240, 255]
+            } else {
+                &[0, 0, 0, 255]
+            });
+        }
+        let png = cua_driver_core::image_utils::encode_rgba_to_png(&pixels, 100, 100).unwrap();
+        assert!(validate_off_space_picture(png.clone(), false).is_ok());
+        let error = validate_off_space_picture(png, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("off_space_picture_unavailable"));
+        assert!(error.contains("ask the user"));
+        assert!(off_space_body_is_blank(&vec![0; 100 * 100 * 4], 100, 100));
+        pixels.fill(64);
+        assert!(!off_space_body_is_blank(&pixels, 100, 100));
+    }
 
     #[test]
     fn off_space_window_uses_skylight_before_public_backends() {
