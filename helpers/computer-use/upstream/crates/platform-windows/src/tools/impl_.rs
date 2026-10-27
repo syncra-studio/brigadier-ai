@@ -9075,21 +9075,6 @@ fn menu_refusal(message: String) -> ToolResult {
     }))
 }
 
-/// Activate a window for a visible native-menu operation. Windows may reject
-/// the first foreground request after the test/user session has been idle even
-/// when we attach to the current foreground thread. A reserved no-name key has
-/// no application meaning but makes this process the owner of the most recent
-/// input, allowing a bounded retry without sending a real shortcut or text to
-/// whichever application currently has focus.
-fn activate_window_for_menu(hwnd: windows::Win32::Foundation::HWND) -> Result<bool, String> {
-    let (activated, assisted) = unsafe { crate::input::force_foreground_assisted(hwnd) };
-    if activated {
-        Ok(assisted)
-    } else {
-        Err("invoke_menu: target window could not be activated".to_owned())
-    }
-}
-
 #[async_trait]
 impl Tool for InvokeMenuTool {
     fn def(&self) -> &ToolDef {
@@ -9114,9 +9099,7 @@ impl Tool for InvokeMenuTool {
             EvidenceKind, RequestedDelivery,
         };
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
 
         let input: InvokeMenuInput = match parse_typed_input("invoke_menu", args) {
             Ok(input) => input,
@@ -9137,52 +9120,19 @@ impl Tool for InvokeMenuTool {
             return menu_refusal("invoke_menu: window_id does not belong to pid".into());
         }
 
-        let outcome = tokio::task::spawn_blocking(move || {
-            // `HWND` wraps a raw pointer and is intentionally not `Send`.
-            // Move the integer handle into the blocking worker and rebuild the
-            // process-local wrapper there instead of carrying it across threads.
-            let hwnd = HWND(hwnd_value as usize as *mut _);
-            let prior = unsafe { GetForegroundWindow() };
-            let needs_activation = prior != hwnd;
-            let used_activation_retry = if needs_activation {
-                activate_window_for_menu(hwnd)?
-            } else {
-                false
-            };
-            if needs_activation {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let result = crate::uia::invoke_menu_path(hwnd_value, &path);
-            if needs_activation && !prior.0.is_null() {
-                let _ = unsafe { crate::input::force_foreground_attached(prior) };
-            }
-            result.map(|()| used_activation_retry)
-        })
-        .await;
-
+        let outcome =
+            tokio::task::spawn_blocking(move || crate::uia::invoke_menu_path(hwnd_value, &path))
+                .await;
         match outcome {
-            Ok(Ok(used_activation_retry)) => ToolResult::text(
-                "Resolved the live native menu path and dispatched its final accessibility action; verify the command's semantic effect from fresh state.",
-            )
-            .with_action_record(
+            Ok(Ok(())) => ToolResult::text(
+                "Dispatched the final UI Automation menu action in the background; its effect is not confirmed. Read fresh state before retrying.",
+            ).with_action_record(
                 ActionExecutionRecord::builder(
-                    ActionEffect::Unverifiable,
-                    ActionTransport::WindowsUiaInvoke,
-                    RequestedDelivery::Foreground,
-                )
-                .actual_delivery(ActualDelivery::Foreground)
-                .evidence(ActionEvidence {
-                    kind: EvidenceKind::NativeApiResult,
-                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action"
-                        .into(),
-                })
-                .detail(if used_activation_retry {
-                    "target activation required a bounded reserved-key foreground-lock retry"
-                } else {
-                    "target was already foreground or activated without a foreground-lock retry"
-                })
-                .build()
-                .expect("invoke_menu record is valid"),
+                    ActionEffect::Unverifiable, ActionTransport::WindowsUiaInvoke, RequestedDelivery::Background,
+                ).actual_delivery(ActualDelivery::Background)
+                .evidence(ActionEvidence { kind: EvidenceKind::NativeApiResult,
+                    detail: "Every menu hop resolved uniquely and UI Automation accepted the final action".into(),
+                }).build().expect("invoke_menu record is valid"),
             ),
             Ok(Err(error)) => menu_refusal(error),
             Err(error) => menu_refusal(format!("invoke_menu: blocking task failed: {error}")),
