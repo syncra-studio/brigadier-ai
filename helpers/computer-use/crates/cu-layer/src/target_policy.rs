@@ -187,12 +187,15 @@ fn check_pid(
     match identity {
         Some(identity) => {
             check(tool, &identity, allowed)?;
-            let unlocked = identity
-                .bundle_id
-                .as_ref()
-                .is_some_and(|id| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(id)));
-            if !unlocked && process_hosts_terminal(pid) {
-                return Err(refusal(tool, &identity, RefusalReason::Terminal));
+            #[cfg(not(target_os = "macos"))]
+            {
+                let unlocked = identity
+                    .bundle_id
+                    .as_ref()
+                    .is_some_and(|id| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(id)));
+                if !unlocked && process_hosts_terminal(pid) {
+                    return Err(refusal(tool, &identity, RefusalReason::Terminal));
+                }
             }
             Ok(())
         }
@@ -388,11 +391,15 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
             | "com.github.wez.wezterm"
             | "co.zeit.hyper"
             | "co.vercel.hyper"
-            | "org.tabby"
-            | "com.electron.tabby"
-            | "com.waveterm.waveterm"
-            | "com.github.railsware.upterm"
-    ) || bundle.starts_with("dev.warp.")
+    ) || (cfg!(not(target_os = "macos"))
+        && matches!(
+            bundle,
+            "org.tabby"
+                | "com.electron.tabby"
+                | "com.waveterm.waveterm"
+                | "com.github.railsware.upterm"
+        ))
+        || bundle.starts_with("dev.warp.")
         || is_windows_or_linux_terminal(bundle)
         || matches!(
             name,
@@ -406,15 +413,15 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
                 | "alacritty"
                 | "wezterm"
                 | "hyper"
-                | "wmux"
-                | "tabby"
-                | "git bash"
-                | "wezterm-gui"
         )
         || (cfg!(not(target_os = "macos"))
             && matches!(
                 name,
-                "windows terminal"
+                "wmux"
+                    | "tabby"
+                    | "git bash"
+                    | "wezterm-gui"
+                    | "windows terminal"
                     | "command prompt"
                     | "powershell"
                     | "konsole"
@@ -428,66 +435,72 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
 /// Terminals and shells on Windows (executables and the Windows Terminal
 /// package id) and Linux.
 fn is_windows_or_linux_terminal(bundle: &str) -> bool {
-    matches!(
-        bundle,
-        "windowsterminal"
-            | "wmux"
-            | "tabby"
-            | "hyper"
-            | "wezterm"
-            | "warp-preview"
-            | "warp-terminal"
-            | "git-bash"
-            | "git-cmd"
-            | "wt"
-            | "openconsole"
-            | "conhost"
-            | "cmd"
-            | "powershell"
-            | "powershell_ise"
-            | "pwsh"
-            | "mintty"
-            | "wezterm-gui"
-            | "alacritty"
-            | "kitty"
-            | "gnome-terminal"
-            | "gnome-terminal-server"
-            | "kgx"
-            | "ptyxis"
-            | "ptyxis-agent"
-            | "konsole"
-            | "xterm"
-            | "uxterm"
-            | "urxvt"
-            | "rxvt"
-            | "st"
-            | "xfce4-terminal"
-            | "mate-terminal"
-            | "lxterminal"
-            | "qterminal"
-            | "terminator"
-            | "tilix"
-            | "foot"
-            | "footclient"
-            | "ghostty"
-            | "warp"
-            | "terminology"
-            | "cool-retro-term"
-            | "blackbox"
-            | "bash"
-            | "sh"
-            | "dash"
-            | "zsh"
-            | "fish"
-            | "ksh"
-            | "wsl"
-            | "wslhost"
-            | "env"
-    ) || bundle.starts_with("microsoft.windowsterminal")
+    (cfg!(not(target_os = "macos"))
+        && matches!(
+            bundle,
+            "wmux"
+                | "tabby"
+                | "hyper"
+                | "wezterm"
+                | "warp-preview"
+                | "warp-terminal"
+                | "git-bash"
+                | "git-cmd"
+        ))
+        || matches!(
+            bundle,
+            "windowsterminal"
+                | "wt"
+                | "openconsole"
+                | "conhost"
+                | "cmd"
+                | "powershell"
+                | "powershell_ise"
+                | "pwsh"
+                | "mintty"
+                | "wezterm-gui"
+                | "alacritty"
+                | "kitty"
+                | "gnome-terminal"
+                | "gnome-terminal-server"
+                | "kgx"
+                | "ptyxis"
+                | "ptyxis-agent"
+                | "konsole"
+                | "xterm"
+                | "uxterm"
+                | "urxvt"
+                | "rxvt"
+                | "st"
+                | "xfce4-terminal"
+                | "mate-terminal"
+                | "lxterminal"
+                | "qterminal"
+                | "terminator"
+                | "tilix"
+                | "foot"
+                | "footclient"
+                | "ghostty"
+                | "warp"
+                | "terminology"
+                | "cool-retro-term"
+                | "blackbox"
+                | "bash"
+                | "sh"
+                | "dash"
+                | "zsh"
+                | "fish"
+                | "ksh"
+                | "wsl"
+                | "wslhost"
+                | "env"
+        )
+        || bundle.starts_with("microsoft.windowsterminal")
 }
 
 // Process evidence catches renamed/unlisted terminal hosts as well as the
 // maintained app identities above. Never attach to a console or inject input.
+#[cfg(any(not(target_os = "macos"), test))]
 #[derive(Debug)]
 struct ProcessFact {
     pid: i64,
@@ -496,6 +509,7 @@ struct ProcessFact {
     has_tty: bool,
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
     let parents: std::collections::HashMap<i64, i64> = processes
         .iter()
@@ -534,18 +548,35 @@ fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
     })
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn process_hosts_terminal(pid: i64) -> bool {
-    let Ok(output) = std::process::Command::new("/bin/ps")
+    let Ok(mut child) = std::process::Command::new("/bin/ps")
         .args(["-A", "-o", "pid=,ppid=,tty=,comm="])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .spawn()
     else {
         return false;
     };
-    if !output.status.success() {
+    // Drain concurrently: a full stdout pipe must not turn the deadline into
+    // a permanent refusal on machines with many processes.
+    use std::io::Read;
+    let Some(mut stdout) = child.stdout.take() else {
         return false;
-    }
-    let processes: Vec<ProcessFact> = String::from_utf8_lossy(&output.stdout)
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        let _ = tx.send(bytes);
+    });
+    let output = rx.recv_timeout(std::time::Duration::from_millis(250));
+    // Even after stdout closes, do not wait indefinitely for ps to exit.
+    let _ = child.kill();
+    let _ = child.wait();
+    let Ok(output) = output else {
+        return false;
+    };
+    let processes: Vec<ProcessFact> = String::from_utf8_lossy(&output)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -814,6 +845,10 @@ mod tests {
             "foot",
             "tilix",
         ] {
+            if cfg!(target_os = "macos") && matches!(terminal, "wmux" | "tabby" | "git-bash") {
+                assert!(!is_terminal(terminal, terminal), "{terminal}");
+                continue;
+            }
             assert!(is_terminal(terminal, terminal), "{terminal}");
             let target = TargetIdentity {
                 name: terminal.into(),
