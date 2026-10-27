@@ -14,7 +14,11 @@ use serde_json::{json, Value};
 #[derive(Default)]
 struct Seen {
     posted: usize,
+    posted_args: Vec<Value>,
+    panel: Option<(i32, u32)>,
+    driver_refuses: bool,
     made_main: Vec<u32>,
+    menu_pressed: usize,
     selected: usize,
 }
 
@@ -30,8 +34,13 @@ impl Tool for FakeHotkey {
     fn def(&self) -> &ToolDef {
         &self.def
     }
-    async fn invoke(&self, _args: Value) -> ToolResult {
-        self.seen.lock().unwrap().posted += 1;
+    async fn invoke(&self, args: Value) -> ToolResult {
+        let mut seen = self.seen.lock().unwrap();
+        seen.posted += 1;
+        seen.posted_args.push(args);
+        if seen.driver_refuses {
+            return ToolResult::error("panel window could not be resolved");
+        }
         ToolResult::text("posted")
     }
 }
@@ -44,11 +53,19 @@ impl MenuBar for FakeMenuBar {
     fn chromium(&self, pid: i32) -> bool {
         pid == 2
     }
+    fn panel_owns_keys(&self, pid: i32, window_id: u32) -> bool {
+        self.0.lock().unwrap().panel == Some((pid, window_id))
+    }
     fn make_main(&self, _pid: i32, window_id: u32) {
         self.0.lock().unwrap().made_main.push(window_id);
     }
     fn press(&self, _pid: i32, key: &str, modifiers: i64) -> Option<String> {
-        (key == "z" && modifiers == 0).then(|| "Undo".to_owned())
+        self.0.lock().unwrap().menu_pressed += 1;
+        match (key, modifiers) {
+            ("z", 0) => Some("Undo".to_owned()),
+            ("g", 1) => Some("Find Previous".to_owned()),
+            _ => None,
+        }
     }
     fn select_all_text(&self, _pid: i32, _window_id: Option<u32>) -> Option<String> {
         self.0.lock().unwrap().selected += 1;
@@ -87,6 +104,15 @@ fn text_of(result: &ToolResult) -> String {
         .collect()
 }
 
+fn assert_forwarded(seen: &Seen, expected: Value) {
+    assert_eq!(seen.posted_args.len(), 1);
+    let mut forwarded = seen.posted_args[0].as_object().unwrap().clone();
+    // The registry supplies its own transport context before the wrapper.
+    forwarded.remove("_session_id");
+    forwarded.remove("_transport_session_id");
+    assert_eq!(Value::Object(forwarded), expected);
+}
+
 #[tokio::test]
 async fn a_menu_shortcut_presses_its_menu_item_in_the_named_window() {
     let (registry, seen) = build();
@@ -119,6 +145,46 @@ async fn command_a_selects_the_text_when_select_all_cant_be_pressed() {
         text_of(&result)
     );
     assert_eq!(seen.lock().unwrap().posted, 0);
+}
+
+#[tokio::test]
+async fn panel_shortcuts_bypass_the_client_menu_and_preserve_the_exact_target() {
+    for keys in [
+        json!(["cmd", "shift", "g"]),
+        json!(["cmd", "z"]),
+        json!(["cmd", "a"]),
+    ] {
+        let (registry, seen) = build();
+        seen.lock().unwrap().panel = Some((1, 90));
+        let args = json!({"pid": 1, "window_id": 90, "keys": keys});
+        let result = registry.invoke("hotkey", args.clone()).await;
+        assert_eq!(text_of(&result), "posted", "{args}");
+        let seen = seen.lock().unwrap();
+        assert_forwarded(&seen, args);
+        assert_eq!(seen.posted, 1);
+        assert!(seen.made_main.is_empty());
+        assert_eq!(seen.menu_pressed, 0);
+        assert_eq!(seen.selected, 0);
+    }
+}
+
+#[tokio::test]
+async fn panel_driver_refusal_never_falls_back_to_the_client_menu() {
+    let (registry, seen) = build();
+    {
+        let mut seen = seen.lock().unwrap();
+        seen.panel = Some((1, 90));
+        seen.driver_refuses = true;
+    }
+    let args = json!({"pid": 1, "window_id": 90, "keys": ["cmd", "shift", "g"]});
+    let result = registry.invoke("hotkey", args.clone()).await;
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(text_of(&result), "panel window could not be resolved");
+    let seen = seen.lock().unwrap();
+    assert_forwarded(&seen, args);
+    assert!(seen.made_main.is_empty());
+    assert_eq!(seen.menu_pressed, 0);
+    assert_eq!(seen.selected, 0);
 }
 
 #[tokio::test]

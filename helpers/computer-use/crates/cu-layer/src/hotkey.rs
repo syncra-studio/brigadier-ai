@@ -57,6 +57,9 @@ pub fn shortcut_matches(item_char: &str, item_modifiers: i64, key: &str, modifie
 pub trait MenuBar: Send + Sync {
     /// Whether the app embeds Chromium (Electron apps and Chromium browsers).
     fn chromium(&self, pid: i32) -> bool;
+    /// Whether an Open/Save panel owns the shortcut instead of the client's
+    /// menu bar. Its native key equivalents must go through the driver.
+    fn panel_owns_keys(&self, pid: i32, window_id: u32) -> bool;
     /// Makes `window_id` the app's main window, so the menu item acts on it.
     /// The app is not brought to the front.
     fn make_main(&self, pid: i32, window_id: u32);
@@ -167,7 +170,9 @@ impl Tool for MenuShortcut {
         let Some((pid, window_id, key, modifiers, display)) = menu_combo(&args) else {
             return self.inner.invoke(args).await;
         };
-        if self.menu_bar.chromium(pid) {
+        if self.menu_bar.chromium(pid)
+            || window_id.is_some_and(|window_id| self.menu_bar.panel_owns_keys(pid, window_id))
+        {
             return self.inner.invoke(args).await;
         }
         if let Some(window_id) = window_id {
@@ -197,6 +202,10 @@ pub struct System;
 impl MenuBar for System {
     fn chromium(&self, pid: i32) -> bool {
         system::chromium_family(pid)
+    }
+
+    fn panel_owns_keys(&self, pid: i32, window_id: u32) -> bool {
+        platform_macos::ax::panel::blocks_app_menu(pid, window_id)
     }
 
     fn make_main(&self, pid: i32, window_id: u32) {
