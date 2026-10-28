@@ -120,6 +120,8 @@ Patches applied, in order:
 
 - `patches/0114-windows-complete-observation-rows.diff`: Include read-only UIA rows in internal verification observations before claiming complete coverage, preserving public addressable rows and documenting Settings window Close.
 
+- `patches/0115-settings-close-foreground-owner-proof.diff`: Refuse Settings window Close when the target owns the foreground popup or foreground ownership cannot be confirmed, before changing styles and again before dispatch.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

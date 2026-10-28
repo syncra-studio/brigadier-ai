@@ -20,6 +20,7 @@
   24 cua-driver-core/src/tool.rs
    1 cua-driver-core/src/tool_args.rs
    3 cua-driver-core/src/tool_schema.rs
+   1 cua-driver-core/src/window_state_view.rs
    7 platform-macos/src/browser/setup_ui.rs
    1 platform-macos/src/document_edit.rs
    1 platform-macos/src/focus_steal.rs

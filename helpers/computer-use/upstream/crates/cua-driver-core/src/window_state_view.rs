@@ -2037,3 +2037,37 @@ mod kept_ancestor_tests {
         assert_eq!(depths.row_depth(0, true), 0);
     }
 }
+
+/// Closing an owner can also close its foreground popup; unknown ownership
+/// cannot establish that a background-only close is safe.
+pub fn windows_settings_close_front_refusal(
+    target_root: u64,
+    target_owner: u64,
+    front: u64,
+    front_owner: u64,
+) -> Option<&'static str> {
+    if [target_root, target_owner, front, front_owner].contains(&0) {
+        Some("Windows did not expose the front window and its owner, so background close safety could not be confirmed. No close was sent.")
+    } else if target_root == front || target_owner == front_owner {
+        Some("Closing this Settings window could change your front window or its owned dialog. No close was sent.")
+    } else {
+        None
+    }
+}
+#[cfg(test)]
+mod settings_close_front_tests {
+    use super::*;
+    #[test]
+    fn close_preserves_the_front_window_and_its_owned_popups() {
+        assert!(windows_settings_close_front_refusal(1, 1, 2, 2).is_none());
+        assert!(windows_settings_close_front_refusal(1, 1, 1, 1)
+            .unwrap()
+            .contains("front window"));
+        assert!(windows_settings_close_front_refusal(1, 1, 3, 1)
+            .unwrap()
+            .contains("owned dialog"));
+        assert!(windows_settings_close_front_refusal(1, 1, 0, 0)
+            .unwrap()
+            .contains("could not be confirmed"));
+    }
+}
