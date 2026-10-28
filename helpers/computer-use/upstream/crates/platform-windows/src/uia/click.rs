@@ -19,7 +19,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
     IsWindowEnabled, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND,
-    PostMessageW,
+    WM_NCHITTEST,
 };
 
 struct ComApartment(bool);
@@ -184,7 +184,7 @@ fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HW
 }
 
 /// Only a Close button under a TitleBar qualifies; Close Tab must stay an Invoke.
-fn titlebar_close(element: &IUIAutomationElement) -> bool {
+fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
     unsafe {
         if element.CurrentControlType().ok() != Some(UIA_ButtonControlTypeId) {
             return false;
@@ -197,6 +197,22 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
             .CurrentAutomationId()
             .map(|s| s.to_string())
             .unwrap_or_default();
+        // Win11 Notepad exposes a custom caption button below a Pane rather
+        // than a UIA TitleBar. Native non-client hit-test or its exact caption
+        // id at the top-right identifies it without confusing Close Tab.
+        if let Ok(rect) = element.CurrentBoundingRectangle() {
+            let x = rect.left + (rect.right-rect.left)/2;
+            let y = rect.top + (rect.bottom-rect.top)/2;
+            let mut hit = 0usize;
+            if let Ok(packed) = crate::lparam::pack_xy(x, y) {
+                let _ = SendMessageTimeoutW(HWND(hwnd as *mut _), WM_NCHITTEST, WPARAM(0), LPARAM(packed as isize), SMTO_ABORTIFHUNG, 100, Some(&mut hit));
+            }
+            let mut window = windows::Win32::Foundation::RECT::default();
+            let top_right = GetWindowRect(HWND(hwnd as *mut _), &mut window).is_ok()
+                && x >= window.right - 100 && x < window.right
+                && y >= window.top && y < window.top + 80;
+            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) { return true; }
+        }
         if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
             return false;
         }
@@ -285,7 +301,7 @@ fn try_click(
             return Ok(Some(readback.finish(Some(ptr), "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)", ActionTransport::WindowsPostMessage)));
         }
     }
-    let order = pattern_order(titlebar_close(&element), expand_only);
+    let order = pattern_order(titlebar_close(hwnd, &element), expand_only);
     let dispatch = || -> windows::core::Result<Option<(&str, ActionTransport)>> {
         unsafe {
             for action in order {
@@ -306,11 +322,11 @@ fn try_click(
                 let pattern = source.GetCurrentPattern(id);
                 // Non-client Close has a precise WM_CLOSE fallback. Ordinary
                 // client mouse messages do not implement a title-bar hit.
-                if *action == ClickPattern::WindowClose && pattern.is_err() {
+                if *action == ClickPattern::WindowClose && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd)) {
                     ensure_active(cancelled)?;
-                    PostMessageW(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
+                    send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                     return Ok(Some((
-                        "PostMessage WM_CLOSE",
+                        "Top-level WM_CLOSE",
                         ActionTransport::WindowsPostMessage,
                     )));
                 }

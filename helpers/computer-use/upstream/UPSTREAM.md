@@ -100,6 +100,7 @@ Patches applied, in order:
 - `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
 - `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
 - `patches/0092-windows-common-dialog-save.diff`: Native common-dialog Save sends the exact IDOK WM_COMMAND before UIA Invoke and confirms only observed dialog closure.
+- `patches/0093-windows-winui-caption-close.diff`: Recognize WinUI caption Close outside TitleBar ancestry and send top-level WM_CLOSE with bounded closure readback.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
