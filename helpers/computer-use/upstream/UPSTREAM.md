@@ -103,6 +103,7 @@ Patches applied, in order:
 - `patches/0093-windows-winui-caption-close.diff`: Recognize WinUI caption Close outside TitleBar ancestry and send top-level WM_CLOSE with bounded closure readback.
 - `patches/0094-windows-chromium-text-insertion.diff`: Route Chromium caret text to its unique visible renderer child after guarded exact-field focus, without a whole-value write.
 - `patches/0095-windows-input-delivery-validation.diff`: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
+- `patches/0096-windows-input-target-bounds.diff`: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

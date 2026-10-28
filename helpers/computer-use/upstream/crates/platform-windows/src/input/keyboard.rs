@@ -236,13 +236,13 @@ pub fn chromium_text_target(hwnd: u64, rect: Option<(i32, i32, i32, i32)>) -> Op
         {
             return TRUE;
         }
-        if let Some((left, top, right, bottom)) = scan.rect {
+        if let Some(field) = scan.rect {
             let mut r = windows::Win32::Foundation::RECT::default();
             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
-                || left + (right - left) / 2 < r.left
-                || left + (right - left) / 2 >= r.right
-                || top + (bottom - top) / 2 < r.top
-                || top + (bottom - top) / 2 >= r.bottom
+                || !super::text_policy::contains_field_center(
+                    field,
+                    (r.left, r.top, r.right, r.bottom),
+                )
             {
                 return TRUE;
             }
@@ -296,13 +296,13 @@ pub fn background_text_target(
         if !class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
             return TRUE;
         }
-        if let Some((left, top, right, bottom)) = scan.rect {
+        if let Some(field) = scan.rect {
             let mut r = windows::Win32::Foundation::RECT::default();
             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
-                || left + (right - left) / 2 < r.left
-                || left + (right - left) / 2 >= r.right
-                || top + (bottom - top) / 2 < r.top
-                || top + (bottom - top) / 2 >= r.bottom
+                || !super::text_policy::contains_field_center(
+                    field,
+                    (r.left, r.top, r.right, r.bottom),
+                )
             {
                 return TRUE;
             }

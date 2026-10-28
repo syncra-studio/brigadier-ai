@@ -1,0 +1,108 @@
+Why: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
+
+--- a/crates/platform-windows/src/input/text_policy.rs
++++ b/crates/platform-windows/src/input/text_policy.rs
+@@ -14,11 +14,43 @@
+         .collect()
+ }
+ 
++/// UIA rectangles are (left, top, right, bottom), not width/height.
++/// Reject a renderer/editor unless it contains the addressed field's centre.
++pub fn contains_field_center(field: (i32, i32, i32, i32), child: (i32, i32, i32, i32)) -> bool {
++    let (l, t, r, b) = field;
++    let (cl, ct, cr, cb) = child;
++    if l >= r || t >= b || cl >= cr || ct >= cb {
++        return false;
++    }
++    let x = i64::from(l) + (i64::from(r) - i64::from(l)) / 2;
++    let y = i64::from(t) + (i64::from(b) - i64::from(t)) / 2;
++    x >= i64::from(cl) && x < i64::from(cr) && y >= i64::from(ct) && y < i64::from(cb)
++}
++
+ pub const INSERTION_UNAVAILABLE: &str = "This control exposes no background caret-insertion route. type_text did not replace the document or send text. set_value replaces the whole value; use it only when that is intended.";
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn field_bounds_use_ltrb_and_exclude_other_renderers() {
++        assert!(contains_field_center(
++            (1000, 500, 1200, 700),
++            (1050, 550, 1150, 650)
++        ));
++        assert!(!contains_field_center(
++            (1000, 500, 1200, 700),
++            (1500, 500, 1800, 900)
++        ));
++        assert!(!contains_field_center(
++            (1200, 500, 1000, 700),
++            (0, 0, 2000, 1000)
++        ));
++        assert!(contains_field_center(
++            (i32::MIN, 0, i32::MAX, 100),
++            (i32::MIN, 0, i32::MAX, 100)
++        ));
++    }
+     #[test]
+     fn native_editors_are_distinguished_from_frames_and_content_islands() {
+         for class in ["Edit", "RICHEDIT50W", "RichEditD2DPT", "Scintilla"] {
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -236,13 +236,13 @@
+         {
+             return TRUE;
+         }
+-        if let Some((left, top, right, bottom)) = scan.rect {
++        if let Some(field) = scan.rect {
+             let mut r = windows::Win32::Foundation::RECT::default();
+             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+-                || left + (right - left) / 2 < r.left
+-                || left + (right - left) / 2 >= r.right
+-                || top + (bottom - top) / 2 < r.top
+-                || top + (bottom - top) / 2 >= r.bottom
++                || !super::text_policy::contains_field_center(
++                    field,
++                    (r.left, r.top, r.right, r.bottom),
++                )
+             {
+                 return TRUE;
+             }
+@@ -296,13 +296,13 @@
+         if !class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+             return TRUE;
+         }
+-        if let Some((left, top, right, bottom)) = scan.rect {
++        if let Some(field) = scan.rect {
+             let mut r = windows::Win32::Foundation::RECT::default();
+             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+-                || left + (right - left) / 2 < r.left
+-                || left + (right - left) / 2 >= r.right
+-                || top + (bottom - top) / 2 < r.top
+-                || top + (bottom - top) / 2 >= r.bottom
++                || !super::text_policy::contains_field_center(
++                    field,
++                    (r.left, r.top, r.right, r.bottom),
++                )
+             {
+                 return TRUE;
+             }
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4646,7 +4646,7 @@
+             )),
+             _ => None,
+         };
+-        let _delay_ms = args.u64_or("delay_ms", 30);
++        let _delay_ms = args.u64_or("delay_ms", 30).min(200);
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+@@ -9646,7 +9646,7 @@
+                 "pid": pid_v, "status": "exited", "confirmed": true,
+                 "termination_accepted": termination_accepted,
+             })),
+-            Ok(Err(error)) => ToolResult::error(format!("kill_app: {error}")),
++            Ok(Err(error)) => ToolResult::error(error),
+             Err(error) => ToolResult::error(format!(
+                 "kill_app: termination confirmation failed: {error}. Verify whether the app is still running before retrying."
+             )),

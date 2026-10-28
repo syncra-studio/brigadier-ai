@@ -14,11 +14,43 @@ pub fn text_units(text: &str) -> Vec<u16> {
         .collect()
 }
 
+/// UIA rectangles are (left, top, right, bottom), not width/height.
+/// Reject a renderer/editor unless it contains the addressed field's centre.
+pub fn contains_field_center(field: (i32, i32, i32, i32), child: (i32, i32, i32, i32)) -> bool {
+    let (l, t, r, b) = field;
+    let (cl, ct, cr, cb) = child;
+    if l >= r || t >= b || cl >= cr || ct >= cb {
+        return false;
+    }
+    let x = i64::from(l) + (i64::from(r) - i64::from(l)) / 2;
+    let y = i64::from(t) + (i64::from(b) - i64::from(t)) / 2;
+    x >= i64::from(cl) && x < i64::from(cr) && y >= i64::from(ct) && y < i64::from(cb)
+}
+
 pub const INSERTION_UNAVAILABLE: &str = "This control exposes no background caret-insertion route. type_text did not replace the document or send text. set_value replaces the whole value; use it only when that is intended.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn field_bounds_use_ltrb_and_exclude_other_renderers() {
+        assert!(contains_field_center(
+            (1000, 500, 1200, 700),
+            (1050, 550, 1150, 650)
+        ));
+        assert!(!contains_field_center(
+            (1000, 500, 1200, 700),
+            (1500, 500, 1800, 900)
+        ));
+        assert!(!contains_field_center(
+            (1200, 500, 1000, 700),
+            (0, 0, 2000, 1000)
+        ));
+        assert!(contains_field_center(
+            (i32::MIN, 0, i32::MAX, 100),
+            (i32::MIN, 0, i32::MAX, 100)
+        ));
+    }
     #[test]
     fn native_editors_are_distinguished_from_frames_and_content_islands() {
         for class in ["Edit", "RICHEDIT50W", "RichEditD2DPT", "Scintilla"] {

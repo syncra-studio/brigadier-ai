@@ -4816,7 +4816,7 @@ impl Tool for TypeTextTool {
             )),
             _ => None,
         };
-        let _delay_ms = args.u64_or("delay_ms", 30);
+        let _delay_ms = args.u64_or("delay_ms", 30).min(200);
         let hwnd = match hwnd_opt {
             Some(h) => h,
             None => {
@@ -9816,7 +9816,7 @@ impl Tool for KillAppTool {
                 "pid": pid_v, "status": "exited", "confirmed": true,
                 "termination_accepted": termination_accepted,
             })),
-            Ok(Err(error)) => ToolResult::error(format!("kill_app: {error}")),
+            Ok(Err(error)) => ToolResult::error(error),
             Err(error) => ToolResult::error(format!(
                 "kill_app: termination confirmation failed: {error}. Verify whether the app is still running before retrying."
             )),
