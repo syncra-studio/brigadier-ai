@@ -53,6 +53,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_NOACTIVATE,
 };
 
+#[path = "foreground_watch.rs"]
+pub(crate) mod foreground_watch;
+
 #[derive(Default)]
 struct ForegroundLockState {
     holders: usize,
