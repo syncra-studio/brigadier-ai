@@ -398,8 +398,8 @@ mod fresh_document_tests {
     }
 }
 
-/// Remove only our newly created empty document if launch is refused or fails
-/// before Windows accepts it. Once launched, the path is the user's document
+/// Remove only our newly created empty document if launch is refused before
+/// submission to Windows. Once submitted, the path is the user's document
 /// and stays available for saving/reading until the caller cleans it up.
 pub(super) struct UnlaunchedDocument(Option<std::path::PathBuf>);
 impl UnlaunchedDocument {

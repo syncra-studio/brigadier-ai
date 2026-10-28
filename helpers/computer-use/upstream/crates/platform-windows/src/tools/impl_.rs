@@ -2749,18 +2749,25 @@ impl Tool for LaunchAppTool {
         let pid = if let Some(aumid) = aumid_for_uwp.clone() {
             let aumid_clone = aumid.clone();
             let args_clone = extra_joined.clone();
+            // Once submitted, a broker may still open the file after our
+            // deadline. Keep it even when activation cannot be confirmed.
+            fresh_document_cleanup.launched();
             let activation = tokio::task::spawn_blocking(move || {
                 crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
-            })
-            .await;
+            });
+            let activation =
+                tokio::time::timeout(std::time::Duration::from_secs(15), activation).await;
             match activation {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => {
+                Ok(Ok(Ok(p))) => p,
+                Ok(Ok(Err(e))) => {
                     return ToolResult::error(format!(
                         "Failed to activate packaged app {aumid:?}: {e}"
                     ))
                 }
-                Err(e) => return ToolResult::error(format!("Task error: {e}")),
+                Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
+                Err(_) => return ToolResult::error(format!(
+                    "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
+                )),
             }
         } else {
             // Legacy ShellExecuteExW path for plain Win32 apps and for
@@ -2771,6 +2778,7 @@ impl Tool for LaunchAppTool {
                 Ok(token) => token,
                 Err(message) => return ToolResult::error(message),
             };
+            fresh_document_cleanup.launched();
             let urls_clone = if urls_in_arguments {
                 Vec::new()
             } else {
@@ -2959,9 +2967,9 @@ impl Tool for LaunchAppTool {
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
                 Err(_elapsed) => {
                     return ToolResult::error(format!(
-                        "Launch of {:?} timed out after 15s — the target likely has no \
-                     registered handler and a blocking shell dialog appeared on the \
-                     session desktop; aborted to keep the daemon responsive.",
+                        "Launch of {:?} did not answer within 15s. Windows may still \
+                     complete it; cancellation and foreground preservation are unconfirmed. \
+                     Inspect list_windows before retrying.",
                         target_file_opt
                             .as_deref()
                             .or_else(|| urls.first().map(|s| s.as_str()))
@@ -2970,8 +2978,6 @@ impl Tool for LaunchAppTool {
                 }
             }
         };
-
-        fresh_document_cleanup.launched();
 
         // Resolve the pid's windows so the caller can skip a list_windows
         // round-trip — same approach as Swift's `resolveWindows`. Retry

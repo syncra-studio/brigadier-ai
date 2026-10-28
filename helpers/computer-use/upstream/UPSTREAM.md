@@ -122,6 +122,8 @@ Patches applied, in order:
 
 - `patches/0115-settings-close-foreground-owner-proof.diff`: Refuse Settings window Close when the target owns the foreground popup or foreground ownership cannot be confirmed, before changing styles and again before dispatch.
 
+- `patches/0120-windows-launch-timeout-honesty.diff`: Bound packaged-app activation and preserve submitted documents across uncertain launch outcomes; a timeout never claims cancellation.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
