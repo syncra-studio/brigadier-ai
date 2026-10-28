@@ -6,7 +6,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
-    TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_DocumentControlTypeId,
+    TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
     UIA_LegacyIAccessiblePatternId, UIA_ValueValuePropertyId,
 };
 
@@ -46,40 +46,84 @@ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<Str
     super::browser_target::is_web_url(&value).then_some(value)
 }
 
+/// Only browser chrome can supply fallback URL evidence. A web page's own
+/// Edit controls must never impersonate an omnibox.
+unsafe fn inside_document(automation: &IUIAutomation, element: &IUIAutomationElement, root: &IUIAutomationElement) -> bool {
+    let Ok(walker) = automation.ControlViewWalker() else { return true; };
+    let mut current = element.clone();
+    for _ in 0..128 {
+        let Ok(parent) = walker.GetParentElement(&current) else { return true; };
+        if automation.CompareElements(&parent, root).map(|same| same.as_bool()).unwrap_or(false) {
+            return false;
+        }
+        if parent.CurrentControlType().ok() == Some(UIA_DocumentControlTypeId) { return true; }
+        current = parent;
+    }
+    true
+}
+
+unsafe fn address_bar_url(automation: &IUIAutomation, root: &IUIAutomationElement) -> Option<String> {
+    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_EditControlTypeId.0.into()).ok()?;
+    let edits = root.FindAll(TreeScope_Subtree, &condition).ok()?;
+    let mut result = None;
+    for index in 0..edits.Length().ok()? {
+        let edit = edits.GetElement(index).ok()?;
+        if edit.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(automation, &edit, root) { continue; }
+        let id = edit.CurrentAutomationId().ok().map(|s| s.to_string()).unwrap_or_default();
+        let class = edit.CurrentClassName().ok().map(|s| s.to_string()).unwrap_or_default();
+        if !super::browser_target::is_omnibox(&id, &class) { continue; }
+        // Edge often exposes the address on its Edit, not its Document. The
+        // value may omit https://, so document_url's scheme filter cannot apply.
+        let value = edit.GetCurrentPropertyValue(UIA_ValueValuePropertyId).ok()
+            .and_then(|v| windows::core::BSTR::try_from(&v).ok()).map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                let pattern: IUIAutomationLegacyIAccessiblePattern = edit.GetCurrentPattern(UIA_LegacyIAccessiblePatternId).ok()?.cast().ok()?;
+                pattern.CurrentValue().ok().map(|s| s.to_string())
+            })?;
+        if result.replace(value).is_some() { return None; }
+    }
+    result
+}
+
 pub(super) unsafe fn matching_document(
     hwnd: u64,
     requested: &str,
     exact: bool,
-) -> anyhow::Result<(IUIAutomation, IUIAutomationElement)> {
+) -> anyhow::Result<(IUIAutomation, IUIAutomationElement, String)> {
     let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
     let root = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
-    let condition = automation.CreatePropertyCondition(
-        UIA_ControlTypePropertyId,
-        &UIA_DocumentControlTypeId.0.into(),
-    )?;
+    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_DocumentControlTypeId.0.into())?;
     let documents = root.FindAll(TreeScope_Subtree, &condition)?;
+    let mut visible = Vec::new();
     let mut matching = None;
     for index in 0..documents.Length()? {
         let document = documents.GetElement(index)?;
-        if document
-            .CurrentIsOffscreen()
-            .map(|off| off.as_bool())
-            .unwrap_or(true)
-        {
-            continue;
-        }
-        if document_url(&document)
-            .is_some_and(|url| super::browser_target::url_matches(&url, requested, exact))
-        {
+        if document.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(&automation, &document, &root) { continue; }
+        let url = document_url(&document);
+        if url.as_deref().is_some_and(|url| super::browser_target::url_matches(url, requested, exact)) {
             if matching.is_some() {
                 anyhow::bail!("More than one visible document matches {requested:?}; use a more specific URL. No other page was read.");
             }
-            matching = Some(document);
+            matching = Some((document.clone(), url.clone().unwrap_or_default()));
+        }
+        visible.push((document, url));
+    }
+    if let Some((doc, url)) = matching { return Ok((automation, doc, url)); }
+    let browser = crate::win32::window_owner_pid(hwnd).is_some_and(|pid| {
+        crate::win32::list_processes().iter().any(|p| p.pid == pid &&
+            super::browser_target::named_browser_executable(&p.name).is_some())
+    });
+    if browser {
+        if let Some(bar) = address_bar_url(&automation, &root) {
+            if let Some((document, url)) = visible.first() {
+                if super::browser_target::omnibox_binds_document(visible.len(), url.as_deref(), &bar, requested, exact) {
+                    return Ok((automation, document.clone(), bar));
+                }
+            }
         }
     }
-    matching.map(|doc| (automation, doc)).ok_or_else(|| anyhow::anyhow!(
-        "Windows UI Automation does not expose a visible tab matching {requested:?} in this window. The tab may be inactive, absent, or its URL unavailable. No other page was read. Select that tab in the named window and retry."
-    ))
+    anyhow::bail!("Windows UI Automation does not expose a uniquely visible document matching {requested:?} in window {hwnd}. Its document URL and address bar could not confirm the target. No other page was read. Select that tab in the named window and retry.")
 }
 
 pub(super) async fn window_showing_url(

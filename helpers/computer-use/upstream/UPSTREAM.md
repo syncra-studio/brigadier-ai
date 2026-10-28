@@ -86,6 +86,7 @@ Patches applied, in order:
 - `patches/0071-windows-input-timeout-and-focus.diff`: bound click readback, suppress late menu cleanup, preserve safe WPF routing and launch activation warnings.
 - `patches/0072-windows-background-pointer-refusal.diff`: refuse MSAA real-mouse clicks in background mode and keep the Chromium fallback off SendInput.
 - `patches/0100-windows-settings-protocol-window.diff`: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
+- `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

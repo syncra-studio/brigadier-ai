@@ -40,22 +40,83 @@ pub(crate) fn quote_argument(value: &str) -> String {
     output
 }
 
+/// The omnibox may omit the scheme and the root slash. Preserve path/query
+/// case and never equate two explicitly different schemes.
 pub(crate) fn url_matches(actual: &str, requested: &str, exact: bool) -> bool {
-    if requested.trim().is_empty() || !is_web_url(actual) {
-        return false;
-    }
-    if !exact {
-        return actual.contains(requested);
-    }
-    fn root_slash(url: &str) -> &str {
-        if let Some((_, rest)) = url.split_once("://") {
-            if rest.ends_with('/') && rest.matches('/').count() == 1 {
-                return &url[..url.len() - 1];
-            }
+    fn parts(value: &str) -> Option<(Option<String>, String)> {
+        let value = value.trim();
+        if value.is_empty() || value.chars().any(char::is_whitespace) {
+            return None;
         }
-        url
+        let (scheme, rest) = if let Some((scheme, rest)) = value.split_once("://") {
+            if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+                return None;
+            }
+            (Some(scheme.to_ascii_lowercase()), rest)
+        } else {
+            (None, value)
+        };
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let host = &rest[..end];
+        if host.is_empty() || host.contains('@') ||
+            !(host.contains('.') || host.starts_with("localhost") || host.starts_with('[')) {
+            return None;
+        }
+        let tail = &rest[end..];
+        Some((scheme, format!("{}{}", host.to_ascii_lowercase(), if tail == "/" { "" } else { tail })))
     }
-    root_slash(actual) == root_slash(requested)
+    let Some((actual_scheme, actual)) = parts(actual) else { return false; };
+    let requested = requested.trim();
+    if requested.is_empty() { return false; }
+    if exact {
+        let Some((requested_scheme, requested)) = parts(requested) else { return false; };
+        return (actual_scheme.is_none() || requested_scheme.is_none() || actual_scheme == requested_scheme)
+            && actual == requested;
+    }
+    if let Some((requested_scheme, normalized)) = parts(requested) {
+        (actual_scheme.is_none() || requested_scheme.is_none() || actual_scheme == requested_scheme)
+            && actual.contains(&normalized)
+    } else {
+        actual.contains(requested)
+    }
+}
+
+pub(crate) fn is_omnibox(automation_id: &str, class_name: &str) -> bool {
+    matches!(automation_id.to_ascii_lowercase().as_str(), "addresseditbox" | "omnibox" | "urlbar")
+        || class_name.eq_ignore_ascii_case("OmniboxView")
+}
+
+/// Address-bar evidence binds only a single visible top-level document with
+/// no conflicting URL of its own. Never use a title or a page's search field.
+pub(crate) fn omnibox_binds_document(visible_documents: usize, document_url: Option<&str>, bar: &str, requested: &str, exact: bool) -> bool {
+    visible_documents == 1 && url_matches(bar, requested, exact)
+        && document_url.is_none_or(|url| url_matches(url, requested, exact))
+}
+
+#[cfg(test)]
+mod omnibox_tests {
+    use super::*;
+    #[test]
+    fn edge_address_value_matches_displayed_scheme_and_root_slash_variants() {
+        for actual in ["https://example.com", "https://example.com/", "example.com", "EXAMPLE.COM/"] {
+            assert!(url_matches(actual, "https://example.com/", true));
+            assert!(url_matches(actual, "example.com", false));
+        }
+        assert!(!url_matches("http://example.com", "https://example.com", true));
+        assert!(!url_matches("https://example.com/Other", "https://example.com/other", true));
+        assert!(!url_matches("Example Domain", "Example", false));
+        assert!(!url_matches("https://example.com.evil/", "https://example.com", true));
+    }
+    #[test]
+    fn omnibox_never_selects_between_documents_or_overrides_a_conflict() {
+        assert!(is_omnibox("addressEditBox", ""));
+        assert!(is_omnibox("", "OmniboxView"));
+        assert!(!is_omnibox("search", "Edit"));
+        assert!(omnibox_binds_document(1, None, "example.com", "example.com", false));
+        assert!(!omnibox_binds_document(2, None, "example.com", "example.com", false));
+        assert!(!omnibox_binds_document(0, None, "example.com", "example.com", false));
+        assert!(!omnibox_binds_document(1, Some("https://other.com"), "example.com", "example.com", false));
+    }
 }
 
 #[cfg(test)]

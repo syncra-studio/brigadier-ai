@@ -139,19 +139,18 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
                 "no page text",
                 move |_| unsafe {
                     let _com = super::launch_browser::Apartment::new();
-                    let (automation, document) =
+                    let (automation, document, before) =
                         super::launch_browser::matching_document(hwnd, &hint, false)?;
-                    let before = super::launch_browser::document_url(&document);
                     let text = if query {
                         query_dom_document(&automation, &document, &selector, &attributes)?
                     } else {
                         text_pattern_dump(&document)
                             .unwrap_or_else(|_| walk_text_blocking(&document))
                     };
-                    let (_, current) =
+                    let (_, current, after) =
                         super::launch_browser::matching_document(hwnd, &hint, false)?;
                     if crate::win32::window_owner_pid(hwnd) != Some(pid)
-                        || super::launch_browser::document_url(&document) != before
+                        || after != before
                         || !automation.CompareElements(&document, &current)?.as_bool()
                     {
                         anyhow::bail!(
