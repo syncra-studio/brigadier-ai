@@ -91,7 +91,8 @@ impl ForegroundLockGuard {
     }
 
     pub fn acquired(&self) -> bool {
-        self.held
+        let state = FOREGROUND_LOCK_STATE.lock().unwrap();
+        self.held && state.locked && self.generation == state.generation
     }
 }
 

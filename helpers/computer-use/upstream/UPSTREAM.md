@@ -146,6 +146,8 @@ Patches applied, in order:
 
 - `patches/0134-windows-uia-cached-leaf-coverage.diff`: Treat a successful null cached-child array as a leaf while preserving real COM failures, so complete Windows trees are not mislabeled as failed provider walks.
 
+- `patches/0135-windows-task-manager-direct-launch-and-singleton-refusal.diff`: Resolve Task Manager to the trusted system executable and use direct non-activating process creation, refusing reuse of an existing singleton and refusing launch without a valid prevention lock.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -2672,7 +2672,7 @@ impl Tool for LaunchAppTool {
         // fail because the shell only resolves a single filesystem path
         // there. No-op for AUMID tokens / plain paths without args / UWP
         // `shell:appsFolder\..!..` tokens.
-        let (target_file_opt, extra_joined) = {
+        let (mut target_file_opt, extra_joined) = {
             let base_extra = extra_args.join(" ");
             if launch_path_opt.is_some() {
                 if let Some(t) = resolved_target.as_deref() {
@@ -2694,23 +2694,34 @@ impl Tool for LaunchAppTool {
             }
         };
 
+        let direct_task_manager = if let Some(target) = target_file_opt.as_deref() {
+            match super::launch_focus::task_manager_direct_path(target) {
+                Ok(Some(path)) => {
+                    target_file_opt = Some(path);
+                    true
+                }
+                Ok(None) => false,
+                Err(message) => return ToolResult::error(message),
+            }
+        } else {
+            false
+        };
+
         // Strict no-activation is available only for the desktop launch path.
         // UWP activation is broker-controlled and retains its existing
         // restore-after-activation behavior.
-        let mut foreground_lock = if start_minimized && aumid_for_uwp.is_none() {
-            Some(crate::input::ForegroundLockGuard::acquire())
-        } else {
-            None
-        };
+        let mut foreground_lock =
+            if (start_minimized || direct_task_manager) && aumid_for_uwp.is_none() {
+                Some(crate::input::ForegroundLockGuard::acquire())
+            } else {
+                None
+            };
         if foreground_lock
             .as_ref()
             .is_some_and(|guard| !guard.acquired())
         {
             return ToolResult::error(
-                "Background minimized launch is unavailable because Windows did not grant the \
-                 foreground lock required to prevent the new process from activating. No process \
-                 was started. Launch without start_minimized only when a foreground change is \
-                 acceptable.",
+                "Background launch is unavailable because Windows did not grant the activation-prevention lock required for this launch. No process was started.",
             )
             .with_structured(json!({
                 "code": "background_unavailable",
@@ -2789,7 +2800,7 @@ impl Tool for LaunchAppTool {
             let target_for_shell = target_file_opt.clone();
             let extra_for_shell = extra_joined.clone();
             let n_show_for_shell = n_show;
-            let direct_minimized_exe = start_minimized
+            let direct_background_exe = (start_minimized || direct_task_manager)
                 && target_for_shell.as_deref().is_some_and(|target| {
                     std::path::Path::new(target).is_file()
                         && std::path::Path::new(target)
@@ -2829,7 +2840,7 @@ impl Tool for LaunchAppTool {
                 let args_w = to_wide(&extra_for_shell);
 
                 use crate::standard_user_launch::AppLaunchToken;
-                let pid = if direct_minimized_exe {
+                let pid = if direct_background_exe {
                     let target = target_for_shell
                         .as_deref()
                         .expect("checked executable path");

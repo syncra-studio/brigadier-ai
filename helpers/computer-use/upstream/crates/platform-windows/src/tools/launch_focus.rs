@@ -73,3 +73,61 @@ impl LaunchForegroundGuard {
         self.reported_foreground.load(Ordering::Acquire)
     }
 }
+/// Task Manager's shell registration auto-elevates and reuses its singleton.
+/// Use the trusted executable directly, and never activate an existing instance.
+pub(super) fn task_manager_direct_path(target: &str) -> Result<Option<String>, String> {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES};
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let name = super::launch_policy::executable_name(target);
+    if name != "taskmgr" && name != "task manager" {
+        return Ok(None);
+    }
+    let mut buffer = [0u16; 32768];
+    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return Err("Windows did not identify its trusted system directory. No Task Manager launch was sent.".into());
+    }
+    let executable = format!(
+        "{}\\taskmgr.exe",
+        String::from_utf16_lossy(&buffer[..length])
+    );
+    if target.contains(['\\', '/']) && !target.replace('/', "\\").eq_ignore_ascii_case(&executable)
+    {
+        return Ok(None);
+    }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(|e| {
+        format!("Could not check whether Task Manager already runs: {e}. No launch was sent.")
+    })?;
+    let result = (|| {
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        unsafe { Process32FirstW(snapshot, &mut entry) }.map_err(|e| {
+            format!("Could not enumerate running processes: {e}. No Task Manager launch was sent.")
+        })?;
+        loop {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|&ch| ch == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case("taskmgr.exe")
+            {
+                return Err(format!("Task Manager is already running (pid {}). Windows can bring that single-instance window forward, including an elevated instance. No launch was sent because keeping your window in front could not be guaranteed.", entry.th32ProcessID));
+            }
+            match unsafe { Process32NextW(snapshot, &mut entry) } {
+                Ok(()) => {},
+                Err(error) if error.code() == windows::core::HRESULT::from_win32(ERROR_NO_MORE_FILES.0) => break,
+                Err(error) => return Err(format!("Could not finish checking running processes: {error}. No Task Manager launch was sent.")),
+            }
+        }
+        Ok(Some(executable))
+    })();
+    let _ = unsafe { CloseHandle(snapshot) };
+    result
+}
