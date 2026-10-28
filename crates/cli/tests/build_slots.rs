@@ -34,9 +34,17 @@ impl Pool {
     }
 
     fn command(&self, tool: &Path) -> Command {
-        let mut cmd = Command::new(self.0.join("build-tools/brigadier-build-slot"));
+        self.command_at(&self.0.join("build-tools/brigadier-build-slot"), tool)
+    }
+
+    fn command_at(&self, launcher: &Path, tool: &Path) -> Command {
+        let mut cmd = Command::new(launcher);
         cmd.arg(tool)
             .env("TEST_POOL", &self.0)
+            .env(
+                brigadier_sandbox::build_slots::POOL_ENV,
+                self.0.join("build-slots"),
+            )
             .env_remove("BRIGADIER_BUILD_RUSTC_WRAPPER")
             .env_remove("RUSTC")
             .env_remove("RUSTC_WORKSPACE_WRAPPER");
@@ -90,12 +98,23 @@ fn signal(pid: u32, sig: &str) {
 }
 
 #[test]
-fn concurrent_compilers_share_the_machine_pool() {
+fn concurrent_daemon_launchers_share_the_machine_pool() {
     let pool = Pool::new("concurrent");
+    let other = pool.0.join("other-daemon/build-tools/brigadier-build-slot");
+    fs::create_dir_all(other.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_brigadier"), &other).unwrap();
     let tool = pool.script("compiler", "printf '+\\n' >> \"$TEST_POOL/events\"\nsleep 0.15\nprintf '%s\\n' - >> \"$TEST_POOL/events\"");
     let slots = brigadier_sandbox::build_slots::count();
     let mut children: Vec<_> = (0..slots * 4)
-        .map(|_| pool.command(&tool).spawn().unwrap())
+        .map(|i| {
+            if i % 2 == 0 {
+                pool.command(&tool)
+            } else {
+                pool.command_at(&other, &tool)
+            }
+            .spawn()
+            .unwrap()
+        })
         .collect();
     for child in &mut children {
         assert!(wait(child).success());

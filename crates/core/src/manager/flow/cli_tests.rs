@@ -3048,3 +3048,65 @@ async fn a_codex_thread_gets_the_stop_hook_too() {
     assert!(thread.output_hook.is_none());
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn missing_compiler_launcher_adds_no_build_environment() {
+    let flow = Flow::start(
+        "missing-build-launcher",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let env = flow.manager.cli_env("session", "grant");
+    assert_no_build_environment(&env);
+    flow.stop().await;
+}
+
+fn assert_no_build_environment(env: &[(String, String)]) {
+    for name in [
+        "RUSTC_WRAPPER",
+        "BRIGADIER_BUILD_RUSTC_WRAPPER",
+        "BRIGADIER_BUILD_SLOTS_DIR",
+        "CMAKE_C_COMPILER_LAUNCHER",
+        "CMAKE_CXX_COMPILER_LAUNCHER",
+        "GOFLAGS",
+        "CARGO_BUILD_JOBS",
+        "CMAKE_BUILD_PARALLEL_LEVEL",
+        "GRADLE_OPTS",
+    ] {
+        assert!(!env.iter().any(|(key, _)| key == name), "unexpected {name}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compiler_environment_requires_this_daemons_resolving_launcher() {
+    let flow = Flow::start(
+        "dangling-build-launcher",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    let wrapper = brigadier_sandbox::build_slots::wrapper_path(&flow.manager.data_dir);
+    let target = flow.manager.data_dir.join("compiler-cli");
+    std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &wrapper).unwrap();
+    assert_no_build_environment(&flow.manager.cli_env("session", "grant"));
+
+    std::fs::write(&target, "compiler wrapper").unwrap();
+    let env = flow.manager.cli_env("session", "grant");
+    assert!(
+        env.iter()
+            .any(|(key, value)| key == "RUSTC_WRAPPER" && value == wrapper.to_str().unwrap())
+    );
+    let pool = brigadier_sandbox::build_slots::pool_path().unwrap();
+    assert!(
+        env.iter()
+            .any(|(key, value)| key == "BRIGADIER_BUILD_SLOTS_DIR"
+                && value == pool.to_str().unwrap())
+    );
+
+    std::fs::remove_file(target).unwrap();
+    assert_no_build_environment(&flow.manager.cli_env("session", "grant"));
+    flow.stop().await;
+}

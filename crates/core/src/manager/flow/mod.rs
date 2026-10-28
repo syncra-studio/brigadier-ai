@@ -1678,6 +1678,7 @@ async fn boot(
         ManagerConfig {
             // Inside an app bundle that has no computer-use helper until a test puts one there.
             daemon_exe: data.join("Brigadier.app/Contents/MacOS/brigadierd"),
+            build_slots_ready: true,
             seam,
         },
     )

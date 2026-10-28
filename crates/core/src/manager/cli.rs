@@ -299,7 +299,8 @@ impl SessionManager {
                 env.push(("PATH".to_owned(), path.to_string_lossy().into_owned()));
             }
         }
-        if let Ok(wrapper) = brigadier_sandbox::build_slots::wrapper_path() {
+        let wrapper = brigadier_sandbox::build_slots::wrapper_path(&self.data_dir);
+        if self.config.build_slots_ready && wrapper.is_file() {
             env.extend(brigadier_sandbox::build_slots::environment(
                 &wrapper,
                 |name| {

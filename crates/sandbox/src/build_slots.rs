@@ -2,7 +2,7 @@
 //! files under the user's home, independent of its data directory; they are created once,
 //! never removed or replaced. The OS drops a dead wrapper's lock.
 //!
-//! The command is a second mode of `brigadier`, reached through a fixed link. Only the
+//! The command is a second mode of `brigadier`, reached through each daemon's own link. Only the
 //! wrapper owns the lock: its compiler and everything the compiler starts inherit no handle.
 //! Compiler discovery goes straight through, so a busy build never delays a tool's probes.
 
@@ -14,6 +14,8 @@ use std::process::{Command, ExitStatus};
 
 const NAME: &str = "brigadier-build-slot";
 const RUSTC_CHAIN: &str = "BRIGADIER_BUILD_RUSTC_WRAPPER";
+/// The shared pool's absolute path, retained when a CLI uses an account-specific home.
+pub const POOL_ENV: &str = "BRIGADIER_BUILD_SLOTS_DIR";
 
 /// The machine's compiler budget, shared by all sessions and workers.
 pub fn count() -> usize {
@@ -26,13 +28,14 @@ fn root() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home for compiler slots"))
 }
 
-/// The fixed compiler launcher, outside any daemon's data directory.
-pub fn wrapper_path() -> io::Result<PathBuf> {
-    Ok(wrapper_in(&root()?))
+/// The persistent pool, shared by every daemon regardless of its data directory.
+pub fn pool_path() -> io::Result<PathBuf> {
+    Ok(root()?.join("build-slots"))
 }
 
-fn wrapper_in(root: &Path) -> PathBuf {
-    root.join("build-tools").join(if cfg!(windows) {
+/// This daemon's compiler launcher. A missing or dangling link is not usable.
+pub fn wrapper_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("build-tools").join(if cfg!(windows) {
         "brigadier-build-slot.exe"
     } else {
         NAME
@@ -40,13 +43,13 @@ fn wrapper_in(root: &Path) -> PathBuf {
 }
 
 /// Prepares the launcher and persistent slot files before the daemon admits sessions.
-pub fn prepare(cli: &Path) -> io::Result<()> {
-    prepare_in(&root()?, cli)
+pub fn prepare(data_dir: &Path, cli: &Path) -> io::Result<()> {
+    prepare_in(&pool_path()?, data_dir, cli)
 }
 
-fn prepare_in(root: &Path, cli: &Path) -> io::Result<()> {
-    prepare_pool(&root.join("build-slots"), count())?;
-    let wrapper = wrapper_in(root);
+fn prepare_in(pool: &Path, data_dir: &Path, cli: &Path) -> io::Result<()> {
+    prepare_pool(pool, count())?;
+    let wrapper = wrapper_path(data_dir);
     fs::create_dir_all(wrapper.parent().expect("launcher folder"))?;
     #[cfg(unix)]
     if fs::read_link(&wrapper).ok().as_deref() == Some(cli) {
@@ -119,6 +122,9 @@ fn acquire(dir: &Path, slots: usize) -> io::Result<File> {
 /// Ecosystem compiler launchers and job caps. An existing Rust wrapper runs inside ours;
 /// every other variable is a default, including an explicitly empty user value.
 pub fn environment(wrapper: &Path, get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    let Ok(pool) = pool_path() else {
+        return Vec::new();
+    };
     let wrapper = wrapper.to_string_lossy();
     let slots = count().to_string();
     // Go splits GOFLAGS, then splits the toolexec value again. Quote both levels when the
@@ -137,13 +143,23 @@ pub fn environment(wrapper: &Path, get: impl Fn(&str) -> Option<String>) -> Vec<
         .filter(|(key, _)| get(key).is_none())
         .map(|(key, value)| (key.to_owned(), value))
         .collect();
-    if let Some(previous) = get("RUSTC_WRAPPER")
+    let previous = get("RUSTC_WRAPPER").and_then(|previous| {
+        if Path::new(&previous).file_stem() == Some(OsStr::new(NAME)) {
+            // A dev daemon started inside a session inherits that daemon's launcher.
+            // Keep the user's underlying wrapper, without taking a second compiler slot.
+            get(RUSTC_CHAIN)
+        } else {
+            Some(previous)
+        }
+    });
+    if let Some(previous) = previous
         && !previous.is_empty()
         && previous != wrapper
     {
         env.push((RUSTC_CHAIN.to_owned(), previous));
     }
     env.push(("RUSTC_WRAPPER".to_owned(), wrapper.into_owned()));
+    env.push((POOL_ENV.to_owned(), pool.to_string_lossy().into_owned()));
     env
 }
 
@@ -184,8 +200,7 @@ fn probe(args: &[OsString]) -> bool {
 }
 
 fn run() -> io::Result<ExitStatus> {
-    let mut words = std::env::args_os();
-    let launcher = PathBuf::from(words.next().expect("argv[0]"));
+    let mut words = std::env::args_os().skip(1);
     let tool = words
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "compiler path required"))?;
@@ -209,11 +224,7 @@ fn run() -> io::Result<ExitStatus> {
         #[cfg(windows)]
         return command.status();
     }
-    let dir = launcher
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "launcher folder required"))?
-        .join("build-slots");
+    let dir = std::env::var_os(POOL_ENV).map_or_else(pool_path, |dir| Ok(PathBuf::from(dir)))?;
     signals::install()?;
     let slot = acquire(&dir, count())?;
     signals::lower_priority();

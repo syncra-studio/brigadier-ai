@@ -29,13 +29,26 @@ fn ecosystem_defaults_and_rust_wrapper_chain() {
     let env: BTreeMap<_, _> = environment(path, |key| user.get(key).map(|s| s.to_string()))
         .into_iter()
         .collect();
-    assert_eq!(env.len(), 2);
+    assert_eq!(env.len(), 3);
     assert_eq!(env[RUSTC_CHAIN], "sccache");
     assert_eq!(env["RUSTC_WRAPPER"], path.to_str().unwrap());
     let env = environment(path, |key| {
         (key == "RUSTC_WRAPPER").then(|| path.to_string_lossy().into_owned())
     });
     assert!(!env.iter().any(|(key, _)| key == RUSTC_CHAIN));
+
+    let inherited = BTreeMap::from([
+        (
+            "RUSTC_WRAPPER",
+            "/other-daemon/build-tools/brigadier-build-slot",
+        ),
+        (RUSTC_CHAIN, "sccache"),
+    ]);
+    let env: BTreeMap<_, _> = environment(path, |key| inherited.get(key).map(|s| s.to_string()))
+        .into_iter()
+        .collect();
+    assert_eq!(env[RUSTC_CHAIN], "sccache");
+    assert_eq!(env["RUSTC_WRAPPER"], path.to_str().unwrap());
 }
 
 #[test]
@@ -90,20 +103,20 @@ fn preparing_preserves_existing_slot_and_its_lock() {
 #[test]
 fn preparing_installs_the_multicall_launcher_and_keeps_live_slots() {
     let dir = std::env::temp_dir().join(format!("brigadier-launcher-{}", std::process::id()));
+    let pool = dir.join("shared-slots");
+    let data = dir.join("data");
     let cli = std::env::current_exe().unwrap();
-    prepare_in(&dir, &cli).unwrap();
-    assert!(wrapper_in(&dir).is_file());
-    let held = acquire(&dir.join("build-slots"), count()).unwrap();
-    prepare_in(&dir, &cli).unwrap();
+    prepare_in(&pool, &data, &cli).unwrap();
+    assert!(wrapper_path(&data).is_file());
+    let held = acquire(&pool, count()).unwrap();
+    prepare_in(&pool, &data, &cli).unwrap();
     let mut locks = Vec::new();
     for i in 0..count() {
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(windows)]
         options.write(true);
-        let file = options
-            .open(dir.join(format!("build-slots/slot-{i}")))
-            .unwrap();
+        let file = options.open(pool.join(format!("slot-{i}"))).unwrap();
         if file.try_lock().is_ok() {
             locks.push(file);
         }
@@ -111,5 +124,37 @@ fn preparing_installs_the_multicall_launcher_and_keeps_live_slots() {
     assert_eq!(locks.len(), count() - 1);
     drop(held);
     drop(locks);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn daemons_keep_independent_launchers_and_a_shared_pool() {
+    let dir = std::env::temp_dir().join(format!("brigadier-daemon-slots-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let pool = dir.join("shared-slots");
+    let installed_cli = dir.join("installed-cli");
+    let dev_cli = dir.join("dev-cli");
+    fs::write(&installed_cli, "installed").unwrap();
+    fs::write(&dev_cli, "dev").unwrap();
+    let installed = dir.join("installed-data");
+    let dev = dir.join("dev-data");
+    prepare_in(&pool, &installed, &installed_cli).unwrap();
+    let held = acquire(&pool, 1).unwrap();
+    prepare_in(&pool, &dev, &dev_cli).unwrap();
+    assert_eq!(fs::read(wrapper_path(&installed)).unwrap(), b"installed");
+    assert_eq!(fs::read(wrapper_path(&dev)).unwrap(), b"dev");
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.write(true);
+    let file = options.open(pool.join("slot-0")).unwrap();
+    assert!(matches!(file.try_lock(), Err(TryLockError::WouldBlock)));
+    fs::remove_file(dev_cli).unwrap();
+    assert!(wrapper_path(&installed).is_file());
+    #[cfg(unix)]
+    assert!(!wrapper_path(&dev).is_file());
+    held.unlock().unwrap();
+    drop(held);
+    drop(file);
     fs::remove_dir_all(dir).unwrap();
 }
