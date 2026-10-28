@@ -2437,7 +2437,8 @@ impl Tool for LaunchAppTool {
         let mut shell_target_from_name: Option<String> = None;
         let browser_from_name = name_opt
             .as_deref()
-            .and_then(super::browser_target::named_browser_executable);
+            .and_then(|name| super::browser_target::named_browser_executable(name)
+                .or_else(|| super::browser_target::named_desktop_executable(name)));
         let aumid_for_uwp: Option<String> = if launch_path_opt.is_some() || path_opt.is_some() {
             None
         } else if let Some(a) = aumid_opt.clone() {
@@ -2511,7 +2512,7 @@ impl Tool for LaunchAppTool {
                     .as_deref()
                     .is_some_and(|target| target.starts_with("shell:") || target.contains('!')))
         {
-            return ToolResult::error("Windows cannot pass these URLs to this shell app registration reliably. No app was launched; pass the named browser's executable path instead.");
+            return ToolResult::error("Windows cannot pass these URLs or files to this app registration reliably. No app was launched; pass this app's executable path so Windows can receive the arguments directly.");
         }
         if resolved_target
             .as_deref()

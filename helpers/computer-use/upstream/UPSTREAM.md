@@ -88,6 +88,7 @@ Patches applied, in order:
 - `patches/0100-windows-settings-protocol-window.diff`: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
 - `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
 - `patches/0102-windows-page-text-run-boundaries.diff`: preserve whitespace within UIA text runs and word boundaries across inline nodes rather than trusting Chromium aggregate TextPattern concatenation.
+- `patches/0103-windows-explorer-folder-launch.diff`: resolve File Explorer by name to explorer.exe with quoted folder arguments and describe unsupported app registrations without browser-specific wording.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -236,3 +236,24 @@ mod text_run_tests {
         assert_eq!(text, "αβ γδ\nnext\tline");
     }
 }
+
+/// Resolve well-known desktop aliases before shell:AppsFolder, whose parsing
+/// registrations cannot reliably receive file/folder arguments.
+pub(crate) fn named_desktop_executable(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "file explorer" | "windows explorer" | "explorer" | "explorer.exe" => Some("explorer.exe"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod explorer_tests {
+    use super::*;
+    #[test]
+    fn explorer_folder_launch_uses_the_executable_and_keeps_one_argument() {
+        assert_eq!(named_desktop_executable("File Explorer"), Some("explorer.exe"));
+        assert_eq!(named_browser_executable("File Explorer"), None);
+        assert_eq!(quote_argument(r"C:\Users\A User\Documents"), r#""C:\Users\A User\Documents""#);
+        assert_eq!(named_desktop_executable("unregistered app"), None);
+    }
+}
