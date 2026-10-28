@@ -197,9 +197,11 @@ pub(crate) fn document_title_matches(title: &str, filename: &str) -> bool {
     let stem = filename.strip_suffix(".txt").unwrap_or(filename);
     [filename, stem].iter().any(|name| {
         title == *name
-            || title
-                .strip_prefix(name)
-                .is_some_and(|tail| tail.starts_with(" - "))
+            || title.strip_prefix(name).is_some_and(|tail| {
+                // A window title ("x.txt - Notepad") or a Notepad tab's
+                // accessible name ("x.txt. Unmodified.").
+                tail.starts_with(" - ") || matches!(tail, ". Unmodified." | ". Modified.")
+            })
     })
 }
 
@@ -236,6 +238,14 @@ mod fresh_document_tests {
         ));
         assert!(!document_title_matches(
             "brigadier-cu-1234.txt",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(document_title_matches(
+            "brigadier-cu-123.txt. Unmodified.",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(!document_title_matches(
+            "brigadier-cu-123.txt.bak. Unmodified.",
             "brigadier-cu-123.txt"
         ));
     }

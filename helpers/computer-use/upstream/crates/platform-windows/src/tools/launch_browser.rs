@@ -303,33 +303,40 @@ pub(super) async fn notepad_document_window(
                     if !pids.contains(&window.pid) {
                         continue;
                     }
-                    let root = automation
-                        .ElementFromHandle(HWND(window.hwnd as *mut _))
-                        .ok()?;
+                    // One unreadable window or tab must not hide the others.
+                    let Ok(root) = automation.ElementFromHandle(HWND(window.hwnd as *mut _)) else {
+                        continue;
+                    };
                     let condition = automation
                         .CreatePropertyCondition(
                             UIA_ControlTypePropertyId,
                             &UIA_TabItemControlTypeId.0.into(),
                         )
                         .ok()?;
-                    let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
-                    if tabs.Length().ok()? == 0
+                    let Ok(tabs) = root.FindAll(TreeScope_Subtree, &condition) else {
+                        continue;
+                    };
+                    let count = tabs.Length().unwrap_or(0);
+                    if count == 0
                         && super::launch_policy::document_title_matches(&window.title, &filename)
                     {
                         return Some(window); // classic Notepad has no tabs
                     }
-                    for index in 0..tabs.Length().ok()? {
-                        let tab = tabs.GetElement(index).ok()?;
-                        let name = tab.CurrentName().ok()?.to_string();
+                    for index in 0..count {
+                        let Ok(tab) = tabs.GetElement(index) else {
+                            continue;
+                        };
+                        let name = tab.CurrentName().map(|n| n.to_string()).unwrap_or_default();
                         if !super::launch_policy::document_title_matches(&name, &filename) {
                             continue;
                         }
-                        let pattern: IUIAutomationSelectionItemPattern = tab
+                        let selected = tab
                             .GetCurrentPattern(UIA_SelectionItemPatternId)
-                            .ok()?
-                            .cast()
-                            .ok()?;
-                        if pattern.CurrentIsSelected().ok()?.as_bool() {
+                            .ok()
+                            .and_then(|p| p.cast::<IUIAutomationSelectionItemPattern>().ok())
+                            .and_then(|p| p.CurrentIsSelected().ok())
+                            .is_some_and(|s| s.as_bool());
+                        if selected {
                             return Some(window);
                         }
                     }

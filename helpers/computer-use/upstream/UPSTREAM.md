@@ -134,6 +134,8 @@ Patches applied, in order:
 
 - `patches/0125-windows-caret-worker-com-apartment.diff`: Initialize and balance COM on the dedicated caret-insertion deadline thread before using retained UIA interfaces.
 
+- `patches/0130-windows-notepad-tab-name-confirmation.diff`: Match Notepad tab accessible names ("x.txt. Unmodified.") when confirming a fresh launch document, and skip unreadable windows or tabs instead of abandoning the whole check.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
