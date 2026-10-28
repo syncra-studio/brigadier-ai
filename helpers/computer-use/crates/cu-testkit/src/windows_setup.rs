@@ -51,3 +51,33 @@ mod tests {
         ));
     }
 }
+
+#[cfg(target_os = "windows")]
+pub fn minimize_hosted_runner_console() -> Result<&'static str, String> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
+        let mut title = [0u16; 512];
+        let mut class = [0u16; 128];
+        let title_len = unsafe { GetWindowTextW(hwnd, &mut title) } as usize;
+        let class_len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+        if is_hosted_runner_console(
+            &String::from_utf16_lossy(&title[..title_len]),
+            &String::from_utf16_lossy(&class[..class_len]),
+        ) {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_MINIMIZE);
+                *(data.0 as *mut bool) = true;
+            }
+        }
+        BOOL(1)
+    }
+    let mut changed = false;
+    unsafe { EnumWindows(Some(visit), LPARAM(&mut changed as *mut bool as isize)) }
+        .map_err(|e| e.to_string())?;
+    Ok(if changed {
+        "minimized_named_runner_console"
+    } else {
+        "no_named_runner_console"
+    })
+}

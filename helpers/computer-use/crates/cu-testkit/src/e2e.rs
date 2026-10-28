@@ -29,6 +29,10 @@ impl Platform {
         {
             Self::Macos
         }
+        #[cfg(target_os = "windows")]
+        {
+            Self::Windows
+        }
     }
 }
 
@@ -46,6 +50,10 @@ impl DisplayServer {
         #[cfg(target_os = "macos")]
         {
             Self::Quartz
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Self::Win32
         }
     }
 }
