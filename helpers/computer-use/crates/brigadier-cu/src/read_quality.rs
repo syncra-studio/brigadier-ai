@@ -217,6 +217,20 @@ fn nodes(state: &Value) -> Vec<Node> {
                 }
                 n
             });
+            // Windows Notepad exposes its editable text body as Document,
+            // unlike an image/canvas document. Its value is already readable.
+            if cfg!(target_os = "windows")
+                && state["app_name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("notepad.exe"))
+                && element["role"] == "Document"
+                && element["value"].is_string()
+                && element["actions"]
+                    .as_array()
+                    .is_some_and(|actions| actions.iter().any(|action| action == "text"))
+            {
+                nodes[n].role = Role::Edit;
+            }
             nodes[n].frame = Rect::from_value(&element["frame"]);
             nodes[n].text |= nonempty(element.get("value"));
             nodes[n].caption = nodes[n].role == Role::Text
@@ -391,5 +405,26 @@ mod tests {
         state["elements"][2]["frame"] = json!({"x":2000,"y":100,"w":400,"h":300});
         state["elements"].as_array_mut().unwrap().pop();
         assert!(!assess(&state).thin, "off-window image");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_text_document_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn readable_notepad_body_does_not_request_pixels_but_visual_documents_do() {
+        let mut state = json!({"app_name":"Notepad.exe", "window_bounds":{"x":0,"y":0,"w":1000,"h":800}, "elements":[{"element_index":0,"role":"Document","label":"Editor","value":"Existing document text","actions":["text","set_value"],"frame":{"x":0,"y":100,"w":1000,"h":700}}]});
+        assert!(!assess(&state).thin);
+        state["elements"][0]["value"] = "".into();
+        assert!(
+            !assess(&state).thin,
+            "empty text editor remains an exposed editor"
+        );
+        state["app_name"] = "image-viewer.exe".into();
+        assert!(
+            assess(&state).thin,
+            "other visual documents still need pixels"
+        );
     }
 }
