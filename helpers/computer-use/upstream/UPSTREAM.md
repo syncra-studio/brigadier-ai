@@ -89,6 +89,7 @@ Patches applied, in order:
 - `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
 - `patches/0102-windows-page-text-run-boundaries.diff`: preserve whitespace within UIA text runs and word boundaries across inline nodes rather than trusting Chromium aggregate TextPattern concatenation.
 - `patches/0103-windows-explorer-folder-launch.diff`: resolve File Explorer by name to explorer.exe with quoted folder arguments and describe unsupported app registrations without browser-specific wording.
+- `patches/0104-windows-fresh-launch-documents.diff`: request fresh browser windows, exclude pre-existing URL matches, open a unique blank Notepad file and confirm its selected tab, and disclose additional/restored tabs.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

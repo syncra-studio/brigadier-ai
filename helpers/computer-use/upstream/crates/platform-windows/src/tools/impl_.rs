@@ -2529,6 +2529,24 @@ impl Tool for LaunchAppTool {
             );
         }
 
+        let fresh_document_path = if urls.is_empty() && extra_args.is_empty()
+            && aumid_for_uwp.as_deref().or(resolved_target.as_deref()).is_some_and(super::launch_policy::is_notepad_target) {
+            match super::launch_browser::create_notepad_document() {
+                Ok(path) => {
+                    extra_args.push(super::browser_target::quote_argument(&path.to_string_lossy()));
+                    Some(path)
+                }
+                Err(error) => return ToolResult::error(format!("No app was launched: a fresh Notepad document could not be created: {error}")),
+            }
+        } else { None };
+        if let Some(flag) = resolved_target.as_deref().and_then(super::launch_policy::fresh_window_argument) {
+            if !extra_args.iter().any(|arg| arg == flag) { extra_args.insert(0, flag.into()); }
+        }
+        // Snapshot native HWNDs before launch. A pre-existing browser window
+        // with the same URL is not proof that this launch opened a fresh one.
+        let preexisting_windows: std::collections::HashSet<u64> = crate::win32::list_windows_via_win32(None)
+            .into_iter().map(|window| window.hwnd).collect();
+
         // Single launch path. `display` is the human-readable identifier
         // we report in the success header; for the packaged path it's
         // the AUMID, which is more informative than the display name.
@@ -2904,7 +2922,7 @@ impl Tool for LaunchAppTool {
                     if remaining.is_zero() {
                         break;
                     }
-                    found = match super::launch_browser::window_showing_url(executable, url, remaining).await {
+                    found = match super::launch_browser::window_showing_url(executable, url, remaining, preexisting_windows.clone()).await {
                         Ok(window) => window,
                         Err(error) => return ToolResult::error(format!(
                             "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
@@ -2945,10 +2963,33 @@ impl Tool for LaunchAppTool {
             }
         }
 
+        if let Some(path) = fresh_document_path.as_ref() {
+            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            for _ in 0..20 {
+                match super::launch_browser::notepad_document_window(filename.clone()).await {
+                    Ok(Some(window)) => {
+                        resolved_pid = window.pid;
+                        windows_json = vec![json!({
+                            "window_id": window.hwnd, "title": window.title,
+                            "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                            "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                        })];
+                        break;
+                    }
+                    Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+                    Err(_) => break,
+                }
+            }
+            if windows_json.is_empty() {
+                return ToolResult::text(format!("Launch requested for {display}. Notepad has not exposed the fresh document {} as its selected tab. Opening is unconfirmed; no restored document window is returned. Inspect list_windows before retrying.", path.display()))
+                    .with_structured(json!({"code": "fresh_document_unconfirmed", "launch_confirmed": false, "launched_pid": pid, "document_path": path.to_string_lossy(), "windows": []}));
+            }
+        }
+
         // Retain the activation's real app pid while returning its shared frame
         // HWND. Window attribution validates that pair through the hosted
         // CoreWindow. Only the app process may become runtime-owned/killable.
-        if aumid_for_uwp.is_some() {
+        if aumid_for_uwp.is_some() && windows_json.is_empty() {
             for _ in 0..10 {
                 let host =
                     tokio::task::spawn_blocking(move || crate::win32::resolve_uwp_host_window(pid))
@@ -3237,6 +3278,19 @@ impl Tool for LaunchAppTool {
             .await;
         }
 
+        let mut restored_content_note = String::new();
+        if web_launch || fresh_document_path.is_some() {
+            for window in &windows_json {
+                if let Some(hwnd) = window["window_id"].as_u64() {
+                    match super::launch_browser::additional_tabs(hwnd, urls.len().max(1)).await {
+                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. Only the requested document was confirmed; do not read the other tabs.")),
+                        None => restored_content_note.push_str(" Windows did not expose a reliable tab count; other restored content could not be ruled out."),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         let running = !windows_json.is_empty()
             || (pid != 0
                 && tokio::task::spawn_blocking(move || {
@@ -3251,6 +3305,10 @@ impl Tool for LaunchAppTool {
             .map(|guard| guard.report())
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+        summary.push_str(&restored_content_note);
+        if let Some(path) = fresh_document_path.as_ref() {
+            summary.push_str(&format!(" Fresh document: {}.", path.display()));
+        }
         if !running {
             summary.push_str(" Windows did not expose a running app or its window; opening could not be confirmed.");
         }
@@ -3290,6 +3348,8 @@ impl Tool for LaunchAppTool {
                 pid != 0 && foreground_pid == pid
             },
             "foreground_note": foreground_note,
+            "document_path": fresh_document_path.as_ref().map(|path| path.to_string_lossy()),
+            "restored_content_note": restored_content_note,
             "windows":   windows_json,
         });
         let mut result = ToolResult::text(summary).with_structured(structured);

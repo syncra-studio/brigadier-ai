@@ -130,6 +130,7 @@ pub(super) async fn window_showing_url(
     executable: &str,
     url: &str,
     timeout: std::time::Duration,
+    preexisting_windows: std::collections::HashSet<u64>,
 ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
     let executable = super::launch_policy::executable_name(executable);
     let url = url.to_owned();
@@ -145,6 +146,7 @@ pub(super) async fn window_showing_url(
                         continue;
                     }
                     for window in crate::win32::list_windows_win32_first(process.pid) {
+                        if preexisting_windows.contains(&window.hwnd) { continue; }
                         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                             return None;
                         }
@@ -173,5 +175,79 @@ mod tests {
     fn missing_window_is_not_a_verified_browser_page() {
         let _com = Apartment::new();
         assert!(unsafe { matching_document(0, "example.com", false) }.is_err());
+    }
+}
+
+/// A blank on-disk document bypasses Notepad's restore-only startup. It is the
+/// agent's actual document, reported to the caller; never overwrite an old file.
+pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("Could not create a fresh document name: {error}"))?;
+    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    let path = std::env::temp_dir().join(format!("brigadier-cu-{nonce}.txt"));
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+    Ok(path)
+}
+
+pub(super) async fn notepad_document_window(filename: String) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+    tokio::task::spawn_blocking(move || {
+        crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            "fresh Notepad document verification", std::time::Duration::from_secs(2), "no unverified document",
+            move |cancelled| unsafe {
+                use windows::Win32::UI::Accessibility::{IUIAutomationSelectionItemPattern, UIA_SelectionItemPatternId, UIA_TabItemControlTypeId};
+                let _com = Apartment::new();
+                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+                let pids: std::collections::HashSet<_> = crate::win32::list_processes().into_iter()
+                    .filter(|process| super::launch_policy::is_notepad_target(&process.name)).map(|process| process.pid).collect();
+                for window in crate::win32::list_windows_via_win32(None) {
+                    if cancelled.load(std::sync::atomic::Ordering::Acquire) { return None; }
+                    if !pids.contains(&window.pid) { continue; }
+                    let root = automation.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
+                    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
+                    let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
+                    if tabs.Length().ok()? == 0 && super::launch_policy::document_title_matches(&window.title, &filename) {
+                        return Some(window); // classic Notepad has no tabs
+                    }
+                    for index in 0..tabs.Length().ok()? {
+                        let tab = tabs.GetElement(index).ok()?;
+                        let name = tab.CurrentName().ok()?.to_string();
+                        if !super::launch_policy::document_title_matches(&name, &filename) { continue; }
+                        let pattern: IUIAutomationSelectionItemPattern = tab.GetCurrentPattern(UIA_SelectionItemPatternId).ok()?.cast().ok()?;
+                        if pattern.CurrentIsSelected().ok()?.as_bool() { return Some(window); }
+                    }
+                }
+                None
+            }
+        ).map_err(|error| anyhow::anyhow!("Fresh document verification stopped because {}", crate::uia::click::deadline_reason(error)))
+    }).await?
+}
+
+pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<usize> {
+    tokio::task::spawn_blocking(move || {
+        crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            "launch tab count", std::time::Duration::from_millis(500), "unknown tab count", move |_| unsafe {
+                use windows::Win32::UI::Accessibility::UIA_TabItemControlTypeId;
+                let _com = Apartment::new();
+                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+                let root = automation.ElementFromHandle(HWND(hwnd as *mut _)).ok()?;
+                let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
+                let count = root.FindAll(TreeScope_Subtree, &condition).ok()?.Length().ok()? as usize;
+                Some(count.saturating_sub(requested_tabs))
+            }
+        ).ok().flatten()
+    }).await.ok().flatten()
+}
+
+#[cfg(test)]
+mod fresh_document_tests {
+    use super::*;
+    #[test]
+    fn each_fresh_notepad_file_is_empty_unique_and_never_reuses_a_document() {
+        let first = create_notepad_document().unwrap();
+        let second = create_notepad_document().unwrap();
+        assert_ne!(first, second);
+        assert!(std::fs::read(&first).unwrap().is_empty());
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
     }
 }
