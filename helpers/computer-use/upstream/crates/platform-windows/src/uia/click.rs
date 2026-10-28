@@ -16,7 +16,11 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
+    IsWindowEnabled, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND,
+    PostMessageW,
+};
 
 struct ComApartment(bool);
 impl ComApartment {
@@ -144,6 +148,41 @@ impl Readback {
     }
 }
 
+fn class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let n = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    String::from_utf16_lossy(&buffer[..n.max(0) as usize])
+}
+
+/// Bounded synchronous dispatch keeps the background guard alive while the
+/// target handles the command. A timeout is never retried: it may have run.
+fn send_command(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> windows::core::Result<()> {
+    let mut result = 0usize;
+    let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG, 1000, Some(&mut result)) };
+    if sent.0 == 0 { return Err(windows::core::Error::from_win32()); }
+    Ok(())
+}
+
+/// Exact IDOK control in a native common dialog. Do this before Invoke:
+/// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
+fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
+    unsafe {
+        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId { return None; }
+        let button = GetDlgItem(hwnd, 1).ok()?;
+        if !crate::input::action_policy::common_dialog_accept(&class_name(hwnd), &class_name(button), GetDlgCtrlID(button))
+            || GetParent(button).ok()? != hwnd || !IsWindowEnabled(button).as_bool() { return None; }
+        let native = element.CurrentNativeWindowHandle().ok();
+        if native == Some(button) { return Some(button); }
+        if element.CurrentAutomationId().ok()?.to_string() != "1" { return None; }
+        let r = element.CurrentBoundingRectangle().ok()?;
+        let mut b = windows::Win32::Foundation::RECT::default();
+        GetWindowRect(button, &mut b).ok()?;
+        let x = r.left + (r.right-r.left)/2;
+        let y = r.top + (r.bottom-r.top)/2;
+        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
+    }
+}
+
 /// Only a Close button under a TitleBar qualifies; Close Tab must stay an Invoke.
 fn titlebar_close(element: &IUIAutomationElement) -> bool {
     unsafe {
@@ -234,6 +273,18 @@ fn try_click(
     }
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
+    if !expand_only {
+        if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
+            let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                ensure_active(cancelled)?;
+                send_command(HWND(hwnd as *mut _), WM_COMMAND, WPARAM(1), LPARAM(button.0 as isize))
+            });
+            if let Err(error) = result {
+                anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
+            }
+            return Ok(Some(readback.finish(Some(ptr), "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)", ActionTransport::WindowsPostMessage)));
+        }
+    }
     let order = pattern_order(titlebar_close(&element), expand_only);
     let dispatch = || -> windows::core::Result<Option<(&str, ActionTransport)>> {
         unsafe {

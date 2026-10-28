@@ -9,6 +9,7 @@
 //! For clicks, coordinates are window-client-relative (ScreenToClient applied
 //! if screen coords are given). We pack with MAKELPARAM(x,y).
 
+pub mod action_policy;
 pub mod delivery;
 pub mod inject;
 pub mod keyboard;
