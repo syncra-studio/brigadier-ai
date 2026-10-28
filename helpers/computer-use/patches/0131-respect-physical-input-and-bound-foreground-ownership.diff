@@ -1,0 +1,732 @@
+Why: Revoke every foreground lock holder on physical input, preserve queued activation evidence without claiming a flash, restrict broker attribution, and refuse pointer-moving background touch drags.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+index bed5cba53..5989d3e62 100644
+--- a/crates/platform-windows/src/input/foreground_policy.rs
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -2,6 +2,8 @@
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub(crate) struct Observation {
+     pub activated: bool,
++    pub uncertain_broker: bool,
++    pub foreground_seen: bool,
+     pub restored: bool,
+     pub monitoring: bool,
+     pub interrupted: bool,
+@@ -9,16 +11,22 @@ pub(crate) struct Observation {
+ 
+ impl Observation {
+     pub(crate) fn report(self) -> (&'static str, bool) {
++        if !self.activated && self.uncertain_broker {
++            return ("A Windows broker activation event could not be attributed to this launch. Keeping your window in front is unconfirmed.", true);
++        }
++        if self.activated && !self.foreground_seen {
++            return ("Windows reported an app activation event, but the app was not confirmed in front. Keeping your window in front is unconfirmed; monitoring remains bounded.", true);
++        }
+         match (self.activated, self.restored, self.monitoring, self.interrupted) {
+             (true, true, _, _) => (
+-                "App activation was observed; your previous window was confirmed in front at reply time. A brief focus change occurred.", false),
++                "App activation was observed; your previous window was confirmed in front at reply time. A focus change occurred.", false),
+             (true, false, _, _) => (
+-                "App activation was observed; your previous window could not be confirmed in front. Opening and foreground preservation are separate results.", true),
++                "App activation was observed; your previous window could not be confirmed in front. Opening and keeping your window in front are separate results.", true),
+             (false, _, _, true) => (
+-                "Foreground monitoring stopped after user input or the previous window closed; foreground preservation is unconfirmed.", true),
++                "Monitoring stopped after user input or the previous window closed; keeping your window in front is unconfirmed.", true),
+             (false, _, true, false) => (
+                 "No app activation has been recorded before this reply. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
+-            _ => ("Foreground observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
++            _ => ("Window activation observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
+         }
+     }
+ }
+@@ -50,20 +58,16 @@ pub(crate) fn switch_click(injected: bool, clicked_prior: bool) -> bool {
+ pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
+     for name in expected.clone() {
+         match name.as_str() {
+-            "calculator" | "calc" | "calculatorapp" => {
+-                expected.extend(["calculatorapp".into(), "applicationframehost".into()])
+-            }
++            "calculator" | "calc" | "calculatorapp" => expected.push("calculatorapp".into()),
+             "task manager" | "taskmgr" => expected.push("taskmgr".into()),
+             "windows powershell" | "powershell" | "pwsh" | "windows terminal" => {
+                 expected.extend(["powershell".into(), "pwsh".into(), "windowsterminal".into()])
+             }
+-            "notepad" | "systemsettings" => expected.push("applicationframehost".into()),
++
+             _ => {}
+         }
+     }
+-    if expected.is_empty() {
+-        expected.push("applicationframehost".into());
+-    }
++    expected.retain(|name| name != "applicationframehost");
+     expected.sort_unstable();
+     expected.dedup();
+     expected
+@@ -147,17 +151,17 @@ mod tests {
+     fn launch_attribution_covers_reported_shell_and_store_delegates() {
+         for (requested, host) in [
+             ("calculator", "calculatorapp"),
+-            ("calc", "applicationframehost"),
++            ("calc", "calculatorapp"),
+             ("task manager", "taskmgr"),
+             ("windows powershell", "windowsterminal"),
+             ("chrome", "chrome"),
+-            ("notepad", "applicationframehost"),
++            ("notepad", "notepad"),
+         ] {
+             assert!(launch_names(vec![requested.into()])
+                 .iter()
+                 .any(|name| name == host));
+         }
+-        assert_eq!(launch_names(Vec::new()), vec!["applicationframehost"]);
++        assert!(launch_names(Vec::new()).is_empty());
+         assert!(!launch_names(vec!["chrome".into()]).contains(&"windowsterminal".into()));
+     }
+ 
+@@ -187,13 +191,11 @@ mod tests {
+             .starts_with("No app activation has been recorded"));
+         let observed = Observation {
+             activated: true,
++            foreground_seen: true,
+             restored: true,
+             ..unseen
+         };
+-        assert!(observed
+-            .report()
+-            .0
+-            .contains("A brief focus change occurred"));
++        assert!(observed.report().0.contains("A focus change occurred"));
+         assert!(!observed.report().1);
+         assert!(
+             Observation {
+@@ -245,3 +247,72 @@ mod tests {
+         assert!(expired(30_000, Some(0)));
+     }
+ }
++
++/// Pure lease accounting shared by every native launch holder.
++#[derive(Default)]
++pub(crate) struct ForegroundLockState {
++    pub holders: usize,
++    pub locked: bool,
++    pub generation: u64,
++}
++impl ForegroundLockState {
++    pub fn add_holder(&mut self) {
++        self.holders += 1;
++    }
++    pub fn release(&mut self, generation: u64) -> bool {
++        if generation != self.generation || self.holders == 0 {
++            return false;
++        }
++        self.holders -= 1;
++        if self.holders != 0 {
++            return false;
++        }
++        let unlock = self.locked;
++        self.locked = false;
++        unlock
++    }
++    pub fn revoke(&mut self) -> bool {
++        self.generation = self.generation.wrapping_add(1);
++        self.holders = 0;
++        let unlock = self.locked;
++        self.locked = false;
++        unlock
++    }
++}
++#[cfg(test)]
++mod lease_tests {
++    use super::*;
++    #[test]
++    fn nested_holders_release_only_last_and_revocation_invalidates_all() {
++        let mut state = ForegroundLockState {
++            locked: true,
++            ..Default::default()
++        };
++        state.add_holder();
++        state.add_holder();
++        let old = state.generation;
++        assert!(!state.release(old));
++        assert!(state.locked);
++        assert!(state.revoke());
++        state.locked = true;
++        state.add_holder();
++        assert!(!state.release(old));
++        assert!(state.locked);
++        assert_eq!(state.holders, 1);
++        assert!(state.release(state.generation));
++        assert!(!state.release(state.generation));
++    }
++    #[test]
++    fn broker_host_is_never_sufficient_launch_identity() {
++        for app in ["calc", "notepad", "systemsettings"] {
++            assert!(!launch_names(vec![app.into()]).contains(&"applicationframehost".into()));
++        }
++        assert!(Observation {
++            activated: true,
++            ..Default::default()
++        }
++        .report()
++        .0
++        .contains("not confirmed in front"));
++    }
++}
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index 77d879ad2..63418b502 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -2,7 +2,7 @@
+ //! Out-of-context WinEvents record even switches shorter than a polling tick.
+ //! Restoration uses no synthetic keys and never moves the pointer.
+ use std::cell::RefCell;
+-use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+ use std::sync::{mpsc, Arc, Mutex, Weak};
+ use std::time::{Duration, Instant};
+ use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
+ };
+ 
+ #[path = "foreground_policy.rs"]
+-mod policy;
++pub(super) mod policy;
+ 
+ #[derive(Clone, PartialEq, Eq)]
+ pub(crate) enum Target {
+@@ -47,6 +47,11 @@ struct Watch {
+     prior: usize,
+     prior_pid: u32,
+     user_selected: AtomicBool,
++    // Any physical key or button press: the user may be opening something.
++    user_active: AtomicBool,
++    first_input: AtomicU32,
++    input_generation: u64,
++    hold_lock: bool,
+     started: Instant,
+     cancelled: AtomicBool,
+     target: Target,
+@@ -101,54 +106,66 @@ fn process_name(pid: u32) -> Option<String> {
+ }
+ 
+ impl Watch {
+-    fn observe(&self, event_hwnd: HWND) {
++    fn observe(&self, event_hwnd: HWND, event_time: Option<u32>) {
+         let prior = HWND(self.prior as *mut _);
+         let prior_valid = self.prior != 0
+             && unsafe { IsWindow(prior) }.as_bool()
+             && window_process(prior) == self.prior_pid;
+-        let input_unchanged = !self.user_selected.load(Ordering::Acquire);
+-        {
+-            let mut state = self.state.lock().unwrap();
+-            if !state.observation.monitoring {
+-                return;
+-            }
+-            if !prior_valid || !input_unchanged {
+-                state.observation.interrupted = true;
+-                state.observation.monitoring = false;
+-                return;
+-            }
++        let input_unchanged = !self.user_active.load(Ordering::Acquire)
++            && super::foreground_generation() == self.input_generation;
++        let first = self.first_input.load(Ordering::Acquire);
++        // A queued pre-input event is still evidence, never permission to restore.
++        let record = input_unchanged
++            || event_time.is_some_and(|time| first != 0 && (time.wrapping_sub(first) as i32) <= 0);
++        if !input_unchanged || !prior_valid {
++            self.state.lock().unwrap().observation.interrupted = true;
++        }
++        if !record {
++            return;
+         }
+-        if event_hwnd == prior || event_hwnd.0.is_null() {
++        if event_hwnd.0.is_null() {
+             return;
+         }
++        if event_hwnd == prior {
++            return;
++        }
++        // Keep transient event evidence; check current foreground before restoration.
+         let pid = window_process(event_hwnd);
+-        let target = match &self.target {
++        let named = match &self.target {
+             Target::Processes(targets) => pid != 0 && targets.contains(&pid),
+             Target::Launch(names) => process_name(pid).is_some_and(|name| names.contains(&name)),
+         };
+         let target = {
+             let mut state = self.state.lock().unwrap();
+-            let target = state.evidence.observe(pid, target);
++            let target = state.evidence.observe(pid, named);
+             state.observation.activated = state.evidence.activated;
++            state.observation.uncertain_broker |= !target
++                && matches!(self.target, Target::Launch(_))
++                && process_name(pid).as_deref() == Some("applicationframehost");
++            state.observation.foreground_seen |=
++                target && unsafe { GetForegroundWindow() } == event_hwnd;
+             target
+         };
+         if !target {
+             return;
+         }
+-        // An event may describe a transient switch already restored by Windows.
+-        // Record it, but never overwrite a newer foreground from an old event.
+         if policy::may_hand_back(
+             prior_valid,
+-            !self.user_selected.load(Ordering::Acquire),
++            input_unchanged,
+             target,
+             unsafe { GetForegroundWindow() } == event_hwnd,
+         ) {
+-            unsafe { super::force_foreground_attached(prior) };
++            unsafe {
++                super::hand_back_foreground(prior, event_hwnd, || {
++                    !self.user_active.load(Ordering::Acquire)
++                        && super::foreground_generation() == self.input_generation
++                })
++            };
+         }
+     }
+ 
+     fn snapshot(&self) -> (policy::Observation, usize) {
+-        self.observe(unsafe { GetForegroundWindow() });
++        self.observe(unsafe { GetForegroundWindow() }, None);
+         let mut result = self.state.lock().unwrap().observation;
+         let foreground = unsafe { GetForegroundWindow() }.0 as usize;
+         result.restored = foreground == self.prior;
+@@ -163,11 +180,11 @@ unsafe extern "system" fn foreground_event(
+     _: i32,
+     _: i32,
+     _: u32,
+-    _: u32,
++    event_time: u32,
+ ) {
+     let watch = CURRENT.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+     if let Some(watch) = watch {
+-        watch.observe(hwnd);
++        watch.observe(hwnd, Some(event_time));
+     }
+ }
+ 
+@@ -183,6 +200,14 @@ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM)
+         let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+         CURRENT.with(|slot| {
+             if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
++                if event.flags & LLMHF_INJECTED == 0 {
++                    watch
++                        .first_input
++                        .compare_exchange(0, event.time, Ordering::AcqRel, Ordering::Acquire)
++                        .ok();
++                    watch.user_active.store(true, Ordering::Release);
++                    super::revoke_foreground_lock();
++                }
+                 let clicked = unsafe { GetAncestor(WindowFromPoint(event.pt), GA_ROOT) };
+                 if policy::switch_click(
+                     event.flags & LLMHF_INJECTED != 0,
+@@ -199,6 +224,18 @@ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM)
+ unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+     if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
+         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
++        if !event.flags.contains(LLKHF_INJECTED) {
++            CURRENT.with(|slot| {
++                if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
++                    watch
++                        .first_input
++                        .compare_exchange(0, event.time, Ordering::AcqRel, Ordering::Acquire)
++                        .ok();
++                    watch.user_active.store(true, Ordering::Release);
++                    super::revoke_foreground_lock();
++                }
++            });
++        }
+         if policy::switch_key(
+             event.vkCode,
+             event.flags.contains(LLKHF_ALTDOWN),
+@@ -216,7 +253,9 @@ unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPAR
+ }
+ 
+ impl ForegroundWatch {
+-    pub(crate) fn start(prior: usize, target: Target) -> Self {
++    /// `hold_lock` keeps other processes from taking the front for the whole
++    /// watch, not just the call; it is lifted at the user's first own input.
++    pub(crate) fn start(prior: usize, target: Target, hold_lock: bool) -> Self {
+         let mut live = LIVE.lock().unwrap();
+         live.retain(|entry| {
+             entry
+@@ -232,8 +271,7 @@ impl ForegroundWatch {
+                     && watch.started.elapsed() < Duration::from_secs(20)
+                 {
+                     let mut state = watch.state.lock().unwrap();
+-                    if state.observation.monitoring && !watch.user_selected.load(Ordering::Acquire)
+-                    {
++                    if state.observation.monitoring && !watch.user_active.load(Ordering::Acquire) {
+                         state.holders += 1;
+                         state.ended = None;
+                         drop(state);
+@@ -249,6 +287,10 @@ impl ForegroundWatch {
+             prior,
+             prior_pid: window_process(HWND(prior as *mut _)),
+             user_selected: AtomicBool::new(false),
++            user_active: AtomicBool::new(false),
++            first_input: AtomicU32::new(0),
++            input_generation: super::foreground_generation(),
++            hold_lock,
+             started: Instant::now(),
+             cancelled: AtomicBool::new(false),
+             target,
+@@ -289,6 +331,10 @@ impl ForegroundWatch {
+                 && prior != 0
+                 && unsafe { GetForegroundWindow() }.0 as usize == prior;
+             worker.state.lock().unwrap().observation.monitoring = monitoring;
++            // Locked before the caller acts; Windows lifts it on the user's own input.
++            let mut lock = (monitoring && worker.hold_lock)
++                .then(super::ForegroundLockGuard::acquire)
++                .filter(super::ForegroundLockGuard::acquired);
+             let _ = ready.send(());
+             while monitoring && !worker.cancelled.load(Ordering::Acquire) {
+                 let mut message = MSG::default();
+@@ -300,7 +346,10 @@ impl ForegroundWatch {
+                     }
+                     unsafe { DispatchMessageW(&message) };
+                 }
+-                worker.observe(unsafe { GetForegroundWindow() });
++                if worker.user_active.load(Ordering::Acquire) {
++                    lock = None;
++                }
++                worker.observe(unsafe { GetForegroundWindow() }, None);
+                 for reply in receive.try_iter().take(128) {
+                     let _ = reply.send(worker.snapshot());
+                 }
+@@ -314,9 +363,13 @@ impl ForegroundWatch {
+                     break;
+                 }
+                 drop(state);
++                if worker.user_active.load(Ordering::Acquire) {
++                    lock = None;
++                }
+                 std::thread::sleep(Duration::from_millis(2));
+             }
+             worker.state.lock().unwrap().observation.monitoring = false;
++            drop(lock);
+             if !hook.0.is_null() {
+                 let _ = unsafe { UnhookWinEvent(hook) };
+             }
+@@ -382,7 +435,7 @@ mod tests {
+     use super::*;
+     #[test]
+     fn null_prior_is_reported_unconfirmed_without_touching_foreground() {
+-        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new()));
++        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new()), false);
+         assert!(watch.report().1);
+     }
+ }
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index 71bf707f5..bdfc8659c 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -28,43 +28,38 @@
+ //! touch mapping; callers fall back to their existing routing for those.
+ 
+ use anyhow::{bail, Result};
+-use core::ffi::c_void;
+ use std::sync::Mutex;
+ use std::thread::sleep;
+ use std::time::Duration;
+ 
+-use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
++use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+ use windows::Win32::UI::Controls::{
+-    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
+-    POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
++    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, POINTER_FEEDBACK_DEFAULT,
++    POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+ };
+ use windows::Win32::UI::Input::Pointer::{
+     InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
+-    POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
++    POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+-    IsWindow, LockSetForegroundWindow, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW,
+-    WindowFromPoint, GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH,
+-    WS_EX_NOACTIVATE,
++    GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow,
++    LockSetForegroundWindow, SetForegroundWindow, SetWindowLongPtrW, WindowFromPoint, GA_ROOT,
++    GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, WS_EX_NOACTIVATE,
+ };
+ 
+ #[path = "foreground_watch.rs"]
+ pub(crate) mod foreground_watch;
+ 
+-#[derive(Default)]
+-struct ForegroundLockState {
+-    holders: usize,
+-    locked: bool,
+-}
++use foreground_watch::policy::ForegroundLockState;
+ 
+ static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(ForegroundLockState {
+     holders: 0,
+     locked: false,
++    generation: 0,
+ });
+ 
+ /// Prevent other processes from taking the foreground during a background
+@@ -72,6 +67,7 @@ static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(Foreground
+ /// still balances the documented unlock call and overlapping driver launches.
+ pub struct ForegroundLockGuard {
+     held: bool,
++    generation: u64,
+ }
+ 
+ impl ForegroundLockGuard {
+@@ -86,9 +82,12 @@ impl ForegroundLockGuard {
+             }
+         }
+         if state.locked {
+-            state.holders += 1;
++            state.add_holder();
++        }
++        Self {
++            held: state.locked,
++            generation: state.generation,
+         }
+-        Self { held: state.locked }
+     }
+ 
+     pub fn acquired(&self) -> bool {
+@@ -96,16 +95,71 @@ impl ForegroundLockGuard {
+     }
+ }
+ 
++/// Revoke every overlapping launch lease on physical input. Stale drops
++/// cannot unlock a later generation, and no existing lease can re-lock it.
++pub(crate) fn revoke_foreground_lock() {
++    let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
++    if state.revoke() {
++        let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
++    }
++}
++
++pub(crate) fn foreground_generation() -> u64 {
++    FOREGROUND_LOCK_STATE.lock().unwrap().generation
++}
++
++/// Win32 has no atomic conditional foreground swap. Check both selection and
++/// physical-input generation at each boundary, never resampling a new victim.
++pub(crate) unsafe fn hand_back_foreground(
++    prior: HWND,
++    displaced: HWND,
++    allowed: impl Fn() -> bool,
++) -> bool {
++    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
++        return false;
++    }
++    // If prevention already failed, relinquish every live lease before a
++    // conditional hand-back. Keep holder counts, so none of these leases can
++    // re-lock; physical input can still revoke their generation at any time.
++    {
++        let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
++        if unsafe { GetForegroundWindow() } != displaced {
++            return false;
++        }
++        if state.locked {
++            let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
++            state.locked = false;
++        }
++    }
++    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
++        return false;
++    }
++    let my_tid = unsafe { GetCurrentThreadId() };
++    let tid = unsafe { GetWindowThreadProcessId(displaced, None) };
++    let attached = tid != 0 && tid != my_tid;
++    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
++        return false;
++    }
++    if attached {
++        let _ = unsafe { AttachThreadInput(my_tid, tid, true) };
++    }
++    if allowed() && unsafe { GetForegroundWindow() } == displaced {
++        let _ = unsafe { SetForegroundWindow(prior) };
++    }
++    if attached {
++        let _ = unsafe { AttachThreadInput(my_tid, tid, false) };
++    }
++    (unsafe { GetForegroundWindow() }) == prior
++}
++
+ impl Drop for ForegroundLockGuard {
+     fn drop(&mut self) {
+         if !self.held {
+             return;
+         }
+         let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
+-        state.holders = state.holders.saturating_sub(1);
+-        if state.holders == 0 {
++        if state.release(self.generation) {
+             let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
+-            state.locked = false;
+             tracing::debug!(target: "launch_app.focus_lock", "unlocked foreground changes after background launch");
+         }
+     }
+@@ -217,6 +271,7 @@ impl NoActivateGuard {
+         let watch = foreground_watch::ForegroundWatch::start(
+             prior,
+             foreground_watch::Target::Processes(pids),
++            true,
+         );
+         Self {
+             styles,
+@@ -616,116 +671,9 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+     Ok(())
+ }
+ 
+-/// A **persistent** synthetic touch digitizer, created once and never
+-/// destroyed. This is load-bearing: a transient (per-stroke) device is gone
+-/// before WPF's WISP stylus stack can bind to it, so the OS falls back to
+-/// legacy touch→mouse promotion — which drags the user's cursor to the
+-/// contact. A *standing* digitizer is enumerated as a real tablet, so WPF (and
+-/// other stylus/pointer-aware frameworks) consume the contact as touch/stylus
+-/// and promote it to mouse INTERNALLY, without the OS moving the system cursor.
+-static TOUCH_DEV: Mutex<isize> = Mutex::new(0);
+-
+-/// One **touch** press-drag-release from screen `(sx0,sy0)` to `(sx1,sy1)` with
+-/// `steps` interpolated in-contact moves, via the persistent [`TOUCH_DEV`].
+-/// Unlike a pen (an absolute *cursor* device — injecting one drags the user's
+-/// mouse pointer along), a touch contact from a standing digitizer is consumed
+-/// as touch/stylus and does NOT move the user's cursor. Serialized on the
+-/// single shared device (one stroke at a time across all sessions).
+-fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()> {
+-    let mut dev_guard = TOUCH_DEV.lock().unwrap_or_else(|e| e.into_inner());
+-    unsafe {
+-        // A non-pointer-aware window (WPF) makes the OS promote the PRIMARY touch
+-        // contact to a mouse event, which drags the system cursor to the contact
+-        // — and the OS gates delivery on the cursor actually reaching it, so the
+-        // move can't be prevented from a background process (pinning/clipping the
+-        // cursor just drops the input). What we CAN do is snap the cursor back to
+-        // exactly where the user left it the instant the stroke ends, so the net
+-        // displacement is zero and (with a fast, few-step stroke) the excursion
+-        // is a brief flick rather than a sustained drag. Pointer-aware targets
+-        // (Chromium) never promote, so the cursor never moves and this restore is
+-        // a harmless no-op.
+-        let mut cpos = POINT::default();
+-        let have_cpos = GetCursorPos(&mut cpos).is_ok();
+-        let dev = if *dev_guard != 0 {
+-            HSYNTHETICPOINTERDEVICE(*dev_guard as *mut c_void)
+-        } else {
+-            let d = CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_DEFAULT)
+-                .map_err(|e| anyhow::anyhow!("CreateSyntheticPointerDevice(TOUCH): {e}"))?;
+-            *dev_guard = d.0 as isize;
+-            d
+-        };
+-        let mk = |flags, x: i32, y: i32| POINTER_TYPE_INFO {
+-            r#type: PT_TOUCH,
+-            Anonymous: POINTER_TYPE_INFO_0 {
+-                touchInfo: POINTER_TOUCH_INFO {
+-                    pointerInfo: POINTER_INFO {
+-                        pointerType: PT_TOUCH,
+-                        pointerId: 0,
+-                        pointerFlags: flags,
+-                        sourceDevice: HANDLE::default(),
+-                        hwndTarget: HWND::default(),
+-                        ptPixelLocation: POINT { x, y },
+-                        ..Default::default()
+-                    },
+-                    touchFlags: 0,
+-                    touchMask: 0,
+-                    rcContact: RECT {
+-                        left: x - 2,
+-                        top: y - 2,
+-                        right: x + 2,
+-                        bottom: y + 2,
+-                    },
+-                    rcContactRaw: RECT {
+-                        left: x - 2,
+-                        top: y - 2,
+-                        right: x + 2,
+-                        bottom: y + 2,
+-                    },
+-                    orientation: 0,
+-                    pressure: 512,
+-                },
+-            },
+-        };
+-        // Fast stroke: line-tool canvases only need down→up (the segment is the
+-        // straight line between them), so a few in-contact frames with a tiny
+-        // dwell is plenty — and the shorter the stroke, the briefer the cursor
+-        // excursion before we snap it back.
+-        let down = mk(
+-            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+-            sx0,
+-            sy0,
+-        );
+-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
+-        let steps = steps.clamp(1, 3);
+-        for i in 1..=steps {
+-            sleep(Duration::from_millis(2));
+-            let t = i as f64 / steps as f64;
+-            let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
+-            let y = sy0 + ((sy1 - sy0) as f64 * t).round() as i32;
+-            let mv = mk(
+-                POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+-                x,
+-                y,
+-            );
+-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
+-        }
+-        sleep(Duration::from_millis(2));
+-        let up = mk(POINTER_FLAG_UP, sx1, sy1);
+-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
+-        // Snap the cursor back to where the user left it. The OS processes the
+-        // promoted mouse messages slightly after injection, so a single restore
+-        // right after the `up` can be overrun by that late move — settle briefly,
+-        // then restore, and restore once more to win the race. No-op for
+-        // pointer-aware targets (Chromium) that never moved the cursor.
+-        if have_cpos {
+-            let _ = SetCursorPos(cpos.x, cpos.y);
+-            sleep(Duration::from_millis(12));
+-            let _ = SetCursorPos(cpos.x, cpos.y);
+-        }
+-        // device intentionally NOT destroyed — see TOUCH_DEV.
+-        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(touch drag): {e}"))?;
+-    }
+-    Ok(())
++/// Refuse transport whose OS promotion can move the real pointer.
++fn touch_drag(_sx0: i32, _sy0: i32, _sx1: i32, _sy1: i32, _steps: usize) -> Result<()> {
++    bail!("background_unavailable: Windows touch-to-mouse promotion can move your pointer. No drag was sent.")
+ }
+ 
+ /// Inject a press-drag-release at **screen** coordinates, routed by the system
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+index 39c213fe9..3b9f0cc85 100644
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
+ pub(super) struct LaunchForegroundGuard {
+     watch: ForegroundWatch,
+     reported_foreground: AtomicUsize,
+-    _lock: crate::input::ForegroundLockGuard,
+ }
+ 
+ pub(super) fn associated_executable(url: &str) -> Option<String> {
+@@ -51,10 +50,10 @@ impl LaunchForegroundGuard {
+         } else {
+             0
+         };
+-        let lock = crate::input::ForegroundLockGuard::acquire();
++        // The watch holds the foreground lock until it ends, so a window that
++        // appears after the reply remains guarded (locking may be refused).
+         Self {
+-            watch: ForegroundWatch::start(prior, Target::launch(expected)),
+-            _lock: lock,
++            watch: ForegroundWatch::start(prior, Target::launch(expected), true),
+             reported_foreground: AtomicUsize::new(0),
+         }
+     }

@@ -28,43 +28,38 @@
 //! touch mapping; callers fall back to their existing routing for those.
 
 use anyhow::{bail, Result};
-use core::ffi::c_void;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
+use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Controls::{
-    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
-    POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, POINTER_FEEDBACK_DEFAULT,
+    POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
 };
 use windows::Win32::UI::Input::Pointer::{
     InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
-    POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+    POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsWindow, LockSetForegroundWindow, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW,
-    WindowFromPoint, GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH,
-    WS_EX_NOACTIVATE,
+    GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsWindow,
+    LockSetForegroundWindow, SetForegroundWindow, SetWindowLongPtrW, WindowFromPoint, GA_ROOT,
+    GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, WS_EX_NOACTIVATE,
 };
 
 #[path = "foreground_watch.rs"]
 pub(crate) mod foreground_watch;
 
-#[derive(Default)]
-struct ForegroundLockState {
-    holders: usize,
-    locked: bool,
-}
+use foreground_watch::policy::ForegroundLockState;
 
 static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(ForegroundLockState {
     holders: 0,
     locked: false,
+    generation: 0,
 });
 
 /// Prevent other processes from taking the foreground during a background
@@ -72,6 +67,7 @@ static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(Foreground
 /// still balances the documented unlock call and overlapping driver launches.
 pub struct ForegroundLockGuard {
     held: bool,
+    generation: u64,
 }
 
 impl ForegroundLockGuard {
@@ -86,14 +82,74 @@ impl ForegroundLockGuard {
             }
         }
         if state.locked {
-            state.holders += 1;
+            state.add_holder();
         }
-        Self { held: state.locked }
+        Self {
+            held: state.locked,
+            generation: state.generation,
+        }
     }
 
     pub fn acquired(&self) -> bool {
         self.held
     }
+}
+
+/// Revoke every overlapping launch lease on physical input. Stale drops
+/// cannot unlock a later generation, and no existing lease can re-lock it.
+pub(crate) fn revoke_foreground_lock() {
+    let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
+    if state.revoke() {
+        let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
+    }
+}
+
+pub(crate) fn foreground_generation() -> u64 {
+    FOREGROUND_LOCK_STATE.lock().unwrap().generation
+}
+
+/// Win32 has no atomic conditional foreground swap. Check both selection and
+/// physical-input generation at each boundary, never resampling a new victim.
+pub(crate) unsafe fn hand_back_foreground(
+    prior: HWND,
+    displaced: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    // If prevention already failed, relinquish every live lease before a
+    // conditional hand-back. Keep holder counts, so none of these leases can
+    // re-lock; physical input can still revoke their generation at any time.
+    {
+        let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
+        if unsafe { GetForegroundWindow() } != displaced {
+            return false;
+        }
+        if state.locked {
+            let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
+            state.locked = false;
+        }
+    }
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    let my_tid = unsafe { GetCurrentThreadId() };
+    let tid = unsafe { GetWindowThreadProcessId(displaced, None) };
+    let attached = tid != 0 && tid != my_tid;
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    if attached {
+        let _ = unsafe { AttachThreadInput(my_tid, tid, true) };
+    }
+    if allowed() && unsafe { GetForegroundWindow() } == displaced {
+        let _ = unsafe { SetForegroundWindow(prior) };
+    }
+    if attached {
+        let _ = unsafe { AttachThreadInput(my_tid, tid, false) };
+    }
+    (unsafe { GetForegroundWindow() }) == prior
 }
 
 impl Drop for ForegroundLockGuard {
@@ -102,10 +158,8 @@ impl Drop for ForegroundLockGuard {
             return;
         }
         let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
-        state.holders = state.holders.saturating_sub(1);
-        if state.holders == 0 {
+        if state.release(self.generation) {
             let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
-            state.locked = false;
             tracing::debug!(target: "launch_app.focus_lock", "unlocked foreground changes after background launch");
         }
     }
@@ -217,6 +271,7 @@ impl NoActivateGuard {
         let watch = foreground_watch::ForegroundWatch::start(
             prior,
             foreground_watch::Target::Processes(pids),
+            true,
         );
         Self {
             styles,
@@ -616,116 +671,9 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool) 
     Ok(())
 }
 
-/// A **persistent** synthetic touch digitizer, created once and never
-/// destroyed. This is load-bearing: a transient (per-stroke) device is gone
-/// before WPF's WISP stylus stack can bind to it, so the OS falls back to
-/// legacy touch→mouse promotion — which drags the user's cursor to the
-/// contact. A *standing* digitizer is enumerated as a real tablet, so WPF (and
-/// other stylus/pointer-aware frameworks) consume the contact as touch/stylus
-/// and promote it to mouse INTERNALLY, without the OS moving the system cursor.
-static TOUCH_DEV: Mutex<isize> = Mutex::new(0);
-
-/// One **touch** press-drag-release from screen `(sx0,sy0)` to `(sx1,sy1)` with
-/// `steps` interpolated in-contact moves, via the persistent [`TOUCH_DEV`].
-/// Unlike a pen (an absolute *cursor* device — injecting one drags the user's
-/// mouse pointer along), a touch contact from a standing digitizer is consumed
-/// as touch/stylus and does NOT move the user's cursor. Serialized on the
-/// single shared device (one stroke at a time across all sessions).
-fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()> {
-    let mut dev_guard = TOUCH_DEV.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        // A non-pointer-aware window (WPF) makes the OS promote the PRIMARY touch
-        // contact to a mouse event, which drags the system cursor to the contact
-        // — and the OS gates delivery on the cursor actually reaching it, so the
-        // move can't be prevented from a background process (pinning/clipping the
-        // cursor just drops the input). What we CAN do is snap the cursor back to
-        // exactly where the user left it the instant the stroke ends, so the net
-        // displacement is zero and (with a fast, few-step stroke) the excursion
-        // is a brief flick rather than a sustained drag. Pointer-aware targets
-        // (Chromium) never promote, so the cursor never moves and this restore is
-        // a harmless no-op.
-        let mut cpos = POINT::default();
-        let have_cpos = GetCursorPos(&mut cpos).is_ok();
-        let dev = if *dev_guard != 0 {
-            HSYNTHETICPOINTERDEVICE(*dev_guard as *mut c_void)
-        } else {
-            let d = CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_DEFAULT)
-                .map_err(|e| anyhow::anyhow!("CreateSyntheticPointerDevice(TOUCH): {e}"))?;
-            *dev_guard = d.0 as isize;
-            d
-        };
-        let mk = |flags, x: i32, y: i32| POINTER_TYPE_INFO {
-            r#type: PT_TOUCH,
-            Anonymous: POINTER_TYPE_INFO_0 {
-                touchInfo: POINTER_TOUCH_INFO {
-                    pointerInfo: POINTER_INFO {
-                        pointerType: PT_TOUCH,
-                        pointerId: 0,
-                        pointerFlags: flags,
-                        sourceDevice: HANDLE::default(),
-                        hwndTarget: HWND::default(),
-                        ptPixelLocation: POINT { x, y },
-                        ..Default::default()
-                    },
-                    touchFlags: 0,
-                    touchMask: 0,
-                    rcContact: RECT {
-                        left: x - 2,
-                        top: y - 2,
-                        right: x + 2,
-                        bottom: y + 2,
-                    },
-                    rcContactRaw: RECT {
-                        left: x - 2,
-                        top: y - 2,
-                        right: x + 2,
-                        bottom: y + 2,
-                    },
-                    orientation: 0,
-                    pressure: 512,
-                },
-            },
-        };
-        // Fast stroke: line-tool canvases only need down→up (the segment is the
-        // straight line between them), so a few in-contact frames with a tiny
-        // dwell is plenty — and the shorter the stroke, the briefer the cursor
-        // excursion before we snap it back.
-        let down = mk(
-            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-            sx0,
-            sy0,
-        );
-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
-        let steps = steps.clamp(1, 3);
-        for i in 1..=steps {
-            sleep(Duration::from_millis(2));
-            let t = i as f64 / steps as f64;
-            let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-            let y = sy0 + ((sy1 - sy0) as f64 * t).round() as i32;
-            let mv = mk(
-                POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-                x,
-                y,
-            );
-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
-        }
-        sleep(Duration::from_millis(2));
-        let up = mk(POINTER_FLAG_UP, sx1, sy1);
-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
-        // Snap the cursor back to where the user left it. The OS processes the
-        // promoted mouse messages slightly after injection, so a single restore
-        // right after the `up` can be overrun by that late move — settle briefly,
-        // then restore, and restore once more to win the race. No-op for
-        // pointer-aware targets (Chromium) that never moved the cursor.
-        if have_cpos {
-            let _ = SetCursorPos(cpos.x, cpos.y);
-            sleep(Duration::from_millis(12));
-            let _ = SetCursorPos(cpos.x, cpos.y);
-        }
-        // device intentionally NOT destroyed — see TOUCH_DEV.
-        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(touch drag): {e}"))?;
-    }
-    Ok(())
+/// Refuse transport whose OS promotion can move the real pointer.
+fn touch_drag(_sx0: i32, _sy0: i32, _sx1: i32, _sy1: i32, _steps: usize) -> Result<()> {
+    bail!("background_unavailable: Windows touch-to-mouse promotion can move your pointer. No drag was sent.")
 }
 
 /// Inject a press-drag-release at **screen** coordinates, routed by the system

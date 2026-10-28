@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(super) struct LaunchForegroundGuard {
     watch: ForegroundWatch,
     reported_foreground: AtomicUsize,
-    _lock: crate::input::ForegroundLockGuard,
 }
 
 pub(super) fn associated_executable(url: &str) -> Option<String> {
@@ -51,10 +50,10 @@ impl LaunchForegroundGuard {
         } else {
             0
         };
-        let lock = crate::input::ForegroundLockGuard::acquire();
+        // The watch holds the foreground lock until it ends, so a window that
+        // appears after the reply remains guarded (locking may be refused).
         Self {
-            watch: ForegroundWatch::start(prior, Target::launch(expected)),
-            _lock: lock,
+            watch: ForegroundWatch::start(prior, Target::launch(expected), true),
             reported_foreground: AtomicUsize::new(0),
         }
     }

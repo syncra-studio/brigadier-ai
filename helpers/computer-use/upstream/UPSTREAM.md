@@ -136,6 +136,10 @@ Patches applied, in order:
 
 - `patches/0130-windows-notepad-tab-name-confirmation.diff`: Match Notepad tab accessible names ("x.txt. Unmodified.") when confirming a fresh launch document, and skip unreadable windows or tabs instead of abandoning the whole check.
 
+
+
+- `patches/0131-respect-physical-input-and-bound-foreground-ownership.diff`: Revoke every foreground lock holder on physical input, preserve queued activation evidence without claiming a flash, restrict broker attribution, and refuse pointer-moving background touch drags.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -2,6 +2,8 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Observation {
     pub activated: bool,
+    pub uncertain_broker: bool,
+    pub foreground_seen: bool,
     pub restored: bool,
     pub monitoring: bool,
     pub interrupted: bool,
@@ -9,16 +11,22 @@ pub(crate) struct Observation {
 
 impl Observation {
     pub(crate) fn report(self) -> (&'static str, bool) {
+        if !self.activated && self.uncertain_broker {
+            return ("A Windows broker activation event could not be attributed to this launch. Keeping your window in front is unconfirmed.", true);
+        }
+        if self.activated && !self.foreground_seen {
+            return ("Windows reported an app activation event, but the app was not confirmed in front. Keeping your window in front is unconfirmed; monitoring remains bounded.", true);
+        }
         match (self.activated, self.restored, self.monitoring, self.interrupted) {
             (true, true, _, _) => (
-                "App activation was observed; your previous window was confirmed in front at reply time. A brief focus change occurred.", false),
+                "App activation was observed; your previous window was confirmed in front at reply time. A focus change occurred.", false),
             (true, false, _, _) => (
-                "App activation was observed; your previous window could not be confirmed in front. Opening and foreground preservation are separate results.", true),
+                "App activation was observed; your previous window could not be confirmed in front. Opening and keeping your window in front are separate results.", true),
             (false, _, _, true) => (
-                "Foreground monitoring stopped after user input or the previous window closed; foreground preservation is unconfirmed.", true),
+                "Monitoring stopped after user input or the previous window closed; keeping your window in front is unconfirmed.", true),
             (false, _, true, false) => (
                 "No app activation has been recorded before this reply. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
-            _ => ("Foreground observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
+            _ => ("Window activation observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
         }
     }
 }
@@ -50,20 +58,16 @@ pub(crate) fn switch_click(injected: bool, clicked_prior: bool) -> bool {
 pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
     for name in expected.clone() {
         match name.as_str() {
-            "calculator" | "calc" | "calculatorapp" => {
-                expected.extend(["calculatorapp".into(), "applicationframehost".into()])
-            }
+            "calculator" | "calc" | "calculatorapp" => expected.push("calculatorapp".into()),
             "task manager" | "taskmgr" => expected.push("taskmgr".into()),
             "windows powershell" | "powershell" | "pwsh" | "windows terminal" => {
                 expected.extend(["powershell".into(), "pwsh".into(), "windowsterminal".into()])
             }
-            "notepad" | "systemsettings" => expected.push("applicationframehost".into()),
+
             _ => {}
         }
     }
-    if expected.is_empty() {
-        expected.push("applicationframehost".into());
-    }
+    expected.retain(|name| name != "applicationframehost");
     expected.sort_unstable();
     expected.dedup();
     expected
@@ -147,17 +151,17 @@ mod tests {
     fn launch_attribution_covers_reported_shell_and_store_delegates() {
         for (requested, host) in [
             ("calculator", "calculatorapp"),
-            ("calc", "applicationframehost"),
+            ("calc", "calculatorapp"),
             ("task manager", "taskmgr"),
             ("windows powershell", "windowsterminal"),
             ("chrome", "chrome"),
-            ("notepad", "applicationframehost"),
+            ("notepad", "notepad"),
         ] {
             assert!(launch_names(vec![requested.into()])
                 .iter()
                 .any(|name| name == host));
         }
-        assert_eq!(launch_names(Vec::new()), vec!["applicationframehost"]);
+        assert!(launch_names(Vec::new()).is_empty());
         assert!(!launch_names(vec!["chrome".into()]).contains(&"windowsterminal".into()));
     }
 
@@ -187,13 +191,11 @@ mod tests {
             .starts_with("No app activation has been recorded"));
         let observed = Observation {
             activated: true,
+            foreground_seen: true,
             restored: true,
             ..unseen
         };
-        assert!(observed
-            .report()
-            .0
-            .contains("A brief focus change occurred"));
+        assert!(observed.report().0.contains("A focus change occurred"));
         assert!(!observed.report().1);
         assert!(
             Observation {
@@ -243,5 +245,74 @@ mod tests {
         assert!(!expired(9_000, Some(7_999)));
         assert!(expired(9_000, Some(8_000)));
         assert!(expired(30_000, Some(0)));
+    }
+}
+
+/// Pure lease accounting shared by every native launch holder.
+#[derive(Default)]
+pub(crate) struct ForegroundLockState {
+    pub holders: usize,
+    pub locked: bool,
+    pub generation: u64,
+}
+impl ForegroundLockState {
+    pub fn add_holder(&mut self) {
+        self.holders += 1;
+    }
+    pub fn release(&mut self, generation: u64) -> bool {
+        if generation != self.generation || self.holders == 0 {
+            return false;
+        }
+        self.holders -= 1;
+        if self.holders != 0 {
+            return false;
+        }
+        let unlock = self.locked;
+        self.locked = false;
+        unlock
+    }
+    pub fn revoke(&mut self) -> bool {
+        self.generation = self.generation.wrapping_add(1);
+        self.holders = 0;
+        let unlock = self.locked;
+        self.locked = false;
+        unlock
+    }
+}
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    #[test]
+    fn nested_holders_release_only_last_and_revocation_invalidates_all() {
+        let mut state = ForegroundLockState {
+            locked: true,
+            ..Default::default()
+        };
+        state.add_holder();
+        state.add_holder();
+        let old = state.generation;
+        assert!(!state.release(old));
+        assert!(state.locked);
+        assert!(state.revoke());
+        state.locked = true;
+        state.add_holder();
+        assert!(!state.release(old));
+        assert!(state.locked);
+        assert_eq!(state.holders, 1);
+        assert!(state.release(state.generation));
+        assert!(!state.release(state.generation));
+    }
+    #[test]
+    fn broker_host_is_never_sufficient_launch_identity() {
+        for app in ["calc", "notepad", "systemsettings"] {
+            assert!(!launch_names(vec![app.into()]).contains(&"applicationframehost".into()));
+        }
+        assert!(Observation {
+            activated: true,
+            ..Default::default()
+        }
+        .report()
+        .0
+        .contains("not confirmed in front"));
     }
 }
