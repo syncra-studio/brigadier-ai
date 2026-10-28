@@ -129,11 +129,9 @@ pub fn environment(wrapper: &Path, get: impl Fn(&str) -> Option<String>) -> Vec<
     let slots = count().to_string();
     // Go splits GOFLAGS, then splits the toolexec value again. Quote both levels when the
     // home folder has spaces; the launcher's path itself must remain one argument.
-    let go_tool = go_quote(&wrapper);
     let defaults = [
         ("CMAKE_C_COMPILER_LAUNCHER", wrapper.to_string()),
         ("CMAKE_CXX_COMPILER_LAUNCHER", wrapper.to_string()),
-        ("GOFLAGS", go_quote(&format!("-toolexec={go_tool}"))),
         ("CARGO_BUILD_JOBS", slots.clone()),
         ("CMAKE_BUILD_PARALLEL_LEVEL", slots.clone()),
         ("GRADLE_OPTS", format!("-Dorg.gradle.workers.max={slots}")),
@@ -143,7 +141,17 @@ pub fn environment(wrapper: &Path, get: impl Fn(&str) -> Option<String>) -> Vec<
         .filter(|(key, _)| get(key).is_none())
         .map(|(key, value)| (key.to_owned(), value))
         .collect();
-    let previous = get("RUSTC_WRAPPER").and_then(|previous| {
+    // Go's quoted.Split has no escape syntax. Some valid filesystem names cannot
+    // survive both parses; leave Go uncapped rather than supplying invalid flags.
+    if get("GOFLAGS").is_none()
+        && let Some(flags) =
+            go_quote(&wrapper).and_then(|tool| go_quote(&format!("-toolexec={tool}")))
+    {
+        env.push(("GOFLAGS".to_owned(), flags));
+    }
+    let configured = get("RUSTC_WRAPPER").or_else(|| get("CARGO_BUILD_RUSTC_WRAPPER"));
+    let disabled = configured.as_deref() == Some("");
+    let previous = configured.and_then(|previous| {
         if Path::new(&previous).file_stem() == Some(OsStr::new(NAME)) {
             // A dev daemon started inside a session inherits that daemon's launcher.
             // Keep the user's underlying wrapper, without taking a second compiler slot.
@@ -158,18 +166,25 @@ pub fn environment(wrapper: &Path, get: impl Fn(&str) -> Option<String>) -> Vec<
     {
         env.push((RUSTC_CHAIN.to_owned(), previous));
     }
-    env.push(("RUSTC_WRAPPER".to_owned(), wrapper.into_owned()));
+    if !disabled {
+        env.push(("RUSTC_WRAPPER".to_owned(), wrapper.into_owned()));
+    }
     env.push((POOL_ENV.to_owned(), pool.to_string_lossy().into_owned()));
     env
 }
 
-fn go_quote(value: &str) -> String {
-    if !value.chars().any(char::is_whitespace) {
-        value.to_owned()
+fn go_quote(value: &str) -> Option<String> {
+    if !value
+        .chars()
+        .any(|c| c.is_ascii_whitespace() || c == '\'' || c == '"')
+    {
+        Some(value.to_owned())
     } else if !value.contains('\'') {
-        format!("'{value}'")
+        Some(format!("'{value}'"))
+    } else if !value.contains('"') {
+        Some(format!("\"{value}\""))
     } else {
-        format!("\"{value}\"")
+        None
     }
 }
 

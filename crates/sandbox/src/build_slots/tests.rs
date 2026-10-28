@@ -52,6 +52,24 @@ fn ecosystem_defaults_and_rust_wrapper_chain() {
 }
 
 #[test]
+fn cargo_build_wrapper_environment_is_chained_and_empty_disables_wrapping() {
+    let path = Path::new("/home/me/brigadier-build-slot");
+    let env: BTreeMap<_, _> = environment(path, |key| {
+        (key == "CARGO_BUILD_RUSTC_WRAPPER").then(|| "sccache".into())
+    })
+    .into_iter()
+    .collect();
+    assert_eq!(env[RUSTC_CHAIN], "sccache");
+    for key in ["RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"] {
+        let env: BTreeMap<_, _> = environment(path, |name| (name == key).then(String::new))
+            .into_iter()
+            .collect();
+        assert!(!env.contains_key("RUSTC_WRAPPER"));
+        assert!(!env.contains_key(RUSTC_CHAIN));
+    }
+}
+
+#[test]
 fn rust_discovery_arguments() {
     for args in [
         vec!["-vV"],
@@ -77,6 +95,18 @@ fn go_launcher_with_spaces_quotes_both_parses() {
         env["GOFLAGS"],
         "\"-toolexec='/home/a b/brigadier-build-slot'\""
     );
+}
+
+#[test]
+fn go_launcher_omits_flags_that_cannot_survive_go_quoting() {
+    for path in [
+        "/home/a'b c/brigadier-build-slot",
+        "/home/a\"b c/brigadier-build-slot",
+    ] {
+        let env: BTreeMap<_, _> = environment(Path::new(path), |_| None).into_iter().collect();
+        assert!(!env.contains_key("GOFLAGS"));
+        assert!(env.contains_key("RUSTC_WRAPPER"));
+    }
 }
 
 #[test]
