@@ -31,6 +31,12 @@ use tokio_util::sync::CancellationToken;
 
 pub const SECRET_HEADER: &str = "x-brigadier-mcp-secret";
 
+const SAVE_GRANT_ERROR: &str = if cfg!(windows) {
+    "Cannot save gateway token grant"
+} else {
+    "Cannot save gateway Keychain grant"
+};
+
 struct Credentials {
     grant: Option<Grant>,
     pending: Option<Grant>,
@@ -238,7 +244,12 @@ impl McpGatewayService {
                     Err(_) => (
                         None,
                         CatalogSignIn::Failed {
-                            message: "Cannot read gateway Keychain".into(),
+                            message: if cfg!(windows) {
+                                "Cannot read gateway token store"
+                            } else {
+                                "Cannot read gateway Keychain"
+                            }
+                            .into(),
                         },
                     ),
                 };
@@ -327,12 +338,9 @@ impl McpGatewayService {
                         CatalogSignIn::SignedIn
                     }
                     Err(_) => {
-                        tracing::info!(
-                            reason = "Cannot save gateway Keychain grant",
-                            "MCP sign-in failed"
-                        );
+                        tracing::info!(reason = SAVE_GRANT_ERROR, "MCP sign-in failed");
                         CatalogSignIn::Failed {
-                            message: "Cannot save gateway Keychain grant".into(),
+                            message: SAVE_GRANT_ERROR.into(),
                         }
                     }
                 },

@@ -9,6 +9,81 @@ use serde_json::{Value, json};
 use std::sync::atomic::AtomicUsize;
 use store::MemoryStore;
 
+#[cfg(windows)]
+#[test]
+fn mcp_gateway_windows_dpapi_store_round_trip() {
+    struct Temp(std::path::PathBuf);
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let temp = Temp(std::env::temp_dir().join(format!("gateway-dpapi-{}", uuid::Uuid::new_v4())));
+    let store = store::WindowsStore::new(&temp.0);
+    let resource = "https://example.test/mcp?private=resource";
+    assert!(store.load(resource).unwrap().is_none());
+    store.delete(resource).unwrap();
+    // Exceeds Credential Manager's blob cap, including a large refresh token.
+    let mut grant = Grant {
+        access_token: "private-access-token".repeat(512),
+        refresh_token: Some("private-refresh-token".repeat(512)),
+        expires_at: 123,
+        client_id: "client".into(),
+        client_secret: Some("private-client-secret".into()),
+        token_endpoint: "https://example.test/token".into(),
+        revocation_endpoint: Some("https://example.test/revoke".into()),
+    };
+    store.save(resource, &grant).unwrap();
+    // A new instance reads the persisted value, rather than an in-memory cache.
+    let reopened = store::WindowsStore::new(&temp.0);
+    assert_eq!(
+        serde_json::to_value(reopened.load(resource).unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&grant).unwrap()
+    );
+    let directory = temp.0.join("mcp-gateway-grants");
+    let files: Vec<_> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1);
+    let expected_name = format!("{}.dpapi", blake3::hash(resource.as_bytes()).to_hex());
+    assert_eq!(files[0].file_name().unwrap(), expected_name.as_str());
+    let encrypted = std::fs::read(&files[0]).unwrap();
+    assert!(
+        !encrypted
+            .windows(20)
+            .any(|part| part == b"private-access-token")
+    );
+    assert!(serde_json::from_slice::<serde_json::Value>(&encrypted).is_err());
+    grant.access_token = "rotated-access".into();
+    grant.refresh_token = None;
+    grant.client_secret = None;
+    grant.expires_at = 456;
+    store.save(resource, &grant).unwrap();
+    assert_eq!(
+        serde_json::to_value(store.load(resource).unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&grant).unwrap()
+    );
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    assert!(store.load("https://other.test/mcp").unwrap().is_none());
+    assert!(
+        store::WindowsStore::new(&temp.0.join("other-instance"))
+            .load(resource)
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(&files[0], b"corrupt DPAPI data").unwrap();
+    assert!(store.load(resource).is_err());
+    store.delete(resource).unwrap();
+    assert!(store.load(resource).unwrap().is_none());
+    store.delete(resource).unwrap();
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+    // The wrapper's cfg(test) stub remains unchanged.
+    let stub = store::KeychainStore::new(&temp.0);
+    assert!(stub.save(resource, &grant).is_err());
+    assert!(stub.load(resource).unwrap().is_none());
+}
+
 /// Read-only catalog + public OAuth setup benchmark. Never opens a browser or exchanges a code.
 #[tokio::test]
 #[ignore = "requires explicit read-only catalog paths and a network connection"]
