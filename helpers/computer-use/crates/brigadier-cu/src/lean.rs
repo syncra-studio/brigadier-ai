@@ -540,8 +540,17 @@ impl View {
             restore_read_format(original, read);
             return None;
         }
+        // Walk coverage and readability are separate: a truncated tree can
+        // already contain ample text and labelled controls. Assess the visible
+        // content without that flag, then restore the exact walk metadata.
+        let truncated = read["structuredContent"]
+            .as_object_mut()
+            .and_then(|state| state.remove("truncated"));
         let state = &read["structuredContent"];
         if state["since_status"] == "no_change" {
+            if let Some(truncated) = truncated {
+                read["structuredContent"]["truncated"] = truncated;
+            }
             restore_read_format(original, read);
             return None;
         }
@@ -560,6 +569,9 @@ impl View {
             self.windows.insert(window, quality);
             quality.thin
         };
+        if let Some(truncated) = truncated {
+            read["structuredContent"]["truncated"] = truncated;
+        }
         restore_read_format(original, read);
         if original.get("include_screenshot").is_some()
             || original["include_accessibility_tree"] == false
@@ -956,6 +968,51 @@ mod tests {
     }
 
     #[test]
+    fn useful_windows_reads_do_not_need_pixels_only_because_the_walk_was_partial() {
+        let args = json!({"pid": 1, "window_id": 2});
+        for rows in [34, 60] {
+            let markdown = (0..rows)
+                .map(|i| format!("- [{i}] Button \"Control {i}\"\n"))
+                .collect::<String>();
+            for truncated in [false, true] {
+                let mut state = read(&markdown);
+                state["structuredContent"]["truncated"] = truncated.into();
+                assert!(
+                    View::default()
+                        .fallback_arguments("get_window_state", &args, &mut state, true)
+                        .is_none(),
+                    "rows={rows} truncated={truncated}"
+                );
+                assert_eq!(state["structuredContent"]["truncated"], truncated);
+            }
+        }
+        // Named menus/toolbars alone do not explain a window's body, even
+        // when their row count resembles a useful Settings or Explorer read.
+        let toolbar = format!(
+            "- [0] ToolBar\n{}",
+            (1..60)
+                .map(|i| format!("  - [{i}] Button \"Tool {i}\"\n"))
+                .collect::<String>()
+        );
+        let mut state = read(&toolbar);
+        state["structuredContent"]["truncated"] = true.into();
+        assert!(View::default()
+            .fallback_arguments("get_window_state", &args, &mut state, true)
+            .is_some());
+        assert_eq!(state["structuredContent"]["truncated"], true);
+        // Truly sparse labelled controls retain the image fallback.
+        for rows in [0, 1, 3, 4] {
+            let markdown = (0..rows)
+                .map(|i| format!("- [{i}] Button \"Control {i}\"\n"))
+                .collect::<String>();
+            assert_eq!(
+                fallback_arguments("get_window_state", &args, &read(&markdown), true).is_some(),
+                rows < 4
+            );
+        }
+    }
+
+    #[test]
     fn automatic_image_preserves_snapshot_and_reports_failed_capture() {
         let mut tree = read("");
         merge_screenshot(
@@ -1201,8 +1258,8 @@ mod tests {
     }
 
     #[test]
-    fn partial_read_still_gets_pixels_but_explicit_false_and_no_change_win() {
-        let mut reply = json!({"structuredContent":serde_json::from_str::<Value>(include_str!("fixtures/lean-textedit.json")).unwrap()});
+    fn partial_visual_read_still_gets_pixels_but_explicit_false_and_no_change_win() {
+        let mut reply = json!({"structuredContent":serde_json::from_str::<Value>(include_str!("fixtures/lean-preview.json")).unwrap()});
         reply["structuredContent"]["truncated"] = true.into();
         let args = json!({"pid":1,"window_id":2});
         assert!(View::default()
