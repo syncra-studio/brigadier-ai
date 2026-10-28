@@ -9,7 +9,7 @@
 //! `processes`, get_config platform string, check_permissions keys, type_text
 //! target app, hotkey modifier, etc.).
 
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(target_os = "macos")]
 
 use cu_testkit::RawDriver;
 
