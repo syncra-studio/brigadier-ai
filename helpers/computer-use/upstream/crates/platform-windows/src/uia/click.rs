@@ -16,7 +16,11 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::*;
-use windows::Win32::UI::WindowsAndMessaging::{IsWindow, PostMessageW, WM_CLOSE};
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
+    SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_NCHITTEST,
+};
 
 struct ComApartment(bool);
 impl ComApartment {
@@ -138,14 +142,79 @@ impl Readback {
             });
         }
         ToolResult::text(summary(route, closed, changed)).with_structured(serde_json::json!({
-            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
+            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsSendMessage => "send_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
             "verified": confirmed, "effect": if confirmed { "confirmed" } else { "unverifiable" }
         })).with_action_record(record)
     }
 }
 
-/// Only a Close button under a TitleBar qualifies; Close Tab must stay an Invoke.
-fn titlebar_close(element: &IUIAutomationElement) -> bool {
+fn class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 256];
+    let n = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    String::from_utf16_lossy(&buffer[..n.max(0) as usize])
+}
+
+/// Bounded synchronous dispatch keeps the background guard alive while the
+/// target handles the command. A timeout is never retried: it may have run.
+fn send_command(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::core::Result<()> {
+    let mut result = 0usize;
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            message,
+            wparam,
+            lparam,
+            SMTO_ABORTIFHUNG,
+            1000,
+            Some(&mut result),
+        )
+    };
+    if sent.0 == 0 {
+        return Err(windows::core::Error::from_win32());
+    }
+    Ok(())
+}
+
+/// Exact IDOK control in a native common dialog. Do this before Invoke:
+/// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
+fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
+    unsafe {
+        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId {
+            return None;
+        }
+        let button = GetDlgItem(hwnd, 1).ok()?;
+        if !crate::input::action_policy::common_dialog_accept(
+            &class_name(hwnd),
+            &class_name(button),
+            GetDlgCtrlID(button),
+        ) || GetParent(button).ok()? != hwnd
+            || !IsWindowEnabled(button).as_bool()
+        {
+            return None;
+        }
+        let native = element.CurrentNativeWindowHandle().ok();
+        if native == Some(button) {
+            return Some(button);
+        }
+        if element.CurrentAutomationId().ok()?.to_string() != "1" {
+            return None;
+        }
+        let r = element.CurrentBoundingRectangle().ok()?;
+        let mut b = windows::Win32::Foundation::RECT::default();
+        GetWindowRect(button, &mut b).ok()?;
+        let x = r.left + (r.right - r.left) / 2;
+        let y = r.top + (r.bottom - r.top) / 2;
+        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
+    }
+}
+
+/// Identify native/WinUI caption Close; Close Tab must stay an Invoke.
+fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
     unsafe {
         if element.CurrentControlType().ok() != Some(UIA_ButtonControlTypeId) {
             return false;
@@ -158,7 +227,38 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
             .CurrentAutomationId()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
+        // Win11 Notepad exposes a custom caption button below a Pane rather
+        // than a UIA TitleBar. Native non-client hit-test or its exact caption
+        // id at the top-right identifies it without confusing Close Tab.
+        let mut native_caption = false;
+        if let Ok(rect) = element.CurrentBoundingRectangle() {
+            let x = rect.left + (rect.right - rect.left) / 2;
+            let y = rect.top + (rect.bottom - rect.top) / 2;
+            let mut hit = 0usize;
+            if let Ok(packed) = crate::lparam::pack_xy(x, y) {
+                let _ = SendMessageTimeoutW(
+                    HWND(hwnd as *mut _),
+                    WM_NCHITTEST,
+                    WPARAM(0),
+                    LPARAM(packed as isize),
+                    SMTO_ABORTIFHUNG,
+                    100,
+                    Some(&mut hit),
+                );
+            }
+            let mut window = windows::Win32::Foundation::RECT::default();
+            let top_right = GetWindowRect(HWND(hwnd as *mut _), &mut window).is_ok()
+                && x >= window.right - 100
+                && x < window.right
+                && y >= window.top
+                && y < window.top + 80;
+            native_caption =
+                crate::input::action_policy::caption_close(true, hit as isize, &id, top_right);
+        }
+        if !name.eq_ignore_ascii_case("close")
+            && !id.eq_ignore_ascii_case("close")
+            && !native_caption
+        {
             return false;
         }
         let Ok(uia) = automation() else {
@@ -168,19 +268,24 @@ fn titlebar_close(element: &IUIAutomationElement) -> bool {
             return false;
         };
         let mut current = element.clone();
-        for _ in 0..4 {
+        for _ in 0..16 {
             let Ok(parent) = walker.GetParentElement(&current) else {
                 break;
             };
-            if parent.CurrentControlType().ok() == Some(UIA_TitleBarControlTypeId) {
-                return crate::input_outcome::close_button_identity(true, true, &name, &id);
+            let kind = parent.CurrentControlType().ok();
+            if kind == Some(UIA_TabItemControlTypeId) || kind == Some(UIA_DocumentControlTypeId) {
+                return false;
+            }
+            if kind == Some(UIA_TitleBarControlTypeId) {
+                return native_caption
+                    || crate::input_outcome::close_button_identity(true, true, &name, &id);
             }
             if parent.CurrentControlType().ok() == Some(UIA_WindowControlTypeId) {
                 break;
             }
             current = parent;
         }
-        false
+        native_caption
     }
 }
 
@@ -232,9 +337,41 @@ fn try_click(
         // existing background coordinate route instead of entering that handler.
         return Ok(None);
     }
+    // Keep target/owner protection alive through native commands and their
+    // bounded readback, even if this helper was reached without a window_id.
+    let _noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
-    let order = pattern_order(titlebar_close(&element), expand_only);
+    if !expand_only {
+        if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
+            return super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                ensure_active(cancelled)?;
+                let dispatch = send_command(
+                    HWND(hwnd as *mut _),
+                    WM_COMMAND,
+                    WPARAM(1),
+                    LPARAM(button.0 as isize),
+                );
+                let observed = readback.finish(
+                    Some(ptr),
+                    "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
+                    ActionTransport::WindowsSendMessage,
+                );
+                if let Err(error) = dispatch {
+                    if observed
+                        .structured_content
+                        .as_ref()
+                        .and_then(|s| s["verified"].as_bool())
+                        != Some(true)
+                    {
+                        anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
+                    }
+                }
+                Ok(Some(observed))
+            });
+        }
+    }
+    let order = pattern_order(titlebar_close(hwnd, &element), expand_only);
     let dispatch = || -> windows::core::Result<Option<(&str, ActionTransport)>> {
         unsafe {
             for action in order {
@@ -255,12 +392,14 @@ fn try_click(
                 let pattern = source.GetCurrentPattern(id);
                 // Non-client Close has a precise WM_CLOSE fallback. Ordinary
                 // client mouse messages do not implement a title-bar hit.
-                if *action == ClickPattern::WindowClose && pattern.is_err() {
+                if *action == ClickPattern::WindowClose
+                    && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd))
+                {
                     ensure_active(cancelled)?;
-                    PostMessageW(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
+                    send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                     return Ok(Some((
-                        "PostMessage WM_CLOSE",
-                        ActionTransport::WindowsPostMessage,
+                        "Top-level WM_CLOSE",
+                        ActionTransport::WindowsSendMessage,
                     )));
                 }
                 let Ok(pattern) = pattern else {
@@ -309,9 +448,10 @@ fn try_click(
             Ok(None)
         }
     };
-    let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, dispatch)
-        .map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
-    Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
+    super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+        let result = dispatch().map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
+        Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
+    })
 }
 
 /// Search inside the addressed window, never ElementFromPoint on the user's
@@ -371,6 +511,23 @@ mod tests {
         let result =
             Readback::new(0, None).finish(None, "Close", ActionTransport::WindowsPostMessage);
         assert_eq!(result.structured_content.unwrap()["verified"], false);
+    }
+    #[test]
+    fn synchronous_native_command_reports_send_message_without_false_confirmation() {
+        let result =
+            Readback::new(0, None).finish(None, "WM_CLOSE", ActionTransport::WindowsSendMessage);
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["path"],
+            "send_message"
+        );
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["verified"],
+            false
+        );
+        assert_eq!(
+            result.action_record.unwrap().debug_json()["transport"],
+            "windows_send_message"
+        );
     }
     #[test]
     fn cancellation_prevents_late_mutation() {

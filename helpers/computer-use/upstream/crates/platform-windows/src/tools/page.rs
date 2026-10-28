@@ -139,19 +139,17 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
                 "no page text",
                 move |_| unsafe {
                     let _com = super::launch_browser::Apartment::new();
-                    let (automation, document) =
+                    let (automation, document, before) =
                         super::launch_browser::matching_document(hwnd, &hint, false)?;
-                    let before = super::launch_browser::document_url(&document);
                     let text = if query {
                         query_dom_document(&automation, &document, &selector, &attributes)?
                     } else {
-                        text_pattern_dump(&document)
-                            .unwrap_or_else(|_| walk_text_blocking(&document))
+                        document_text(&automation, &document)?
                     };
-                    let (_, current) =
+                    let (_, current, after) =
                         super::launch_browser::matching_document(hwnd, &hint, false)?;
                     if crate::win32::window_owner_pid(hwnd) != Some(pid)
-                        || super::launch_browser::document_url(&document) != before
+                        || after != before
                         || !automation.CompareElements(&document, &current)?.as_bool()
                     {
                         anyhow::bail!(
@@ -177,6 +175,26 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
     }
 }
 
+// Untargeted accessibility reads need the same provider deadline as URL-matched
+// reads. A hung provider otherwise blocks page forever without a URL hint.
+fn bounded_page_read<T: Send + 'static>(
+    stage: &'static str,
+    read: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+        stage,
+        std::time::Duration::from_secs(4),
+        "no page content",
+        move |_| read(),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "Page read stopped because {}; no page content was returned",
+            crate::uia::click::deadline_reason(error),
+        )
+    })?
+}
+
 pub struct WindowsPageBackend;
 
 impl WindowsPageBackend {
@@ -195,9 +213,11 @@ impl Default for WindowsPageBackend {
 impl PageBackend for WindowsPageBackend {
     async fn get_text(&self, _pid: i32, window_id: u64) -> anyhow::Result<String> {
         let hwnd = window_id;
-        tokio::task::spawn_blocking(move || unsafe { get_text_blocking(hwnd) })
-            .await
-            .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+        tokio::task::spawn_blocking(move || {
+            bounded_page_read("page text read", move || unsafe { get_text_blocking(hwnd) })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
     }
 
     async fn query_dom(
@@ -210,9 +230,13 @@ impl PageBackend for WindowsPageBackend {
         let hwnd = window_id;
         let selector = css_selector.to_owned();
         let attrs: Vec<String> = attributes.to_vec();
-        tokio::task::spawn_blocking(move || unsafe { query_dom_blocking(hwnd, &selector, &attrs) })
-            .await
-            .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+        tokio::task::spawn_blocking(move || {
+            bounded_page_read("page DOM read", move || unsafe {
+                query_dom_blocking(hwnd, &selector, &attrs)
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
     }
 
     async fn execute_javascript(
@@ -493,7 +517,7 @@ unsafe fn get_text_blocking(hwnd: u64) -> anyhow::Result<String> {
     let (automation, root) = uia_root_for(hwnd)?;
     let document = find_document_descendant(&automation, &root)?;
     if let Some(doc) = document {
-        text_pattern_dump(&doc)
+        document_text(&automation, &doc)
     } else {
         // No Document control — try TextPattern on the root.
         match text_pattern_dump(&root) {
@@ -633,6 +657,85 @@ unsafe fn find_document_descendant(
     match root.FindFirst(TreeScope_Subtree, &cond) {
         Ok(elem) => Ok(Some(elem)),
         Err(_) => Ok(None),
+    }
+}
+
+/// Chromium's aggregate TextPattern can concatenate inline runs without
+/// whitespace. Read named static-text runs instead, retaining whitespace in
+/// each run and explicit boundaries between runs. Traverse in document order;
+/// stop below a named Text node so its inline descendants are not duplicated.
+unsafe fn document_text(
+    automation: &IUIAutomation,
+    document: &IUIAutomationElement,
+) -> anyhow::Result<String> {
+    let walker = automation.RawViewWalker()?;
+    let mut stack = vec![document.clone()];
+    let mut text = String::new();
+    let mut visited = 0;
+    while let Some(element) = stack.pop() {
+        visited += 1;
+        if visited > 20_000 {
+            anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+        }
+        let control = element.CurrentControlType().ok();
+        if control == Some(UIA_EditControlTypeId) {
+            // An Edit's Name is its label/placeholder, not the user's text.
+            // Keep its actual value (when exposed) rather than substituting a
+            // label for the composer or other editable content.
+            if let Ok(value) = element.GetCurrentPropertyValue(UIA_ValueValuePropertyId) {
+                if let Ok(value) = windows::core::BSTR::try_from(&value) {
+                    if !value.is_empty() {
+                        super::browser_target::append_text_run(&mut text, &value.to_string());
+                        continue;
+                    }
+                }
+            }
+        }
+        if control == Some(UIA_TextControlTypeId) {
+            if let Ok(name) = element.CurrentName() {
+                let name = name.to_string();
+                if !name.is_empty() {
+                    super::browser_target::append_text_run(&mut text, &name);
+                    continue;
+                }
+            }
+        }
+        let mut children = Vec::new();
+        if let Ok(mut child) = walker.GetFirstChildElement(&element) {
+            loop {
+                children.push(child.clone());
+                let Ok(next) = walker.GetNextSiblingElement(&child) else {
+                    break;
+                };
+                child = next;
+                if children.len() > 20_000 {
+                    anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+                }
+            }
+        }
+        // Link/button/heading names can be the only exposed text. Use them
+        // only when there are no children to avoid reading ancestor labels twice.
+        if children.is_empty()
+            && control.is_some_and(|control| {
+                [
+                    UIA_HyperlinkControlTypeId,
+                    UIA_ButtonControlTypeId,
+                    UIA_HeaderControlTypeId,
+                    UIA_ImageControlTypeId,
+                ]
+                .contains(&control)
+            })
+        {
+            if let Ok(name) = element.CurrentName() {
+                super::browser_target::append_text_run(&mut text, &name.to_string());
+            }
+        }
+        stack.extend(children.into_iter().rev());
+    }
+    if text.trim().is_empty() {
+        text_pattern_dump(document)
+    } else {
+        Ok(text)
     }
 }
 

@@ -1,0 +1,284 @@
+Why: Distinguish synchronous Windows SendMessageTimeout delivery from PostMessage in action transport identities and normalization, without upgrading unconfirmed effects.
+
+--- a/crates/cua-driver-core/src/action_record.rs
++++ b/crates/cua-driver-core/src/action_record.rs
+@@ -76,6 +76,8 @@
+     WindowsUiaScroll,
+     WindowsMsaaAction,
+     WindowsPostMessage,
++    /// Synchronous targeted Win32 messages, including SendMessageTimeoutW.
++    WindowsSendMessage,
+     WindowsTargetedInjection,
+     WindowsSendInput,
+     WindowsSetCursorPos,
+@@ -119,6 +121,7 @@
+         Self::WindowsUiaScroll,
+         Self::WindowsMsaaAction,
+         Self::WindowsPostMessage,
++        Self::WindowsSendMessage,
+         Self::WindowsTargetedInjection,
+         Self::WindowsSendInput,
+         Self::WindowsSetCursorPos,
+@@ -159,6 +162,7 @@
+             | Self::LinuxAtSpiValue => ActionRoute::Accessibility,
+             Self::MacosCgEventPid
+             | Self::WindowsPostMessage
++            | Self::WindowsSendMessage
+             | Self::LinuxPty
+             | Self::LinuxXSendEvent
+             | Self::LinuxHyprlandIsolatedInput => ActionRoute::SyntheticEvents,
+@@ -776,6 +780,9 @@
+         "uia_expand_collapse" => ActionTransport::WindowsUiaExpandCollapse,
+         "msaa" => ActionTransport::WindowsMsaaAction,
+         "post_message" | "PostMessage" => ActionTransport::WindowsPostMessage,
++        "send_message" | "SendMessageW" | "SendMessageTimeoutW" => {
++            ActionTransport::WindowsSendMessage
++        }
+         "SendInput" => ActionTransport::WindowsSendInput,
+         "SetCursorPos" => ActionTransport::WindowsSetCursorPos,
+         "atspi" | "wayland_atspi" | "x11_atspi" => ActionTransport::LinuxAtSpiAction,
+@@ -1126,6 +1133,7 @@
+         ActionTransport::WindowsUiaScroll => "windows_uia_scroll",
+         ActionTransport::WindowsMsaaAction => "windows_msaa_action",
+         ActionTransport::WindowsPostMessage => "windows_post_message",
++        ActionTransport::WindowsSendMessage => "windows_send_message",
+         ActionTransport::WindowsTargetedInjection => "windows_targeted_injection",
+         ActionTransport::WindowsSendInput => "windows_send_input",
+         ActionTransport::WindowsSetCursorPos => "windows_set_cursor_pos",
+@@ -2049,6 +2057,40 @@
+     }
+ 
+     #[test]
++    fn synchronous_windows_messages_keep_their_identity_without_confirming_effect() {
++        for tool in ["click", "type_text"] {
++            for path in ["send_message", "SendMessageW", "SendMessageTimeoutW"] {
++                let record = ActionExecutionRecord::from_legacy(
++                    tool,
++                    &serde_json::json!({}),
++                    &serde_json::json!({
++                        "path": path, "verified": false, "effect": "unverifiable",
++                    }),
++                )
++                .expect("synchronous message path must normalize on every host");
++                assert_eq!(record.transport, ActionTransport::WindowsSendMessage);
++                assert_eq!(record.transport.route(), ActionRoute::SyntheticEvents);
++                assert_eq!(record.debug_json()["transport"], "windows_send_message");
++                assert_eq!(record.effect, ActionEffect::Unverifiable);
++                assert!(record.evidence.is_empty());
++            }
++        }
++        for path in ["post_message", "PostMessage"] {
++            let record = ActionExecutionRecord::from_legacy(
++                "click",
++                &serde_json::json!({}),
++                &serde_json::json!({
++                    "path": path, "effect": "unverifiable",
++                }),
++            )
++            .unwrap();
++            assert_eq!(record.transport, ActionTransport::WindowsPostMessage);
++            assert_eq!(record.debug_json()["transport"], "windows_post_message");
++        }
++        assert!(ActionTransport::ALL.contains(&ActionTransport::WindowsSendMessage));
++    }
++
++    #[test]
+     fn every_known_legacy_action_path_normalizes() {
+         let paths = [
+             "ax",
+@@ -2058,6 +2100,9 @@
+             "msaa",
+             "post_message",
+             "PostMessage",
++            "send_message",
++            "SendMessageW",
++            "SendMessageTimeoutW",
+             "SendInput",
+             "SetCursorPos",
+             "atspi",
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -142,7 +142,7 @@
+             });
+         }
+         ToolResult::text(summary(route, closed, changed)).with_structured(serde_json::json!({
+-            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
++            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsSendMessage => "send_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
+             "verified": confirmed, "effect": if confirmed { "confirmed" } else { "unverifiable" }
+         })).with_action_record(record)
+     }
+@@ -347,7 +347,7 @@
+                 let observed = readback.finish(
+                     Some(ptr),
+                     "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
+-                    ActionTransport::WindowsPostMessage,
++                    ActionTransport::WindowsSendMessage,
+                 );
+                 if let Err(error) = dispatch {
+                     if observed
+@@ -391,7 +391,7 @@
+                     send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
+                     return Ok(Some((
+                         "Top-level WM_CLOSE",
+-                        ActionTransport::WindowsPostMessage,
++                        ActionTransport::WindowsSendMessage,
+                     )));
+                 }
+                 let Ok(pattern) = pattern else {
+@@ -505,6 +505,23 @@
+         assert_eq!(result.structured_content.unwrap()["verified"], false);
+     }
+     #[test]
++    fn synchronous_native_command_reports_send_message_without_false_confirmation() {
++        let result =
++            Readback::new(0, None).finish(None, "WM_CLOSE", ActionTransport::WindowsSendMessage);
++        assert_eq!(
++            result.structured_content.as_ref().unwrap()["path"],
++            "send_message"
++        );
++        assert_eq!(
++            result.structured_content.as_ref().unwrap()["verified"],
++            false
++        );
++        assert_eq!(
++            result.action_record.unwrap().debug_json()["transport"],
++            "windows_send_message"
++        );
++    }
++    #[test]
+     fn cancellation_prevents_late_mutation() {
+         let cancelled = AtomicBool::new(true);
+         assert!(ensure_active(&cancelled).is_err());
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5000,11 +5000,11 @@
+             Err(error) => return ToolResult::error(error.to_string()),
+         };
+ 
+-        // 3. Legacy Win32 / GDI / Chromium-IME — PostMessage WM_CHAR, no focus steal.
++        // 3. Legacy Win32 / GDI / Chromium-IME — targeted WM_CHAR, no focus steal.
+         //
+         // Read-back verification (mirrors macOS type_text): WM_CHAR is silently
+         // dropped by some focused targets (notably a VCL/LibreOffice Calc grid
+-        // not in cell-edit mode), and PostMessage reports success regardless. So
++        // not in cell-edit mode), and message dispatch reports success regardless. So
+         // snapshot the focused element's UIA value before and after; if it did
+         // not change we can't confirm the text landed and report "Sent
+         // (unverified)" with the foreground-escalation hint, instead of a blind
+@@ -5058,7 +5058,7 @@
+                 // the same as "the text didn't land": on Windows, UIA's
+                 // GetFocusedElement is system-wide (unlike macOS's per-app
+                 // AXFocusedUIElement), so when the target isn't the foreground
+-                // app we cannot read it back even though a PostMessage WM_CHAR
++                // app we cannot read it back even though a targeted WM_CHAR
+                 // may have landed fine. Treating unreadable as failure would
+                 // spuriously push agents to foreground and break the
+                 // background-first contract. A changed value containing the
+@@ -5072,7 +5072,7 @@
+                          requested text, but the insertion point is not known). Take a \
+                          fresh snapshot to verify the intended final value before retrying."
+                     ))
+-                    .with_structured(changed_contains_post_message_result(text_len)),
++                    .with_structured(changed_contains_send_message_result(text_len)),
+                     (Some(_), Some(_)) => ToolResult::text(format!(
+                         "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR, but \
+                          the focused field's value did not contain the requested text \
+@@ -5081,7 +5081,7 @@
+                          Retry with delivery_mode:\"foreground\"."
+                     ))
+                     .with_structured(serde_json::json!({
+-                        "path": "key_events", "characters": text_len,
++                        "path": "send_message", "characters": text_len,
+                         "verified": false, "verify": "unchanged",
+                         "effect": "unverifiable",
+                         "escalation": {
+@@ -5099,7 +5099,7 @@
+                          delivery_mode:\"foreground\"."
+                     ))
+                     .with_structured(serde_json::json!({
+-                        "path": "key_events", "characters": text_len,
++                        "path": "send_message", "characters": text_len,
+                         "verified": false, "verify": "unreadable",
+                         "effect": "unverifiable",
+                         "escalation": {
+@@ -5144,9 +5144,9 @@
+     })
+ }
+ 
+-fn changed_contains_post_message_result(text_len: usize) -> serde_json::Value {
++fn changed_contains_send_message_result(text_len: usize) -> serde_json::Value {
+     serde_json::json!({
+-        "path": "key_events",
++        "path": "send_message",
+         "characters": text_len,
+         "verified": false,
+         "verify": "changed_contains",
+@@ -6265,7 +6265,7 @@
+         ActionEffect::Unverifiable
+     };
+     let mut record =
+-        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsPostMessage, requested)
++        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsSendMessage, requested)
+             // Window messages reach the control without focusing or raising it.
+             .actual_delivery(ActualDelivery::Background)
+             .detail(text.clone());
+--- a/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs
++++ b/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs
+@@ -1,4 +1,4 @@
+-use super::{changed_contains_post_message_result, post_message_readback_observed};
++use super::{changed_contains_send_message_result, post_message_readback_observed};
+ 
+ #[test]
+ fn observes_only_a_changed_value_containing_the_requested_text() {
+@@ -27,7 +27,8 @@
+ 
+ #[test]
+ fn changed_contains_remains_unverifiable_without_retry_escalation() {
+-    let result = changed_contains_post_message_result(5);
++    let result = changed_contains_send_message_result(5);
++    assert_eq!(result["path"], "send_message");
+     assert_eq!(result["effect"], "unverifiable");
+     assert_eq!(result["verify"], "changed_contains");
+     assert_eq!(result["verified"], false);
+@@ -38,10 +39,40 @@
+         &serde_json::json!({"delivery_mode": "background"}),
+         &result,
+     )
+-    .expect("changed-and-contains PostMessage result should normalize");
++    .expect("changed-and-contains SendMessage result should normalize");
++    assert_eq!(
++        record.transport,
++        cua_driver_core::action_record::ActionTransport::WindowsSendMessage
++    );
+     let public = serde_json::to_value(record.public_result().expect("valid ActionResult"))
+         .expect("serialize ActionResult");
+     assert_eq!(public["effect"], "unverifiable");
+     assert!(public.get("escalation").is_none());
+     assert!(public.get("evidence").is_none());
+ }
++
++#[test]
++fn native_combo_writes_report_the_synchronous_message_transport() {
++    use crate::win32::combo::{Combo, ComboWrite};
++    let result = super::win32_combo_set_value_result(
++        0,
++        "chosen",
++        Combo {
++            hwnd: 0,
++            editable: false,
++        },
++        ComboWrite::Applied {
++            selected: Some(0),
++            unchanged: false,
++            readback_text: Some("chosen".into()),
++            readback_index: Some(0),
++        },
++        &serde_json::json!({}),
++    );
++    let record = result.action_record.unwrap();
++    assert_eq!(
++        record.transport,
++        cua_driver_core::action_record::ActionTransport::WindowsSendMessage
++    );
++    assert_eq!(record.debug_json()["transport"], "windows_send_message");
++}

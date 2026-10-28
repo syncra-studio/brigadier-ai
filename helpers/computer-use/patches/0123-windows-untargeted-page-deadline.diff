@@ -1,0 +1,65 @@
+Why: Apply the shared four-second single-flight UIA deadline to page reads without URL hints as well as matched reads.
+
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+index fdc312c19..4c0912e22 100644
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -175,6 +175,26 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
+     }
+ }
+ 
++// Untargeted accessibility reads need the same provider deadline as URL-matched
++// reads. A hung provider otherwise blocks page forever without a URL hint.
++fn bounded_page_read<T: Send + 'static>(
++    stage: &'static str,
++    read: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
++) -> anyhow::Result<T> {
++    crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++        stage,
++        std::time::Duration::from_secs(4),
++        "no page content",
++        move |_| read(),
++    )
++    .map_err(|error| {
++        anyhow::anyhow!(
++            "Page read stopped because {}; no page content was returned",
++            crate::uia::click::deadline_reason(error),
++        )
++    })?
++}
++
+ pub struct WindowsPageBackend;
+ 
+ impl WindowsPageBackend {
+@@ -193,9 +213,11 @@ impl Default for WindowsPageBackend {
+ impl PageBackend for WindowsPageBackend {
+     async fn get_text(&self, _pid: i32, window_id: u64) -> anyhow::Result<String> {
+         let hwnd = window_id;
+-        tokio::task::spawn_blocking(move || unsafe { get_text_blocking(hwnd) })
+-            .await
+-            .map_err(|e| anyhow::anyhow!("join error: {e}"))?
++        tokio::task::spawn_blocking(move || {
++            bounded_page_read("page text read", move || unsafe { get_text_blocking(hwnd) })
++        })
++        .await
++        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+     }
+ 
+     async fn query_dom(
+@@ -208,9 +230,13 @@ impl PageBackend for WindowsPageBackend {
+         let hwnd = window_id;
+         let selector = css_selector.to_owned();
+         let attrs: Vec<String> = attributes.to_vec();
+-        tokio::task::spawn_blocking(move || unsafe { query_dom_blocking(hwnd, &selector, &attrs) })
+-            .await
+-            .map_err(|e| anyhow::anyhow!("join error: {e}"))?
++        tokio::task::spawn_blocking(move || {
++            bounded_page_read("page DOM read", move || unsafe {
++                query_dom_blocking(hwnd, &selector, &attrs)
++            })
++        })
++        .await
++        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+     }
+ 
+     async fn execute_javascript(

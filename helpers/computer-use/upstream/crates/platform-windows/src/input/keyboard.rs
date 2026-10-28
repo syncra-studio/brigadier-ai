@@ -222,6 +222,164 @@ pub fn wait_for_focused_descendant(hwnd: u64, timeout: Duration) -> Option<u64> 
     }
 }
 
+/// Select only a visible renderer under the addressed window and field.
+/// Ambiguous renderers are refused rather than typing into another tab.
+pub fn chromium_text_target(hwnd: u64, rect: Option<(i32, i32, i32, i32)>) -> Option<u64> {
+    struct Scan {
+        rect: Option<(i32, i32, i32, i32)>,
+        renderers: Vec<u64>,
+    }
+    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+        let scan = &mut *(data.0 as *mut Scan);
+        if class_name(h).as_deref() != Some("Chrome_RenderWidgetHostHWND")
+            || !windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(h).as_bool()
+        {
+            return TRUE;
+        }
+        if let Some(field) = scan.rect {
+            let mut r = windows::Win32::Foundation::RECT::default();
+            if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+                || !super::text_policy::contains_field_center(
+                    field,
+                    (r.left, r.top, r.right, r.bottom),
+                )
+            {
+                return TRUE;
+            }
+        }
+        scan.renderers.push(h.0 as usize as u64);
+        TRUE
+    }
+    let mut scan = Scan {
+        rect,
+        renderers: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumChildWindows(
+            HWND(hwnd as *mut _),
+            Some(collect),
+            LPARAM(&mut scan as *mut _ as isize),
+        );
+    }
+    (scan.renderers.len() == 1).then(|| scan.renderers[0])
+}
+
+/// Resolve a real editor, without UIA SetFocus or activating the window.
+/// A token's native handle wins; otherwise its rectangle scopes candidates.
+pub fn background_text_target(
+    hwnd: u64,
+    native: Option<u64>,
+    rect: Option<(i32, i32, i32, i32)>,
+    indexed: bool,
+) -> Result<u64> {
+    let root = HWND(hwnd as *mut _);
+    let belongs = |h: HWND| h == root || unsafe { IsChild(root, h) }.as_bool();
+    if let Some(native) = native.filter(|h| *h != 0) {
+        let h = HWND(native as *mut _);
+        if belongs(h) && class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+            return Ok(native);
+        }
+    }
+    if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd)
+    {
+        if let Some(renderer) = chromium_text_target(hwnd, rect) {
+            return Ok(renderer);
+        }
+        bail!("No unique visible Chromium renderer contains the addressed text field. No text was sent and no other tab was targeted.");
+    }
+    struct Scan {
+        rect: Option<(i32, i32, i32, i32)>,
+        matches: Vec<u64>,
+    }
+    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+        let scan = &mut *(data.0 as *mut Scan);
+        if !class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+            return TRUE;
+        }
+        if let Some(field) = scan.rect {
+            let mut r = windows::Win32::Foundation::RECT::default();
+            if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+                || !super::text_policy::contains_field_center(
+                    field,
+                    (r.left, r.top, r.right, r.bottom),
+                )
+            {
+                return TRUE;
+            }
+        }
+        if windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(h).as_bool() {
+            scan.matches.push(h.0 as usize as u64);
+        }
+        TRUE
+    }
+    let mut scan = Scan {
+        rect,
+        matches: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumChildWindows(root, Some(collect), LPARAM(&mut scan as *mut _ as isize));
+    }
+    if scan.matches.len() == 1 {
+        return Ok(scan.matches[0]);
+    }
+    if !indexed {
+        if let Some(focused) = focused_descendant(root) {
+            if class_name(focused).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+                return Ok(focused.0 as usize as u64);
+            }
+        }
+        if !is_xaml_host_hwnd(hwnd) && !crate::input::delivery::is_wpf_target_window(hwnd) {
+            return Ok(focused_descendant(root).unwrap_or(root).0 as usize as u64);
+        }
+    }
+    bail!(super::text_policy::INSERTION_UNAVAILABLE)
+}
+
+/// Deliver characters synchronously to exactly the proven editor. A timed-out
+/// handler may have consumed a prefix; never retry or change routes automatically.
+pub fn post_insert_text(target: u64, text: &str, delay_ms: u64) -> Result<()> {
+    post_insert_text_cancelable(
+        target,
+        text,
+        delay_ms,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+pub fn post_insert_text_cancelable(
+    target: u64,
+    text: &str,
+    delay_ms: u64,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
+        bail!(message);
+    }
+    for unit in super::text_policy::text_units(text) {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            bail!("Text insertion stopped at its deadline. Some text may have been inserted; read fresh state before retrying.");
+        }
+        let sent = unsafe {
+            windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+                HWND(target as *mut _),
+                WM_CHAR,
+                WPARAM(unit as usize),
+                LPARAM(1),
+                windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
+                1000,
+                None,
+            )
+        };
+        if sent.0 == 0 {
+            bail!("The target did not acknowledge a text character before the deadline. Some text may have been inserted; read fresh state before retrying. No alternate route was attempted.");
+        }
+        if delay_ms > 0 {
+            sleep(Duration::from_millis(delay_ms));
+        }
+    }
+    Ok(())
+}
+
 /// Post a Unicode character as WM_CHAR.
 pub fn post_char(hwnd: u64, ch: char) -> Result<()> {
     if let Some(msg) = crate::input::post_message_blocked_by_uipi(hwnd) {

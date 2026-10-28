@@ -1,0 +1,78 @@
+Why: Refuse Settings window Close when the target owns the foreground popup or foreground ownership cannot be confirmed, before changing styles and again before dispatch.
+--- a/crates/cua-driver-core/src/window_state_view.rs
++++ b/crates/cua-driver-core/src/window_state_view.rs
+@@ -2037,3 +2037,37 @@
+         assert_eq!(depths.row_depth(0, true), 0);
+     }
+ }
++
++/// Closing an owner can also close its foreground popup; unknown ownership
++/// cannot establish that a background-only close is safe.
++pub fn windows_settings_close_front_refusal(
++    target_root: u64,
++    target_owner: u64,
++    front: u64,
++    front_owner: u64,
++) -> Option<&'static str> {
++    if [target_root, target_owner, front, front_owner].contains(&0) {
++        Some("Windows did not expose the front window and its owner, so background close safety could not be confirmed. No close was sent.")
++    } else if target_root == front || target_owner == front_owner {
++        Some("Closing this Settings window could change your front window or its owned dialog. No close was sent.")
++    } else {
++        None
++    }
++}
++#[cfg(test)]
++mod settings_close_front_tests {
++    use super::*;
++    #[test]
++    fn close_preserves_the_front_window_and_its_owned_popups() {
++        assert!(windows_settings_close_front_refusal(1, 1, 2, 2).is_none());
++        assert!(windows_settings_close_front_refusal(1, 1, 1, 1)
++            .unwrap()
++            .contains("front window"));
++        assert!(windows_settings_close_front_refusal(1, 1, 3, 1)
++            .unwrap()
++            .contains("owned dialog"));
++        assert!(windows_settings_close_front_refusal(1, 1, 0, 0)
++            .unwrap()
++            .contains("could not be confirmed"));
++    }
++}
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -553,7 +553,7 @@
+     let window_id = args["window_id"].as_u64().unwrap();
+     tokio::task::spawn_blocking(move || {
+         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+-        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, IsWindow, PostMessageW, GA_ROOT, WM_CLOSE};
++        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, IsWindow, PostMessageW, GA_ROOT, GA_ROOTOWNER, WM_CLOSE};
+         let settings = crate::win32::list_processes().iter().any(|process| process.pid == pid && process.name.eq_ignore_ascii_case("SystemSettings.exe"));
+         if !settings {
+             return ToolResult::error("This window Close route is only available for Windows Settings. No close was sent.")
+@@ -565,12 +565,21 @@
+             return ToolResult::error("The Settings window is closed, stale or belongs to another process. No close was sent.")
+                 .with_structured(json!({"code":"window_target_mismatch","effect":"refused","delivery_attempted":false}));
+         }
+-        // Closing the user's front window necessarily changes the foreground.
++        // Refuse the front Settings window and any owner of its foreground
++        // popup. Check before changing styles and again immediately before send.
++        let front_refusal = || unsafe {
++            let front=GetForegroundWindow();
++            cua_driver_core::window_state_view::windows_settings_close_front_refusal(
++                root.0 as u64,GetAncestor(root,GA_ROOTOWNER).0 as u64,
++                front.0 as u64,GetAncestor(front,GA_ROOTOWNER).0 as u64)
++        };
++        if let Some(reason)=front_refusal() {
++            return ToolResult::error(reason).with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
++        }
+         let _no_activate = crate::input::NoActivateGuard::arm(root);
+         let readback = crate::uia::click::Readback::new(window_id, None);
+-        if unsafe { GetForegroundWindow() } == root {
+-            return ToolResult::error("Closing this Settings window would change your front window. No close was sent.")
+-                .with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
++        if let Some(reason)=front_refusal() {
++            return ToolResult::error(reason).with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
+         }
+         if let Err(error) = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) } {
+             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))

@@ -10,7 +10,7 @@
 //! liveness check is replaced with an equivalent post-sleep request probe — a
 //! crashed process would EOF and panic inside `recv()`.
 
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(target_os = "macos")]
 
 use cu_testkit::RawDriver;
 

@@ -572,6 +572,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_silent_listener_is_hung_within_the_deadline() {
         let dir = std::env::temp_dir().join(format!("cu-supervisor-hung-{}", std::process::id()));
@@ -609,6 +610,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_pid_file_naming_another_program_is_never_ours() {
         let dir = std::env::temp_dir().join(format!("cu-supervisor-pid-{}", std::process::id()));
@@ -621,6 +623,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_lifecycle_lock_is_exclusive_across_descriptors() {
         let dir = std::env::temp_dir().join(format!("cu-supervisor-lock-{}", std::process::id()));

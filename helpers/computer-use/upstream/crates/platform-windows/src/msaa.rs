@@ -72,10 +72,18 @@ pub fn walk_msaa_tree(hwnd: u64) -> UiaTreeResult {
 
 /// [`walk_msaa_tree`] under the caller's node and time budget.
 pub fn walk_msaa_tree_budgeted(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
-    unsafe { walk_unsafe(hwnd, budget) }
+    walk_msaa_tree_budgeted_with_depth(hwnd, budget, MAX_DEPTH - 1)
 }
 
-unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
+pub fn walk_msaa_tree_budgeted_with_depth(
+    hwnd: u64,
+    budget: &mut WalkBudget,
+    max_depth: usize,
+) -> UiaTreeResult {
+    unsafe { walk_unsafe(hwnd, budget, max_depth.min(MAX_DEPTH - 1)) }
+}
+
+unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget, max_depth: usize) -> UiaTreeResult {
     let hwnd_win = HWND(hwnd as *mut _);
     let mut raw_root: *mut std::ffi::c_void = null_mut();
     // AccessibleObjectFromWindow returns IAccessible (as `*mut c_void` typed
@@ -93,6 +101,10 @@ unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
                 "- Window <SAL/VCL — MSAA fallback failed (AccessibleObjectFromWindow hr={hr:?})>\n"
             ),
             nodes: Vec::new(),
+            coverage: cua_driver_core::window_state_view::WindowsReadCoverage {
+                source_partial: true,
+                ..Default::default()
+            },
         };
     }
     let root: IAccessible = IAccessible::from_raw(raw_root);
@@ -101,12 +113,28 @@ unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
     let mut lines: Vec<(usize, String)> = Vec::new();
     let mut counter = 0usize;
 
-    walk(&root, 0, None, &mut nodes, &mut lines, &mut counter, budget);
+    let mut coverage = cua_driver_core::window_state_view::WindowsReadCoverage {
+        source_partial: true,
+        ..Default::default()
+    };
+    walk(
+        &root,
+        0,
+        None,
+        &mut nodes,
+        &mut lines,
+        &mut counter,
+        budget,
+        max_depth,
+        &mut coverage,
+        &mut cua_driver_core::window_state_view::KeptAncestorDepths::default(),
+    );
 
     let tree_markdown = render_lines(&lines);
     UiaTreeResult {
         tree_markdown,
         nodes,
+        coverage,
     }
 }
 
@@ -119,8 +147,14 @@ unsafe fn walk(
     lines: &mut Vec<(usize, String)>,
     counter: &mut usize,
     budget: &mut WalkBudget,
+    max_depth: usize,
+    coverage: &mut cua_driver_core::window_state_view::WindowsReadCoverage,
+    projection: &mut cua_driver_core::window_state_view::KeptAncestorDepths,
 ) {
-    if depth >= MAX_DEPTH || !budget.admit() {
+    if !coverage.admits_depth(depth, max_depth) {
+        return;
+    }
+    if !budget.admit() {
         return;
     }
 
@@ -165,6 +199,7 @@ unsafe fn walk(
     let is_actionable = !actions.is_empty();
     let has_content = name.is_some();
 
+    let rendered_depth = projection.row_depth(depth, is_actionable || has_content);
     if is_actionable || has_content {
         // Retain the IAccessible pointer for the cache. Mirror what the UIA
         // walker does: clone, get raw, forget the local — the cache's Drop
@@ -195,7 +230,7 @@ unsafe fn walk(
                 center_y,
                 rect,
                 msaa_role: role_int,
-                depth,
+                depth: rendered_depth,
                 parent_element_index: parent_index,
                 in_web_content: false,
             }
@@ -215,7 +250,7 @@ unsafe fn walk(
                 center_y: 0,
                 rect,
                 msaa_role: role_int,
-                depth,
+                depth: rendered_depth,
                 parent_element_index: parent_index,
                 in_web_content: false,
             }
@@ -224,7 +259,7 @@ unsafe fn walk(
         // it received an element_index (mirrors what the markdown shows:
         // only indexed rows are addressable).
         let next_parent = node.element_index.or(parent_index);
-        lines.push((depth, crate::uia::format_node_line(&node)));
+        lines.push((rendered_depth, crate::uia::format_node_line(&node)));
         nodes.push(node);
 
         // Recurse via accChildCount + get_accChild.
@@ -242,6 +277,9 @@ unsafe fn walk(
                         lines,
                         counter,
                         budget,
+                        max_depth,
+                        coverage,
+                        projection,
                     );
                 }
             }
@@ -264,6 +302,9 @@ unsafe fn walk(
                     lines,
                     counter,
                     budget,
+                    max_depth,
+                    coverage,
+                    projection,
                 );
             }
         }

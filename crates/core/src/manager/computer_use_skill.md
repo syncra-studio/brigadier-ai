@@ -3,7 +3,7 @@ name: computer-use
 description: Read and operate apps through computer MCP tools in the background.
 ---
 
-Brigadier manages your session; omit `session` and never call start_session/end_session.
+Brigadier manages the session and agent cursor; omit `session`.
 
 1. Open only apps the task needs with `launch_app`. Choose your pid/window_id from its reply and call `get_window_state`.
 2. Prefer fresh element_token targets: snapshot_id S and row [N] give `S:N`. A new tree read replaces that window's snapshot: use the newest ids, obey reindexed mappings, never borrow another window's tokens. On stale-token errors, read that window again. Truncated trees need query or higher max_elements (default 250).
@@ -22,6 +22,6 @@ Aim type_text at a field; without a token it types into the focused field. Open/
 **Use one window and one tab for the whole run.** Each `launch_app` with `urls` opens another window, so call it once. Navigate in your own tab by links or page; never type into the address bar or switch the user's tabs. Focus the DOM field before typing; use target_url_contains to select a unique tab. If offered, enabling JavaScript Apple Events restarts the browser: obtain confirmation first.
 **Close what you opened** when finished, never the user's own windows; preserve unsaved work. Record only when asked; finish with stop_recording.
 
-For target_not_allowed, stop: Brigadier, terminals and security/authentication surfaces are off limits; Settings is read-only. Never retry or bypass the refusal. tool_not_offered means use another offered tool. Missing permissions: stop computer use, explain the grant needed and let Brigadier's setup guide the user; no retry/probe loop or opening Settings yourself.
+For target_not_allowed, stop: Brigadier, terminals and security/authentication surfaces are off limits; Settings is read-only; Close a task-owned Windows Settings window with click using pid/window_id and action:"close", without an element or pixels; kill_app is available if normal close fails. Never retry or bypass the refusal. tool_not_offered means use another offered tool. Missing permissions: stop computer use, explain the grant needed and let Brigadier's setup guide the user; no retry/probe loop or opening Settings yourself.
 
 On other failures, take a full read (omit since) with include_screenshot:true. Check for effects before retrying an uncertain action. Retry once using fresh tokens, named targets or grounded pixels. If still blocked, stop; report attempts, exact error/evidence and current app state.

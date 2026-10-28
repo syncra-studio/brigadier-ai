@@ -5,7 +5,7 @@
 //! `set_agent_cursor_motion` Bezier knobs, and the `set_config.capture_mode`
 //! enum.
 
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(target_os = "macos")]
 
 use cu_testkit::RawDriver;
 

@@ -76,6 +76,8 @@ pub enum ActionTransport {
     WindowsUiaScroll,
     WindowsMsaaAction,
     WindowsPostMessage,
+    /// Synchronous targeted Win32 messages, including SendMessageTimeoutW.
+    WindowsSendMessage,
     WindowsTargetedInjection,
     WindowsSendInput,
     WindowsSetCursorPos,
@@ -119,6 +121,7 @@ impl ActionTransport {
         Self::WindowsUiaScroll,
         Self::WindowsMsaaAction,
         Self::WindowsPostMessage,
+        Self::WindowsSendMessage,
         Self::WindowsTargetedInjection,
         Self::WindowsSendInput,
         Self::WindowsSetCursorPos,
@@ -159,6 +162,7 @@ impl ActionTransport {
             | Self::LinuxAtSpiValue => ActionRoute::Accessibility,
             Self::MacosCgEventPid
             | Self::WindowsPostMessage
+            | Self::WindowsSendMessage
             | Self::LinuxPty
             | Self::LinuxXSendEvent
             | Self::LinuxHyprlandIsolatedInput => ActionRoute::SyntheticEvents,
@@ -776,6 +780,9 @@ fn transport_from_legacy(
         "uia_expand_collapse" => ActionTransport::WindowsUiaExpandCollapse,
         "msaa" => ActionTransport::WindowsMsaaAction,
         "post_message" | "PostMessage" => ActionTransport::WindowsPostMessage,
+        "send_message" | "SendMessageW" | "SendMessageTimeoutW" => {
+            ActionTransport::WindowsSendMessage
+        }
         "SendInput" => ActionTransport::WindowsSendInput,
         "SetCursorPos" => ActionTransport::WindowsSetCursorPos,
         "atspi" | "wayland_atspi" | "x11_atspi" => ActionTransport::LinuxAtSpiAction,
@@ -1126,6 +1133,7 @@ fn transport_name(transport: ActionTransport) -> &'static str {
         ActionTransport::WindowsUiaScroll => "windows_uia_scroll",
         ActionTransport::WindowsMsaaAction => "windows_msaa_action",
         ActionTransport::WindowsPostMessage => "windows_post_message",
+        ActionTransport::WindowsSendMessage => "windows_send_message",
         ActionTransport::WindowsTargetedInjection => "windows_targeted_injection",
         ActionTransport::WindowsSendInput => "windows_send_input",
         ActionTransport::WindowsSetCursorPos => "windows_set_cursor_pos",
@@ -2049,6 +2057,40 @@ mod tests {
     }
 
     #[test]
+    fn synchronous_windows_messages_keep_their_identity_without_confirming_effect() {
+        for tool in ["click", "type_text"] {
+            for path in ["send_message", "SendMessageW", "SendMessageTimeoutW"] {
+                let record = ActionExecutionRecord::from_legacy(
+                    tool,
+                    &serde_json::json!({}),
+                    &serde_json::json!({
+                        "path": path, "verified": false, "effect": "unverifiable",
+                    }),
+                )
+                .expect("synchronous message path must normalize on every host");
+                assert_eq!(record.transport, ActionTransport::WindowsSendMessage);
+                assert_eq!(record.transport.route(), ActionRoute::SyntheticEvents);
+                assert_eq!(record.debug_json()["transport"], "windows_send_message");
+                assert_eq!(record.effect, ActionEffect::Unverifiable);
+                assert!(record.evidence.is_empty());
+            }
+        }
+        for path in ["post_message", "PostMessage"] {
+            let record = ActionExecutionRecord::from_legacy(
+                "click",
+                &serde_json::json!({}),
+                &serde_json::json!({
+                    "path": path, "effect": "unverifiable",
+                }),
+            )
+            .unwrap();
+            assert_eq!(record.transport, ActionTransport::WindowsPostMessage);
+            assert_eq!(record.debug_json()["transport"], "windows_post_message");
+        }
+        assert!(ActionTransport::ALL.contains(&ActionTransport::WindowsSendMessage));
+    }
+
+    #[test]
     fn every_known_legacy_action_path_normalizes() {
         let paths = [
             "ax",
@@ -2058,6 +2100,9 @@ mod tests {
             "msaa",
             "post_message",
             "PostMessage",
+            "send_message",
+            "SendMessageW",
+            "SendMessageTimeoutW",
             "SendInput",
             "SetCursorPos",
             "atspi",

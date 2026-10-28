@@ -85,6 +85,55 @@ Patches applied, in order:
 - `patches/0070-windows-browser-read-deadlines.diff`: bound browser verification and targeted page reads, share the UIA single-flight gate, and balance COM apartments.
 - `patches/0071-windows-input-timeout-and-focus.diff`: bound click readback, suppress late menu cleanup, preserve safe WPF routing and launch activation warnings.
 - `patches/0072-windows-background-pointer-refusal.diff`: refuse MSAA real-mouse clicks in background mode and keep the Chromium fallback off SendInput.
+- `patches/0080-windows-foreground-observation.diff`: Record brief and delegated foreground activations through bounded WinEvents, preserve late-window hand-back, and remove synthetic-key UWP restoration hidden from launch reports.
+- `patches/0081-windows-background-input-guard.diff`: Guard all posted key/text actions and dialog-owner activation, with overlapping style leases and late hand-back for run_steps and Save As dismissal.
+- `patches/0082-windows-launch-focus-evidence.diff`: Bind broker and resolved app pids to launch observations, sample active and focus wording together, and keep confirmed opening distinct from unconfirmed foreground preservation.
+- `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
+- `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
+- `patches/0092-windows-common-dialog-save.diff`: Native common-dialog Save sends the exact IDOK WM_COMMAND before UIA Invoke and confirms only observed dialog closure.
+- `patches/0093-windows-winui-caption-close.diff`: Recognize WinUI caption Close outside TitleBar ancestry and send top-level WM_CLOSE with bounded closure readback.
+- `patches/0094-windows-chromium-text-insertion.diff`: Route Chromium caret text to its unique visible renderer child after guarded exact-field focus, without a whole-value write.
+- `patches/0095-windows-input-delivery-validation.diff`: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
+- `patches/0096-windows-input-target-bounds.diff`: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
+- `patches/0097-windows-resolved-input-guard.diff`: Arm the shared background guard after resolving the actual text HWND and retain click target/owner protection through command readback.
+- `patches/0098-windows-send-message-transport.diff`: Distinguish synchronous Windows SendMessageTimeout delivery from PostMessage in action transport identities and normalization, without upgrading unconfirmed effects.
+- `patches/0099-windows-caption-identity-and-focus-refusal.diff`: Recognize both WinUI caption Close ids while excluding tab/document ancestry, and explain failed Chromium background focus plainly.
+- `patches/0100-windows-settings-protocol-window.diff`: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
+- `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
+- `patches/0102-windows-page-text-run-boundaries.diff`: preserve whitespace within UIA text runs and word boundaries across inline nodes rather than trusting Chromium aggregate TextPattern concatenation.
+- `patches/0103-windows-explorer-folder-launch.diff`: resolve File Explorer by name to explorer.exe with quoted folder arguments and describe unsupported app registrations without browser-specific wording.
+- `patches/0104-windows-fresh-launch-documents.diff`: request fresh browser windows, exclude pre-existing URL matches, open a unique blank Notepad file and confirm its selected tab, and disclose additional/restored tabs.
+- `patches/0105-windows-launch-read-evidence-hardening.diff`: reject conflicting document/address evidence, avoid returning prior browser windows, and distinguish the visible confirmed URL from other requested tabs.
+- `patches/0106-windows-browser-launch-confirmation-facts.diff`: scan native browser windows once per poll and report an opened window separately from its unconfirmed requested URL without reading unrelated content.
+- `patches/0107-windows-notepad-file-launch-route.diff`: pass fresh Notepad files through its executable alias and avoid claiming URL confirmation when only the app window was verified.
+- `patches/0108-windows-page-and-tab-read-fidelity.diff`: read editable values rather than labels, count only browser-chrome tabs, and report unavailable tab counts as unknown rather than implying no restoration.
+- `patches/0109-windows-fresh-document-launch-cleanup.diff`: keep the native UIA call explicitly unsafe and remove untouched fresh Notepad files when launch is refused or fails before Windows accepts it.
+- `patches/0110-plain-administrator-refusal.diff`: State the administrator refusal in one plain sentence, followed by a labelled hint shared by reads and input.
+
+- `patches/0111-windows-settings-window-close.diff`: Allow only an exact unmodified Settings window Close through WM_CLOSE, refuse closing the front window, and confirm only observed window destruction.
+
+
+- `patches/0112-windows-walk-completeness.diff`: Report complete UIA walks truthfully and mark depth cuts, provider enumeration failures, time/node stops and partial MSAA sources as incomplete.
+
+- `patches/0113-kept-ancestor-tree-depths.diff`: Indent rows by actual retained ancestors, observing omitted native siblings before query filtering, while keeping native depths for traversal limits.
+
+
+- `patches/0114-windows-complete-observation-rows.diff`: Include read-only UIA rows in internal verification observations before claiming complete coverage, preserving public addressable rows and documenting Settings window Close.
+
+- `patches/0115-settings-close-foreground-owner-proof.diff`: Refuse Settings window Close when the target owns the foreground popup or foreground ownership cannot be confirmed, before changing styles and again before dispatch.
+
+- `patches/0120-windows-launch-timeout-honesty.diff`: Bound packaged-app activation and preserve submitted documents across uncertain launch outcomes; a timeout never claims cancellation.
+
+- `patches/0121-windows-preserve-foreground-selection.diff`: Respect physical window selection after pointer injection, avoid disabling the front window, and refuse terminating the foreground app or its popup owner.
+
+- `patches/0122-windows-caret-provider-deadline.diff`: Run caret insertion and its provider reads under one 30-second single-flight deadline; check cancellation before focus and each character so late provider returns cannot continue typing.
+
+- `patches/0123-windows-untargeted-page-deadline.diff`: Apply the shared four-second single-flight UIA deadline to page reads without URL hints as well as matched reads.
+
+- `patches/0124-windows-termination-frame-proof.diff`: Refuse termination when a foreground shared Store frame cannot prove its hosted app identity instead of treating ApplicationFrameHost as an unrelated app.
+
+- `patches/0125-windows-caret-worker-com-apartment.diff`: Initialize and balance COM on the dedicated caret-insertion deadline thread before using retained UIA interfaces.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

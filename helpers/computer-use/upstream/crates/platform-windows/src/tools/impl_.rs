@@ -535,8 +535,58 @@ impl Tool for ExactPidWindowTargetGuard {
                 }
             }
         }
+        // Settings Close is a window operation, separate from click delivery.
+        if self.inner.def().name == "click" && args["action"] == "close" {
+            return close_settings_window(args).await;
+        }
         self.inner.invoke(args).await
     }
+}
+
+async fn close_settings_window(args: Value) -> ToolResult {
+    use cua_driver_core::window_state_view::windows_settings_close_request;
+    if !windows_settings_close_request("click", &args) {
+        return ToolResult::error("Settings window Close requires pid, window_id and action:\"close\" without an element, pixels or modifiers. No close was sent.")
+            .with_structured(json!({"code":"settings_close_refused","effect":"refused","delivery_attempted":false}));
+    }
+    let pid = args["pid"].as_u64().unwrap() as u32;
+    let window_id = args["window_id"].as_u64().unwrap();
+    tokio::task::spawn_blocking(move || {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, IsWindow, PostMessageW, GA_ROOT, GA_ROOTOWNER, WM_CLOSE};
+        let settings = crate::win32::list_processes().iter().any(|process| process.pid == pid && process.name.eq_ignore_ascii_case("SystemSettings.exe"));
+        if !settings {
+            return ToolResult::error("This window Close route is only available for Windows Settings. No close was sent.")
+                .with_structured(json!({"code":"settings_close_refused","effect":"refused","delivery_attempted":false}));
+        }
+        let hwnd = HWND(window_id as *mut _);
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        if !unsafe { IsWindow(hwnd) }.as_bool() || root.0.is_null() || crate::win32::window_app_pid(window_id) != Some(pid) {
+            return ToolResult::error("The Settings window is closed, stale or belongs to another process. No close was sent.")
+                .with_structured(json!({"code":"window_target_mismatch","effect":"refused","delivery_attempted":false}));
+        }
+        // Refuse the front Settings window and any owner of its foreground
+        // popup. Check before changing styles and again immediately before send.
+        let front_refusal = || unsafe {
+            let front=GetForegroundWindow();
+            cua_driver_core::window_state_view::windows_settings_close_front_refusal(
+                root.0 as u64,GetAncestor(root,GA_ROOTOWNER).0 as u64,
+                front.0 as u64,GetAncestor(front,GA_ROOTOWNER).0 as u64)
+        };
+        if let Some(reason)=front_refusal() {
+            return ToolResult::error(reason).with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
+        }
+        let _no_activate = crate::input::NoActivateGuard::arm(root);
+        let readback = crate::uia::click::Readback::new(window_id, None);
+        if let Some(reason)=front_refusal() {
+            return ToolResult::error(reason).with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
+        }
+        if let Err(error) = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) } {
+            return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
+                .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
+        }
+        readback.finish(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage)
+    }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
 type PidWindowGuardParts = (
@@ -1111,12 +1161,24 @@ mod get_window_state_actions_tests;
 // ── get_window_state ─────────────────────────────────────────────────────────
 
 /// Build a single structured element entry for `get_window_state`.
-/// Returns `None` when the node has no `element_index` (non-actionable rows).
+/// Public rows need an element_index. Internal observations also include
+/// display-only text so complete walks cannot falsely report its absence.
 fn build_element_entry(
     n: &crate::uia::UiaNode,
     snapshot_id: Option<u32>,
 ) -> Option<serde_json::Value> {
-    let idx = n.element_index?;
+    build_read_element_entry(n, snapshot_id, false)
+}
+
+fn build_read_element_entry(
+    n: &crate::uia::UiaNode,
+    snapshot_id: Option<u32>,
+    include_display_only: bool,
+) -> Option<serde_json::Value> {
+    let idx = n.element_index;
+    if idx.is_none() && !include_display_only {
+        return None;
+    }
     // `label`: name → value → automation_id → help_text.
     let label = n
         .name
@@ -1124,13 +1186,15 @@ fn build_element_entry(
         .or_else(|| n.value.clone())
         .or_else(|| n.automation_id.clone())
         .or_else(|| n.help_text.clone());
-    let mut entry = json!({
-        "element_index": idx,
-        "role": n.control_type,
-        "depth": n.depth,
-    });
-    if let Some(snapshot_id) = snapshot_id {
-        entry["element_token"] = json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
+    let mut entry = json!({ "role": n.control_type, "depth": n.depth });
+    if let Some(idx) = idx {
+        entry["element_index"] = json!(idx);
+        if let Some(snapshot_id) = snapshot_id {
+            entry["element_token"] =
+                json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
+        }
+    } else {
+        entry["display_only"] = json!(true);
     }
     if n.in_web_content {
         entry["in_web_content"] = json!(true);
@@ -1470,6 +1534,10 @@ impl Tool for GetWindowStateTool {
                              delivery_mode:\"foreground\" for a dialog's default accelerator.)"
                         ),
                         nodes: Vec::new(),
+                        coverage: cua_driver_core::window_state_view::WindowsReadCoverage {
+                            source_partial: true,
+                            ..Default::default()
+                        },
                     };
                     let payload = crate::uia::snapshot::UiaSnapshot::from_nodes(
                         &[],
@@ -1552,8 +1620,16 @@ impl Tool for GetWindowStateTool {
                         .iter()
                         .filter(|n| n.element_index.is_some())
                         .count();
+                    tr.coverage.apply(
+                        &walk,
+                        &mut structured,
+                        query
+                            .as_deref()
+                            .is_some_and(|query| !query.trim().is_empty()),
+                        count > 0,
+                    );
                     let mut header = format!("window_id={hwnd} pid={pid} elements={count}\n");
-                    if let Some(note) = walk.note() {
+                    if let Some(note) = tr.coverage.note(&walk) {
                         header.push_str(&note);
                         header.push('\n');
                     }
@@ -1562,12 +1638,7 @@ impl Tool for GetWindowStateTool {
                         header + &tr.tree_markdown,
                     ));
                     structured["element_count"] = json!(count);
-                    // UIA currently does not expose whether a bounded walk
-                    // exhausted every subtree. Keep negative existence
-                    // conservative until that proof is available.
-                    structured["elements_complete"] = json!(false);
                     structured["tree_markdown"] = json!(tr.tree_markdown);
-                    walk.apply(&mut structured);
 
                     let (snapshot_id, replaced) = (!observation_only)
                         .then(|| {
@@ -1592,7 +1663,13 @@ impl Tool for GetWindowStateTool {
                     let elements: Vec<serde_json::Value> = tr
                         .nodes
                         .iter()
-                        .filter_map(|n| build_element_entry(n, snapshot_id))
+                        .filter_map(|n| {
+                            if observation_only {
+                                build_read_element_entry(n, snapshot_id, true)
+                            } else {
+                                build_element_entry(n, snapshot_id)
+                            }
+                        })
                         .collect();
                     let elements = cua_driver_core::element_query::project_elements_for_query(
                         elements,
@@ -1613,7 +1690,11 @@ impl Tool for GetWindowStateTool {
                         }
                         _ => elements,
                     };
-                    structured["total_element_count"] = json!(count);
+                    structured["total_element_count"] = json!(if observation_only {
+                        tr.nodes.len()
+                    } else {
+                        count
+                    });
                     structured["returned_element_count"] = json!(elements.len());
                     structured["elements"] = json!(elements);
                     // Surface 6: snapshot id mirror for debug correlation.
@@ -2435,9 +2516,10 @@ impl Tool for LaunchAppTool {
         // CreateProcess semantics, not Start Menu activation.
         let mut name_lookup_missed = false;
         let mut shell_target_from_name: Option<String> = None;
-        let browser_from_name = name_opt
-            .as_deref()
-            .and_then(super::browser_target::named_browser_executable);
+        let browser_from_name = name_opt.as_deref().and_then(|name| {
+            super::browser_target::named_browser_executable(name)
+                .or_else(|| super::browser_target::named_desktop_executable(name))
+        });
         let aumid_for_uwp: Option<String> = if launch_path_opt.is_some() || path_opt.is_some() {
             None
         } else if let Some(a) = aumid_opt.clone() {
@@ -2511,7 +2593,7 @@ impl Tool for LaunchAppTool {
                     .as_deref()
                     .is_some_and(|target| target.starts_with("shell:") || target.contains('!')))
         {
-            return ToolResult::error("Windows cannot pass these URLs to this shell app registration reliably. No app was launched; pass the named browser's executable path instead.");
+            return ToolResult::error("Windows cannot pass these URLs or files to this app registration reliably. No app was launched; pass this app's executable path so Windows can receive the arguments directly.");
         }
         if resolved_target
             .as_deref()
@@ -2527,6 +2609,51 @@ impl Tool for LaunchAppTool {
                     .map(|url| super::browser_target::quote_argument(url)),
             );
         }
+
+        let fresh_document_path = if urls.is_empty()
+            && extra_args.is_empty()
+            && aumid_for_uwp
+                .as_deref()
+                .or(resolved_target.as_deref())
+                .is_some_and(super::launch_policy::is_notepad_target)
+        {
+            match super::launch_browser::create_notepad_document() {
+                Ok(path) => {
+                    extra_args.push(super::browser_target::quote_argument(
+                        &path.to_string_lossy(),
+                    ));
+                    Some(path)
+                }
+                Err(error) => {
+                    return ToolResult::error(format!(
+                    "No app was launched: a fresh Notepad document could not be created: {error}"
+                ))
+                }
+            }
+        } else {
+            None
+        };
+        let mut fresh_document_cleanup =
+            super::launch_browser::UnlaunchedDocument::new(fresh_document_path.clone());
+        let fresh_browser_launch = resolved_target.as_deref().is_some_and(|target| {
+            let (file, _) = split_launchable_target(target);
+            super::launch_policy::fresh_window_argument(&file).is_some()
+        });
+        if let Some(flag) = resolved_target.as_deref().and_then(|target| {
+            let (file, _) = split_launchable_target(target);
+            super::launch_policy::fresh_window_argument(&file)
+        }) {
+            if !extra_args.iter().any(|arg| arg == flag) {
+                extra_args.insert(0, flag.into());
+            }
+        }
+        // Snapshot native HWNDs before launch. A pre-existing browser window
+        // with the same URL is not proof that this launch opened a fresh one.
+        let preexisting_windows: std::collections::HashSet<u64> =
+            crate::win32::list_windows_via_win32(None)
+                .into_iter()
+                .map(|window| window.hwnd)
+                .collect();
 
         // Single launch path. `display` is the human-readable identifier
         // we report in the success header; for the packaged path it's
@@ -2622,18 +2749,25 @@ impl Tool for LaunchAppTool {
         let pid = if let Some(aumid) = aumid_for_uwp.clone() {
             let aumid_clone = aumid.clone();
             let args_clone = extra_joined.clone();
+            // Once submitted, a broker may still open the file after our
+            // deadline. Keep it even when activation cannot be confirmed.
+            fresh_document_cleanup.launched();
             let activation = tokio::task::spawn_blocking(move || {
                 crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
-            })
-            .await;
+            });
+            let activation =
+                tokio::time::timeout(std::time::Duration::from_secs(15), activation).await;
             match activation {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => {
+                Ok(Ok(Ok(p))) => p,
+                Ok(Ok(Err(e))) => {
                     return ToolResult::error(format!(
                         "Failed to activate packaged app {aumid:?}: {e}"
                     ))
                 }
-                Err(e) => return ToolResult::error(format!("Task error: {e}")),
+                Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
+                Err(_) => return ToolResult::error(format!(
+                    "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
+                )),
             }
         } else {
             // Legacy ShellExecuteExW path for plain Win32 apps and for
@@ -2644,6 +2778,7 @@ impl Tool for LaunchAppTool {
                 Ok(token) => token,
                 Err(message) => return ToolResult::error(message),
             };
+            fresh_document_cleanup.launched();
             let urls_clone = if urls_in_arguments {
                 Vec::new()
             } else {
@@ -2832,9 +2967,9 @@ impl Tool for LaunchAppTool {
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
                 Err(_elapsed) => {
                     return ToolResult::error(format!(
-                        "Launch of {:?} timed out after 15s — the target likely has no \
-                     registered handler and a blocking shell dialog appeared on the \
-                     session desktop; aborted to keep the daemon responsive.",
+                        "Launch of {:?} did not answer within 15s. Windows may still \
+                     complete it; cancellation and foreground preservation are unconfirmed. \
+                     Inspect list_windows before retrying.",
                         target_file_opt
                             .as_deref()
                             .or_else(|| urls.first().map(|s| s.as_str()))
@@ -2856,66 +2991,148 @@ impl Tool for LaunchAppTool {
         // descendant + name-related processes and pick the first one with a
         // window. The resolved pid is reflected in the response's `pid` field
         // so callers can target it with subsequent calls. See #1615.
+        if let Some(guard) = foreground_guard.as_ref() {
+            guard.register_pid(pid);
+        }
         let mut windows_json: Vec<serde_json::Value> = Vec::new();
         let mut resolved_pid: u32 = pid;
 
+        if super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls) {
+            // EnumWindows already attributes each ApplicationFrameHost frame to
+            // its CoreWindow app pid. Avoid the global UIA deadline and pid-0
+            // launcher fallback on every poll.
+            for _ in 0..30 {
+                let window = tokio::task::spawn_blocking(|| {
+                    let settings_pids: std::collections::HashSet<_> =
+                        crate::win32::list_processes()
+                            .into_iter()
+                            .filter(|process| {
+                                super::launch_policy::is_settings_process(&process.name)
+                            })
+                            .map(|process| process.pid)
+                            .collect();
+                    let mut windows = crate::win32::list_windows_via_win32(None)
+                        .into_iter()
+                        .filter(|window| settings_pids.contains(&window.pid));
+                    let first = windows.next()?;
+                    // Multiple Settings frames cannot be attributed to this
+                    // protocol activation without additional evidence.
+                    windows.next().is_none().then_some(first)
+                })
+                .await
+                .unwrap_or(None);
+                if let Some(window) = window {
+                    resolved_pid = window.pid;
+                    windows_json.push(json!({
+                        "window_id": window.hwnd, "title": window.title,
+                        "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                        "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                    }));
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        let mut confirmed_url: Option<String> = None;
+        let mut url_confirmation_note = String::new();
         if web_launch {
             let executable = target_file_opt.as_deref().unwrap_or("");
-            let mut confirmed = Vec::new();
-            // One budget for the whole request, including every URL/provider.
+            let url = urls.last().expect("web launch has at least one URL");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
-            for url in &urls {
-                let mut found = None;
-                for _ in 0..30 {
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    if remaining.is_zero() {
-                        break;
-                    }
-                    found = match super::launch_browser::window_showing_url(executable, url, remaining).await {
-                        Ok(window) => window,
-                        Err(error) => return ToolResult::error(format!(
-                            "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
-                        )).with_structured(json!({"code": "browser_url_unconfirmed", "launched_pid": pid})),
-                    };
-                    if found.is_some() {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut found = None;
+            for _ in 0..30 {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
                 }
-                let Some(window) = found else {
-                    let note = foreground_guard
-                        .as_ref()
-                        .map(|guard| guard.report().0)
-                        .unwrap_or("");
-                    return ToolResult::error(format!(
-                        "Launch was requested in {display}, but Windows did not expose a visible document with URL {url:?} in that browser. No unrelated browser window is being returned. The URL may be loading, redirected, or in an inactive tab; inspect that browser with list_windows/get_window_state. {note}"
-                    )).with_structured(json!({"code": "browser_url_unconfirmed", "requested_url": url, "launched_pid": pid}));
-                };
-                confirmed.push(window);
-            }
-            resolved_pid = confirmed[0].pid;
-            for window in confirmed {
-                if window.pid != resolved_pid {
-                    continue;
-                }
-                if windows_json
-                    .iter()
-                    .any(|value| value["window_id"].as_u64() == Some(window.hwnd))
+                match super::launch_browser::window_showing_url(
+                    executable,
+                    url,
+                    remaining,
+                    preexisting_windows.clone(),
+                )
+                .await
                 {
-                    continue;
+                    Ok(window) => found = window,
+                    Err(error) => {
+                        url_confirmation_note = format!(" URL verification stopped: {error}.");
+                        break;
+                    }
                 }
+                if found.is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            if let Some(window) = found {
+                confirmed_url = Some(url.clone());
+                resolved_pid = window.pid;
                 windows_json.push(json!({
                     "window_id": window.hwnd, "title": window.title,
                     "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
                     "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
                 }));
+            } else {
+                // A confirmed app window and an unconfirmed URL are different
+                // facts. Never call an opened browser a failed app launch, or
+                // claim that its requested page loaded without URL evidence.
+                let executable = super::launch_policy::executable_name(executable);
+                let pids: std::collections::HashSet<_> = crate::win32::list_processes()
+                    .into_iter()
+                    .filter(|p| super::launch_policy::executable_name(&p.name) == executable)
+                    .map(|p| p.pid)
+                    .collect();
+                let windows: Vec<_> = crate::win32::list_windows_via_win32(None)
+                    .into_iter()
+                    .filter(|w| pids.contains(&w.pid) && !preexisting_windows.contains(&w.hwnd))
+                    .collect();
+                if let Some(window) = windows.first().filter(|_| windows.len() == 1) {
+                    resolved_pid = window.pid;
+                    windows_json.push(json!({
+                        "window_id": window.hwnd, "title": window.title,
+                        "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                        "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                    }));
+                    url_confirmation_note.push_str(&format!(" This new browser window is open, but URL {url:?} is unconfirmed. No page content was read; use page with target_url_contains to confirm the requested tab before reading."));
+                } else {
+                    return ToolResult::text(format!("Launch requested for {display}, but neither a unique new browser window nor URL {url:?} was confirmed.{url_confirmation_note} No pre-existing window or page content is returned. Inspect list_windows before retrying."))
+                        .with_structured(json!({"code": "browser_launch_unconfirmed", "launch_confirmed": false, "url_confirmed": false, "requested_url": url, "launched_pid": pid, "windows": []}));
+                }
+            }
+        }
+
+        if let Some(path) = fresh_document_path.as_ref() {
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            for _ in 0..20 {
+                match super::launch_browser::notepad_document_window(filename.clone()).await {
+                    Ok(Some(window)) => {
+                        resolved_pid = window.pid;
+                        windows_json = vec![json!({
+                            "window_id": window.hwnd, "title": window.title,
+                            "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                            "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                        })];
+                        break;
+                    }
+                    Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+                    Err(_) => break,
+                }
+            }
+            if windows_json.is_empty() {
+                return ToolResult::text(format!("Launch requested for {display}. Notepad has not exposed the fresh document {} as its selected tab. Opening is unconfirmed; no restored document window is returned. Inspect list_windows before retrying.", path.display()))
+                    .with_structured(json!({"code": "fresh_document_unconfirmed", "launch_confirmed": false, "launched_pid": pid, "document_path": path.to_string_lossy(), "windows": []}));
             }
         }
 
         // Retain the activation's real app pid while returning its shared frame
         // HWND. Window attribution validates that pair through the hosted
         // CoreWindow. Only the app process may become runtime-owned/killable.
-        if aumid_for_uwp.is_some() {
+        if aumid_for_uwp.is_some() && windows_json.is_empty() {
             for _ in 0..10 {
                 let host =
                     tokio::task::spawn_blocking(move || crate::win32::resolve_uwp_host_window(pid))
@@ -2945,7 +3162,7 @@ impl Tool for LaunchAppTool {
         }
 
         for _ in 0..5 {
-            if !windows_json.is_empty() {
+            if pid == 0 || !windows_json.is_empty() {
                 break;
             }
             let wins =
@@ -2965,7 +3182,7 @@ impl Tool for LaunchAppTool {
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        if windows_json.is_empty() {
+        if pid != 0 && windows_json.is_empty() {
             // Launcher-stub fallback. Compute the exe basename from the
             // launchable target so name-based matching has something to work
             // with (e.g. "gimp-3.exe" → prefix "gimp" matches "gimp-3.2.exe").
@@ -3050,6 +3267,17 @@ impl Tool for LaunchAppTool {
                 // total_attempts cap. The loop body handles the empty queue
                 // by falling through to the re-scan again.
             }
+        }
+        if (fresh_browser_launch && !web_launch)
+            || target_file_opt
+                .as_deref()
+                .is_some_and(|target| super::launch_policy::executable_name(target) == "explorer")
+        {
+            windows_json.retain(|window| {
+                window["window_id"]
+                    .as_u64()
+                    .is_some_and(|hwnd| !preexisting_windows.contains(&hwnd))
+            });
         }
         let pid = resolved_pid;
 
@@ -3204,6 +3432,19 @@ impl Tool for LaunchAppTool {
             .await;
         }
 
+        let mut restored_content_note = String::new();
+        if web_launch || fresh_document_path.is_some() {
+            for window in &windows_json {
+                if let Some(hwnd) = window["window_id"].as_u64() {
+                    match super::launch_browser::additional_tabs(hwnd, urls.len().max(1)).await {
+                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. These additional tabs were not read; do not read them as the requested document.")),
+                        None => restored_content_note.push_str(" Windows did not expose a reliable tab count; other restored content could not be ruled out."),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         let running = !windows_json.is_empty()
             || (pid != 0
                 && tokio::task::spawn_blocking(move || {
@@ -3213,11 +3454,28 @@ impl Tool for LaunchAppTool {
                 })
                 .await
                 .unwrap_or(false));
+        if let Some(guard) = foreground_guard.as_ref() {
+            guard.register_pid(pid);
+        }
         let (foreground_note, foreground_failed) = foreground_guard
             .as_ref()
             .map(|guard| guard.report())
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+        summary.push_str(&restored_content_note);
+        summary.push_str(&url_confirmation_note);
+        if let Some(url) = confirmed_url.as_ref() {
+            summary.push_str(&format!(" Confirmed visible URL: {url}."));
+        }
+        if confirmed_url.is_some() && urls.len() > 1 {
+            summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
+        }
+        if fresh_browser_launch && windows_json.is_empty() {
+            summary.push_str(" A new browser window was not confirmed; pre-existing windows were excluded from this reply.");
+        }
+        if let Some(path) = fresh_document_path.as_ref() {
+            summary.push_str(&format!(" Fresh document: {}.", path.display()));
+        }
         if !running {
             summary.push_str(" Windows did not expose a running app or its window; opening could not be confirmed.");
         }
@@ -3257,10 +3515,32 @@ impl Tool for LaunchAppTool {
                 pid != 0 && foreground_pid == pid
             },
             "foreground_note": foreground_note,
+            "url_confirmed": confirmed_url.is_some(),
+            "confirmed_url": confirmed_url,
+            "url_confirmation_note": url_confirmation_note,
+            "document_path": fresh_document_path.as_ref().map(|path| path.to_string_lossy()),
+            "restored_content_note": restored_content_note,
             "windows":   windows_json,
         });
         let mut result = ToolResult::text(summary).with_structured(structured);
-        if foreground_failed || !running {
+        // Use one foreground sample for active and observation wording.
+        let foreground_at_report = foreground_guard
+            .as_ref()
+            .map(|guard| guard.reported_foreground())
+            .unwrap_or(0);
+        if let Some(content) = result.structured_content.as_mut() {
+            content["active"] = json!(
+                windows_json
+                    .iter()
+                    .any(|window| window["window_id"].as_u64() == Some(foreground_at_report as u64))
+                    || (pid != 0
+                        && crate::input::inject::foreground_watch::window_process(
+                            windows::Win32::Foundation::HWND(foreground_at_report as *mut _)
+                        ) == pid)
+            );
+            content["focus_hand_back_unconfirmed"] = json!(foreground_failed);
+        }
+        if !running {
             result.is_error = Some(true);
         }
         result
@@ -3424,7 +3704,7 @@ impl Tool for ClickTool {
                 `count: 2` posts two down/up pairs for a double-click. Pixel clicks need \
                 a visible on-screen window to anchor the coordinate conversion (errors \
                 with `pid X has no on-screen window` otherwise).\n\n\
-                Exactly one of `element_token` or (`x` AND `y`) must be provided. \
+                For Windows Settings, `action:\"close\"` with exact pid/window_id closes that window without an element or pixels. Otherwise, exactly one of `element_token` or (`x` AND `y`) must be provided. \
                 `pid` is required for window scope and omitted for desktop scope. After a `zoom` call, \
                 pass `from_zoom=true` to auto-translate zoom-image coords back to \
                 full-window space.\n\n\
@@ -3440,7 +3720,7 @@ impl Tool for ClickTool {
                     "pid":{"type":"integer","description":"Target process ID for window scope. Optional with element_token (the token carries the pid). Omit with scope=desktop for screen-absolute coordinates from get_desktop_state."},
                     "window_id":{"type":"integer","description":"HWND of the target window. Omit when element_token is supplied (the token carries it)."},
                     "element_token": cua_driver_core::tool_schema::element_token_schema(),
-                    "action":{"type":"string","description":"Accessibility action for an element_token target. \"expand\" opens the element through UIA ExpandCollapsePattern, or clicks the dropdown half of an MSAA split button. Omit for the default invoke."},
+                    "action":{"type":"string","description":"For Windows Settings only, \"close\" with pid/window_id closes that window without an element or pixels. Otherwise an accessibility action for an element_token target. \"expand\" opens the element through UIA ExpandCollapsePattern, or clicks the dropdown half of an MSAA split button. Omit for the default invoke."},
                     "capture_id":{"type":"string","minLength":1,"description":"Optional ID from get_window_state or get_desktop_state. When present, x and y are admitted against that exact capture and the ID is consumed before native dispatch."},
                     "x":{"type":"number","description":"X in window-local screenshot pixels — same space as the PNG get_window_state returns. Must be provided together with y."},
                     "y":{"type":"number","description":"Y in window-local screenshot pixels. Must be provided together with x."},
@@ -4517,32 +4797,7 @@ impl Tool for TypeTextTool {
     fn def(&self) -> &ToolDef {
         TYPE_DEF.get_or_init(|| ToolDef {
             name: "type_text".into(),
-            // Description ported from Swift `TypeTextTool.swift` with the
-            // Windows transport note.  Swift tries AXSetAttribute(kAXSelectedText)
-            // first, falls back to character-by-character CGEvent synthesis.
-            // Windows uses character-by-character PostMessage(WM_CHAR) to the
-            // window's focused child — there's no UIA equivalent of
-            // AXSelectedText wired up yet, so it's always the synthesis path.
-            description: "Insert text into the target pid via character-by-character \
-                PostMessage(WM_CHAR) to the focused window. No focus steal.\n\n\
-                Special keys (Return, Escape, arrows, Tab) go through `press_key` / \
-                `hotkey` — they are not text.\n\n\
-                **Routing on Windows.** When the target's owning EXE or top-level window \
-                class identifies it as a XAML / WinUI3 / UWP host (modern Notepad, \
-                Calculator, Photos, Settings, etc.), the tool requires `element_token` \
-                and routes through UI Automation's `ValuePattern.SetValue` \
-                — same backend as the `set_value` tool. PostMessage WM_CHAR doesn't \
-                reach those hosts (their CoreInput dispatcher only consumes events from \
-                the system input queue), so the fallback path silently dropped chars. \
-                If you call `type_text(pid, text)` on a XAML host without `element_token`, \
-                the tool returns an actionable error pointing you at `get_window_state` \
-                first. Native ConsoleHost on Windows ARM64 is hard-refused because it can \
-                accept synthesized Unicode events without delivering them; use a process \
-                or PTY setup channel instead. Legacy Win32 apps still use the PostMessage \
-                path, preserving the no-focus-steal property.\n\n\
-                `delay_ms` (0–200, default 30) spaces successive characters on the \
-                PostMessage path so autocomplete and IME can keep up. Ignored on the \
-                UIA path (SetValue is atomic).".into(),
+            description: "Insert text at the target control's caret/selection using background character messages to its real editor. Never replaces the document through ValuePattern.SetValue. If no caret-insertion route exists, refuses plainly; set_value retains explicit whole-value replacement. No activation or pointer movement. Use press_key for special keys. delay_ms spaces characters (0–200, default 30).".into(),
             input_schema: json!({
                 "type":"object","required":["text"],"properties":{
                     "session": cua_driver_core::tool_schema::session_schema(),
@@ -4550,7 +4805,7 @@ impl Tool for TypeTextTool {
                     "pid":{"type":"integer","description":"Target process ID."},
                     "text":{"type":"string","description":"Text to insert at the focused element's cursor."},
                     "window_id":{"type":"integer","description":"HWND of the target window. Omit when element_token is supplied (the token carries it)."},
-                    "element_token":{"type":"string","pattern":"^s[0-9a-f]{8}:[0-9]+$","description":"Opaque element handle from get_window_state. When supplied, type_text writes through UIA ValuePattern and reads that exact element back by handle. The shared ActionResult is confirmed only when the complete expected value is synchronously visible. If SetValue succeeds but read-back is stale or unavailable, the result is unverifiable with no escalation; take a fresh snapshot before retrying because deferred providers may publish only after this call returns."},
+                    "element_token":{"type":"string","pattern":"^s[0-9a-f]{8}:[0-9]+$","description":"Exact field from get_window_state. Resolves its native editor for caret/selection insertion; never calls ValuePattern.SetValue."},
                     "x":{"type":"number","description":"Window-local screenshot-pixel X of the field to type into — the element px action form. Pass x,y (no element_token) and the tool pixel-clicks there to establish real renderer focus, then types. Use for Chromium/Electron inputs the UIA/WM_CHAR path can't reach. Read straight off the get_window_state PNG, same convention as click."},
                     "y":{"type":"number","description":"Window-local screenshot-pixel Y of the field (see x)."},
                     "delay_ms":{"type":"integer","minimum":0,"maximum":200,"description":"Milliseconds between characters. Default 30."},
@@ -4660,18 +4915,7 @@ impl Tool for TypeTextTool {
             }
         }
 
-        // Same no-raise guard as click: a XAML/WPF ValuePattern.SetValue handler
-        // calls UIElement.Focus()→SetForegroundWindow; WS_EX_NOACTIVATE on the
-        // target makes that a no-op while the value still gets set. Safe because
-        // type_text never uses the SendInput foreground-swap path. No-op for
-        // delivery_mode:"foreground" and when no window_id was given.
-        let _noact = match (delivery != DeliveryMode::Foreground, hwnd_opt) {
-            (true, Some(h)) => Some(crate::input::NoActivateGuard::arm(
-                windows::Win32::Foundation::HWND(h as *mut _),
-            )),
-            _ => None,
-        };
-        let _delay_ms = args.u64_or("delay_ms", 30);
+        let _delay_ms = args.u64_or("delay_ms", 30).min(200);
         let hwnd = match hwnd_opt {
             Some(h) => h,
             None => {
@@ -4694,6 +4938,11 @@ impl Tool for TypeTextTool {
                 }
             }
         };
+        // Arm after resolving the real HWND, including calls that omit
+        // window_id. The shared guard also covers a modal dialog's owner.
+        let _noact = (delivery != DeliveryMode::Foreground).then(|| {
+            crate::input::NoActivateGuard::arm(windows::Win32::Foundation::HWND(hwnd as *mut _))
+        });
         if let Some(element) = admitted.as_ref() {
             let (cx, cy) = element.center;
             pin_overlay_above(&cursor_key, hwnd);
@@ -4738,7 +4987,7 @@ impl Tool for TypeTextTool {
         // while unindexed text would be posted to the top-level and disappear.
         if delivery == DeliveryMode::Background
             && (crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::TextInput)
-                || (elem_idx.is_none() && crate::input::delivery::is_wpf_target_window(hwnd)))
+                || crate::input::delivery::is_wpf_target_window(hwnd))
         {
             return crate::input::delivery::background_unavailable_error(
                 hwnd,
@@ -4838,164 +5087,11 @@ impl Tool for TypeTextTool {
             );
         }
 
-        // CUA-543 routing: PostMessage WM_CHAR doesn't reach modern
-        // XAML / WinUI3 hosts. When the target is one of those AND the
-        // caller has supplied an element_index, route through UIA
-        // `ValuePattern.SetValue` — same code path the `set_value` tool
-        // uses, which we've verified works on modern Notepad / WinUI3.
-        // Legacy Win32 stays on the PostMessage path so the no-focus-
-        // steal property is preserved.
-        // ── Automatic routing — the caller need not know the framework. ──
-        // 1. With an element_index, try UIA ValuePattern.SetValue first: it works
-        //    for WPF / WinForms / UWP / XAML and many web inputs, sets the value
-        //    through the accessibility channel (no keystrokes), and the `_noact`
-        //    guard blocks any self-foreground — so it never raises. Auto-falls-
-        //    back to the WM_CHAR path below if the element has no ValuePattern
-        //    (most legacy Win32 EDITs consume WM_CHAR fine without focus steal).
-        if let Some(idx) = elem_idx {
-            let text_for_uia = text.clone();
-            let set_result = tokio::task::spawn_blocking({
-                let admitted = admitted.clone();
-                move || {
-                    let _admission = &admitted;
-                    // Retain the element under the cache lock so a concurrent
-                    // get_window_state snapshot-replace on the same (pid, hwnd)
-                    // can't Release it to zero while this SetValue is in flight.
-                    // The guard is held for the whole closure.
-                    let element_guard = admitted.as_ref().filter(|element| element.is_uia())?;
-                    let ptr = element_guard.as_ptr();
-                    use windows::core::{Interface, BSTR};
-                    use windows::Win32::UI::Accessibility::{
-                        IUIAutomationElement, IUIAutomationValuePattern, UIA_ValuePatternId,
-                    };
-                    let elem: IUIAutomationElement =
-                        unsafe { IUIAutomationElement::from_raw(ptr as *mut _) };
-                    let result = (|| -> anyhow::Result<(String, String)> {
-                        let pattern = unsafe { elem.GetCurrentPattern(UIA_ValuePatternId) }?;
-                        let vp: IUIAutomationValuePattern = pattern.cast()?;
-                        // Shield the SetValue against host self-foreground. A
-                        // Chromium/Electron (or XAML) ValuePattern.SetValue handler
-                        // calls SetForegroundWindow(self), which WS_EX_NOACTIVATE
-                        // does NOT stop; the EnableWindow shield does (disabled
-                        // top-level can't be foregrounded) while the a11y-channel
-                        // SetValue still lands. Same fix as the UIA Invoke path.
-                        crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || unsafe {
-                            // ValuePattern has no caret/selection insertion API. Preserve
-                            // the current document and append as the deterministic
-                            // background fallback; replacing the whole value violates
-                            // type_text's insertion contract for editors.
-                            let current = vp
-                                .CurrentValue()
-                                .map(|value| value.to_string())
-                                .unwrap_or_default();
-                            let inserted = format!("{current}{text_for_uia}");
-                            vp.SetValue(&BSTR::from(inserted.as_str()))?;
-                            Ok((current, inserted))
-                        })
-                    })()
-                    .ok();
-                    std::mem::forget(elem);
-                    result
-                }
-            })
-            .await
-            .unwrap_or(None);
-            if let Some((before, expected)) = set_result {
-                // Read the value back by element handle — focus-independent
-                // (works regardless of which window is foreground), proving the
-                // a11y write actually took rather than trusting SetValue's
-                // return alone.
-                let verify = tokio::task::spawn_blocking({
-                    let admitted = admitted.clone();
-                    move || {
-                        let _admission = &admitted;
-                        let value = read_cached_element_value(&admitted);
-                        classify_value_write_readback(value.as_deref(), &before, &expected)
-                    }
-                })
-                .await
-                .unwrap_or("pending");
-                // SURFACE-AWARE VERIFICATION (mirrors macOS type_text). On
-                // Electron/Chromium web inputs the UIA layer accepts a
-                // `ValuePattern.SetValue` and echoes it straight back through
-                // `ValuePattern.CurrentValue` while the renderer/DOM never observes
-                // it — so a read-back "confirm" is a shim echo, not ground truth
-                // (the Windows analogue of the Slack-search AX false-confirm).
-                // Refuse to claim verified there: the screenshot is the only truth
-                // and the next rung is the element px action. Probe ONLY when it
-                // would otherwise confirm via the UIA value path, so native UIA
-                // types (WPF / WinForms / UWP / XAML) pay nothing. The signal is
-                // the window class — Chromium and every Electron host expose
-                // `Chrome_WidgetWin_*` (see `is_chromium_target_window`).
-                let ax_echo_surface =
-                    verify == "confirmed" && crate::input::is_chromium_target_window(hwnd);
-                let verified = verify == "confirmed" && !ax_echo_surface;
-                let (mark, note) = if verified {
-                    ("✅ Wrote", String::new())
-                } else if ax_echo_surface {
-                    (
-                        "📨 Sent (unverified)",
-                        " — Electron/web surface: the UIA layer accepts and echoes the \
-                      write but the renderer may not have observed it, so the driver \
-                      cannot confirm via UIA. Verify via the screenshot; if it didn't \
-                      land, re-type with the px form (pass x,y to pixel-focus the \
-                      field)."
-                            .to_string(),
-                    )
-                } else {
-                    (
-                        "📨 Accepted (verification pending)",
-                        " — the provider may publish its new value only after this call returns. Take a fresh snapshot before retrying."
-                            .to_string(),
-                    )
-                };
-                return ToolResult::text(format!(
-                    "{mark} {text_len} char(s) on pid {raw_pid} via UIA ValuePattern \
-                     (element_index=[{idx}]; verify: {verify}).{note}"
-                ))
-                .with_structured({
-                    // `effect` mirrors the UIA read-back: a TRUSTED positive
-                    // read-back is "confirmed"; a deferred provider or an Electron UIA echo
-                    // that we refuse to trust is "unverifiable". Only the echo
-                    // recommends pixel escalation.
-                    let mut s = value_write_structured_result(text_len, verify, verified);
-                    if ax_echo_surface {
-                        // Electron UIA echo → the element px action is the next rung,
-                        // not foreground (it's a renderer-focus problem, not an
-                        // activation one).
-                        s["escalation"] = serde_json::json!({
-                            "recommended": "px",
-                            "reason": "Electron/web surface — the UIA write was echoed \
-                                       but the renderer may not have observed it. \
-                                       Confirm via the screenshot; if it didn't land, \
-                                       re-type with the element px action (pass x,y to \
-                                       pixel-focus the field, then type)."
-                        });
-                    }
-                    s
-                });
-            }
-            // ValuePattern unavailable → fall through to the WM_CHAR path.
-        }
-
-        // 2. No element_index on a WPF target: WM_CHAR is dropped and there's no
-        //    element to SetValue. The only background path was a cloaked focus
-        //    grab (SendInput), which the macOS-aligned contract forbids in
-        //    background. Prefer supplying an element_index (path 1, UIA SetValue —
-        //    never raises); otherwise surface background_unavailable so the agent
-        //    escalates to delivery_mode:"foreground".
-        if elem_idx.is_none() && crate::input::delivery::is_wpf_target_window(hwnd) {
-            return crate::input::delivery::background_unavailable_error(
-                hwnd,
-                EventKind::TextInput,
-            );
-        }
-
-        // 3. Legacy Win32 / GDI / Chromium-IME — PostMessage WM_CHAR, no focus steal.
+        // 3. Legacy Win32 / GDI / Chromium-IME — targeted WM_CHAR, no focus steal.
         //
         // Read-back verification (mirrors macOS type_text): WM_CHAR is silently
         // dropped by some focused targets (notably a VCL/LibreOffice Calc grid
-        // not in cell-edit mode), and PostMessage reports success regardless. So
+        // not in cell-edit mode), and message dispatch reports success regardless. So
         // snapshot the focused element's UIA value before and after; if it did
         // not change we can't confirm the text landed and report "Sent
         // (unverified)" with the foreground-escalation hint, instead of a blind
@@ -5007,35 +5103,74 @@ impl Tool for TypeTextTool {
         let result = tokio::task::spawn_blocking({
             let admitted = admitted.clone();
             move || {
-                let _admission = &admitted;
-                // Prefer a focus-independent read of the *specific* cached element
-                // when we have its index; only fall back to the (flaky, focus-
-                // dependent) system focused element when typing into "whatever is
-                // focused" with no element_token.
-                let read = |idx: Option<usize>| match idx {
-                    Some(_) => read_cached_element_value(&admitted),
-                    None => read_focused_value_uia(verify_pid),
-                };
-                let before = read(verify_idx);
-                let post_res = crate::input::post_type_text(hwnd, &text_for_post);
-                std::thread::sleep(std::time::Duration::from_millis(40));
-                let after = read(verify_idx);
-                let observed = post_message_readback_observed(
-                    before.as_deref(),
-                    after.as_deref(),
-                    &text_for_post,
-                );
-                (post_res, before, after, observed)
+                crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                    "caret insertion", std::time::Duration::from_secs(30),
+                    "unconfirmed insertion; no automatic retry",
+                    move |cancelled| -> anyhow::Result<_> {
+                        let _com = super::launch_browser::Apartment::new();
+                        // Retain target protection even if a provider outlives
+                        // the caller; cancellation is checked before mutations.
+                        let _noact = crate::input::NoActivateGuard::arm(
+                            windows::Win32::Foundation::HWND(hwnd as *mut _),
+                        );
+                        let native = admitted.as_ref().filter(|e| e.is_uia()).and_then(|e| {
+                            use windows::core::Interface;
+                            let element = std::mem::ManuallyDrop::new(unsafe {
+                                windows::Win32::UI::Accessibility::IUIAutomationElement::from_raw(
+                                    e.as_ptr() as *mut _
+                                )
+                            });
+                            unsafe { element.CurrentNativeWindowHandle() }
+                                .ok().map(|h| h.0 as usize as u64)
+                        });
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let text_target = crate::input::keyboard::background_text_target(
+                            hwnd, native, admitted.as_ref().and_then(|e| e.rect), elem_idx.is_some(),
+                        )?;
+                        let read = |idx: Option<usize>| match idx {
+                            Some(_) => read_cached_element_value(&admitted),
+                            None => read_focused_value_uia(verify_pid),
+                        };
+                        let before = read(verify_idx);
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                            (|| -> anyhow::Result<()> {
+                                crate::uia::click::ensure_active(&cancelled)?;
+                                if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
+                                    if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
+                                        element.focus_element().map_err(|error| anyhow::anyhow!(
+                                            "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
+                                        ))?;
+                                    } else {
+                                        anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
+                                    }
+                                }
+                                crate::input::keyboard::post_insert_text_cancelable(
+                                    text_target, &text_for_post, _delay_ms.min(200), &cancelled,
+                                )
+                            })()
+                        });
+                        std::thread::sleep(std::time::Duration::from_millis(40));
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let after = read(verify_idx);
+                        let observed = post_message_readback_observed(
+                            before.as_deref(), after.as_deref(), &text_for_post,
+                        );
+                        Ok((post_res, before, after, observed))
+                    },
+                ).map_err(|error| anyhow::anyhow!(
+                    "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
+                    crate::uia::click::deadline_reason(error),
+                ))?
             }
-        })
-        .await;
+        }).await;
         match result {
-            Ok((Ok(()), before, after, observed)) => {
+            Ok(Ok((Ok(()), before, after, observed))) => {
                 // Three-way verdict. Crucially, "couldn't read the field" is NOT
                 // the same as "the text didn't land": on Windows, UIA's
                 // GetFocusedElement is system-wide (unlike macOS's per-app
                 // AXFocusedUIElement), so when the target isn't the foreground
-                // app we cannot read it back even though a PostMessage WM_CHAR
+                // app we cannot read it back even though a targeted WM_CHAR
                 // may have landed fine. Treating unreadable as failure would
                 // spuriously push agents to foreground and break the
                 // background-first contract. A changed value containing the
@@ -5044,21 +5179,21 @@ impl Tool for TypeTextTool {
                 // prove final state from a fresh snapshot before any retry.
                 match (&before, &after) {
                     (Some(_), Some(_)) if observed => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
                          ({_delay_ms}ms delay; the field changed and now contains the \
                          requested text, but the insertion point is not known). Take a \
                          fresh snapshot to verify the intended final value before retrying."
                     ))
-                    .with_structured(changed_contains_post_message_result(text_len)),
+                    .with_structured(changed_contains_send_message_result(text_len)),
                     (Some(_), Some(_)) => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage, but \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR, but \
                          the focused field's value did not contain the requested text \
                          after dispatch — delivery was incomplete or dropped (e.g. a \
                          VCL/LibreOffice grid not in cell-edit mode). \
                          Retry with delivery_mode:\"foreground\"."
                     ))
                     .with_structured(serde_json::json!({
-                        "path": "key_events", "characters": text_len,
+                        "path": "send_message", "characters": text_len,
                         "verified": false, "verify": "unchanged",
                         "effect": "unverifiable",
                         "escalation": {
@@ -5069,14 +5204,14 @@ impl Tool for TypeTextTool {
                         },
                     })),
                     _ => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
                          ({_delay_ms}ms delay; not verified — could not read \
                          the focused field back, e.g. the target isn't foreground or \
                          exposes no ValuePattern). If it didn't land, retry with \
                          delivery_mode:\"foreground\"."
                     ))
                     .with_structured(serde_json::json!({
-                        "path": "key_events", "characters": text_len,
+                        "path": "send_message", "characters": text_len,
                         "verified": false, "verify": "unreadable",
                         "effect": "unverifiable",
                         "escalation": {
@@ -5088,7 +5223,8 @@ impl Tool for TypeTextTool {
                     })),
                 }
             }
-            Ok((Err(e), _, _, _)) => ToolResult::error(e.to_string()),
+            Ok(Ok((Err(e), _, _, _))) => ToolResult::error(e.to_string()),
+            Ok(Err(e)) => ToolResult::error(e.to_string()),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
     }
@@ -5106,6 +5242,7 @@ fn post_message_readback_observed(
     )
 }
 
+#[cfg(test)]
 fn value_write_structured_result(
     text_len: usize,
     verify: &str,
@@ -5120,9 +5257,9 @@ fn value_write_structured_result(
     })
 }
 
-fn changed_contains_post_message_result(text_len: usize) -> serde_json::Value {
+fn changed_contains_send_message_result(text_len: usize) -> serde_json::Value {
     serde_json::json!({
-        "path": "key_events",
+        "path": "send_message",
         "characters": text_len,
         "verified": false,
         "verify": "changed_contains",
@@ -5133,6 +5270,7 @@ fn changed_contains_post_message_result(text_len: usize) -> serde_json::Value {
 #[cfg(test)]
 mod post_message_readback_tests;
 
+#[cfg(test)]
 fn classify_value_write_readback(
     value: Option<&str>,
     before: &str,
@@ -6240,7 +6378,7 @@ fn win32_combo_set_value_result(
         ActionEffect::Unverifiable
     };
     let mut record =
-        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsPostMessage, requested)
+        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsSendMessage, requested)
             // Window messages reach the control without focusing or raising it.
             .actual_delivery(ActualDelivery::Background)
             .detail(text.clone());
@@ -9785,7 +9923,7 @@ impl Tool for KillAppTool {
                 "pid": pid_v, "status": "exited", "confirmed": true,
                 "termination_accepted": termination_accepted,
             })),
-            Ok(Err(error)) => ToolResult::error(format!("kill_app: {error}")),
+            Ok(Err(error)) => ToolResult::error(error),
             Err(error) => ToolResult::error(format!(
                 "kill_app: termination confirmation failed: {error}. Verify whether the app is still running before retrying."
             )),
@@ -10339,3 +10477,52 @@ mod pid_window_target_tests;
 mod display_only_tests;
 #[cfg(test)]
 mod value_write_readback_tests;
+
+#[cfg(test)]
+mod complete_observation_rows_tests {
+    use super::*;
+    #[test]
+    fn complete_observations_include_read_only_text_without_minting_input_tokens() {
+        let node = crate::uia::UiaNode {
+            element_index: None,
+            control_type: "Text".into(),
+            name: Some("Windows 11 Pro".into()),
+            value: Some("read-only value".into()),
+            automation_id: None,
+            help_text: None,
+            actions: Vec::new(),
+            enabled: Some(true),
+            selected: None,
+            element_ptr: 0,
+            center_x: 0,
+            center_y: 0,
+            rect: None,
+            msaa_role: None,
+            depth: 1,
+            parent_element_index: Some(0),
+            in_web_content: false,
+        };
+        assert!(build_read_element_entry(&node, Some(1), false).is_none());
+        let row = build_read_element_entry(&node, Some(1), true).unwrap();
+        assert_eq!(row["label"], "Windows 11 Pro");
+        assert_eq!(row["value"], "read-only value");
+        assert_eq!(row["display_only"], true);
+        assert!(row.get("element_token").is_none());
+        assert!(row.get("element_index").is_none());
+        let mut web = node.clone();
+        web.in_web_content = true;
+        assert_eq!(
+            build_read_element_entry(&web, None, true).unwrap()["in_web_content"],
+            true
+        );
+    }
+    #[tokio::test]
+    async fn malformed_close_never_reaches_native_dispatch() {
+        let result =
+            close_settings_window(json!({"pid":42,"window_id":99,"action":"close","x":0})).await;
+        assert_eq!(
+            result.structured_content.unwrap()["delivery_attempted"],
+            false
+        );
+    }
+}

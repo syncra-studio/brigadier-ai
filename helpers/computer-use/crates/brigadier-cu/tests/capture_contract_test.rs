@@ -14,7 +14,7 @@
 //! Run explicitly:
 //!   cargo test -p brigadier-cu --test capture_contract_test -- --ignored --nocapture --test-threads=1
 
-#![cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#![cfg(target_os = "macos")]
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

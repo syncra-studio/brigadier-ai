@@ -1889,6 +1889,22 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_proxy_refuses_shell_display_names_before_daemon_startup() {
+        for args in [
+            serde_json::json!({"name":"Windows PowerShell"}),
+            serde_json::json!({"name":"Windows Terminal"}),
+            serde_json::json!({"path":"C:\\Windows\\System32\\cmd.exe"}),
+            serde_json::json!({"launch_path":"wt.exe"}),
+        ] {
+            let refused = proxy_target_guard("launch_app", &args, &[]).unwrap_err();
+            let state = refused.structured_content.unwrap();
+            assert_eq!(state["reason"], "terminal");
+            assert!(state["message"].as_str().unwrap().contains("terminal apps"));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn grant_wait_policy_bypasses_only_permission_status_calls() {

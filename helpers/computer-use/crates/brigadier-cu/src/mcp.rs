@@ -58,7 +58,7 @@ fn host_manages_session() -> bool {
 /// `computer-use` skill that Brigadier gives its agents.
 fn agent_instructions(host_manages_session: bool) -> String {
     let session_step = if host_manages_session {
-        "0. Your session and agent cursor are already set up for you: don't call start_session or end_session, and leave out `session`."
+        "0. Your session and agent cursor are already set up for you; leave out `session`."
     } else {
         "0. start_session(session) once per run with a stable id you choose; pass the same `session` on every action; end_session(session) when done. Parallel runs use their own ids."
     };
@@ -399,6 +399,37 @@ mod tests {
             "lean list is {bytes} bytes (~{} tokens)",
             bytes / 4
         );
+        let serialized = serde_json::to_string(&small).unwrap();
+        for hidden in cu_layer::catalog::OFFERED
+            .iter()
+            .filter(|name| {
+                !small["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == **name)
+            })
+            .chain(cu_layer::catalog::WITHHELD.iter().map(|(name, _)| name))
+        {
+            assert!(
+                !serialized.contains(hidden),
+                "hidden tool {hidden} in tools/list"
+            );
+        }
+        if small["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "launch_app")
+            .unwrap()
+            .pointer("/inputSchema/properties/cdp_debugging_port")
+            .is_none()
+        {
+            assert!(!serialized.contains("cdp_debugging_port"));
+        }
+        let skill = include_str!("../../../../../crates/core/src/manager/computer_use_skill.md");
+        assert!(!skill.contains("start_session"));
+        assert!(!skill.contains("end_session"));
         for tool in small["tools"].as_array().unwrap() {
             assert!(tool.pointer("/inputSchema/properties/session").is_none());
         }
@@ -409,10 +440,7 @@ mod tests {
     #[test]
     fn a_session_the_host_manages_takes_no_session_calls() {
         let hosted = agent_instructions(true);
-        assert!(
-            hosted.contains("don't call start_session or end_session"),
-            "{hosted}"
-        );
+        assert!(hosted.contains("already set up for you"), "{hosted}");
         assert!(!hosted.contains("SESSION_STEP"));
         let standalone = agent_instructions(false);
         assert!(

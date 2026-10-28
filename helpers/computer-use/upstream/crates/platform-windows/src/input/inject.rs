@@ -53,6 +53,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_NOACTIVATE,
 };
 
+#[path = "foreground_watch.rs"]
+pub(crate) mod foreground_watch;
+
 #[derive(Default)]
 struct ForegroundLockState {
     holders: usize,
@@ -154,69 +157,125 @@ pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
     (false, true)
 }
 
-/// RAII guard that makes a specific target window **unable to become the
-/// foreground/active window** for the duration of an actuation, by adding the
-/// `WS_EX_NOACTIVATE` extended style to its top-level window.
-///
-/// Why this and not a global foreground-lock: our own injected/posted input
-/// (or a UIA-Invoke) legitimizes the target's foreground claim, so even a
-/// maxed `SPI_*FOREGROUNDLOCKTIMEOUT` won't stop the steal. `WS_EX_NOACTIVATE`
-/// is categorical — Windows refuses to activate the window *at all* (clicks,
-/// `SetForegroundWindow(self)` from WPF/XAML/Tauri handlers, mouse-activate) —
-/// while the window still RECEIVES the click/key. It is per-window (no session
-/// side effects) and reversed on drop. Covers the self-activation that the
-/// EnableWindow/UWP bypass cannot (WPF `UIElement.Focus()`→SetForegroundWindow).
+/// Suppress system activation of the target and its owner while background
+/// input is in flight. Explicit app activation may bypass this style; the
+/// event watch handles observed activation and late dialog dismissal.
+/// Leases are shared so overlapping run_steps do not clear each other's bit.
 pub struct NoActivateGuard {
-    // Store the handle as an integer so the guard is `Send` and can be held
-    // across `.await` in the async tools.
-    root_addr: isize,
-    applied: bool,
+    styles: Vec<(isize, u32, u32)>,
+    _watch: foreground_watch::ForegroundWatch,
 }
 
+struct StyleLease {
+    holders: usize,
+    added: bool,
+}
+
+static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLease>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
 impl NoActivateGuard {
-    /// Arm on the top-level (GA_ROOT) ancestor of `hwnd`.
     pub fn arm(hwnd: HWND) -> Self {
-        unsafe {
-            let root = {
-                let r = GetAncestor(hwnd, GA_ROOT);
-                if r.0.is_null() {
-                    hwnd
-                } else {
-                    r
-                }
-            };
-            let prev = GetWindowLongPtrW(root, GWL_EXSTYLE);
-            let want = WS_EX_NOACTIVATE.0 as isize;
-            // Apply WS_EX_NOACTIVATE if not already set (prev can be 0, so don't
-            // gate on it — we just need to check the bit and set it if absent).
-            let applied = (prev & want) == 0 && {
-                SetWindowLongPtrW(root, GWL_EXSTYLE, prev | want);
-                // Confirm it took (cross-process SetWindowLongPtr can be denied
-                // by UIPI on higher-integrity targets).
-                (GetWindowLongPtrW(root, GWL_EXSTYLE) & want) != 0
-            };
-            Self {
-                root_addr: root.0 as isize,
-                applied,
+        use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+        let prior = unsafe { GetForegroundWindow() }.0 as usize;
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        let root = if root.0.is_null() { hwnd } else { root };
+        let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
+        let mut styles = Vec::new();
+        let mut pids = Vec::new();
+        let mut leases = STYLE_LEASES.lock().unwrap();
+        for window in [root, owner] {
+            if window.0.is_null() || window.0 as usize == prior {
+                continue;
             }
+            let mut pid = 0;
+            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            if pid == 0 || tid == 0 {
+                continue;
+            }
+            let key = (window.0 as isize, pid, tid);
+            if styles.contains(&key) {
+                continue;
+            }
+            pids.push(pid);
+            let lease = leases.entry(key).or_insert_with(|| {
+                let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+                let want = WS_EX_NOACTIVATE.0 as isize;
+                let added = current & want == 0
+                    && unsafe {
+                        SetWindowLongPtrW(window, GWL_EXSTYLE, current | want);
+                        GetWindowLongPtrW(window, GWL_EXSTYLE) & want != 0
+                    };
+                StyleLease { holders: 0, added }
+            });
+            lease.holders += 1;
+            styles.push(key);
+        }
+        drop(leases);
+        pids.sort_unstable();
+        pids.dedup();
+        let watch = foreground_watch::ForegroundWatch::start(
+            prior,
+            foreground_watch::Target::Processes(pids),
+        );
+        Self {
+            styles,
+            _watch: watch,
         }
     }
 }
 
 impl Drop for NoActivateGuard {
     fn drop(&mut self) {
-        if self.applied {
-            unsafe {
-                let root = HWND(self.root_addr as *mut _);
-                let current = GetWindowLongPtrW(root, GWL_EXSTYLE);
-                let noactivate = WS_EX_NOACTIVATE.0 as isize;
-                // Clear only the bit this guard added. Restoring the full
-                // captured value can clobber unrelated style changes the app
-                // made while the background action was in flight.
-                SetWindowLongPtrW(root, GWL_EXSTYLE, current & !noactivate);
+        let mut leases = STYLE_LEASES.lock().unwrap();
+        for key in &self.styles {
+            let Some(lease) = leases.get_mut(key) else {
+                continue;
+            };
+            lease.holders = lease.holders.saturating_sub(1);
+            if lease.holders != 0 {
+                continue;
+            }
+            let added = lease.added;
+            leases.remove(key);
+            let window = HWND(key.0 as *mut _);
+            let mut pid = 0;
+            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            // Do not modify an unrelated window if Windows recycled the HWND.
+            if added && pid == key.1 && tid == key.2 {
+                unsafe {
+                    let current = GetWindowLongPtrW(window, GWL_EXSTYLE);
+                    SetWindowLongPtrW(
+                        window,
+                        GWL_EXSTYLE,
+                        current & !(WS_EX_NOACTIVATE.0 as isize),
+                    );
+                }
             }
         }
     }
+}
+
+// Guard even unindexed key/text calls: a posted Return can dismiss a dialog
+// asynchronously and let its owner activate after PostMessage has returned.
+pub fn guarded_post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_key(hwnd, key, modifiers)
+}
+
+pub fn guarded_post_char(hwnd: u64, ch: char) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_char(hwnd, ch)
+}
+
+pub fn guarded_post_type_text(hwnd: u64, text: &str) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_type_text(hwnd, text)
+}
+
+pub fn guarded_post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_type_text_with_delay(hwnd, text, inter_char_ms)
 }
 
 /// PEN_FLAG_BARREL (winuser.h) — pen barrel button held == secondary (right)
@@ -345,28 +404,11 @@ pub fn inject_click_screen(
              no-foreground contract). Escalate to delivery_mode:\"foreground\"."
         );
     }
-    // Remember who the user had in front so we can re-assert it below.
-    let prev_fg = unsafe { GetForegroundWindow() };
     // Make the target non-activatable for the click so click-activation can't
-    // steal foreground. No z-order raise.
-    let result = {
-        let _noact = NoActivateGuard::arm(target_h);
-        // One synthetic device does all `count` taps (single/double/triple click).
-        pen_taps(sx, sy, barrel, count)
-    };
-    // `WS_EX_NOACTIVATE` is NOT categorical against a Chromium/Electron content
-    // window that calls `SetForegroundWindow(self)` from its (async) click
-    // handler. Re-assert the USER's foreground (this restores focus where the
-    // user left it — it never raises the target). Short settle + repeat to win
-    // the race against the async self-activation.
-    unsafe {
-        if result.is_ok() && !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-            sleep(Duration::from_millis(12));
-            force_foreground_attached(prev_fg);
-        }
-    }
-    result
+    // steal foreground. The shared watch attributes activation and yields to
+    // physical window selection; never blindly restore an old foreground.
+    let _noact = NoActivateGuard::arm(target_h);
+    pen_taps(sx, sy, barrel, count)
 }
 
 /// True when `target`'s top-level root is the window actually visible at screen
@@ -740,7 +782,6 @@ pub fn inject_drag_screen(
              — it is occluded by another window. Escalate to delivery_mode:\"foreground\"."
         );
     }
-    let prev_fg = unsafe { GetForegroundWindow() };
     // Left drag → touch contact (coordinate-routed). Right/barrel drag has no
     // touch equivalent, so fall back to a pen (rare).
     let stroke = |()| {
@@ -750,18 +791,9 @@ pub fn inject_drag_screen(
             touch_drag(sx0, sy0, sx1, sy1, steps)
         }
     };
-    // Chromium/GTK: pointer-aware, process injection in the background — hold
-    // non-activatable (no raise), inject, then re-assert the user's foreground.
-    let r = {
-        let _noact = NoActivateGuard::arm(target_h);
-        stroke(())
-    };
-    unsafe {
-        if !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-        }
-    }
-    r
+    // The watch, rather than an unconditional restore, respects user switches.
+    let _noact = NoActivateGuard::arm(target_h);
+    stroke(())
 }
 
 // (Removed inject_key_cloaked / inject_text_cloaked.) The macOS-aligned

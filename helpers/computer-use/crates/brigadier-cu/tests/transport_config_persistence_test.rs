@@ -19,6 +19,9 @@
 //! save the prior value and restore it. Run explicitly:
 //!   cargo test -p brigadier-cu --test transport_config_persistence_test -- --ignored --nocapture
 
+// The integration testkit in this workspace implements macOS only.
+#![cfg(target_os = "macos")]
+
 use cu_testkit::{CliDriver, Driver, McpDriver};
 
 const KEY: &str = "max_image_dimension";

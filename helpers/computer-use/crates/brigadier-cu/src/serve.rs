@@ -2797,10 +2797,9 @@ pub fn run_status_cmd(socket_path: &str, pid_file_path: &str) {
 
 #[cfg(test)]
 mod external_permission_flow_tests {
-    use super::{
-        clamp_external_permission_prompt, screen_capture_verification_response,
-        validate_system_permission_request,
-    };
+    #[cfg(target_os = "macos")]
+    use super::validate_system_permission_request;
+    use super::{clamp_external_permission_prompt, screen_capture_verification_response};
 
     #[test]
     fn external_permission_flow_clamps_agent_prompt_requests() {
@@ -2858,10 +2857,11 @@ mod external_permission_flow_tests {
 
 #[cfg(test)]
 mod socket_authentication_tests {
+    #[cfg(target_os = "macos")]
+    use super::ProcessIdentity;
     use super::{
         host_request_is_authorized, parse_request_with_token, parse_request_with_tokens,
         process_descends_from, socket_peer_requires_authorized_root, DaemonRequest,
-        ProcessIdentity,
     };
     use std::collections::HashMap;
 

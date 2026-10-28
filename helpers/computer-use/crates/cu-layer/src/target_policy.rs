@@ -116,18 +116,17 @@ pub fn enforce(
     if is_listing_tool(tool) {
         return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
     enforce_executable_launch(tool, args, allowed)?;
     let own_pid = i64::from(std::process::id());
     let mut checked_pid = None;
     if let Some(pid) = args.get("pid").and_then(Value::as_i64) {
         checked_pid = Some(pid);
-        check_pid(tool, pid, own_pid, allowed, resolver)?;
+        check_pid(tool, args, pid, own_pid, allowed, resolver)?;
     }
     if let Some(window_id) = args.get("window_id").and_then(Value::as_u64) {
         if let Some(owner) = (resolver.pid_for_window)(window_id) {
             if checked_pid != Some(owner) {
-                check_pid(tool, owner, own_pid, allowed, resolver)?;
+                check_pid(tool, args, owner, own_pid, allowed, resolver)?;
             }
         } else {
             #[cfg(not(target_os = "macos"))]
@@ -141,7 +140,7 @@ pub fn enforce(
             bundle_id: Some(bundle_id.to_owned()),
             pid: None,
         };
-        check(tool, &identity, allowed)?;
+        check_call(tool, args, &identity, allowed)?;
     }
     if tool == "launch_app" {
         if let Some(name) = args.get("name").and_then(Value::as_str) {
@@ -150,7 +149,7 @@ pub fn enforce(
                 bundle_id: None,
                 pid: None,
             };
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
         }
         if let Some(urls) = args.get("urls").and_then(Value::as_array) {
             for url in urls.iter().filter_map(Value::as_str) {
@@ -170,6 +169,7 @@ pub fn enforce(
 
 fn check_pid(
     tool: &str,
+    args: &Value,
     pid: i64,
     own_pid: i64,
     allowed: &[String],
@@ -186,7 +186,7 @@ fn check_pid(
     }
     match identity {
         Some(identity) => {
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
             #[cfg(not(target_os = "macos"))]
             {
                 let unlocked = identity
@@ -221,10 +221,30 @@ fn unresolved_identity(tool: &str) -> ToolResult {
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
-        Some(RefusalReason::SecuritySurface) if reads_settings(tool, identity) => Ok(()),
+        Some(RefusalReason::SecuritySurface)
+            if reads_settings(tool, identity)
+                || tool == "kill_app" && is_windows_settings(identity) =>
+        {
+            Ok(())
+        }
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
     }
+}
+
+fn check_call(
+    tool: &str,
+    args: &Value,
+    identity: &TargetIdentity,
+    allowed: &[String],
+) -> Result<(), ToolResult> {
+    if is_windows_settings(identity)
+        && classify(identity, allowed) == Some(RefusalReason::SecuritySurface)
+        && cua_driver_core::window_state_view::windows_settings_close_request(tool, args)
+    {
+        return Ok(());
+    }
+    check(tool, identity, allowed)
 }
 
 /// System Settings may be opened and read (a version, whether a setting is
@@ -235,6 +255,17 @@ fn reads_settings(tool: &str, identity: &TargetIdentity) -> bool {
             tool,
             "launch_app" | "get_window_state" | "verify_state" | "get_accessibility_tree" | "zoom"
         )
+}
+
+/// Windows Settings owns a separate app process; terminating it cannot change
+/// a setting. Other security surfaces and platform Settings retain their policy.
+fn is_windows_settings(identity: &TargetIdentity) -> bool {
+    let id = identity
+        .bundle_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    id == "systemsettings" || id.starts_with("windows.immersivecontrolpanel")
 }
 
 /// Whether `identity` is System Settings.
@@ -401,6 +432,20 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
         ))
         || bundle.starts_with("dev.warp.")
         || is_windows_or_linux_terminal(bundle)
+        || is_windows_or_linux_terminal(name)
+        || name == "wmux"
+        || matches!(
+            name,
+            "windows terminal"
+                | "command prompt"
+                | "git bash"
+                | "git cmd"
+                | "windows command processor"
+                | "windows console host"
+        )
+        || name == "windows powershell"
+        || name.starts_with("windows powershell ")
+        || name.starts_with("powershell ")
         || matches!(
             name,
             "terminal"
@@ -648,6 +693,15 @@ fn enforce_executable_launch(
             continue;
         };
         let reference = reference.trim();
+        check(
+            tool,
+            &TargetIdentity {
+                name: app_name_from_reference(reference),
+                bundle_id: None,
+                pid: None,
+            },
+            allowed,
+        )?;
         let token = if let Some(quoted) = reference.strip_prefix('"') {
             quoted.split('"').next().unwrap_or(quoted)
         } else if reference.contains('!') {
@@ -704,9 +758,18 @@ fn enforce_executable_launch(
 
 /// `launch_app` accepts a display name or an app path; compare the app name.
 fn app_name_from_reference(reference: &str) -> String {
-    let trimmed = reference.trim().trim_end_matches('/');
-    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    last.strip_suffix(".app").unwrap_or(last).to_owned()
+    let trimmed = reference
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['/', '\\']);
+    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let lower = last.to_ascii_lowercase();
+    for suffix in [".app", ".exe", ".lnk", ".desktop"] {
+        if lower.ends_with(suffix) {
+            return last[..last.len() - suffix.len()].to_owned();
+        }
+    }
+    last.to_owned()
 }
 
 /// A `brigadier:` (or `brigadier-*:`) URL opens in the user's Brigadier.
@@ -730,7 +793,7 @@ const SETTINGS_REFUSAL: &str =
      setting, ask the user to do this step.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
-    "Settings can be opened and read, never clicked or typed into. To read a page, open it \
+    "Settings can be opened, read and closed; all other input is refused. Close a task-owned window with click using pid, window_id and action:\"close\" without an element or pixels; use kill_app if normal close fails. To read a page, open it \
      directly: launch_app with urls [\"ms-settings:<page>\"], for example ms-settings:about \
      (the Windows version), ms-settings:windowsupdate, ms-settings:display or \
      ms-settings:network, then get_window_state. To change a setting, ask the user to do \
@@ -800,6 +863,51 @@ mod tests {
     }
 
     #[test]
+    fn terminal_display_names_paths_and_shell_aliases_are_refused_before_launch() {
+        with_fake_apps(|resolver| {
+            for name in [
+                "Windows PowerShell",
+                "Windows PowerShell (x86)",
+                "Windows PowerShell ISE",
+                "Git CMD",
+                "Windows Command Processor",
+                "Windows Console Host",
+                "PowerShell 7 (x64)",
+                "powershell",
+                "pwsh",
+                "cmd",
+                "wt",
+                "Windows Terminal",
+                "wmux",
+                "bash",
+                "wsl",
+                "conhost",
+                "zsh",
+                "fish",
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "C:\\Users\\user\\Windows PowerShell.lnk",
+                "/bin/bash",
+                "/Applications/Terminal.app",
+            ] {
+                for key in ["name", "path", "launch_path"] {
+                    let args = json!({key:name});
+                    assert_eq!(
+                        reason_of(enforce("launch_app", &args, &[], resolver)).as_deref(),
+                        Some("terminal"),
+                        "{args}"
+                    );
+                }
+            }
+            for name in ["Notepad", "Calculator", "/Applications/Console.app"] {
+                assert!(
+                    enforce("launch_app", &json!({"name":name}), &[], resolver).is_ok(),
+                    "{name}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn console_and_pty_descendants_reveal_unknown_terminal_hosts() {
         for host in ["conhost.exe", "OpenConsole.exe", "pwsh.exe"] {
             let processes = [
@@ -845,7 +953,7 @@ mod tests {
             "foot",
             "tilix",
         ] {
-            if cfg!(target_os = "macos") && matches!(terminal, "wmux" | "tabby" | "git-bash") {
+            if cfg!(target_os = "macos") && matches!(terminal, "tabby" | "git-bash") {
                 assert!(!is_terminal(terminal, terminal), "{terminal}");
                 continue;
             }
@@ -867,6 +975,25 @@ mod tests {
         }
         #[cfg(target_os = "macos")]
         assert!(!is_terminal("com.apple.console", "console"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_launches_are_refused_before_native_target_lookup() {
+        let resolver = TargetResolver {
+            app_for_pid: &|_| panic!("shell launch must be refused before native lookup"),
+            pid_for_window: &|_| panic!("shell launch must be refused before native lookup"),
+        };
+        for args in [
+            json!({"name":"Windows PowerShell"}),
+            json!({"path":"C:\\Windows\\System32\\cmd.exe"}),
+            json!({"launch_path":"wt.exe"}),
+        ] {
+            assert_eq!(
+                reason_of(enforce("launch_app", &args, &[], &resolver)).as_deref(),
+                Some("terminal")
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -1068,6 +1195,90 @@ mod tests {
                 Some("driver")
             );
         });
+    }
+
+    #[test]
+    fn only_an_exact_settings_window_close_passes_the_input_policy() {
+        let identity = TargetIdentity {
+            name: "Settings".into(),
+            bundle_id: Some("systemsettings".into()),
+            pid: Some(42),
+        };
+        let args = json!({"pid":42,"window_id":99,"action":"close"});
+        let resolver = TargetResolver {
+            app_for_pid: &|_| Some(identity.clone()),
+            pid_for_window: &|_| Some(42),
+        };
+        assert!(enforce("click", &args, &[], &resolver).is_ok());
+        for (field, value) in [
+            ("x", json!(0)),
+            ("element_token", json!("s1:0")),
+            ("action", json!("press")),
+            ("modifier", json!(["ctrl"])),
+        ] {
+            let mut modified = args.clone();
+            modified[field] = value;
+            assert!(
+                enforce("click", &modified, &[], &resolver).is_err(),
+                "{modified}"
+            );
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let other = TargetIdentity {
+                bundle_id: Some(id.into()),
+                name: id.into(),
+                pid: Some(42),
+            };
+            assert!(check_call("click", &args, &other, &[]).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn windows_settings_can_be_terminated_but_other_input_stays_refused() {
+        for id in [
+            "systemsettings",
+            "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+        ] {
+            let identity = TargetIdentity {
+                name: "Settings".into(),
+                bundle_id: Some(id.into()),
+                pid: Some(42),
+            };
+            assert!(check("kill_app", &identity, &[]).is_ok());
+            assert!(check("get_window_state", &identity, &[]).is_ok());
+            for tool in [
+                "click",
+                "double_click",
+                "right_click",
+                "press_key",
+                "hotkey",
+                "type_text",
+                "set_value",
+                "scroll",
+                "invoke_menu",
+            ] {
+                assert!(check(tool, &identity, &[]).is_err(), "{tool}");
+            }
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "regedit",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let identity = TargetIdentity {
+                name: id.into(),
+                bundle_id: Some(id.into()),
+                pid: Some(43),
+            };
+            assert!(check("kill_app", &identity, &[]).is_err(), "{id}");
+        }
     }
 
     #[test]

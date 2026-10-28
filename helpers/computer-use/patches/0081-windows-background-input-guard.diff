@@ -1,0 +1,206 @@
+Why: Guard all posted key/text actions and dialog-owner activation, with overlapping style leases and late hand-back for run_steps and Save As dismissal.
+
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -157,69 +157,125 @@
+     (false, true)
+ }
+ 
+-/// RAII guard that makes a specific target window **unable to become the
+-/// foreground/active window** for the duration of an actuation, by adding the
+-/// `WS_EX_NOACTIVATE` extended style to its top-level window.
+-///
+-/// Why this and not a global foreground-lock: our own injected/posted input
+-/// (or a UIA-Invoke) legitimizes the target's foreground claim, so even a
+-/// maxed `SPI_*FOREGROUNDLOCKTIMEOUT` won't stop the steal. `WS_EX_NOACTIVATE`
+-/// is categorical — Windows refuses to activate the window *at all* (clicks,
+-/// `SetForegroundWindow(self)` from WPF/XAML/Tauri handlers, mouse-activate) —
+-/// while the window still RECEIVES the click/key. It is per-window (no session
+-/// side effects) and reversed on drop. Covers the self-activation that the
+-/// EnableWindow/UWP bypass cannot (WPF `UIElement.Focus()`→SetForegroundWindow).
++/// Suppress system activation of the target and its owner while background
++/// input is in flight. Explicit app activation may bypass this style; the
++/// event watch handles observed activation and late dialog dismissal.
++/// Leases are shared so overlapping run_steps do not clear each other's bit.
+ pub struct NoActivateGuard {
+-    // Store the handle as an integer so the guard is `Send` and can be held
+-    // across `.await` in the async tools.
+-    root_addr: isize,
+-    applied: bool,
+-}
++    styles: Vec<(isize, u32, u32)>,
++    _watch: foreground_watch::ForegroundWatch,
++}
++
++struct StyleLease {
++    holders: usize,
++    added: bool,
++}
++
++static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLease>> =
++    Mutex::new(std::collections::BTreeMap::new());
+ 
+ impl NoActivateGuard {
+-    /// Arm on the top-level (GA_ROOT) ancestor of `hwnd`.
+     pub fn arm(hwnd: HWND) -> Self {
+-        unsafe {
+-            let root = {
+-                let r = GetAncestor(hwnd, GA_ROOT);
+-                if r.0.is_null() {
+-                    hwnd
+-                } else {
+-                    r
+-                }
+-            };
+-            let prev = GetWindowLongPtrW(root, GWL_EXSTYLE);
+-            let want = WS_EX_NOACTIVATE.0 as isize;
+-            // Apply WS_EX_NOACTIVATE if not already set (prev can be 0, so don't
+-            // gate on it — we just need to check the bit and set it if absent).
+-            let applied = (prev & want) == 0 && {
+-                SetWindowLongPtrW(root, GWL_EXSTYLE, prev | want);
+-                // Confirm it took (cross-process SetWindowLongPtr can be denied
+-                // by UIPI on higher-integrity targets).
+-                (GetWindowLongPtrW(root, GWL_EXSTYLE) & want) != 0
+-            };
+-            Self {
+-                root_addr: root.0 as isize,
+-                applied,
++        use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
++        let prior = unsafe { GetForegroundWindow() }.0 as usize;
++        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
++        let root = if root.0.is_null() { hwnd } else { root };
++        let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
++        let mut styles = Vec::new();
++        let mut pids = Vec::new();
++        let mut leases = STYLE_LEASES.lock().unwrap();
++        for window in [root, owner] {
++            if window.0.is_null() || window.0 as usize == prior {
++                continue;
+             }
++            let mut pid = 0;
++            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
++            if pid == 0 || tid == 0 {
++                continue;
++            }
++            let key = (window.0 as isize, pid, tid);
++            if styles.contains(&key) {
++                continue;
++            }
++            pids.push(pid);
++            let lease = leases.entry(key).or_insert_with(|| {
++                let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
++                let want = WS_EX_NOACTIVATE.0 as isize;
++                let added = current & want == 0
++                    && unsafe {
++                        SetWindowLongPtrW(window, GWL_EXSTYLE, current | want);
++                        GetWindowLongPtrW(window, GWL_EXSTYLE) & want != 0
++                    };
++                StyleLease { holders: 0, added }
++            });
++            lease.holders += 1;
++            styles.push(key);
++        }
++        drop(leases);
++        pids.sort_unstable();
++        pids.dedup();
++        let watch = foreground_watch::ForegroundWatch::start(
++            prior,
++            foreground_watch::Target::Processes(pids),
++        );
++        Self {
++            styles,
++            _watch: watch,
+         }
+     }
+ }
+ 
+ impl Drop for NoActivateGuard {
+     fn drop(&mut self) {
+-        if self.applied {
+-            unsafe {
+-                let root = HWND(self.root_addr as *mut _);
+-                let current = GetWindowLongPtrW(root, GWL_EXSTYLE);
+-                let noactivate = WS_EX_NOACTIVATE.0 as isize;
+-                // Clear only the bit this guard added. Restoring the full
+-                // captured value can clobber unrelated style changes the app
+-                // made while the background action was in flight.
+-                SetWindowLongPtrW(root, GWL_EXSTYLE, current & !noactivate);
++        let mut leases = STYLE_LEASES.lock().unwrap();
++        for key in &self.styles {
++            let Some(lease) = leases.get_mut(key) else {
++                continue;
++            };
++            lease.holders = lease.holders.saturating_sub(1);
++            if lease.holders != 0 {
++                continue;
+             }
+-        }
+-    }
++            let added = lease.added;
++            leases.remove(key);
++            let window = HWND(key.0 as *mut _);
++            let mut pid = 0;
++            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
++            // Do not modify an unrelated window if Windows recycled the HWND.
++            if added && pid == key.1 && tid == key.2 {
++                unsafe {
++                    let current = GetWindowLongPtrW(window, GWL_EXSTYLE);
++                    SetWindowLongPtrW(
++                        window,
++                        GWL_EXSTYLE,
++                        current & !(WS_EX_NOACTIVATE.0 as isize),
++                    );
++                }
++            }
++        }
++    }
++}
++
++// Guard even unindexed key/text calls: a posted Return can dismiss a dialog
++// asynchronously and let its owner activate after PostMessage has returned.
++pub fn guarded_post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
++    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
++    super::keyboard::post_key(hwnd, key, modifiers)
++}
++
++pub fn guarded_post_char(hwnd: u64, ch: char) -> Result<()> {
++    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
++    super::keyboard::post_char(hwnd, ch)
++}
++
++pub fn guarded_post_type_text(hwnd: u64, text: &str) -> Result<()> {
++    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
++    super::keyboard::post_type_text(hwnd, text)
++}
++
++pub fn guarded_post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> Result<()> {
++    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
++    super::keyboard::post_type_text_with_delay(hwnd, text, inter_char_ms)
+ }
+ 
+ /// PEN_FLAG_BARREL (winuser.h) — pen barrel button held == secondary (right)
+diff --git a/crates/platform-windows/src/input/mod.rs b/crates/platform-windows/src/input/mod.rs
+--- a/crates/platform-windows/src/input/mod.rs
++++ b/crates/platform-windows/src/input/mod.rs
+@@ -16,13 +16,15 @@
+ 
+ pub(crate) use inject::{force_foreground_assisted, force_foreground_attached};
+ pub use inject::{
+-    inject_click_screen, point_in_window_bounds, point_on_virtual_desktop, window_is_iconic,
+-    ForegroundLockGuard, NoActivateGuard,
++    guarded_post_char as post_char, guarded_post_key as post_key,
++    guarded_post_type_text as post_type_text,
++    guarded_post_type_text_with_delay as post_type_text_with_delay, inject_click_screen,
++    point_in_window_bounds, point_on_virtual_desktop, window_is_iconic, ForegroundLockGuard,
++    NoActivateGuard,
+ };
+ pub use keyboard::{
+-    is_xaml_host_hwnd, post_char, post_key, post_type_text, post_type_text_with_delay,
+-    send_key_synthesized, send_key_synthesized_after_focus, send_text_synthesized,
+-    send_text_synthesized_after_focus, wait_for_focused_descendant,
++    is_xaml_host_hwnd, send_key_synthesized, send_key_synthesized_after_focus,
++    send_text_synthesized, send_text_synthesized_after_focus, wait_for_focused_descendant,
+ };
+ pub use mouse::{
+     has_chromium_descendant, is_chromium_target_window, post_click, post_click_screen,

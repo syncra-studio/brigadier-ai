@@ -1,0 +1,245 @@
+Why: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -40,22 +40,83 @@
+     output
+ }
+ 
++/// The omnibox may omit the scheme and the root slash. Preserve path/query
++/// case and never equate two explicitly different schemes.
+ pub(crate) fn url_matches(actual: &str, requested: &str, exact: bool) -> bool {
+-    if requested.trim().is_empty() || !is_web_url(actual) {
+-        return false;
+-    }
+-    if !exact {
+-        return actual.contains(requested);
+-    }
+-    fn root_slash(url: &str) -> &str {
+-        if let Some((_, rest)) = url.split_once("://") {
+-            if rest.ends_with('/') && rest.matches('/').count() == 1 {
+-                return &url[..url.len() - 1];
++    fn parts(value: &str) -> Option<(Option<String>, String)> {
++        let value = value.trim();
++        if value.is_empty() || value.chars().any(char::is_whitespace) {
++            return None;
++        }
++        let (scheme, rest) = if let Some((scheme, rest)) = value.split_once("://") {
++            if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
++                return None;
+             }
+-        }
+-        url
+-    }
+-    root_slash(actual) == root_slash(requested)
++            (Some(scheme.to_ascii_lowercase()), rest)
++        } else {
++            (None, value)
++        };
++        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
++        let host = &rest[..end];
++        if host.is_empty() || host.contains('@') ||
++            !(host.contains('.') || host.starts_with("localhost") || host.starts_with('[')) {
++            return None;
++        }
++        let tail = &rest[end..];
++        Some((scheme, format!("{}{}", host.to_ascii_lowercase(), if tail == "/" { "" } else { tail })))
++    }
++    let Some((actual_scheme, actual)) = parts(actual) else { return false; };
++    let requested = requested.trim();
++    if requested.is_empty() { return false; }
++    if exact {
++        let Some((requested_scheme, requested)) = parts(requested) else { return false; };
++        return (actual_scheme.is_none() || requested_scheme.is_none() || actual_scheme == requested_scheme)
++            && actual == requested;
++    }
++    if let Some((requested_scheme, normalized)) = parts(requested) {
++        (actual_scheme.is_none() || requested_scheme.is_none() || actual_scheme == requested_scheme)
++            && actual.contains(&normalized)
++    } else {
++        actual.contains(requested)
++    }
++}
++
++pub(crate) fn is_omnibox(automation_id: &str, class_name: &str) -> bool {
++    matches!(automation_id.to_ascii_lowercase().as_str(), "addresseditbox" | "omnibox" | "urlbar")
++        || class_name.eq_ignore_ascii_case("OmniboxView")
++}
++
++/// Address-bar evidence binds only a single visible top-level document with
++/// no conflicting URL of its own. Never use a title or a page's search field.
++pub(crate) fn omnibox_binds_document(visible_documents: usize, document_url: Option<&str>, bar: &str, requested: &str, exact: bool) -> bool {
++    visible_documents == 1 && url_matches(bar, requested, exact)
++        && document_url.is_none_or(|url| url_matches(url, requested, exact))
++}
++
++#[cfg(test)]
++mod omnibox_tests {
++    use super::*;
++    #[test]
++    fn edge_address_value_matches_displayed_scheme_and_root_slash_variants() {
++        for actual in ["https://example.com", "https://example.com/", "example.com", "EXAMPLE.COM/"] {
++            assert!(url_matches(actual, "https://example.com/", true));
++            assert!(url_matches(actual, "example.com", false));
++        }
++        assert!(!url_matches("http://example.com", "https://example.com", true));
++        assert!(!url_matches("https://example.com/Other", "https://example.com/other", true));
++        assert!(!url_matches("Example Domain", "Example", false));
++        assert!(!url_matches("https://example.com.evil/", "https://example.com", true));
++    }
++    #[test]
++    fn omnibox_never_selects_between_documents_or_overrides_a_conflict() {
++        assert!(is_omnibox("addressEditBox", ""));
++        assert!(is_omnibox("", "OmniboxView"));
++        assert!(!is_omnibox("search", "Edit"));
++        assert!(omnibox_binds_document(1, None, "example.com", "example.com", false));
++        assert!(!omnibox_binds_document(2, None, "example.com", "example.com", false));
++        assert!(!omnibox_binds_document(0, None, "example.com", "example.com", false));
++        assert!(!omnibox_binds_document(1, Some("https://other.com"), "example.com", "example.com", false));
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -6,7 +6,7 @@
+ };
+ use windows::Win32::UI::Accessibility::{
+     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
+-    TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_DocumentControlTypeId,
++    TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+     UIA_LegacyIAccessiblePatternId, UIA_ValueValuePropertyId,
+ };
+ 
+@@ -46,40 +46,84 @@
+     super::browser_target::is_web_url(&value).then_some(value)
+ }
+ 
++/// Only browser chrome can supply fallback URL evidence. A web page's own
++/// Edit controls must never impersonate an omnibox.
++unsafe fn inside_document(automation: &IUIAutomation, element: &IUIAutomationElement, root: &IUIAutomationElement) -> bool {
++    let Ok(walker) = automation.ControlViewWalker() else { return true; };
++    let mut current = element.clone();
++    for _ in 0..128 {
++        let Ok(parent) = walker.GetParentElement(&current) else { return true; };
++        if automation.CompareElements(&parent, root).map(|same| same.as_bool()).unwrap_or(false) {
++            return false;
++        }
++        if parent.CurrentControlType().ok() == Some(UIA_DocumentControlTypeId) { return true; }
++        current = parent;
++    }
++    true
++}
++
++unsafe fn address_bar_url(automation: &IUIAutomation, root: &IUIAutomationElement) -> Option<String> {
++    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_EditControlTypeId.0.into()).ok()?;
++    let edits = root.FindAll(TreeScope_Subtree, &condition).ok()?;
++    let mut result = None;
++    for index in 0..edits.Length().ok()? {
++        let edit = edits.GetElement(index).ok()?;
++        if edit.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(automation, &edit, root) { continue; }
++        let id = edit.CurrentAutomationId().ok().map(|s| s.to_string()).unwrap_or_default();
++        let class = edit.CurrentClassName().ok().map(|s| s.to_string()).unwrap_or_default();
++        if !super::browser_target::is_omnibox(&id, &class) { continue; }
++        // Edge often exposes the address on its Edit, not its Document. The
++        // value may omit https://, so document_url's scheme filter cannot apply.
++        let value = edit.GetCurrentPropertyValue(UIA_ValueValuePropertyId).ok()
++            .and_then(|v| windows::core::BSTR::try_from(&v).ok()).map(|s| s.to_string())
++            .filter(|s| !s.is_empty())
++            .or_else(|| {
++                let pattern: IUIAutomationLegacyIAccessiblePattern = edit.GetCurrentPattern(UIA_LegacyIAccessiblePatternId).ok()?.cast().ok()?;
++                pattern.CurrentValue().ok().map(|s| s.to_string())
++            })?;
++        if result.replace(value).is_some() { return None; }
++    }
++    result
++}
++
+ pub(super) unsafe fn matching_document(
+     hwnd: u64,
+     requested: &str,
+     exact: bool,
+-) -> anyhow::Result<(IUIAutomation, IUIAutomationElement)> {
++) -> anyhow::Result<(IUIAutomation, IUIAutomationElement, String)> {
+     let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+     let root = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
+-    let condition = automation.CreatePropertyCondition(
+-        UIA_ControlTypePropertyId,
+-        &UIA_DocumentControlTypeId.0.into(),
+-    )?;
++    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_DocumentControlTypeId.0.into())?;
+     let documents = root.FindAll(TreeScope_Subtree, &condition)?;
++    let mut visible = Vec::new();
+     let mut matching = None;
+     for index in 0..documents.Length()? {
+         let document = documents.GetElement(index)?;
+-        if document
+-            .CurrentIsOffscreen()
+-            .map(|off| off.as_bool())
+-            .unwrap_or(true)
+-        {
+-            continue;
+-        }
+-        if document_url(&document)
+-            .is_some_and(|url| super::browser_target::url_matches(&url, requested, exact))
+-        {
++        if document.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(&automation, &document, &root) { continue; }
++        let url = document_url(&document);
++        if url.as_deref().is_some_and(|url| super::browser_target::url_matches(url, requested, exact)) {
+             if matching.is_some() {
+                 anyhow::bail!("More than one visible document matches {requested:?}; use a more specific URL. No other page was read.");
+             }
+-            matching = Some(document);
++            matching = Some((document.clone(), url.clone().unwrap_or_default()));
++        }
++        visible.push((document, url));
++    }
++    if let Some((doc, url)) = matching { return Ok((automation, doc, url)); }
++    let browser = crate::win32::window_owner_pid(hwnd).is_some_and(|pid| {
++        crate::win32::list_processes().iter().any(|p| p.pid == pid &&
++            super::browser_target::named_browser_executable(&p.name).is_some())
++    });
++    if browser {
++        if let Some(bar) = address_bar_url(&automation, &root) {
++            if let Some((document, url)) = visible.first() {
++                if super::browser_target::omnibox_binds_document(visible.len(), url.as_deref(), &bar, requested, exact) {
++                    return Ok((automation, document.clone(), bar));
++                }
++            }
+         }
+     }
+-    matching.map(|doc| (automation, doc)).ok_or_else(|| anyhow::anyhow!(
+-        "Windows UI Automation does not expose a visible tab matching {requested:?} in this window. The tab may be inactive, absent, or its URL unavailable. No other page was read. Select that tab in the named window and retry."
+-    ))
++    anyhow::bail!("Windows UI Automation does not expose a uniquely visible document matching {requested:?} in window {hwnd}. Its document URL and address bar could not confirm the target. No other page was read. Select that tab in the named window and retry.")
+ }
+ 
+ pub(super) async fn window_showing_url(
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -139,19 +139,18 @@
+                 "no page text",
+                 move |_| unsafe {
+                     let _com = super::launch_browser::Apartment::new();
+-                    let (automation, document) =
++                    let (automation, document, before) =
+                         super::launch_browser::matching_document(hwnd, &hint, false)?;
+-                    let before = super::launch_browser::document_url(&document);
+                     let text = if query {
+                         query_dom_document(&automation, &document, &selector, &attributes)?
+                     } else {
+                         text_pattern_dump(&document)
+                             .unwrap_or_else(|_| walk_text_blocking(&document))
+                     };
+-                    let (_, current) =
++                    let (_, current, after) =
+                         super::launch_browser::matching_document(hwnd, &hint, false)?;
+                     if crate::win32::window_owner_pid(hwnd) != Some(pid)
+-                        || super::launch_browser::document_url(&document) != before
++                        || after != before
+                         || !automation.CompareElements(&document, &current)?.as_bool()
+                     {
+                         anyhow::bail!(

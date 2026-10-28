@@ -9,20 +9,24 @@
 //! For clicks, coordinates are window-client-relative (ScreenToClient applied
 //! if screen coords are given). We pack with MAKELPARAM(x,y).
 
+pub mod action_policy;
 pub mod delivery;
 pub mod inject;
 pub mod keyboard;
 pub mod mouse;
+pub mod text_policy;
 
 pub(crate) use inject::{force_foreground_assisted, force_foreground_attached};
 pub use inject::{
-    inject_click_screen, point_in_window_bounds, point_on_virtual_desktop, window_is_iconic,
-    ForegroundLockGuard, NoActivateGuard,
+    guarded_post_char as post_char, guarded_post_key as post_key,
+    guarded_post_type_text as post_type_text,
+    guarded_post_type_text_with_delay as post_type_text_with_delay, inject_click_screen,
+    point_in_window_bounds, point_on_virtual_desktop, window_is_iconic, ForegroundLockGuard,
+    NoActivateGuard,
 };
 pub use keyboard::{
-    is_xaml_host_hwnd, post_char, post_key, post_type_text, post_type_text_with_delay,
-    send_key_synthesized, send_key_synthesized_after_focus, send_text_synthesized,
-    send_text_synthesized_after_focus, wait_for_focused_descendant,
+    is_xaml_host_hwnd, send_key_synthesized, send_key_synthesized_after_focus,
+    send_text_synthesized, send_text_synthesized_after_focus, wait_for_focused_descendant,
 };
 pub use mouse::{
     has_chromium_descendant, is_chromium_target_window, post_click, post_click_screen,
@@ -122,18 +126,42 @@ pub fn post_message_blocked_by_uipi(hwnd: u64) -> Option<String> {
     if unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) } == 0 || pid == 0 {
         return None;
     }
-    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }?;
     let target_handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let target = unsafe { process_integrity_rid(target_handle) };
+    let message = process_control_integrity_refusal(target_handle)
+        .ok()
+        .flatten();
     let _ = unsafe { CloseHandle(target_handle) };
-    let target = target?;
-    integrity_block_message(own, target).map(str::to_owned)
+    message
+}
+
+/// Check the exact process handle used by kill_app, including targets with no
+/// windows. Fail closed if either token cannot be inspected.
+pub(crate) fn process_control_integrity_refusal(target: HANDLE) -> Result<Option<String>, String> {
+    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }.ok_or_else(|| {
+        "Windows could not inspect this helper's privileges. No termination was attempted."
+            .to_owned()
+    })?;
+    let target = unsafe { process_integrity_rid(target) }
+        .ok_or_else(|| "Windows could not inspect the target process's privileges. No termination was attempted.".to_owned())?;
+    Ok(integrity_block_message(own, target).map(str::to_owned))
 }
 
 #[cfg(test)]
 mod integrity_tests {
     use super::*;
+
+    #[test]
+    fn process_control_checks_exact_handles_and_refuses_unknown_privilege() {
+        assert!(
+            process_control_integrity_refusal(unsafe { GetCurrentProcess() })
+                .unwrap()
+                .is_none()
+        );
+        assert!(process_control_integrity_refusal(HANDLE::default())
+            .unwrap_err()
+            .contains("could not inspect the target process's privileges"));
+    }
 
     #[test]
     fn administrator_windows_explain_the_read_and_input_limit_plainly() {
@@ -153,3 +181,6 @@ mod integrity_tests {
         assert!(!message.contains("administrator"));
     }
 }
+
+#[cfg(test)]
+mod native_text_tests;

@@ -51,6 +51,21 @@ pub(crate) fn is_shared_frame_host(executable: &str) -> bool {
     executable_name(executable) == "applicationframehost"
 }
 
+pub(crate) fn termination_front_refusal(
+    pid: u32,
+    foreground_pid: Option<u32>,
+    owner_pid: Option<u32>,
+) -> Option<&'static str> {
+    match (foreground_pid, owner_pid) {
+        (Some(front), Some(owner)) if front != 0 && owner != 0 => {
+            (pid == front || pid == owner).then_some(
+                "Terminating this app could close your front window or its owned dialog. No termination was attempted.",
+            )
+        }
+        _ => Some("Windows could not identify the front window and its owner. No termination was attempted."),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TerminationObservation {
     Terminated,
@@ -74,6 +89,14 @@ pub(crate) fn termination_observation(
 #[cfg(test)]
 mod hosted_termination_tests {
     use super::*;
+    #[test]
+    fn termination_leaves_the_front_app_and_its_popup_owner_alive() {
+        assert!(termination_front_refusal(42, Some(7), Some(7)).is_none());
+        assert!(termination_front_refusal(42, Some(42), Some(42)).is_some());
+        assert!(termination_front_refusal(42, Some(7), Some(42)).is_some());
+        assert!(termination_front_refusal(42, None, Some(7)).is_some());
+        assert!(termination_front_refusal(42, Some(7), Some(0)).is_some());
+    }
     #[test]
     fn each_frame_maps_to_its_own_launched_app_without_owning_the_shared_host() {
         assert_eq!(
@@ -117,5 +140,103 @@ mod hosted_termination_tests {
             termination_observation(false, true),
             TerminationObservation::AlreadyExited
         );
+    }
+}
+
+/// Settings protocol launches often return pid 0; match its actual app identity,
+/// never a shared frame host or a localized window title.
+pub(crate) fn is_settings_protocol_launch(has_app: bool, urls: &[String]) -> bool {
+    !has_app && urls.len() == 1 && urls[0].to_ascii_lowercase().starts_with("ms-settings:")
+}
+
+pub(crate) fn is_settings_process(executable: &str) -> bool {
+    executable_name(executable) == "systemsettings"
+}
+
+#[cfg(test)]
+mod settings_protocol_tests {
+    use super::*;
+    #[test]
+    fn protocol_resolution_never_uses_an_unrelated_process_or_host() {
+        assert!(is_settings_protocol_launch(
+            false,
+            &["ms-settings:about".into()]
+        ));
+        assert!(!is_settings_protocol_launch(
+            true,
+            &["ms-settings:about".into()]
+        ));
+        assert!(!is_settings_protocol_launch(
+            false,
+            &["https://example.com".into()]
+        ));
+        assert!(!is_settings_protocol_launch(false, &[]));
+        assert!(is_settings_process("SystemSettings.exe"));
+        assert!(!is_settings_process("ApplicationFrameHost.exe"));
+        assert!(!is_settings_process("SystemSettingsAdminFlows.exe"));
+    }
+}
+
+pub(crate) fn is_notepad_target(target: &str) -> bool {
+    executable_name(target) == "notepad"
+        || target
+            .to_ascii_lowercase()
+            .starts_with("microsoft.windowsnotepad_")
+}
+
+pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
+    match executable_name(target).as_str() {
+        "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
+        "firefox" | "mozilla firefox" => Some("-new-window"),
+        _ => None,
+    }
+}
+
+pub(crate) fn document_title_matches(title: &str, filename: &str) -> bool {
+    let title = title.trim().trim_start_matches('*');
+    let stem = filename.strip_suffix(".txt").unwrap_or(filename);
+    [filename, stem].iter().any(|name| {
+        title == *name
+            || title
+                .strip_prefix(name)
+                .is_some_and(|tail| tail.starts_with(" - "))
+    })
+}
+
+#[cfg(test)]
+mod fresh_document_tests {
+    use super::*;
+    #[test]
+    fn only_supported_apps_get_fresh_window_flags() {
+        assert_eq!(
+            fresh_window_argument("Microsoft Edge"),
+            Some("--new-window")
+        );
+        assert_eq!(fresh_window_argument("chrome.exe"), Some("--new-window"));
+        assert_eq!(fresh_window_argument("notepad"), None);
+        assert!(is_notepad_target(
+            "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+        ));
+        assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
+        assert!(!is_notepad_target("Notepad++"));
+    }
+    #[test]
+    fn restored_document_titles_cannot_match_the_new_file() {
+        assert!(document_title_matches(
+            "brigadier-cu-123.txt - Notepad",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(document_title_matches(
+            "brigadier-cu-123",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(!document_title_matches(
+            "my resume - Notepad",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(!document_title_matches(
+            "brigadier-cu-1234.txt",
+            "brigadier-cu-123.txt"
+        ));
     }
 }

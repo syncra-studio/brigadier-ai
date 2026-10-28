@@ -7,10 +7,9 @@
 //! `element_token` module and its per-platform tool modules —
 //! this file is only for what's visible across the JSON-RPC boundary.
 
-// element_token resolution is exercised on macOS/Linux only; gate the whole
-// file (helpers included) so Windows excludes it instead of warning about the
-// then-unused tools/list helpers.
-#![cfg(any(target_os = "macos", target_os = "linux"))]
+// This integration test uses the macOS-only testkit. Portable token
+// resolution tests remain in cu-layer and the driver core.
+#![cfg(target_os = "macos")]
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
