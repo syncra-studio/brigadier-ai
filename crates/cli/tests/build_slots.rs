@@ -137,7 +137,7 @@ fn concurrent_daemon_launchers_share_the_machine_pool() {
 }
 
 #[test]
-fn killed_holder_frees_the_slot_without_waiting_for_its_child() {
+fn killing_the_slot_holder_leaves_no_surviving_unlocked_compiler() {
     let pool = Pool::new("killed");
     let _others: Vec<_> = (1..brigadier_sandbox::build_slots::count())
         .map(|i| pool.lock(i))
@@ -147,28 +147,37 @@ fn killed_holder_frees_the_slot_without_waiting_for_its_child() {
     pool.wait_file("child");
     let file = File::open(pool.0.join("build-slots/slot-0")).unwrap();
     assert!(matches!(file.try_lock(), Err(TryLockError::WouldBlock)));
-    holder.kill().unwrap();
-    assert_eq!(holder.wait().unwrap().signal(), Some(9));
-    file.try_lock().expect("the dead wrapper released its slot");
-    let pid = fs::read_to_string(pool.0.join("child"))
+    let compiler: u32 = fs::read_to_string(pool.0.join("child"))
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    signal(pid, "-KILL");
+    assert_eq!(compiler, holder.id(), "the launcher must exec the compiler");
+    holder.kill().unwrap();
+    assert_eq!(holder.wait().unwrap().signal(), Some(9));
+    file.try_lock()
+        .expect("the dead compiler released its slot");
+    assert!(
+        !Command::new("/bin/kill")
+            .args(["-0", &compiler.to_string()])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "an unlocked compiler survived"
+    );
 }
 
 #[test]
-fn compiler_descendant_inherits_no_slot() {
+fn compiler_descendants_keep_the_slot_until_they_exit() {
     let pool = Pool::new("descendant");
     let tool = pool.script(
         "compiler",
         "sleep 30 >/dev/null 2>&1 &\necho $! > \"$TEST_POOL/descendant\"",
     );
     assert!(wait(&mut pool.command(&tool).spawn().unwrap()).success());
-    let _locks: Vec<_> = (0..brigadier_sandbox::build_slots::count())
-        .map(|i| pool.lock(i))
-        .collect();
+    let file = File::open(pool.0.join("build-slots/slot-0")).unwrap();
+    assert!(matches!(file.try_lock(), Err(TryLockError::WouldBlock)));
     let pid = fs::read_to_string(pool.0.join("descendant"))
         .unwrap()
         .trim()
@@ -176,6 +185,17 @@ fn compiler_descendant_inherits_no_slot() {
         .unwrap();
     signal(pid, "-0");
     signal(pid, "-KILL");
+    let start = Instant::now();
+    loop {
+        if file.try_lock().is_ok() {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "descendant did not release the slot"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -248,5 +268,68 @@ fn termination_and_interrupt_reach_the_compiler() {
         let _locks: Vec<_> = (0..brigadier_sandbox::build_slots::count())
             .map(|i| pool.lock(i))
             .collect();
+    }
+}
+
+#[test]
+fn cargo_config_wrapper_and_custom_workspace_compiler_stay_chained() {
+    let pool = Pool::new("cargo-config");
+    let project = pool.0.join("project");
+    fs::create_dir_all(project.join(".cargo")).unwrap();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='wrapper_config_proof'\nversion='0.1.0'\nedition='2024'\n",
+    )
+    .unwrap();
+    fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    pool.script(
+        "configured-cache",
+        "echo configured-cache >> \"$TEST_POOL/config-chain\"\nexec \"$@\"",
+    );
+    pool.script(
+        "workspace-cache",
+        "echo workspace-cache >> \"$TEST_POOL/config-chain\"\nexec \"$@\"",
+    );
+    pool.script(
+        "custom-compiler",
+        "echo custom-compiler >> \"$TEST_POOL/config-chain\"\nexec rustc \"$@\"",
+    );
+    fs::write(project.join(".cargo/config.toml"), "[build]\nrustc-wrapper='../configured-cache'\nrustc-workspace-wrapper='../workspace-cache'\nrustc='../custom-compiler'\n").unwrap();
+    let launcher = pool.0.join("build-tools/brigadier-build-slot");
+    let cargo_home = pool.0.join("cargo-home");
+    let vars = brigadier_sandbox::build_slots::environment_in(&launcher, Some(&project), |name| {
+        (name == "CARGO_HOME").then(|| cargo_home.to_string_lossy().into_owned())
+    });
+    let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["build", "--offline"])
+        .current_dir(&project)
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTC")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC")
+        .env_remove("CARGO_TARGET_DIR")
+        .envs(vars)
+        .env("CARGO_HOME", cargo_home)
+        .env("TEST_POOL", &pool.0)
+        .env(
+            brigadier_sandbox::build_slots::POOL_ENV,
+            pool.0.join("build-slots"),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = fs::read_to_string(pool.0.join("config-chain")).unwrap();
+    for program in ["configured-cache", "workspace-cache", "custom-compiler"] {
+        assert!(
+            log.lines().any(|line| line == program),
+            "{program} was masked: {log}"
+        );
     }
 }

@@ -12,6 +12,7 @@ blake3.workspace = true
 dirs.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+toml_edit = { version = "0.25.15", default-features = false, features = ["parse"] }
 # Moving what Brigadier removes for the user (a Brain, the data directory, the app) to the Trash.
 trash = "5.2.9"
 
@@ -33,6 +34,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_System_Memory",
   "Win32_System_SystemInformation",
   "Win32_System_Console",
+  "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 [lints]

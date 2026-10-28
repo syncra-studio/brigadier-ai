@@ -188,3 +188,176 @@ fn daemons_keep_independent_launchers_and_a_shared_pool() {
     drop(file);
     fs::remove_dir_all(dir).unwrap();
 }
+
+struct ConfigDir(PathBuf);
+
+impl ConfigDir {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "brigadier-build-config-{name}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn write(&self, path: &str, text: &str) -> PathBuf {
+        let path = self.0.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        path
+    }
+}
+
+impl Drop for ConfigDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn cargo_config_precedence_relative_paths_and_explicit_disable() {
+    let dir = ConfigDir::new("cargo");
+    dir.write(
+        "cargo-home/config.toml",
+        "[build]\nrustc-wrapper = 'global-cache'\n",
+    );
+    dir.write(
+        "repo/.cargo/config.toml",
+        "[ build ]\nrustc-wrapper = './bin/cache'\nrustc = './bin/custom-rustc'\n",
+    );
+    dir.write(
+        "repo/nested/.cargo/config.toml",
+        "build = { rustc-workspace-wrapper = './workspace-cache' }\n",
+    );
+    let cwd = dir.0.join("repo/nested").canonicalize().unwrap();
+    let cargo_home = dir.0.join("cargo-home");
+    let vars = BTreeMap::from([("CARGO_HOME", cargo_home.to_string_lossy().into_owned())]);
+    let launcher = dir.0.join("brigadier-build-slot");
+    let env: BTreeMap<_, _> = environment_in(&launcher, Some(&cwd), |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    let repo = dir.0.join("repo").canonicalize().unwrap();
+    assert_eq!(env[RUSTC_CHAIN], repo.join("./bin/cache").to_str().unwrap());
+    assert_eq!(
+        env[RUSTC_TOOL],
+        repo.join("./bin/custom-rustc").to_str().unwrap()
+    );
+    assert_eq!(
+        env[RUSTC_WORKSPACE],
+        cwd.join("./workspace-cache").to_str().unwrap()
+    );
+    assert!(env.keys().all(|key| INJECTED_ENV.contains(&key.as_str())));
+
+    dir.write(
+        "repo/nested/.cargo/config",
+        "[build]\nrustc-wrapper = 'nearest-cache'\n",
+    );
+    let env: BTreeMap<_, _> = environment_in(&launcher, Some(&cwd), |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    assert_eq!(
+        env[RUSTC_CHAIN], "nearest-cache",
+        "legacy config wins over config.toml"
+    );
+    let env: BTreeMap<_, _> = environment_in(&launcher, Some(&cwd), |key| {
+        if key == "RUSTC_WRAPPER" {
+            Some("environment-cache".into())
+        } else {
+            vars.get(key).cloned()
+        }
+    })
+    .into_iter()
+    .collect();
+    assert_eq!(env[RUSTC_CHAIN], "environment-cache");
+
+    dir.write("repo/nested/.cargo/config", "[build]\nrustc-wrapper = ''\n");
+    let env: BTreeMap<_, _> = environment_in(&launcher, Some(&cwd), |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    assert!(!env.contains_key("RUSTC_WRAPPER"));
+    assert!(!env.contains_key(RUSTC_CHAIN));
+    let env: BTreeMap<_, _> = environment_in(&launcher, None, |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    assert_eq!(env[RUSTC_CHAIN], "global-cache");
+}
+
+#[test]
+fn persistent_go_flags_are_preserved_before_toolexec() {
+    let dir = ConfigDir::new("goenv");
+    let file = dir.write(
+        "custom-goenv",
+        "# go env -w output\nGOOS=linux\nGOFLAGS=-tags=mine -trimpath\n",
+    );
+    let vars = BTreeMap::from([("GOENV", file.to_string_lossy().into_owned())]);
+    let launcher = Path::new("/tools/brigadier-build-slot");
+    let env: BTreeMap<_, _> = environment_in(launcher, None, |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    assert_eq!(
+        env["GOFLAGS"],
+        "-tags=mine -trimpath -toolexec=/tools/brigadier-build-slot"
+    );
+    let env: BTreeMap<_, _> = environment_in(launcher, None, |key| {
+        if key == "GOFLAGS" {
+            Some("-race".into())
+        } else {
+            vars.get(key).cloned()
+        }
+    })
+    .into_iter()
+    .collect();
+    assert!(
+        !env.contains_key("GOFLAGS"),
+        "explicit environment flags remain untouched"
+    );
+    let env: BTreeMap<_, _> =
+        environment_in(launcher, None, |key| (key == "GOENV").then(|| "off".into()))
+            .into_iter()
+            .collect();
+    assert_eq!(env["GOFLAGS"], "-toolexec=/tools/brigadier-build-slot");
+    fs::write(&file, "GOFLAGS=-tags=mine -toolexec=user-cache\n").unwrap();
+    let env: BTreeMap<_, _> = environment_in(launcher, None, |key| vars.get(key).cloned())
+        .into_iter()
+        .collect();
+    assert!(
+        !env.contains_key("GOFLAGS"),
+        "do not replace a user's persistent tool launcher"
+    );
+}
+
+#[test]
+fn go_flags_default_to_the_user_config_directory() {
+    let dir = ConfigDir::new("go-default");
+    let vars = BTreeMap::from([
+        ("HOME", dir.0.to_string_lossy().into_owned()),
+        (
+            "APPDATA",
+            dir.0.join("roaming").to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CONFIG_HOME",
+            dir.0.join("xdg").to_string_lossy().into_owned(),
+        ),
+    ]);
+    let path = if cfg!(target_os = "macos") {
+        dir.0.join("Library/Application Support/go/env")
+    } else if cfg!(windows) {
+        dir.0.join("roaming/go/env")
+    } else {
+        dir.0.join("xdg/go/env")
+    };
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, "GOFLAGS=-tags=default_user\n").unwrap();
+    let env: BTreeMap<_, _> =
+        environment_in(Path::new("/tools/brigadier-build-slot"), None, |key| {
+            vars.get(key).cloned()
+        })
+        .into_iter()
+        .collect();
+    assert_eq!(
+        env["GOFLAGS"],
+        "-tags=default_user -toolexec=/tools/brigadier-build-slot"
+    );
+}
