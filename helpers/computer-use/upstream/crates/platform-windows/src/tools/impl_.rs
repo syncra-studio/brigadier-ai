@@ -5032,11 +5032,19 @@ impl Tool for TypeTextTool {
                     None => read_focused_value_uia(verify_pid),
                 };
                 let before = read(verify_idx);
-                let post_res = crate::input::keyboard::post_insert_text(
-                    text_target,
-                    &text_for_post,
-                    _delay_ms.min(200),
-                );
+                let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || -> anyhow::Result<()> {
+                    // A renderer HWND is shared by DOM controls. Focus exactly the
+                    // token's editor while activation is shielded, then deliver to
+                    // that renderer rather than the Chrome_WidgetWin_1 frame.
+                    if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
+                        if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
+                            element.focus_element()?;
+                        } else {
+                            anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
+                        }
+                    }
+                    crate::input::keyboard::post_insert_text(text_target, &text_for_post, _delay_ms.min(200))
+                });
                 std::thread::sleep(std::time::Duration::from_millis(40));
                 let after = read(verify_idx);
                 let observed = post_message_readback_observed(

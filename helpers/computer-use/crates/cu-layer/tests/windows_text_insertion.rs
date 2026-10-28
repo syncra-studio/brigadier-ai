@@ -14,5 +14,5 @@ fn type_text_never_calls_whole_document_set_value() {
         .unwrap();
     assert!(!typing.contains(".SetValue("));
     assert!(!typing.contains(".SetFocus("));
-    assert!(typing.contains("post_insert_text(text_target"));
+    assert!(typing.contains("keyboard::post_insert_text("));
 }
