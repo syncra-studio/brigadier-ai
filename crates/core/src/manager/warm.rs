@@ -14,13 +14,15 @@
 //!   ([`DEPENDENCY_FILES`]): otherwise its packages would be the wrong versions.
 //! - **From where:** each cache from the best of the project's places that has it ([`Root`]):
 //!   the workspace the worktree was made from (the session's, for a worker), then one with the
-//!   same lockfile ([`PREFERRED_SAME`]), then the newest; only the [`MAX_SOURCES`] newest are
-//!   weighed. One that is busy or whose dependencies differ is passed over; a copy that fails
+//!   same lockfile ([`PREFERRED_SAME`]), then the newest. The parent survives the
+//!   [`MAX_SOURCES`] candidate cap. One that is busy or whose dependencies differ is passed over; a copy that fails
 //!   is tried from one more ([`MAX_TRIES`]).
 //! - **Cargo's `target`:** the worktree's own packages (named in its tracked `Cargo.toml`
 //!   files) are compiled for the source's files: every unit of theirs is removed from the copy
-//!   ([`forget_own_units`]), so Cargo always builds them again and reuses only the units of
-//!   registry and git dependencies. That makes the copy right whenever it lands.
+//!   ([`forget_own_units`]), so Cargo always builds them again. Proc macros and other runtime
+//!   executables of packages with build-script runs also rebuild their compiled-in `OUT_DIR`
+//!   ([`forget_build_executables`]); ordinary dependency libraries and compiled build scripts
+//!   stay. Original rustc `.d` files go; Cargo's separate fingerprint dep-info stays.
 //! - **Never:** Python environments (a folder holding a `pyvenv.cfg`, a cache inside one, or a
 //!   link to one). Their scripts point at the interpreter and packages they were made with, so
 //!   a copy would keep using the user's own environment. A folder's name alone doesn't make one:
@@ -460,7 +462,7 @@ impl Warm<'_> {
 
     /// The places that have the cache `rel` as a real folder (a link would be copied as a link
     /// back into them), best first: the parent, then one with the same lockfile, then the
-    /// newest; only the newest [`MAX_SOURCES`] are weighed.
+    /// newest; the parent and the newest others, up to [`MAX_SOURCES`], are weighed.
     fn ranked(&self, rel: &str) -> Vec<&Root> {
         let name = last_name(rel);
         let mut found: Vec<(&Root, Option<SystemTime>)> = self
@@ -471,7 +473,7 @@ impl Warm<'_> {
             })
             .map(|root| (root, newest(&root.path.join(rel), name)))
             .collect();
-        found.sort_by_key(|(_, newest)| Reverse(*newest));
+        found.sort_by_key(|(root, newest)| (Reverse(root.parent), Reverse(*newest)));
         found.truncate(MAX_SOURCES);
         let package = package_of(rel);
         let into = self.worktree.root();
@@ -630,16 +632,24 @@ impl Warm<'_> {
                     .map_err(|err| format!("removing the worktree's own crates: {err}"))?;
             }
             let published = into.join(rel);
-            let dropped = Settle {
-                copy: &copy,
-                from: &from,
-                published: &published,
-                name,
-                paths: &paths,
-                stopped: self.stopped,
-                deadline: self.deadline,
-            }
-            .run()?;
+            let mut dropped = if name == "target" {
+                forget_build_executables(&copy, self.deadline)
+                    .map_err(|err| format!("removing build-time executables: {err}"))?
+            } else {
+                Vec::new()
+            };
+            dropped.extend(
+                Settle {
+                    copy: &copy,
+                    from: &from,
+                    published: &published,
+                    name,
+                    paths: &paths,
+                    stopped: self.stopped,
+                    deadline: self.deadline,
+                }
+                .run()?,
+            );
             if busy() || activity(&from, name) != before {
                 return Err("it changed during the copy".into());
             }
@@ -741,6 +751,157 @@ fn output_name(entry: &str) -> Option<(&str, &str)> {
     unit_name(stem)
 }
 
+/// Reads a copied folder without following a link. Eviction runs before the link probe.
+fn real_entries(dir: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => {
+            return Err(std::io::Error::other(format!(
+                "{} is not a real folder",
+                dir.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+        _ => {}
+    }
+    fs::read_dir(dir)?.collect()
+}
+
+/// A proc macro is a dynamic library with rustc's exported declaration symbol. Cargo's
+/// fingerprint JSON does not record crate type; ordinary dylibs must not be evicted with it.
+fn proc_macro(path: &Path, deadline: Instant) -> std::io::Result<bool> {
+    let symbol = b"__rustc_proc_macro_decls_";
+    let mut file = File::open(path)?;
+    let mut bytes = vec![0; (64 << 10) + symbol.len()];
+    let mut kept = 0;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "out of time",
+            ));
+        }
+        let read = file.read(&mut bytes[kept..])?;
+        if read == 0 {
+            return Ok(false);
+        }
+        let end = kept + read;
+        if memchr::memmem::find(&bytes[..end], symbol).is_some() {
+            return Ok(true);
+        }
+        kept = (symbol.len() - 1).min(end);
+        bytes.copy_within(end - kept..end, 0);
+    }
+}
+
+/// Build-time executables with a build-script run can embed its source OUT_DIR. Rebuild
+/// proc macros (including registry/git ones), bins and test executables, retaining libraries
+/// and compiled build scripts: Cargo does not set OUT_DIR when compiling a build script.
+fn forget_build_executables(
+    target: &Path,
+    deadline: Instant,
+) -> std::io::Result<Vec<(PathBuf, String)>> {
+    let profiles = profiles(target);
+    let mut scripted = BTreeSet::new();
+    let mut units = Vec::new();
+    for profile in &profiles {
+        for entry in real_entries(&profile.join("build"))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some((package, _)) = unit_name(&name)
+                && entry.file_type()?.is_dir()
+                && entry.path().join("out").symlink_metadata().is_ok()
+            {
+                scripted.insert(package.to_owned());
+            }
+        }
+        for entry in real_entries(&profile.join(".fingerprint"))? {
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "out of time",
+                ));
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((package, _)) = unit_name(&name) else {
+                continue;
+            };
+            let mut executable = false;
+            for file in real_entries(&entry.path())? {
+                let filename = file.file_name().to_string_lossy().into_owned();
+                if file.file_type()?.is_file() && filename.ends_with(".json") {
+                    let json: serde_json::Value = serde_json::from_slice(&fs::read(file.path())?)?;
+                    let run = filename.starts_with("run-build-script-")
+                        || json
+                            .get("deps")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|deps| {
+                                deps.iter().any(|dep| {
+                                    dep.get(1).and_then(serde_json::Value::as_str)
+                                        == Some("build_script_build")
+                                })
+                            });
+                    if run {
+                        scripted.insert(package.to_owned());
+                    }
+                    executable |= ["bin-", "test-", "bench-"]
+                        .iter()
+                        .any(|prefix| filename.starts_with(prefix));
+                }
+            }
+            units.push((profile, name, executable));
+        }
+    }
+    let mut dropped = Vec::new();
+    for profile in &profiles {
+        let outputs = real_entries(&profile.join("deps"))?;
+        for (_, unit, executable) in units.iter().filter(|(at, _, _)| *at == profile) {
+            let (package, hash) = unit_name(unit).expect("a unit name");
+            if !scripted.contains(package) {
+                continue;
+            }
+            let matching: Vec<_> = outputs
+                .iter()
+                .filter(|entry| {
+                    output_name(&entry.file_name().to_string_lossy())
+                        .is_some_and(|(_, output_hash)| output_hash == hash)
+                })
+                .collect();
+            let mut rebuild = *executable;
+            for entry in &matching {
+                if entry.file_type()?.is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext == "so" || ext == "dylib" || ext == "dll")
+                    && proc_macro(&entry.path(), deadline)?
+                {
+                    rebuild = true;
+                }
+            }
+            if !rebuild {
+                continue;
+            }
+            fs::remove_dir_all(profile.join(".fingerprint").join(unit))?;
+            for entry in matching {
+                if entry.file_type()?.is_dir() {
+                    fs::remove_dir_all(entry.path())?;
+                } else {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+            dropped.push((
+                profile
+                    .strip_prefix(target)
+                    .expect("a copied profile")
+                    .join(".fingerprint")
+                    .join(unit),
+                "a build-time executable with a build-script run must rebuild its OUT_DIR".into(),
+            ));
+        }
+    }
+    Ok(dropped)
+}
+
 /// Removes from `target`, a fresh copy, every unit of the worktree's own `packages`, in each
 /// profile folder (`debug`, `<triple>/release`, …): its `.fingerprint/<pkg>-<hash>` and
 /// `build/<pkg>-<hash>` folders (a build script compiled for the source's files writes into
@@ -761,26 +922,7 @@ fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Resu
             fs::remove_file(entry.path())
         }
     };
-    let entries = |dir: &Path| -> std::io::Result<Vec<fs::DirEntry>> {
-        // This runs before Settle checks links. Never traverse a copied link, even for
-        // eviction: removing an entry through build/ or deps/ would mutate its source.
-        match fs::symlink_metadata(dir) {
-            Ok(meta) if !meta.is_dir() => {
-                return Err(std::io::Error::other(format!(
-                    "{} is not a real folder",
-                    dir.display()
-                )));
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err),
-            _ => {}
-        }
-        match fs::read_dir(dir) {
-            Ok(entries) => entries.collect(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(err) => Err(err),
-        }
-    };
+    let entries = real_entries;
     for profile in profiles(target) {
         let mut hashes = BTreeSet::new();
         for unit_dir in [".fingerprint", "build"] {
@@ -849,6 +991,23 @@ fn unit_of(rel: &Path) -> Option<(PathBuf, String)> {
             && (parts[at] == "build" || parts[at] == ".fingerprint")
             && unit_name(unit).is_some())
         .then(|| (parts[..at].iter().collect(), unit.to_owned()))
+    })
+}
+
+/// rustc's Make dep-info has already been translated into Cargo's binary `dep-*` files in
+/// `.fingerprint`. Cargo reads those for freshness, not these original output-path records.
+/// Do not remove native compiler dep-info in build-script `out/` directories.
+fn rustc_dep_info(rel: &Path) -> bool {
+    if rel.extension() != Some(OsStr::new("d")) {
+        return false;
+    }
+    let parts: Vec<&OsStr> = rel.iter().collect();
+    [1, 2].into_iter().any(|at| {
+        (parts.len() == at + 2 && parts[at] == "deps")
+            || (parts.len() == at + 3
+                && parts[at] == "build"
+                && parts[at + 1].to_str().and_then(unit_name).is_some()
+                && parts[at + 2].to_string_lossy().starts_with("build_script_"))
     })
 }
 
@@ -1432,6 +1591,11 @@ impl Settle<'_> {
     /// protected paths: `Some(true)` all of it, `Some(false)` if it is small text.
     fn file(&self, rel: &Path, meta: &fs::Metadata) -> Result<Option<bool>, String> {
         let path = self.copy.join(rel);
+        if self.name == "target" && rustc_dep_info(rel) {
+            return fs::remove_file(&path)
+                .map(|()| None)
+                .map_err(|err| err.to_string());
+        }
         let executable = is_executable(meta);
         // A program Cargo built for the source, in a profile folder: one a person might run by
         // hand. Cargo builds it again when it is needed.
@@ -2833,14 +2997,7 @@ mod tests {
         let copy = fx.worktree.join("target/debug");
         assert!(!copy.join("app").exists());
         assert!(copy.join("deps/app-1a2b").exists());
-        let worktree = fs::canonicalize(&fx.worktree).unwrap();
-        assert_eq!(
-            fs::read_to_string(copy.join("deps/app-1a2b.d")).unwrap(),
-            format!(
-                "{0}/target/debug/deps/app-1a2b: {0}/src/main.rs\n",
-                worktree.display()
-            )
-        );
+        assert!(!copy.join("deps/app-1a2b.d").exists());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -3118,6 +3275,166 @@ mod tests {
     }
 
     #[test]
+    fn scripted_proc_macros_rebuild_but_libraries_and_build_scripts_stay() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-proc-units-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let write = |path: PathBuf, bytes: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        for profile in ["debug", "aarch64-apple-darwin/release"] {
+            let at = dir.join(profile);
+            for (package, hash, filename, marker, json) in [
+                (
+                    "out-macro",
+                    "0000000000000001",
+                    "lib-custom.json",
+                    true,
+                    "{}",
+                ),
+                (
+                    "dep-macro",
+                    "0000000000000002",
+                    "lib-custom.json",
+                    true,
+                    r#"{"deps":[[0,"build_script_build",false,0]]}"#,
+                ),
+                (
+                    "plain-macro",
+                    "0000000000000003",
+                    "lib-custom.json",
+                    true,
+                    "{}",
+                ),
+                (
+                    "ordinary-lib",
+                    "0000000000000004",
+                    "lib-custom.json",
+                    false,
+                    "{}",
+                ),
+                (
+                    "out-macro",
+                    "0000000000000005",
+                    "bin-tool.json",
+                    false,
+                    "{}",
+                ),
+                (
+                    "out-macro",
+                    "0000000000000006",
+                    "test-lib-custom.json",
+                    false,
+                    "{}",
+                ),
+            ] {
+                write(
+                    at.join(format!(".fingerprint/{package}-{hash}/{filename}")),
+                    json.as_bytes(),
+                );
+                for ext in ["so", "dylib", "dll"] {
+                    let mut bytes = vec![0; (64 << 10) - 9];
+                    if marker {
+                        bytes.extend(b"__rustc_proc_macro_decls_0123456789abcdef__");
+                    }
+                    write(at.join(format!("deps/libcustom-{hash}.{ext}")), &bytes);
+                }
+                write(
+                    at.join(format!("deps/libcustom-{hash}.rlib")),
+                    b"library output",
+                );
+            }
+            for package in ["out-macro", "ordinary-lib"] {
+                fs::create_dir_all(at.join(format!("build/{package}-0000000000000010/out")))
+                    .unwrap();
+                write(
+                    at.join(format!(
+                        "build/{package}-0000000000000020/build-script-build"
+                    )),
+                    b"compiled build script",
+                );
+                write(at.join(format!(".fingerprint/{package}-0000000000000020/build-script-build-script-build.json")), b"{}");
+            }
+        }
+        let dropped =
+            forget_build_executables(&dir, Instant::now() + Duration::from_secs(10)).unwrap();
+        assert_eq!(dropped.len(), 8);
+        for profile in ["debug", "aarch64-apple-darwin/release"] {
+            let at = dir.join(profile);
+            for (package, hash) in [
+                ("out-macro", "0000000000000001"),
+                ("dep-macro", "0000000000000002"),
+                ("out-macro", "0000000000000005"),
+                ("out-macro", "0000000000000006"),
+            ] {
+                assert!(!at.join(format!(".fingerprint/{package}-{hash}")).exists());
+                for ext in ["so", "dylib", "dll", "rlib"] {
+                    assert!(!at.join(format!("deps/libcustom-{hash}.{ext}")).exists());
+                }
+            }
+            for (package, hash) in [
+                ("plain-macro", "0000000000000003"),
+                ("ordinary-lib", "0000000000000004"),
+            ] {
+                assert!(at.join(format!(".fingerprint/{package}-{hash}")).exists());
+                assert!(at.join(format!("deps/libcustom-{hash}.rlib")).exists());
+                assert!(at.join(format!("deps/libcustom-{hash}.so")).exists());
+            }
+            assert!(
+                at.join("build/out-macro-0000000000000020/build-script-build")
+                    .exists()
+            );
+            assert!(at.join(".fingerprint/out-macro-0000000000000020").exists());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn rustc_output_dep_info_from_previous_worktrees_is_discarded() {
+        let Some(fx) = Fixture::new("target/\n") else {
+            return;
+        };
+        let previous = fx.add_worktree("previous");
+        let stale = format!(
+            "{}/target/debug/deps/libdep.rlib: registry/source.rs\n",
+            previous.display()
+        );
+        fx.write(
+            "target/debug/.fingerprint/dep-0000000000000001/dep-lib-dep",
+            b"\0cargo dep-info",
+        );
+        fx.write(
+            "target/debug/.fingerprint/dep-0000000000000001/lib-dep.json",
+            b"{}",
+        );
+        fx.write("target/debug/deps/dep-0000000000000001.d", stale.as_bytes());
+        fx.write(
+            "target/debug/build/dep-0000000000000002/build_script_build-0000000000000002.d",
+            stale.as_bytes(),
+        );
+        fx.write(
+            "target/debug/build/dep-0000000000000002/out/native.d",
+            b"native.o: native.c\n",
+        );
+        let warmed = fx.warm();
+        assert_eq!(warmed.folders(), ["target"], "{warmed:?}");
+        let at = fx.worktree.join("target/debug");
+        assert!(!at.join("deps/dep-0000000000000001.d").exists());
+        assert!(
+            !at.join("build/dep-0000000000000002/build_script_build-0000000000000002.d")
+                .exists()
+        );
+        assert!(
+            at.join(".fingerprint/dep-0000000000000001/dep-lib-dep")
+                .exists()
+        );
+        assert!(at.join("build/dep-0000000000000002/out/native.d").exists());
+    }
+
+    #[test]
     fn warming_is_stopped_and_waited_for() {
         let dir =
             std::env::temp_dir().join(format!("brigadier-stop-{}", uuid::Uuid::new_v4().simple()));
@@ -3230,6 +3547,27 @@ mod tests {
         );
         assert!(!fx.worktree.join(".turbo").exists());
         assert!(fx.leftovers().is_empty());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn an_old_parent_survives_the_source_candidate_cap() {
+        let Some(fx) = Fixture::new(".turbo/\n") else {
+            return;
+        };
+        let parent = fx.add_worktree("parent");
+        turbo_in(&parent, "parent", false);
+        for i in 0..=MAX_SOURCES {
+            let newer = fx.add_worktree(&format!("newer-{i}"));
+            turbo_in(&newer, "newer", true);
+        }
+        let warmed = fx.warm_from(Some(&parent), Instant::now() + WARM_DEADLINE);
+        assert_eq!(warmed.folders(), [".turbo"], "{warmed:?}");
+        assert_eq!(warmed.copied[0].1, parent);
+        assert_eq!(
+            fs::read_to_string(fx.worktree.join(".turbo/from")).unwrap(),
+            "parent"
+        );
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
