@@ -308,7 +308,7 @@ pub fn classify(identity: &TargetIdentity, allowed: &[String]) -> Option<Refusal
     if is_security_surface(&bundle, &name) {
         return Some(RefusalReason::SecuritySurface);
     }
-    if is_brigadier(&bundle, &name, identity.pid.is_some()) {
+    if is_brigadier(&bundle, &name, identity.pid) {
         return Some(RefusalReason::UserBrigadier);
     }
     let host = std::env::var(crate::HOST_BUNDLE_ID_ENV)
@@ -332,17 +332,71 @@ fn is_driver(bundle: &str, name: &str) -> bool {
         || matches!(name, "brigadier-cu" | "brigadier computer use")
 }
 
-fn is_brigadier(bundle: &str, name: &str, running: bool) -> bool {
+fn is_brigadier(bundle: &str, name: &str, pid: Option<i64>) -> bool {
     // The name only decides when the bundle is unknown (launch by name), so
     // a development build named "Brigadier Dev" is not mistaken for it. A
-    // running process without a bundle is a bare binary (`tauri dev`), never
-    // the installed app, which runs from its bundle (#510).
+    // macOS process without a bundle is a bare binary (`tauri dev`), never
+    // the installed app, which runs from its bundle (#510). Windows dev
+    // builds have the same executable id as the installed app: use its path.
     bundle == "ai.brigadier.app"
         || bundle.starts_with("ai.brigadier.app.")
-        // Windows and Linux: the installed app's executables (a development
-        // build runs from a Cargo build folder and has no id).
-        || matches!(bundle, "brigadier" | "brigadier-app" | "brigadierd")
-        || (bundle.is_empty() && !running && name == "brigadier")
+        || (matches!(bundle, "brigadier" | "brigadier-app" | "brigadierd")
+            && is_installed_brigadier_process(pid))
+        || (bundle.is_empty() && pid.is_none() && name == "brigadier")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_installed_brigadier_process(_pid: Option<i64>) -> bool {
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn is_installed_brigadier_process(pid: Option<i64>) -> bool {
+    let executable = pid
+        .and_then(|pid| u32::try_from(pid).ok())
+        .and_then(crate::lookup::executable_of);
+    let local_app_data = std::env::var("LOCALAPPDATA").ok();
+    windows_brigadier_path_is_protected(
+        executable.as_deref().and_then(std::path::Path::to_str),
+        local_app_data.as_deref(),
+    )
+}
+
+/// NSIS currentUser + productName Brigadier installs under LOCALAPPDATA/Brigadier.
+/// Unknown paths stay protected. Compare directory boundaries, ignoring Windows
+/// casing, slash style and the extended-length prefix returned by some APIs.
+#[cfg(any(target_os = "windows", test))]
+fn windows_brigadier_path_is_protected(
+    executable: Option<&str>,
+    local_app_data: Option<&str>,
+) -> bool {
+    fn normalize(path: &str) -> Option<String> {
+        let path = path.replace('/', "\\").to_lowercase();
+        let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
+        if !(path.as_bytes().get(1) == Some(&b':') && path.as_bytes().get(2) == Some(&b'\\'))
+            && !path.starts_with(r"\\")
+        {
+            return None;
+        }
+        let mut parts = Vec::new();
+        for part in path.split('\\') {
+            match part {
+                "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        Some(parts.join("\\").trim_end_matches('\\').to_owned())
+    }
+    let Some(executable) = executable.and_then(normalize) else {
+        return true;
+    };
+    let Some(local_app_data) = local_app_data.and_then(normalize) else {
+        return true;
+    };
+    executable.starts_with(&format!("{local_app_data}\\brigadier\\"))
 }
 
 fn is_security_surface(bundle: &str, name: &str) -> bool {
@@ -851,6 +905,76 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_brigadier_dev_paths_are_allowed() {
+        let local = Some(r"C:\Users\me\AppData\Local");
+        for path in [
+            r"C:\src\brigadier\target\debug\brigadier-app.exe",
+            r"C:\src\brigadier\target\release\brigadier-app.exe",
+            r"D:\test-app\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier-dev\brigadier-app.exe",
+        ] {
+            assert!(
+                !super::windows_brigadier_path_is_protected(Some(path), local),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_installed_brigadier_paths_are_refused() {
+        let local = Some(r"C:\Users\me\AppData\Local\");
+        for path in [
+            r"C:\Users\me\AppData\Local\Brigadier\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\brigadier.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\brigadierd.exe",
+            r"c:/users/ME/appdata/local/BRIGADIER/brigadier-app.exe",
+            r"\\?\C:\Users\me\AppData\Local\Brigadier\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\target\debug\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\other\..\Brigadier\brigadier-app.exe",
+        ] {
+            assert!(
+                super::windows_brigadier_path_is_protected(Some(path), local),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_unreadable_brigadier_paths_are_refused() {
+        assert!(super::windows_brigadier_path_is_protected(
+            None,
+            Some(r"C:\Users\me\AppData\Local")
+        ));
+        assert!(super::windows_brigadier_path_is_protected(
+            Some(r"C:\dev\brigadier-app.exe"),
+            None
+        ));
+        assert!(super::windows_brigadier_path_is_protected(
+            Some("brigadier-app.exe"),
+            Some(r"C:\Users\me\AppData\Local")
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_brigadier_policy_uses_pid_path_and_fails_closed() {
+        let mut identity = super::TargetIdentity {
+            name: "brigadier-app".into(),
+            bundle_id: Some("brigadier-app".into()),
+            pid: Some(i64::from(std::process::id())),
+        };
+        // This test binary runs outside the installed app's folder.
+        assert_eq!(super::classify(&identity, &[]), None);
+        for pid in [None, Some(-1), Some(0)] {
+            identity.pid = pid;
+            assert_eq!(
+                super::classify(&identity, &[]),
+                Some(super::RefusalReason::UserBrigadier)
+            );
+        }
+    }
+
     use super::*;
 
     fn process(pid: i64, parent: i64, executable: &str, has_tty: bool) -> ProcessFact {
