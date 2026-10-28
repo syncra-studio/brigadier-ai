@@ -2859,6 +2859,38 @@ impl Tool for LaunchAppTool {
         let mut windows_json: Vec<serde_json::Value> = Vec::new();
         let mut resolved_pid: u32 = pid;
 
+        if super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls) {
+            // EnumWindows already attributes each ApplicationFrameHost frame to
+            // its CoreWindow app pid. Avoid the global UIA deadline and pid-0
+            // launcher fallback on every poll.
+            for _ in 0..30 {
+                let window = tokio::task::spawn_blocking(|| {
+                    let settings_pids: std::collections::HashSet<_> = crate::win32::list_processes()
+                        .into_iter()
+                        .filter(|process| super::launch_policy::is_settings_process(&process.name))
+                        .map(|process| process.pid)
+                        .collect();
+                    let mut windows = crate::win32::list_windows_via_win32(None)
+                        .into_iter()
+                        .filter(|window| settings_pids.contains(&window.pid));
+                    let first = windows.next()?;
+                    // Multiple Settings frames cannot be attributed to this
+                    // protocol activation without additional evidence.
+                    windows.next().is_none().then_some(first)
+                }).await.unwrap_or(None);
+                if let Some(window) = window {
+                    resolved_pid = window.pid;
+                    windows_json.push(json!({
+                        "window_id": window.hwnd, "title": window.title,
+                        "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                        "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                    }));
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
         if web_launch {
             let executable = target_file_opt.as_deref().unwrap_or("");
             let mut confirmed = Vec::new();
@@ -2945,7 +2977,7 @@ impl Tool for LaunchAppTool {
         }
 
         for _ in 0..5 {
-            if !windows_json.is_empty() {
+            if pid == 0 || !windows_json.is_empty() {
                 break;
             }
             let wins =
@@ -2965,7 +2997,7 @@ impl Tool for LaunchAppTool {
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        if windows_json.is_empty() {
+        if pid != 0 && windows_json.is_empty() {
             // Launcher-stub fallback. Compute the exe basename from the
             // launchable target so name-based matching has something to work
             // with (e.g. "gimp-3.exe" → prefix "gimp" matches "gimp-3.2.exe").

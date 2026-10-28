@@ -119,3 +119,28 @@ mod hosted_termination_tests {
         );
     }
 }
+
+/// Settings protocol launches often return pid 0; match its actual app identity,
+/// never a shared frame host or a localized window title.
+pub(crate) fn is_settings_protocol_launch(has_app: bool, urls: &[String]) -> bool {
+    !has_app && urls.len() == 1 && urls[0].to_ascii_lowercase().starts_with("ms-settings:")
+}
+
+pub(crate) fn is_settings_process(executable: &str) -> bool {
+    executable_name(executable) == "systemsettings"
+}
+
+#[cfg(test)]
+mod settings_protocol_tests {
+    use super::*;
+    #[test]
+    fn protocol_resolution_never_uses_an_unrelated_process_or_host() {
+        assert!(is_settings_protocol_launch(false, &["ms-settings:about".into()]));
+        assert!(!is_settings_protocol_launch(true, &["ms-settings:about".into()]));
+        assert!(!is_settings_protocol_launch(false, &["https://example.com".into()]));
+        assert!(!is_settings_protocol_launch(false, &[]));
+        assert!(is_settings_process("SystemSettings.exe"));
+        assert!(!is_settings_process("ApplicationFrameHost.exe"));
+        assert!(!is_settings_process("SystemSettingsAdminFlows.exe"));
+    }
+}
