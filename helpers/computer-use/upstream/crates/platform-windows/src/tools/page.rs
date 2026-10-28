@@ -652,9 +652,20 @@ unsafe fn document_text(
             anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
         }
         let control = element.CurrentControlType().ok();
-        if control.is_some_and(|control| {
-            [UIA_TextControlTypeId, UIA_EditControlTypeId].contains(&control)
-        }) {
+        if control == Some(UIA_EditControlTypeId) {
+            // An Edit's Name is its label/placeholder, not the user's text.
+            // Keep its actual value (when exposed) rather than substituting a
+            // label for the composer or other editable content.
+            if let Ok(value) = element.GetCurrentPropertyValue(UIA_ValueValuePropertyId) {
+                if let Ok(value) = windows::core::BSTR::try_from(&value) {
+                    if !value.is_empty() {
+                        super::browser_target::append_text_run(&mut text, &value.to_string());
+                        continue;
+                    }
+                }
+            }
+        }
+        if control == Some(UIA_TextControlTypeId) {
             if let Ok(name) = element.CurrentName() {
                 let name = name.to_string();
                 if !name.is_empty() {

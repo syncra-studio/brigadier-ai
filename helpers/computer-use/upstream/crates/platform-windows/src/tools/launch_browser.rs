@@ -365,12 +365,15 @@ pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<
                         &UIA_TabItemControlTypeId.0.into(),
                     )
                     .ok()?;
-                let count = root
-                    .FindAll(TreeScope_Subtree, &condition)
-                    .ok()?
-                    .Length()
-                    .ok()? as usize;
-                Some(count.saturating_sub(requested_tabs))
+                let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
+                let mut chrome_tabs = 0;
+                for index in 0..tabs.Length().ok()? {
+                    let tab = tabs.GetElement(index).ok()?;
+                    if !inside_document(&automation, &tab, &root) {
+                        chrome_tabs += 1;
+                    }
+                }
+                super::browser_target::additional_tab_count(chrome_tabs, requested_tabs)
             },
         )
         .ok()

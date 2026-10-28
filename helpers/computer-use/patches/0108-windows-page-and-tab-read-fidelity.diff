@@ -1,0 +1,79 @@
+Why: read editable values rather than labels, count only browser-chrome tabs, and report unavailable tab counts as unknown rather than implying no restoration.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -341,3 +341,21 @@
+         assert_eq!(named_desktop_executable("unregistered app"), None);
+     }
+ }
++
++/// A provider exposing no browser-chrome tabs cannot prove the absence of
++/// restored tabs. Page-internal role=tab controls never count here.
++pub(crate) fn additional_tab_count(chrome_tabs: usize, requested: usize) -> Option<usize> {
++    (chrome_tabs >= requested).then(|| chrome_tabs - requested)
++}
++
++#[cfg(test)]
++mod tab_count_tests {
++    use super::*;
++    #[test]
++    fn unavailable_tabs_are_unknown_rather_than_zero_restored_tabs() {
++        assert_eq!(additional_tab_count(0, 1), None);
++        assert_eq!(additional_tab_count(1, 1), Some(0));
++        assert_eq!(additional_tab_count(3, 1), Some(2));
++        assert_eq!(additional_tab_count(1, 2), None);
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -365,12 +365,15 @@
+                         &UIA_TabItemControlTypeId.0.into(),
+                     )
+                     .ok()?;
+-                let count = root
+-                    .FindAll(TreeScope_Subtree, &condition)
+-                    .ok()?
+-                    .Length()
+-                    .ok()? as usize;
+-                Some(count.saturating_sub(requested_tabs))
++                let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
++                let mut chrome_tabs = 0;
++                for index in 0..tabs.Length().ok()? {
++                    let tab = tabs.GetElement(index).ok()?;
++                    if !inside_document(&automation, &tab, &root) {
++                        chrome_tabs += 1;
++                    }
++                }
++                super::browser_target::additional_tab_count(chrome_tabs, requested_tabs)
+             },
+         )
+         .ok()
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -652,9 +652,20 @@
+             anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+         }
+         let control = element.CurrentControlType().ok();
+-        if control.is_some_and(|control| {
+-            [UIA_TextControlTypeId, UIA_EditControlTypeId].contains(&control)
+-        }) {
++        if control == Some(UIA_EditControlTypeId) {
++            // An Edit's Name is its label/placeholder, not the user's text.
++            // Keep its actual value (when exposed) rather than substituting a
++            // label for the composer or other editable content.
++            if let Ok(value) = element.GetCurrentPropertyValue(UIA_ValueValuePropertyId) {
++                if let Ok(value) = windows::core::BSTR::try_from(&value) {
++                    if !value.is_empty() {
++                        super::browser_target::append_text_run(&mut text, &value.to_string());
++                        continue;
++                    }
++                }
++            }
++        }
++        if control == Some(UIA_TextControlTypeId) {
+             if let Ok(name) = element.CurrentName() {
+                 let name = name.to_string();
+                 if !name.is_empty() {

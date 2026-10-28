@@ -341,3 +341,21 @@ mod explorer_tests {
         assert_eq!(named_desktop_executable("unregistered app"), None);
     }
 }
+
+/// A provider exposing no browser-chrome tabs cannot prove the absence of
+/// restored tabs. Page-internal role=tab controls never count here.
+pub(crate) fn additional_tab_count(chrome_tabs: usize, requested: usize) -> Option<usize> {
+    (chrome_tabs >= requested).then(|| chrome_tabs - requested)
+}
+
+#[cfg(test)]
+mod tab_count_tests {
+    use super::*;
+    #[test]
+    fn unavailable_tabs_are_unknown_rather_than_zero_restored_tabs() {
+        assert_eq!(additional_tab_count(0, 1), None);
+        assert_eq!(additional_tab_count(1, 1), Some(0));
+        assert_eq!(additional_tab_count(3, 1), Some(2));
+        assert_eq!(additional_tab_count(1, 2), None);
+    }
+}

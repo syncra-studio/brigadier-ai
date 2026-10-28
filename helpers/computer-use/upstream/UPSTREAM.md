@@ -93,6 +93,7 @@ Patches applied, in order:
 - `patches/0105-windows-launch-read-evidence-hardening.diff`: reject conflicting document/address evidence, avoid returning prior browser windows, and distinguish the visible confirmed URL from other requested tabs.
 - `patches/0106-windows-browser-launch-confirmation-facts.diff`: scan native browser windows once per poll and report an opened window separately from its unconfirmed requested URL without reading unrelated content.
 - `patches/0107-windows-notepad-file-launch-route.diff`: pass fresh Notepad files through its executable alias and avoid claiming URL confirmation when only the app window was verified.
+- `patches/0108-windows-page-and-tab-read-fidelity.diff`: read editable values rather than labels, count only browser-chrome tabs, and report unavailable tab counts as unknown rather than implying no restoration.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
