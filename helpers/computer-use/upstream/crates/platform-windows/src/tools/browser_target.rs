@@ -206,3 +206,33 @@ mod page_tests {
         );
     }
 }
+
+/// Accessibility providers may expose each inline text run separately. Keep
+/// their internal whitespace and add a boundary when the provider omitted it.
+pub(crate) fn append_text_run(output: &mut String, run: &str) {
+    if run.is_empty() { return; }
+    if let (Some(left), Some(right)) = (output.chars().last(), run.chars().next()) {
+        if !left.is_whitespace() && !right.is_whitespace()
+            && !matches!(right, ',' | '.' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
+            && !matches!(left, '(' | '[' | '{') {
+            output.push(' ');
+        }
+    }
+    output.push_str(run);
+}
+
+#[cfg(test)]
+mod text_run_tests {
+    use super::*;
+    #[test]
+    fn inline_runs_keep_word_boundaries_and_existing_spacing() {
+        let mut text = String::new();
+        for run in ["The", "new", "rule", " taking ", "effect", "…", "Hello", ",", "world", "!"] {
+            append_text_run(&mut text, run);
+        }
+        assert_eq!(text, "The new rule taking effect … Hello, world!");
+        let mut text = String::new();
+        for run in ["αβ", "γδ", "\n", "next\tline", ""] { append_text_run(&mut text, run); }
+        assert_eq!(text, "αβ γδ\nnext\tline");
+    }
+}

@@ -144,8 +144,7 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
                     let text = if query {
                         query_dom_document(&automation, &document, &selector, &attributes)?
                     } else {
-                        text_pattern_dump(&document)
-                            .unwrap_or_else(|_| walk_text_blocking(&document))
+                        document_text(&automation, &document)?
                     };
                     let (_, current, after) =
                         super::launch_browser::matching_document(hwnd, &hint, false)?;
@@ -492,7 +491,7 @@ unsafe fn get_text_blocking(hwnd: u64) -> anyhow::Result<String> {
     let (automation, root) = uia_root_for(hwnd)?;
     let document = find_document_descendant(&automation, &root)?;
     if let Some(doc) = document {
-        text_pattern_dump(&doc)
+        document_text(&automation, &doc)
     } else {
         // No Document control — try TextPattern on the root.
         match text_pattern_dump(&root) {
@@ -633,6 +632,53 @@ unsafe fn find_document_descendant(
         Ok(elem) => Ok(Some(elem)),
         Err(_) => Ok(None),
     }
+}
+
+/// Chromium's aggregate TextPattern can concatenate inline runs without
+/// whitespace. Read named static-text runs instead, retaining whitespace in
+/// each run and explicit boundaries between runs. Traverse in document order;
+/// stop below a named Text node so its inline descendants are not duplicated.
+unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElement) -> anyhow::Result<String> {
+    let walker = automation.RawViewWalker()?;
+    let mut stack = vec![document.clone()];
+    let mut text = String::new();
+    let mut visited = 0;
+    while let Some(element) = stack.pop() {
+        visited += 1;
+        if visited > 20_000 {
+            anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+        }
+        let control = element.CurrentControlType().ok();
+        if matches!(control, Some(UIA_TextControlTypeId | UIA_EditControlTypeId)) {
+            if let Ok(name) = element.CurrentName() {
+                let name = name.to_string();
+                if !name.is_empty() {
+                    super::browser_target::append_text_run(&mut text, &name);
+                    continue;
+                }
+            }
+        }
+        let mut children = Vec::new();
+        if let Ok(mut child) = walker.GetFirstChildElement(&element) {
+            loop {
+                children.push(child.clone());
+                let Ok(next) = walker.GetNextSiblingElement(&child) else { break; };
+                child = next;
+                if children.len() > 20_000 {
+                    anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+                }
+            }
+        }
+        // Link/button/heading names can be the only exposed text. Use them
+        // only when there are no children to avoid reading ancestor labels twice.
+        if children.is_empty() && matches!(control, Some(UIA_HyperlinkControlTypeId | UIA_ButtonControlTypeId | UIA_HeaderControlTypeId | UIA_ImageControlTypeId)) {
+            if let Ok(name) = element.CurrentName() {
+                super::browser_target::append_text_run(&mut text, &name.to_string());
+            }
+        }
+        stack.extend(children.into_iter().rev());
+    }
+    if text.trim().is_empty() { text_pattern_dump(document) } else { Ok(text) }
 }
 
 /// Try `TextPattern.DocumentRange.GetText(-1)` on `elem`. Returns an error if
