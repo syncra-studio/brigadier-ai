@@ -371,7 +371,8 @@ fn try_click(
             });
         }
     }
-    let order = pattern_order(titlebar_close(hwnd, &element), expand_only);
+    let caption_close = titlebar_close(hwnd, &element) && !expand_only;
+    let order = pattern_order(caption_close, expand_only);
     let dispatch = || -> windows::core::Result<Option<(&str, ActionTransport)>> {
         unsafe {
             for action in order {
@@ -448,10 +449,17 @@ fn try_click(
             Ok(None)
         }
     };
-    super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+    let finish = || {
         let result = dispatch().map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
         Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
-    })
+    };
+    // Notepad ignores WM_CLOSE while its top-level is disabled. The native
+    // caption close needs the NoActivateGuard above, not EnableWindow(false).
+    if caption_close {
+        finish()
+    } else {
+        super::fg_bypass::run_with_uwp_bypass(hwnd as isize, finish)
+    }
 }
 
 /// Search inside the addressed window, never ElementFromPoint on the user's

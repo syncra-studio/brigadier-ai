@@ -142,6 +142,8 @@ Patches applied, in order:
 
 - `patches/0132-windows-explorer-local-folder-arguments.diff`: Normalize absolute local Explorer folder arguments to Windows separators so forward slashes cannot be parsed as switches that open the wrong folder.
 
+- `patches/0133-windows-caption-close-without-disabling.diff`: Keep native caption Close enabled under the revocable no-activation guard so Notepad processes WM_CLOSE instead of ignoring it while disabled.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
