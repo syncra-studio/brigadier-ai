@@ -359,3 +359,43 @@ mod tab_count_tests {
         assert_eq!(additional_tab_count(1, 2), None);
     }
 }
+
+/// Explorer parses forward slashes in a drive path as switches, even inside
+/// quotes. Normalize only absolute filesystem arguments, never web URLs.
+pub(crate) fn launch_argument(target: &str, value: &str) -> String {
+    let name = target.rsplit(['\\', '/']).next().unwrap_or(target);
+    let bytes = value.as_bytes();
+    let drive_path = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    if name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer") {
+        if drive_path || value.starts_with("//") {
+            return quote_argument(&value.replace('/', "\\"));
+        }
+    }
+    quote_argument(value)
+}
+#[cfg(test)]
+mod path_arguments {
+    use super::*;
+    #[test]
+    fn explorer_drive_and_unc_paths_are_not_switches() {
+        assert_eq!(
+            launch_argument("explorer.exe", "C:/test folder/file.txt"),
+            quote_argument(r"C:\test folder\file.txt")
+        );
+        assert_eq!(
+            launch_argument(r"C:\Windows\explorer.exe", "//server/share/folder"),
+            quote_argument(r"\\server\share\folder")
+        );
+        assert_eq!(
+            launch_argument("chrome.exe", "https://example.com/a/b"),
+            quote_argument("https://example.com/a/b")
+        );
+        assert_eq!(
+            launch_argument("explorer.exe", "https://example.com/a/b"),
+            quote_argument("https://example.com/a/b")
+        );
+    }
+}

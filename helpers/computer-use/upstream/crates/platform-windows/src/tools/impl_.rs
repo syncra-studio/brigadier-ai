@@ -2604,10 +2604,12 @@ impl Tool for LaunchAppTool {
         let urls_in_arguments =
             super::browser_target::urls_belong_to_app(resolved_target.is_some(), !urls.is_empty());
         if urls_in_arguments {
-            extra_args.extend(
-                urls.iter()
-                    .map(|url| super::browser_target::quote_argument(url)),
-            );
+            extra_args.extend(urls.iter().map(|url| {
+                super::browser_target::launch_argument(
+                    resolved_target.as_deref().unwrap_or_default(),
+                    url,
+                )
+            }));
         }
 
         let fresh_document_path = if urls.is_empty()

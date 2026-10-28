@@ -140,6 +140,8 @@ Patches applied, in order:
 
 - `patches/0131-respect-physical-input-and-bound-foreground-ownership.diff`: Revoke every foreground lock holder on physical input, preserve queued activation evidence without claiming a flash, restrict broker attribution, and refuse pointer-moving background touch drags.
 
+- `patches/0132-windows-explorer-local-folder-arguments.diff`: Normalize absolute local Explorer folder arguments to Windows separators so forward slashes cannot be parsed as switches that open the wrong folder.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
