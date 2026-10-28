@@ -85,6 +85,15 @@ Patches applied, in order:
 - `patches/0070-windows-browser-read-deadlines.diff`: bound browser verification and targeted page reads, share the UIA single-flight gate, and balance COM apartments.
 - `patches/0071-windows-input-timeout-and-focus.diff`: bound click readback, suppress late menu cleanup, preserve safe WPF routing and launch activation warnings.
 - `patches/0072-windows-background-pointer-refusal.diff`: refuse MSAA real-mouse clicks in background mode and keep the Chromium fallback off SendInput.
+- `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
+- `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
+- `patches/0092-windows-common-dialog-save.diff`: Native common-dialog Save sends the exact IDOK WM_COMMAND before UIA Invoke and confirms only observed dialog closure.
+- `patches/0093-windows-winui-caption-close.diff`: Recognize WinUI caption Close outside TitleBar ancestry and send top-level WM_CLOSE with bounded closure readback.
+- `patches/0094-windows-chromium-text-insertion.diff`: Route Chromium caret text to its unique visible renderer child after guarded exact-field focus, without a whole-value write.
+- `patches/0095-windows-input-delivery-validation.diff`: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
+- `patches/0096-windows-input-target-bounds.diff`: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
+- `patches/0097-windows-resolved-input-guard.diff`: Arm the shared background guard after resolving the actual text HWND and retain click target/owner protection through command readback.
+- `patches/0099-windows-caption-identity-and-focus-refusal.diff`: Recognize both WinUI caption Close ids while excluding tab/document ancestry, and explain failed Chromium background focus plainly.
 - `patches/0100-windows-settings-protocol-window.diff`: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
 - `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.
 - `patches/0102-windows-page-text-run-boundaries.diff`: preserve whitespace within UIA text runs and word boundaries across inline nodes rather than trusting Chromium aggregate TextPattern concatenation.
@@ -97,14 +106,6 @@ Patches applied, in order:
 - `patches/0109-windows-fresh-document-launch-cleanup.diff`: keep the native UIA call explicitly unsafe and remove untouched fresh Notepad files when launch is refused or fails before Windows accepts it.
 - `patches/0110-plain-administrator-refusal.diff`: State the administrator refusal in one plain sentence, followed by a labelled hint shared by reads and input.
 
-- `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
-- `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
-- `patches/0092-windows-common-dialog-save.diff`: Native common-dialog Save sends the exact IDOK WM_COMMAND before UIA Invoke and confirms only observed dialog closure.
-- `patches/0093-windows-winui-caption-close.diff`: Recognize WinUI caption Close outside TitleBar ancestry and send top-level WM_CLOSE with bounded closure readback.
-- `patches/0094-windows-chromium-text-insertion.diff`: Route Chromium caret text to its unique visible renderer child after guarded exact-field focus, without a whole-value write.
-- `patches/0095-windows-input-delivery-validation.diff`: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
-- `patches/0096-windows-input-target-bounds.diff`: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
-- `patches/0097-windows-resolved-input-guard.diff`: Arm the shared background guard after resolving the actual text HWND and retain click target/owner protection through command readback.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

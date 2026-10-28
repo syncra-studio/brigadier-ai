@@ -230,6 +230,7 @@ fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
         // Win11 Notepad exposes a custom caption button below a Pane rather
         // than a UIA TitleBar. Native non-client hit-test or its exact caption
         // id at the top-right identifies it without confusing Close Tab.
+        let mut native_caption = false;
         if let Ok(rect) = element.CurrentBoundingRectangle() {
             let x = rect.left + (rect.right - rect.left) / 2;
             let y = rect.top + (rect.bottom - rect.top) / 2;
@@ -251,11 +252,13 @@ fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
                 && x < window.right
                 && y >= window.top
                 && y < window.top + 80;
-            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) {
-                return true;
-            }
+            native_caption =
+                crate::input::action_policy::caption_close(true, hit as isize, &id, top_right);
         }
-        if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
+        if !name.eq_ignore_ascii_case("close")
+            && !id.eq_ignore_ascii_case("close")
+            && !native_caption
+        {
             return false;
         }
         let Ok(uia) = automation() else {
@@ -265,19 +268,24 @@ fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
             return false;
         };
         let mut current = element.clone();
-        for _ in 0..4 {
+        for _ in 0..16 {
             let Ok(parent) = walker.GetParentElement(&current) else {
                 break;
             };
-            if parent.CurrentControlType().ok() == Some(UIA_TitleBarControlTypeId) {
-                return crate::input_outcome::close_button_identity(true, true, &name, &id);
+            let kind = parent.CurrentControlType().ok();
+            if kind == Some(UIA_TabItemControlTypeId) || kind == Some(UIA_DocumentControlTypeId) {
+                return false;
+            }
+            if kind == Some(UIA_TitleBarControlTypeId) {
+                return native_caption
+                    || crate::input_outcome::close_button_identity(true, true, &name, &id);
             }
             if parent.CurrentControlType().ok() == Some(UIA_WindowControlTypeId) {
                 break;
             }
             current = parent;
         }
-        false
+        native_caption
     }
 }
 

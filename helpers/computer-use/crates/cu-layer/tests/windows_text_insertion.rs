@@ -27,5 +27,5 @@ mod native_text_tests;
 fn elevated_processes_use_the_exact_read_and_input_refusal() {
     let message =
         cua_driver_core::window_state_view::windows_integrity_message(0x2000, 0x3000).unwrap();
-    assert_eq!(message, "This window runs as administrator and cannot be read or controlled from a normal session. Open the app without administrator privileges, or restart the computer-use helper as administrator.");
+    assert_eq!(message, "This window runs as administrator and cannot be read or controlled here.\nHint: open the app without administrator privileges, or restart the computer-use helper as administrator.");
 }

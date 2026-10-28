@@ -5033,7 +5033,9 @@ impl Tool for TypeTextTool {
                     // that renderer rather than the Chrome_WidgetWin_1 frame.
                     if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
                         if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
-                            element.focus_element()?;
+                            element.focus_element().map_err(|error| anyhow::anyhow!(
+                                "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
+                            ))?;
                         } else {
                             anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
                         }
