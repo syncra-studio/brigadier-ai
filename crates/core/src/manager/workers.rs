@@ -746,7 +746,7 @@ impl SessionManager {
             None => Default::default(),
         };
         let mut env = worker_env(&workspace.scratch);
-        env.extend(self.cli_env(&task.id.0, &worker_grant));
+        env.extend(self.cli_env(&task.id.0, &worker_grant, &cwd));
         // Its own folder and ledger, which the standing instructions name (S17). The ledger's
         // `record/` is outside its workspace, so it is one of the folders it may write.
         let worker_dir = self.session_dir(&conversation_id).worker(task);

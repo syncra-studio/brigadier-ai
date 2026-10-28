@@ -280,7 +280,12 @@ impl SessionManager {
     /// knows who calls and finds the daemon: the session's id and live `grant`, the data folder
     /// when it isn't the installed app's, and the folder `brigadier` ships in first on `PATH`.
     /// The grant stays in the environment, never on a command line.
-    pub(crate) fn cli_env(&self, session: &str, grant: &str) -> Vec<(String, String)> {
+    pub(crate) fn cli_env(
+        &self,
+        session: &str,
+        grant: &str,
+        cwd: &std::path::Path,
+    ) -> Vec<(String, String)> {
         let mut env = vec![
             (cli::SESSION_ENV.to_owned(), session.to_owned()),
             (cli::GRANT_ENV.to_owned(), grant.to_owned()),
@@ -301,8 +306,9 @@ impl SessionManager {
         }
         let wrapper = brigadier_sandbox::build_slots::wrapper_path(&self.data_dir);
         if self.config.build_slots_ready && wrapper.is_file() {
-            env.extend(brigadier_sandbox::build_slots::environment(
+            env.extend(brigadier_sandbox::build_slots::environment_in(
                 &wrapper,
+                Some(cwd),
                 |name| {
                     self.runtime
                         .cli_env()
