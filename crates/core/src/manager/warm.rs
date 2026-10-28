@@ -620,7 +620,13 @@ impl Warm<'_> {
                 return Err(why.into());
             }
             if name == "target" {
-                forget_own_units(&copy, &self.packages)
+                let mut packages = self.packages.clone();
+                // Path dependencies need not be tracked by this repository (or even live in
+                // it). Cargo records every local package without a source in its lockfile.
+                // Include the source's names too: it may have packages this worktree removed.
+                packages.extend(local_lock_packages(&root.path.join(package)));
+                packages.extend(local_lock_packages(&into.join(package)));
+                forget_own_units(&copy, &packages)
                     .map_err(|err| format!("removing the worktree's own crates: {err}"))?;
             }
             let published = into.join(rel);
@@ -686,29 +692,34 @@ fn cargo_packages(root: &Path, tracked: &[String]) -> BTreeSet<String> {
 
 /// The `name` in a manifest's `[package]` table.
 fn package_name(manifest: &str) -> Option<String> {
-    let mut in_package = false;
-    for line in manifest.lines() {
-        let line = line.split('#').next().unwrap_or_default().trim();
-        if line.starts_with('[') {
-            in_package = line == "[package]" || line == "[project]";
-            continue;
-        }
-        let Some(value) = line
-            .strip_prefix("name")
-            .and_then(|rest| rest.trim_start().strip_prefix('='))
-            .filter(|_| in_package)
-        else {
-            continue;
-        };
-        let value = value.trim();
-        let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-        return value[1..]
-            .split(quote)
-            .next()
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned);
-    }
-    None
+    let manifest: toml::Value = toml::from_str(manifest).ok()?;
+    manifest
+        .get("package")
+        .or_else(|| manifest.get("project"))?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn local_lock_packages(root: &Path) -> BTreeSet<String> {
+    let read = || -> Option<BTreeSet<String>> {
+        let lock: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join("Cargo.lock")).ok()?).ok()?;
+        Some(
+            lock.get("package")?
+                .as_array()?
+                .iter()
+                .filter_map(|package| {
+                    package
+                        .get("source")
+                        .is_none()
+                        .then(|| package.get("name")?.as_str().map(str::to_owned))
+                        .flatten()
+                })
+                .collect(),
+        )
+    };
+    read().unwrap_or_default()
 }
 
 /// `<name>-<hash>`, a Cargo unit's folder name (`.fingerprint/`, `build/`): the name and the
@@ -735,8 +746,11 @@ fn output_name(entry: &str) -> Option<(&str, &str)> {
 /// `build/<pkg>-<hash>` folders (a build script compiled for the source's files writes into
 /// them) and what it left in `deps/` (by those hashes, or by its crate name). Every other
 /// folder in a profile goes whole: Cargo keeps incremental data and examples only for local
-/// packages, and the rest (an app bundle) is made from the workspace's own programs. Cargo
-/// then builds them all again, and reuses only the other packages' units.
+/// packages, and the rest (an app bundle) is made from the workspace's own programs. Direct
+/// profile outputs and dep-info go too: these may be an old executable, library or proc macro
+/// with a custom target name, and stale dep-info can still name an earlier source worktree.
+/// Only the lock and the three dependency-unit folders remain. Cargo then builds the local
+/// packages again, and reuses only the other packages' units.
 fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Result<()> {
     let crates: BTreeSet<String> = packages.iter().map(|name| name.replace('-', "_")).collect();
     let remove = |entry: &fs::DirEntry| -> std::io::Result<()> {
@@ -748,6 +762,19 @@ fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Resu
         }
     };
     let entries = |dir: &Path| -> std::io::Result<Vec<fs::DirEntry>> {
+        // This runs before Settle checks links. Never traverse a copied link, even for
+        // eviction: removing an entry through build/ or deps/ would mutate its source.
+        match fs::symlink_metadata(dir) {
+            Ok(meta) if !meta.is_dir() => {
+                return Err(std::io::Error::other(format!(
+                    "{} is not a real folder",
+                    dir.display()
+                )));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+            _ => {}
+        }
         match fs::read_dir(dir) {
             Ok(entries) => entries.collect(),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -779,9 +806,11 @@ fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Resu
         }
         for entry in entries(&profile)? {
             let name = entry.file_name();
-            if entry.file_type()?.is_dir()
-                && ![".fingerprint", "build", "deps"].contains(&&*name.to_string_lossy())
-            {
+            let kind = entry.file_type()?;
+            let keep = (kind.is_dir()
+                && [".fingerprint", "build", "deps"].contains(&&*name.to_string_lossy()))
+                || (kind.is_file() && name == ".cargo-lock");
+            if !keep {
                 remove(&entry)?;
             }
         }
@@ -2901,6 +2930,14 @@ mod tests {
     #[test]
     fn package_names_come_from_the_package_table() {
         assert_eq!(
+            package_name("[ package ]\n'name' = 'spaced'\n"),
+            Some("spaced".into())
+        );
+        assert_eq!(
+            package_name("package = { name = 'inline' }\n"),
+            Some("inline".into())
+        );
+        assert_eq!(
             package_name(
                 "[workspace]\nname = \"no\"\n\n[package] # the crate\nversion = \"1\"\nname = \"brigadier-core\"\n"
             ),
@@ -2980,6 +3017,8 @@ mod tests {
                 format!("{profile}/incremental/my_core-1ab2cd3ef4gh5/s-x/dep-graph.bin"),
                 format!("{profile}/bundle/macos/My.app/Contents/MacOS/app"),
                 format!("{profile}/app.d"),
+                format!("{profile}/libmy_core.rlib"),
+                format!("{profile}/libcustom_target.dylib"),
                 // A registry package, one named like ours but longer, and its outputs.
                 format!("{profile}/.fingerprint/serde-{registry}/lib-serde.json"),
                 format!("{profile}/.fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
@@ -3013,12 +3052,14 @@ mod tests {
                 "examples".into(),
                 "incremental".into(),
                 "bundle".into(),
+                "app.d".into(),
+                "libmy_core.rlib".into(),
+                "libcustom_target.dylib".into(),
             ] {
                 assert!(!at(&gone), "{profile}/{gone} is still there");
             }
             for kept in [
                 ".cargo-lock".to_owned(),
-                "app.d".into(),
                 format!(".fingerprint/serde-{registry}/lib-serde.json"),
                 format!(".fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
                 format!("build/serde-{registry}/output"),
@@ -3029,6 +3070,51 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eviction_never_follows_copied_build_or_deps_links() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-evict-links-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        for linked in ["build", "deps"] {
+            let target = dir.join(linked).join("target");
+            let source = dir.join(linked).join("source");
+            fs::create_dir_all(target.join("debug/.fingerprint")).unwrap();
+            fs::create_dir_all(&source).unwrap();
+            let name = if linked == "build" {
+                "own-0000000000000001"
+            } else {
+                "libown-0000000000000001.rlib"
+            };
+            let original = source.join(name);
+            fs::write(&original, "source must survive").unwrap();
+            std::os::unix::fs::symlink(&source, target.join("debug").join(linked)).unwrap();
+            let result = forget_own_units(&target, &BTreeSet::from(["own".into()]));
+            assert_eq!(
+                fs::read_to_string(&original).unwrap(),
+                "source must survive"
+            );
+            assert!(result.is_err(), "a linked unit folder must reject the copy");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_packages_include_untracked_and_external_path_dependencies() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-lock-packages-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.lock"), "version = 4\n[[package]]\nname = 'external-path'\nversion = '1.0.0'\n[[package]]\nname = 'registry'\nversion = '1.0.0'\nsource = 'registry+https://example.test/index'\n[[package]]\nname = 'git-dep'\nversion = '1.0.0'\nsource = 'git+https://example.test/repo'\n").unwrap();
+        assert_eq!(
+            local_lock_packages(&dir),
+            BTreeSet::from(["external-path".into()])
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -3274,7 +3360,7 @@ mod tests {
         // One outside any unit drops the whole copy.
         fs::remove_dir_all(fx.worktree.join("target")).unwrap();
         fx.write(
-            "target/debug/notes.txt",
+            "target/notes.txt",
             format!("{}/target\n", sibling.display()).as_bytes(),
         );
         let warmed = fx.warm();
@@ -3317,5 +3403,76 @@ mod tests {
         for (rel, why) in &warmed.skipped {
             println!("skipped {rel}: {why}");
         }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    #[ignore = "runs sequential real cargo builds; run explicitly under the build lock"]
+    fn warmed_workspace_recompiles_own_build_script_library_and_proc_macro() {
+        let fx = Fixture::with("target/\n", |root| {
+            let files = [
+                ("Cargo.toml", "[ package ]\nname = 'warm-proof'\nversion = '0.1.0'\nedition = '2024'\n[workspace]\nmembers = ['dep', 'mac']\n[dependencies]\nlocal-dep = { path = 'dep' }\nlocal-mac = { path = 'mac' }\n"),
+                ("src/main.rs", "fn main() { println!(\"{}|{}|{}\", env!(\"CARGO_MANIFEST_DIR\"), local_dep::path(), local_mac::path!()); }\n"),
+                ("build.rs", "fn main() { std::fs::write(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/build-ran\"), \"ran\").unwrap(); }\n"),
+                ("dep/Cargo.toml", "[package]\nname = 'local-dep'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nname = 'local_dep'\n"),
+                ("dep/src/lib.rs", "pub fn path() -> &'static str { env!(\"CARGO_MANIFEST_DIR\") }\n"),
+                ("mac/Cargo.toml", "[package]\nname = 'local-mac'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nproc-macro = true\n"),
+                ("mac/src/lib.rs", "extern crate proc_macro; #[proc_macro] pub fn path(_: proc_macro::TokenStream) -> proc_macro::TokenStream { format!(\"{:?}\", env!(\"CARGO_MANIFEST_DIR\")).parse().unwrap() }\n"),
+            ];
+            for (path, contents) in files {
+                let path = root.join(path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, contents).unwrap();
+            }
+        }).expect("copy-on-write filesystem required for this explicit verification");
+        let build = |root: &Path| {
+            let result = std::process::Command::new("cargo")
+                .args(["build", "--offline", "-v"])
+                .env("CARGO_BUILD_JOBS", "2")
+                .env_remove("CARGO_TARGET_DIR")
+                .current_dir(root)
+                .output()
+                .unwrap();
+            let log = String::from_utf8_lossy(&result.stderr).into_owned();
+            println!("build {}:\n{log}", root.display());
+            assert!(result.status.success(), "{log}");
+            log
+        };
+        build(fx.root());
+        fs::remove_file(fx.root().join("build-ran")).unwrap();
+        let warmed = fx.warm();
+        println!("warming: {warmed:?}");
+        assert!(warmed.folders().contains(&"target".into()), "{warmed:?}");
+        let log = build(&fx.worktree);
+        for name in ["warm-proof", "local-dep", "local-mac"] {
+            assert!(
+                log.lines()
+                    .any(|line| line.trim_start().starts_with(&format!("Compiling {name} "))),
+                "{name} was not compiled: {log}"
+            );
+            assert!(
+                !log.lines()
+                    .any(|line| line.trim_start().starts_with(&format!("Fresh {name} "))),
+                "{name} was reused: {log}"
+            );
+        }
+        assert!(
+            !fx.root().join("build-ran").exists(),
+            "the copied build script wrote to the source"
+        );
+        assert!(fx.worktree.join("build-ran").is_file());
+        let output = std::process::Command::new(fx.worktree.join("target/debug/warm-proof"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            format!(
+                "{}|{}|{}",
+                fx.worktree.display(),
+                fx.worktree.join("dep").display(),
+                fx.worktree.join("mac").display()
+            )
+        );
     }
 }
