@@ -62,6 +62,24 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
                 object.remove("capabilities");
                 object.remove("risk");
             }
+            if cfg!(target_os = "windows") {
+                if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+                    for field in ["webkit_inspector_port", "enable_javascript_apple_events"] {
+                        properties.remove(field);
+                    }
+                }
+            }
+            if cfg!(target_os = "windows") && name == "page" {
+                if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+                    properties.remove("bundle_id");
+                    properties.remove("user_has_confirmed_enabling");
+                }
+                if let Some(actions) =
+                    tool["inputSchema"]["properties"]["action"]["enum"].as_array_mut()
+                {
+                    actions.retain(|action| action != "enable_javascript_apple_events");
+                }
+            }
             shorten_schema(&mut tool["inputSchema"]);
             // These duplicate the tool name and the concise description above.
             if let Some(schema) = tool["inputSchema"].as_object_mut() {
@@ -88,6 +106,7 @@ fn description(name: &str) -> &'static str {
         "get_window_state" => "Read a window's accessibility tree; screenshots only on request or a thin tree. Row [N] with snapshot_id S is element_token S:N. A new read stales the previous tokens. Re-read with since:\"latest\" for a diff and fresh ids; obey reindexed mappings. Use a screenshot before zoom or pixel actions. Partial trees say truncated; narrow query or increase limits.",
         "list_windows" => "List windows, titles and ids. Prefer an app or pid filter. Use the returned pid/window_id for reads and actions.",
         "list_apps" => "List running and installed apps, one short entry each. To open a known app, call launch_app directly.",
+        "page" if cfg!(target_os = "windows") => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Focus the DOM field before inserting text. Accessibility fallback has fewer DOM capabilities.",
         "page" => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Safari uses Apple Events (enabling requires user confirmation and restarts the browser). Focus the DOM field before inserting text. AX fallback has fewer DOM capabilities.",
         "zoom" => "Crop the last screenshot; take get_window_state with include_screenshot:true first. Region uses that image's pixels. Omit pid to resolve the unique session/window snapshot. Click in the zoom image with from_zoom:true.",
         "click" if cfg!(target_os = "windows") => "Click a fresh element_token or screenshot x/y in the target window. For Settings, only closing is allowed: action:\"close\" with pid/window_id and no element, pixels or modifiers. Read again to verify the outcome.",
@@ -95,6 +114,7 @@ fn description(name: &str) -> &'static str {
         "double_click" => "Double-click a fresh element_token or screenshot x/y in a specific window. Verify with a read.",
         "right_click" => "Open a context menu with a fresh element_token or window-local screenshot x/y. Verify with a read.",
         "type_text" => "Insert text, preferably into a fresh element_token. Without a token, target the window's focused field; with x/y, click that screenshot point first. Verify the value afterwards.",
+        "set_value" if cfg!(target_os = "windows") => "Set a writable accessibility element's value using a fresh element_token; reads back the result.",
         "set_value" => "Set a writable accessibility element's value using a fresh element_token; reads back the result. File names in Finder require the Rename menu workflow instead.",
         "press_key" => "Send a key with optional modifiers to an element or window. With x/y, focus that screenshot point first. Verify the outcome.",
         "hotkey" => "Send a key combination to an element or window; menu equivalents may be used. With x/y, focus that screenshot point first. Verify the outcome.",
