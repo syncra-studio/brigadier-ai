@@ -329,6 +329,9 @@ fn try_click(
         // existing background coordinate route instead of entering that handler.
         return Ok(None);
     }
+    // Keep target/owner protection alive through native commands and their
+    // bounded readback, even if this helper was reached without a window_id.
+    let _noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
     if !expand_only {

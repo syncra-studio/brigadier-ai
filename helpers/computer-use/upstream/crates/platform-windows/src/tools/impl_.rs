@@ -4805,17 +4805,6 @@ impl Tool for TypeTextTool {
             }
         }
 
-        // Same no-raise guard as click: a XAML/WPF ValuePattern.SetValue handler
-        // calls UIElement.Focus()→SetForegroundWindow; WS_EX_NOACTIVATE on the
-        // target makes that a no-op while the value still gets set. Safe because
-        // type_text never uses the SendInput foreground-swap path. No-op for
-        // delivery_mode:"foreground" and when no window_id was given.
-        let _noact = match (delivery != DeliveryMode::Foreground, hwnd_opt) {
-            (true, Some(h)) => Some(crate::input::NoActivateGuard::arm(
-                windows::Win32::Foundation::HWND(h as *mut _),
-            )),
-            _ => None,
-        };
         let _delay_ms = args.u64_or("delay_ms", 30).min(200);
         let hwnd = match hwnd_opt {
             Some(h) => h,
@@ -4839,6 +4828,11 @@ impl Tool for TypeTextTool {
                 }
             }
         };
+        // Arm after resolving the real HWND, including calls that omit
+        // window_id. The shared guard also covers a modal dialog's owner.
+        let _noact = (delivery != DeliveryMode::Foreground).then(|| {
+            crate::input::NoActivateGuard::arm(windows::Win32::Foundation::HWND(hwnd as *mut _))
+        });
         if let Some(element) = admitted.as_ref() {
             let (cx, cy) = element.center;
             pin_overlay_above(&cursor_key, hwnd);
