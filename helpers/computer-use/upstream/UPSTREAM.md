@@ -115,6 +115,8 @@ Patches applied, in order:
 
 - `patches/0112-windows-walk-completeness.diff`: Report complete UIA walks truthfully and mark depth cuts, provider enumeration failures, time/node stops and partial MSAA sources as incomplete.
 
+- `patches/0113-kept-ancestor-tree-depths.diff`: Indent rows by actual retained ancestors, observing omitted native siblings before query filtering, while keeping native depths for traversal limits.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

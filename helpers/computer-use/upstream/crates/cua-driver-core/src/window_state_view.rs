@@ -1661,9 +1661,13 @@ pub fn filter_tree_markdown(markdown: &str, query: &str) -> String {
         }
     }
     let mut result = String::new();
+    let mut kept_depths = vec![0; lines.len()];
     for (index, line) in lines.iter().enumerate() {
         if keep[index] {
-            result.push_str(line);
+            let depth = parents[index].map_or(0, |parent| kept_depths[parent] + 1);
+            kept_depths[index] = depth;
+            result.push_str(&"  ".repeat(depth));
+            result.push_str(line.trim_start_matches(' '));
             result.push('\n');
         }
     }
@@ -1733,7 +1737,7 @@ mod query_row_tests {
         let markdown = "- [0] Root\n  - [1] Old branch\n    - [2] Old parent\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n";
         assert_eq!(
             filter_tree_markdown(markdown, "needle"),
-            "- [0] Root\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n"
+            "- [0] Root\n  - [3] New branch\n    - [4] Needle\n    - [5] Needle again\n"
         );
         assert_eq!(filter_tree_markdown(markdown, "absent"), "");
     }
@@ -1973,5 +1977,63 @@ mod windows_coverage_tests {
             );
             assert!(coverage.note(&walk).unwrap().contains("depth limit"));
         }
+    }
+}
+
+/// Project native ancestry while visiting every node, including omitted layout
+/// containers. A skipped sibling still ends the previous displayed branch.
+#[derive(Default)]
+pub struct KeptAncestorDepths(Vec<usize>);
+impl KeptAncestorDepths {
+    pub fn row_depth(&mut self, native_depth: usize, kept: bool) -> usize {
+        while self.0.last().is_some_and(|depth| *depth >= native_depth) {
+            self.0.pop();
+        }
+        let depth = self.0.len();
+        if kept {
+            self.0.push(native_depth);
+        }
+        depth
+    }
+}
+
+#[cfg(test)]
+mod kept_ancestor_tests {
+    use super::*;
+    #[test]
+    fn omitted_sibling_containers_do_not_nest_back_under_the_search_edit() {
+        let mut depths = KeptAncestorDepths::default();
+        let mut markdown = String::new();
+        for (native_depth, row) in [
+            (0, Some("- [0] Window \"Settings\"")),
+            (1, None),
+            (2, Some("- [1] Edit \"Search\"")),
+            (1, None),
+            (2, None),
+            (3, Some("- [2] Button \"Back\"")),
+        ] {
+            let depth = depths.row_depth(native_depth, row.is_some());
+            if let Some(row) = row {
+                markdown.push_str(&format!("{}{row}\n", "  ".repeat(depth)));
+            }
+        }
+        assert_eq!(
+            markdown,
+            "- [0] Window \"Settings\"\n  - [1] Edit \"Search\"\n  - [2] Button \"Back\"\n"
+        );
+        assert_eq!(
+            filter_tree_markdown(&markdown, "Back"),
+            "- [0] Window \"Settings\"\n  - [2] Button \"Back\"\n"
+        );
+    }
+    #[test]
+    fn read_only_kept_parents_and_separate_roots_keep_their_place() {
+        let mut depths = KeptAncestorDepths::default();
+        assert_eq!(depths.row_depth(0, false), 0);
+        assert_eq!(depths.row_depth(2, true), 0);
+        assert_eq!(depths.row_depth(3, true), 1);
+        assert_eq!(depths.row_depth(4, true), 2);
+        assert_eq!(depths.row_depth(3, true), 1);
+        assert_eq!(depths.row_depth(0, true), 0);
     }
 }

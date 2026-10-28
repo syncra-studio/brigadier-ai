@@ -127,6 +127,7 @@ unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget, max_depth: usize) -> U
         budget,
         max_depth,
         &mut coverage,
+        &mut cua_driver_core::window_state_view::KeptAncestorDepths::default(),
     );
 
     let tree_markdown = render_lines(&lines);
@@ -148,6 +149,7 @@ unsafe fn walk(
     budget: &mut WalkBudget,
     max_depth: usize,
     coverage: &mut cua_driver_core::window_state_view::WindowsReadCoverage,
+    projection: &mut cua_driver_core::window_state_view::KeptAncestorDepths,
 ) {
     if !coverage.admits_depth(depth, max_depth) {
         return;
@@ -197,6 +199,7 @@ unsafe fn walk(
     let is_actionable = !actions.is_empty();
     let has_content = name.is_some();
 
+    let rendered_depth = projection.row_depth(depth, is_actionable || has_content);
     if is_actionable || has_content {
         // Retain the IAccessible pointer for the cache. Mirror what the UIA
         // walker does: clone, get raw, forget the local — the cache's Drop
@@ -227,7 +230,7 @@ unsafe fn walk(
                 center_y,
                 rect,
                 msaa_role: role_int,
-                depth,
+                depth: rendered_depth,
                 parent_element_index: parent_index,
                 in_web_content: false,
             }
@@ -247,7 +250,7 @@ unsafe fn walk(
                 center_y: 0,
                 rect,
                 msaa_role: role_int,
-                depth,
+                depth: rendered_depth,
                 parent_element_index: parent_index,
                 in_web_content: false,
             }
@@ -256,7 +259,7 @@ unsafe fn walk(
         // it received an element_index (mirrors what the markdown shows:
         // only indexed rows are addressable).
         let next_parent = node.element_index.or(parent_index);
-        lines.push((depth, crate::uia::format_node_line(&node)));
+        lines.push((rendered_depth, crate::uia::format_node_line(&node)));
         nodes.push(node);
 
         // Recurse via accChildCount + get_accChild.
@@ -276,6 +279,7 @@ unsafe fn walk(
                         budget,
                         max_depth,
                         coverage,
+                        projection,
                     );
                 }
             }
@@ -300,6 +304,7 @@ unsafe fn walk(
                     budget,
                     max_depth,
                     coverage,
+                    projection,
                 );
             }
         }

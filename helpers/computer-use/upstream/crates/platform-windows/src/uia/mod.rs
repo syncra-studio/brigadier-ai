@@ -10,7 +10,7 @@
 //!  take >4s when reading each property individually).
 
 use cua_driver_core::walk_budget::WalkBudget;
-use cua_driver_core::window_state_view::WindowsReadCoverage;
+use cua_driver_core::window_state_view::{KeptAncestorDepths, WindowsReadCoverage};
 use windows::core::{Interface, BSTR};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -290,6 +290,7 @@ unsafe fn walk_tree_unsafe(
     let mut lines: Vec<(usize, String)> = Vec::new();
     let mut counter = 0usize;
     let mut coverage = WindowsReadCoverage::default();
+    let mut projection = KeptAncestorDepths::default();
 
     walk_cached_bounded(
         &root_elem,
@@ -302,6 +303,7 @@ unsafe fn walk_tree_unsafe(
         budget,
         max_depth,
         &mut coverage,
+        &mut projection,
     );
 
     // Fallback for CoreWindow-class apps (Calculator, Settings, older UWPs).
@@ -465,6 +467,7 @@ unsafe fn walk_root_by_pid(
     max_depth: usize,
     coverage: &mut WindowsReadCoverage,
 ) {
+    let mut projection = KeptAncestorDepths::default();
     let root = match automation.GetRootElement() {
         Ok(r) => r,
         Err(e) => {
@@ -536,7 +539,17 @@ unsafe fn walk_root_by_pid(
             }
         };
         walk_cached_bounded(
-            &cached, 0, None, false, nodes, lines, counter, budget, max_depth, coverage,
+            &cached,
+            0,
+            None,
+            false,
+            nodes,
+            lines,
+            counter,
+            budget,
+            max_depth,
+            coverage,
+            &mut projection,
         );
     }
 }
@@ -560,6 +573,7 @@ unsafe fn walk_cached(
         &mut WalkBudget::nodes_only(MAX_TOTAL_ELEMENTS),
         MAX_DEPTH,
         &mut WindowsReadCoverage::default(),
+        &mut KeptAncestorDepths::default(),
     );
 }
 
@@ -575,6 +589,7 @@ unsafe fn walk_cached_bounded(
     budget: &mut WalkBudget,
     max_depth: usize,
     coverage: &mut WindowsReadCoverage,
+    projection: &mut KeptAncestorDepths,
 ) {
     // Node and time budget: a refused node is counted as discovered but not
     // visited, and the walk unwinds with the partial tree it has.
@@ -593,6 +608,7 @@ unsafe fn walk_cached_bounded(
         nodes,
         lines,
         counter,
+        Some(projection),
     );
 
     // Recurse using cached children (no additional RPC).
@@ -614,6 +630,7 @@ unsafe fn walk_cached_bounded(
                     budget,
                     max_depth,
                     coverage,
+                    projection,
                 );
             } else {
                 coverage.provider_errors += 1;
@@ -730,8 +747,16 @@ unsafe fn walk_native_level(
     if !budget.admit() {
         return Err("the native UIA tree exceeded the element budget".to_owned());
     }
-    let (control_type, emitted_parent) =
-        emit_cached_node(element, depth, parent_index, false, nodes, lines, counter);
+    let (control_type, emitted_parent) = emit_cached_node(
+        element,
+        depth,
+        parent_index,
+        false,
+        nodes,
+        lines,
+        counter,
+        None,
+    );
     if control_type.eq_ignore_ascii_case("Document") {
         return Ok(());
     }
@@ -767,6 +792,7 @@ fn emit_cached_node(
     nodes: &mut Vec<UiaNode>,
     lines: &mut Vec<(usize, String)>,
     counter: &mut usize,
+    projection: Option<&mut KeptAncestorDepths>,
 ) -> (String, Option<usize>) {
     let control_type = read_cached_control_type(element);
     let name = read_cached_bstr_name(element);
@@ -789,6 +815,9 @@ fn emit_cached_node(
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
 
+    let depth = projection.map_or(depth, |projection| {
+        projection.row_depth(depth, is_actionable || has_content)
+    });
     let mut emitted_parent: Option<usize> = parent_index;
     if is_actionable || has_content {
         let retained: IUIAutomationElement = element.clone();
@@ -1136,5 +1165,32 @@ mod multiline_query_tests {
         }
         assert_eq!(node.name.as_deref(), Some("First\nSecond"));
         assert_eq!(node.value.as_deref(), Some("value\r\nnext"));
+    }
+}
+
+#[cfg(test)]
+mod retained_ancestor_render_tests {
+    use super::*;
+    #[test]
+    fn back_is_a_sibling_of_search_after_empty_native_branches() {
+        let mut depths = KeptAncestorDepths::default();
+        let mut rows = Vec::new();
+        for (native_depth, row) in [
+            (0, Some("- [0] Window")),
+            (1, None),
+            (2, Some("- [1] Edit \"Search\"")),
+            (1, None),
+            (2, None),
+            (3, Some("- [2] Button \"Back\"")),
+        ] {
+            let depth = depths.row_depth(native_depth, row.is_some());
+            if let Some(row) = row {
+                rows.push((depth, row.to_owned()));
+            }
+        }
+        assert_eq!(
+            filter_tree(&render_lines(&rows), "Back"),
+            "- [0] Window\n  - [2] Button \"Back\"\n"
+        );
     }
 }
