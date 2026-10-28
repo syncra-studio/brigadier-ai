@@ -62,3 +62,24 @@ fn message_delivery_acknowledgement_cannot_confirm_an_effect() {
     assert_eq!(record.effect, ActionEffect::Unverifiable);
     assert!(record.evidence.is_empty());
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn pointer_injection_fallback_refuses_before_any_desktop_access() {
+    // Zero handles/coordinates deliberately provide no desktop target. The
+    // safety refusal must happen before HWND lookup, device creation or input.
+    for button in ["left", "right"] {
+        let click = platform_windows::input::inject_click_screen(0, 0, 0, 1, button)
+            .unwrap_err()
+            .to_string();
+        assert!(click.contains("background_unavailable"));
+        assert!(click.contains("moving your pointer"));
+        assert!(click.contains("No click was sent"));
+        let drag = platform_windows::input::inject::inject_drag_screen(0, 0, 0, 1, 1, 8, button)
+            .unwrap_err()
+            .to_string();
+        assert!(drag.contains("background_unavailable"));
+        assert!(drag.contains("moving your pointer"));
+        assert!(drag.contains("No drag was sent"));
+    }
+}

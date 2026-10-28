@@ -152,6 +152,8 @@ Patches applied, in order:
 
 - `patches/0137-windows-yield-on-physical-release-and-keep-event-evidence.diff`: Yield foreground protection on physical releases and wheel input as well as presses, preserve queued pre-input events at zero or wrapped timestamps, and report user-input interruption explicitly.
 
+- `patches/0138-windows-refuse-pointer-moving-injection-fallback.diff`: Remove synthetic pen and touch fallbacks that cannot guarantee a stationary system pointer; retain earlier semantic UIA and native posted-message routes and return an explicit no-input refusal for the unsafe rung.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

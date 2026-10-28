@@ -6802,16 +6802,8 @@ impl Tool for ScrollTool {
 // `GetWindowStateTool` — that's where the actual screenshot machinery
 // lives now.
 
-/// Chromium/Electron windows silently drop `PostMessage` mouse events — their
-/// input thread only honors SendInput-origin events (#1623). `ClickTool`
-/// auto-routes Chromium targets through SendInput, but `DoubleClickTool` /
-/// `RightClickTool` did not, so element/pixel gestures on Electron apps
-/// (Obsidian, VS Code, Slack, …) reached `post_click_screen` and no-op'd
-/// silently. This mirrors that short-circuit for those tools (#1984): when
-/// `hwnd` is a Chromium window, deliver `count` clicks of `button` at screen
-/// `(sx, sy)` via SendInput with async foreground restore and return
-/// `Some(result)`. Returns `None` for non-Chromium targets so the caller
-/// proceeds to its normal PostMessage path.
+/// Final Chromium pointer fallback, after the caller's applicable semantic
+/// routes. Refuse an unsafe pointer transport; never switch to the system mouse.
 async fn chromium_click_short_circuit(
     hwnd: u64,
     sx: i32,
