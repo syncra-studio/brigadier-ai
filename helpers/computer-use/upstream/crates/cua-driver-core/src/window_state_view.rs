@@ -1748,3 +1748,72 @@ mod query_row_tests {
         );
     }
 }
+
+/// The only writable Settings operation: close one exact window, never an
+/// element, pixel, modified click, or batch alias of a different input action.
+pub fn windows_settings_close_request(tool: &str, args: &Value) -> bool {
+    let absent = |key: &str| args.get(key).is_none_or(Value::is_null);
+    let empty_modifiers =
+        |key: &str| absent(key) || args[key].as_array().is_some_and(Vec::is_empty);
+    tool == "click"
+        && args["action"] == "close"
+        && args["pid"]
+            .as_u64()
+            .is_some_and(|pid| pid > 0 && u32::try_from(pid).is_ok())
+        && args["window_id"].as_u64().is_some_and(|id| id > 0)
+        && ["element_token", "element_index", "x", "y", "capture_id"]
+            .iter()
+            .all(|key| absent(key))
+        && (absent("from_zoom") || args["from_zoom"] == false)
+        && (absent("button") || args["button"] == "left")
+        && (absent("count") || args["count"] == 1)
+        && (absent("scope") || args["scope"] == "window")
+        && (absent("delivery_mode") || args["delivery_mode"] == "background")
+        && empty_modifiers("modifier")
+        && empty_modifiers("modifiers")
+}
+
+#[cfg(test)]
+mod windows_settings_close_tests {
+    use super::*;
+    #[test]
+    fn close_requires_an_exact_unmodified_window_request() {
+        let base = json!({"pid":42,"window_id":99,"action":"close"});
+        assert!(windows_settings_close_request("click", &base));
+        for tool in [
+            "double_click",
+            "right_click",
+            "press_key",
+            "type_text",
+            "invoke_menu",
+        ] {
+            assert!(!windows_settings_close_request(tool, &base));
+        }
+        for (field, value) in [
+            ("element_token", json!("s1:2")),
+            ("element_index", json!(2)),
+            ("x", json!(0)),
+            ("y", json!(0)),
+            ("capture_id", json!("capture")),
+            ("from_zoom", json!(true)),
+            ("button", json!("right")),
+            ("count", json!(2)),
+            ("modifier", json!(["ctrl"])),
+            ("modifiers", json!(["alt"])),
+            ("scope", json!("desktop")),
+            ("delivery_mode", json!("foreground")),
+            ("pid", json!(0)),
+            ("window_id", json!(0)),
+            ("action", json!("invoke")),
+        ] {
+            let mut args = base.clone();
+            args[field] = value;
+            assert!(!windows_settings_close_request("click", &args), "{args}");
+        }
+        for field in ["pid", "window_id"] {
+            let mut args = base.clone();
+            args.as_object_mut().unwrap().remove(field);
+            assert!(!windows_settings_close_request("click", &args));
+        }
+    }
+}

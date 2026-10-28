@@ -535,8 +535,49 @@ impl Tool for ExactPidWindowTargetGuard {
                 }
             }
         }
+        // Settings Close is a window operation, separate from click delivery.
+        if self.inner.def().name == "click" && args["action"] == "close" {
+            return close_settings_window(args).await;
+        }
         self.inner.invoke(args).await
     }
+}
+
+async fn close_settings_window(args: Value) -> ToolResult {
+    use cua_driver_core::window_state_view::windows_settings_close_request;
+    if !windows_settings_close_request("click", &args) {
+        return ToolResult::error("Settings window Close requires pid, window_id and action:\"close\" without an element, pixels or modifiers. No close was sent.")
+            .with_structured(json!({"code":"settings_close_refused","effect":"refused","delivery_attempted":false}));
+    }
+    let pid = args["pid"].as_u64().unwrap() as u32;
+    let window_id = args["window_id"].as_u64().unwrap();
+    tokio::task::spawn_blocking(move || {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, IsWindow, PostMessageW, GA_ROOT, WM_CLOSE};
+        let settings = crate::win32::list_processes().iter().any(|process| process.pid == pid && process.name.eq_ignore_ascii_case("SystemSettings.exe"));
+        if !settings {
+            return ToolResult::error("This window Close route is only available for Windows Settings. No close was sent.")
+                .with_structured(json!({"code":"settings_close_refused","effect":"refused","delivery_attempted":false}));
+        }
+        let hwnd = HWND(window_id as *mut _);
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        if !unsafe { IsWindow(hwnd) }.as_bool() || root.0.is_null() || crate::win32::window_app_pid(window_id) != Some(pid) {
+            return ToolResult::error("The Settings window is closed, stale or belongs to another process. No close was sent.")
+                .with_structured(json!({"code":"window_target_mismatch","effect":"refused","delivery_attempted":false}));
+        }
+        // Closing the user's front window necessarily changes the foreground.
+        let _no_activate = crate::input::NoActivateGuard::arm(root);
+        let readback = crate::uia::click::Readback::new(window_id, None);
+        if unsafe { GetForegroundWindow() } == root {
+            return ToolResult::error("Closing this Settings window would change your front window. No close was sent.")
+                .with_structured(json!({"code":"foreground_window_close_refused","effect":"refused","delivery_attempted":false}));
+        }
+        if let Err(error) = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) } {
+            return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
+                .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
+        }
+        readback.finish(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage)
+    }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
 type PidWindowGuardParts = (
@@ -3633,7 +3674,7 @@ impl Tool for ClickTool {
                     "pid":{"type":"integer","description":"Target process ID for window scope. Optional with element_token (the token carries the pid). Omit with scope=desktop for screen-absolute coordinates from get_desktop_state."},
                     "window_id":{"type":"integer","description":"HWND of the target window. Omit when element_token is supplied (the token carries it)."},
                     "element_token": cua_driver_core::tool_schema::element_token_schema(),
-                    "action":{"type":"string","description":"Accessibility action for an element_token target. \"expand\" opens the element through UIA ExpandCollapsePattern, or clicks the dropdown half of an MSAA split button. Omit for the default invoke."},
+                    "action":{"type":"string","description":"For Windows Settings only, \"close\" with pid/window_id closes that window without an element or pixels. Otherwise an accessibility action for an element_token target. \"expand\" opens the element through UIA ExpandCollapsePattern, or clicks the dropdown half of an MSAA split button. Omit for the default invoke."},
                     "capture_id":{"type":"string","minLength":1,"description":"Optional ID from get_window_state or get_desktop_state. When present, x and y are admitted against that exact capture and the ID is consumed before native dispatch."},
                     "x":{"type":"number","description":"X in window-local screenshot pixels — same space as the PNG get_window_state returns. Must be provided together with y."},
                     "y":{"type":"number","description":"Y in window-local screenshot pixels. Must be provided together with x."},

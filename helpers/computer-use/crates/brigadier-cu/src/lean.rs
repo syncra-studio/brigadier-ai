@@ -90,6 +90,7 @@ fn description(name: &str) -> &'static str {
         "list_apps" => "List running and installed apps, one short entry each. To open a known app, call launch_app directly.",
         "page" => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Safari uses Apple Events (enabling requires user confirmation and restarts the browser). Focus the DOM field before inserting text. AX fallback has fewer DOM capabilities.",
         "zoom" => "Crop the last screenshot; take get_window_state with include_screenshot:true first. Region uses that image's pixels. Omit pid to resolve the unique session/window snapshot. Click in the zoom image with from_zoom:true.",
+        "click" if cfg!(target_os = "windows") => "Click a fresh element_token or screenshot x/y in the target window. For Settings, only closing is allowed: action:\"close\" with pid/window_id and no element, pixels or modifiers. Read again to verify the outcome.",
         "click" => "Click a fresh element_token (preferred) or x/y in the target window's last screenshot. Default AX action press. Unsupported actions are refused; listed AX actions are hints, not proof of delivery. Read again to verify the outcome.",
         "double_click" => "Double-click a fresh element_token or screenshot x/y in a specific window. Verify with a read.",
         "right_click" => "Open a context menu with a fresh element_token or window-local screenshot x/y. Verify with a read.",

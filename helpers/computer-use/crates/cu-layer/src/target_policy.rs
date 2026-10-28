@@ -121,12 +121,12 @@ pub fn enforce(
     let mut checked_pid = None;
     if let Some(pid) = args.get("pid").and_then(Value::as_i64) {
         checked_pid = Some(pid);
-        check_pid(tool, pid, own_pid, allowed, resolver)?;
+        check_pid(tool, args, pid, own_pid, allowed, resolver)?;
     }
     if let Some(window_id) = args.get("window_id").and_then(Value::as_u64) {
         if let Some(owner) = (resolver.pid_for_window)(window_id) {
             if checked_pid != Some(owner) {
-                check_pid(tool, owner, own_pid, allowed, resolver)?;
+                check_pid(tool, args, owner, own_pid, allowed, resolver)?;
             }
         } else {
             #[cfg(not(target_os = "macos"))]
@@ -140,7 +140,7 @@ pub fn enforce(
             bundle_id: Some(bundle_id.to_owned()),
             pid: None,
         };
-        check(tool, &identity, allowed)?;
+        check_call(tool, args, &identity, allowed)?;
     }
     if tool == "launch_app" {
         if let Some(name) = args.get("name").and_then(Value::as_str) {
@@ -149,7 +149,7 @@ pub fn enforce(
                 bundle_id: None,
                 pid: None,
             };
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
         }
         if let Some(urls) = args.get("urls").and_then(Value::as_array) {
             for url in urls.iter().filter_map(Value::as_str) {
@@ -169,6 +169,7 @@ pub fn enforce(
 
 fn check_pid(
     tool: &str,
+    args: &Value,
     pid: i64,
     own_pid: i64,
     allowed: &[String],
@@ -185,7 +186,7 @@ fn check_pid(
     }
     match identity {
         Some(identity) => {
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
             #[cfg(not(target_os = "macos"))]
             {
                 let unlocked = identity
@@ -229,6 +230,21 @@ pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Resul
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
     }
+}
+
+fn check_call(
+    tool: &str,
+    args: &Value,
+    identity: &TargetIdentity,
+    allowed: &[String],
+) -> Result<(), ToolResult> {
+    if is_windows_settings(identity)
+        && classify(identity, allowed) == Some(RefusalReason::SecuritySurface)
+        && cua_driver_core::window_state_view::windows_settings_close_request(tool, args)
+    {
+        return Ok(());
+    }
+    check(tool, identity, allowed)
 }
 
 /// System Settings may be opened and read (a version, whether a setting is
@@ -777,7 +793,7 @@ const SETTINGS_REFUSAL: &str =
      setting, ask the user to do this step.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
-    "Settings can be opened, read and closed with kill_app; all other input is refused. To read a page, open it \
+    "Settings can be opened, read and closed; all other input is refused. Close a task-owned window with click using pid, window_id and action:\"close\" without an element or pixels; use kill_app if normal close fails. To read a page, open it \
      directly: launch_app with urls [\"ms-settings:<page>\"], for example ms-settings:about \
      (the Windows version), ms-settings:windowsupdate, ms-settings:display or \
      ms-settings:network, then get_window_state. To change a setting, ask the user to do \
@@ -1179,6 +1195,47 @@ mod tests {
                 Some("driver")
             );
         });
+    }
+
+    #[test]
+    fn only_an_exact_settings_window_close_passes_the_input_policy() {
+        let identity = TargetIdentity {
+            name: "Settings".into(),
+            bundle_id: Some("systemsettings".into()),
+            pid: Some(42),
+        };
+        let args = json!({"pid":42,"window_id":99,"action":"close"});
+        let resolver = TargetResolver {
+            app_for_pid: &|_| Some(identity.clone()),
+            pid_for_window: &|_| Some(42),
+        };
+        assert!(enforce("click", &args, &[], &resolver).is_ok());
+        for (field, value) in [
+            ("x", json!(0)),
+            ("element_token", json!("s1:0")),
+            ("action", json!("press")),
+            ("modifier", json!(["ctrl"])),
+        ] {
+            let mut modified = args.clone();
+            modified[field] = value;
+            assert!(
+                enforce("click", &modified, &[], &resolver).is_err(),
+                "{modified}"
+            );
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let other = TargetIdentity {
+                bundle_id: Some(id.into()),
+                name: id.into(),
+                pid: Some(42),
+            };
+            assert!(check_call("click", &args, &other, &[]).is_err(), "{id}");
+        }
     }
 
     #[test]

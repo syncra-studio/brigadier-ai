@@ -110,6 +110,8 @@ Patches applied, in order:
 - `patches/0109-windows-fresh-document-launch-cleanup.diff`: keep the native UIA call explicitly unsafe and remove untouched fresh Notepad files when launch is refused or fails before Windows accepts it.
 - `patches/0110-plain-administrator-refusal.diff`: State the administrator refusal in one plain sentence, followed by a labelled hint shared by reads and input.
 
+- `patches/0111-windows-settings-window-close.diff`: Allow only an exact unmodified Settings window Close through WM_CLOSE, refuse closing the front window, and confirm only observed window destruction.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
