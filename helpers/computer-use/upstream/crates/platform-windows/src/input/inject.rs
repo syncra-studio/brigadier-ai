@@ -271,7 +271,10 @@ impl NoActivateGuard {
         pids.dedup();
         let watch = foreground_watch::ForegroundWatch::start(
             prior,
-            foreground_watch::Target::Processes(pids),
+            foreground_watch::Target::Processes(
+                pids,
+                styles.iter().map(|key| key.0 as usize).collect(),
+            ),
             true,
         );
         Self {

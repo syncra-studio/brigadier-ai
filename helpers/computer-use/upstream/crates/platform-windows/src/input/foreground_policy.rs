@@ -316,3 +316,23 @@ mod lease_tests {
         .contains("not confirmed in front"));
     }
 }
+
+/// A shared/unknown host PID alone does not identify the addressed input window.
+pub(crate) fn input_window_matches(
+    pid_matches: bool,
+    exact_window: bool,
+    shared_or_unknown_host: bool,
+) -> bool {
+    pid_matches && (!shared_or_unknown_host || exact_window)
+}
+#[cfg(test)]
+mod input_host_tests {
+    use super::*;
+    #[test]
+    fn shared_host_cannot_attribute_an_unrelated_frame_to_the_input() {
+        assert!(!input_window_matches(true, false, true));
+        assert!(input_window_matches(true, true, true));
+        assert!(!input_window_matches(false, true, true));
+        assert!(input_window_matches(true, false, false));
+    }
+}

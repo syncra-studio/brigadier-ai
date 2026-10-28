@@ -27,7 +27,7 @@ pub(super) mod policy;
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Target {
     Launch(Vec<String>),
-    Processes(Vec<u32>),
+    Processes(Vec<u32>, Vec<usize>),
 }
 
 impl Target {
@@ -132,7 +132,11 @@ impl Watch {
         // Keep transient event evidence; check current foreground before restoration.
         let pid = window_process(event_hwnd);
         let named = match &self.target {
-            Target::Processes(targets) => pid != 0 && targets.contains(&pid),
+            Target::Processes(targets, windows) => policy::input_window_matches(
+                pid != 0 && targets.contains(&pid),
+                windows.contains(&(event_hwnd.0 as usize)),
+                process_name(pid).is_none_or(|name| name == "applicationframehost"),
+            ),
             Target::Launch(names) => process_name(pid).is_some_and(|name| names.contains(&name)),
         };
         let target = {
@@ -267,7 +271,7 @@ impl ForegroundWatch {
             if let Some(watch) = entry.watch.upgrade() {
                 if watch.prior == prior
                     && watch.target == target
-                    && matches!(target, Target::Processes(_))
+                    && matches!(target, Target::Processes(_, _))
                     && watch.started.elapsed() < Duration::from_secs(20)
                 {
                     let mut state = watch.state.lock().unwrap();
@@ -435,7 +439,7 @@ mod tests {
     use super::*;
     #[test]
     fn null_prior_is_reported_unconfirmed_without_touching_foreground() {
-        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new()), false);
+        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new(), Vec::new()), false);
         assert!(watch.report().1);
     }
 }

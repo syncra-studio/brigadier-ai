@@ -148,6 +148,8 @@ Patches applied, in order:
 
 - `patches/0135-windows-task-manager-direct-launch-and-singleton-refusal.diff`: Resolve Task Manager to the trusted system executable and use direct non-activating process creation, refusing reuse of an existing singleton and refusing launch without a valid prevention lock.
 
+- `patches/0136-windows-input-shared-frame-attribution.diff`: Require the exact guarded frame for shared or unreadable host processes instead of treating any window in ApplicationFrameHost as the input target.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

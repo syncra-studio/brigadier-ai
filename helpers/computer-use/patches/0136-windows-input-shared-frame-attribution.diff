@@ -1,0 +1,90 @@
+Why: Require the exact guarded frame for shared or unreadable host processes instead of treating any window in ApplicationFrameHost as the input target.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+index 5989d3e62..5538037b8 100644
+--- a/crates/platform-windows/src/input/foreground_policy.rs
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -316,3 +316,23 @@ mod lease_tests {
+         .contains("not confirmed in front"));
+     }
+ }
++
++/// A shared/unknown host PID alone does not identify the addressed input window.
++pub(crate) fn input_window_matches(
++    pid_matches: bool,
++    exact_window: bool,
++    shared_or_unknown_host: bool,
++) -> bool {
++    pid_matches && (!shared_or_unknown_host || exact_window)
++}
++#[cfg(test)]
++mod input_host_tests {
++    use super::*;
++    #[test]
++    fn shared_host_cannot_attribute_an_unrelated_frame_to_the_input() {
++        assert!(!input_window_matches(true, false, true));
++        assert!(input_window_matches(true, true, true));
++        assert!(!input_window_matches(false, true, true));
++        assert!(input_window_matches(true, false, false));
++    }
++}
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index 63418b502..2178e8d9d 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -27,7 +27,7 @@ pub(super) mod policy;
+ #[derive(Clone, PartialEq, Eq)]
+ pub(crate) enum Target {
+     Launch(Vec<String>),
+-    Processes(Vec<u32>),
++    Processes(Vec<u32>, Vec<usize>),
+ }
+ 
+ impl Target {
+@@ -132,7 +132,11 @@ impl Watch {
+         // Keep transient event evidence; check current foreground before restoration.
+         let pid = window_process(event_hwnd);
+         let named = match &self.target {
+-            Target::Processes(targets) => pid != 0 && targets.contains(&pid),
++            Target::Processes(targets, windows) => policy::input_window_matches(
++                pid != 0 && targets.contains(&pid),
++                windows.contains(&(event_hwnd.0 as usize)),
++                process_name(pid).is_none_or(|name| name == "applicationframehost"),
++            ),
+             Target::Launch(names) => process_name(pid).is_some_and(|name| names.contains(&name)),
+         };
+         let target = {
+@@ -267,7 +271,7 @@ impl ForegroundWatch {
+             if let Some(watch) = entry.watch.upgrade() {
+                 if watch.prior == prior
+                     && watch.target == target
+-                    && matches!(target, Target::Processes(_))
++                    && matches!(target, Target::Processes(_, _))
+                     && watch.started.elapsed() < Duration::from_secs(20)
+                 {
+                     let mut state = watch.state.lock().unwrap();
+@@ -435,7 +439,7 @@ mod tests {
+     use super::*;
+     #[test]
+     fn null_prior_is_reported_unconfirmed_without_touching_foreground() {
+-        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new()), false);
++        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new(), Vec::new()), false);
+         assert!(watch.report().1);
+     }
+ }
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index da2bc566e..d80e7a989 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -271,7 +271,10 @@ impl NoActivateGuard {
+         pids.dedup();
+         let watch = foreground_watch::ForegroundWatch::start(
+             prior,
+-            foreground_watch::Target::Processes(pids),
++            foreground_watch::Target::Processes(
++                pids,
++                styles.iter().map(|key| key.0 as usize).collect(),
++            ),
+             true,
+         );
+         Self {
