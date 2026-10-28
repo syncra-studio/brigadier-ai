@@ -93,6 +93,7 @@ Patches applied, in order:
 - `patches/0095-windows-input-delivery-validation.diff`: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
 - `patches/0096-windows-input-target-bounds.diff`: Validate UIA field rectangles before choosing editor or renderer children, and preserve exact administrator refusal wording.
 - `patches/0097-windows-resolved-input-guard.diff`: Arm the shared background guard after resolving the actual text HWND and retain click target/owner protection through command readback.
+- `patches/0098-windows-send-message-transport.diff`: Distinguish synchronous Windows SendMessageTimeout delivery from PostMessage in action transport identities and normalization, without upgrading unconfirmed effects.
 - `patches/0099-windows-caption-identity-and-focus-refusal.diff`: Recognize both WinUI caption Close ids while excluding tab/document ancestry, and explain failed Chromium background focus plainly.
 - `patches/0100-windows-settings-protocol-window.diff`: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
 - `patches/0101-windows-edge-omnibox-url.diff`: confirm Edge targets from browser-chrome address values, bind only one visible document, and revalidate the same URL after each targeted read.

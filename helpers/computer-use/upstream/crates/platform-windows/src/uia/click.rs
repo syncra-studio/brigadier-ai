@@ -142,7 +142,7 @@ impl Readback {
             });
         }
         ToolResult::text(summary(route, closed, changed)).with_structured(serde_json::json!({
-            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
+            "path": match transport { ActionTransport::WindowsPostMessage => "post_message", ActionTransport::WindowsSendMessage => "send_message", ActionTransport::WindowsTargetedInjection => "pixel", _ => "ax" },
             "verified": confirmed, "effect": if confirmed { "confirmed" } else { "unverifiable" }
         })).with_action_record(record)
     }
@@ -355,7 +355,7 @@ fn try_click(
                 let observed = readback.finish(
                     Some(ptr),
                     "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
-                    ActionTransport::WindowsPostMessage,
+                    ActionTransport::WindowsSendMessage,
                 );
                 if let Err(error) = dispatch {
                     if observed
@@ -399,7 +399,7 @@ fn try_click(
                     send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                     return Ok(Some((
                         "Top-level WM_CLOSE",
-                        ActionTransport::WindowsPostMessage,
+                        ActionTransport::WindowsSendMessage,
                     )));
                 }
                 let Ok(pattern) = pattern else {
@@ -511,6 +511,23 @@ mod tests {
         let result =
             Readback::new(0, None).finish(None, "Close", ActionTransport::WindowsPostMessage);
         assert_eq!(result.structured_content.unwrap()["verified"], false);
+    }
+    #[test]
+    fn synchronous_native_command_reports_send_message_without_false_confirmation() {
+        let result =
+            Readback::new(0, None).finish(None, "WM_CLOSE", ActionTransport::WindowsSendMessage);
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["path"],
+            "send_message"
+        );
+        assert_eq!(
+            result.structured_content.as_ref().unwrap()["verified"],
+            false
+        );
+        assert_eq!(
+            result.action_record.unwrap().debug_json()["transport"],
+            "windows_send_message"
+        );
     }
     #[test]
     fn cancellation_prevents_late_mutation() {

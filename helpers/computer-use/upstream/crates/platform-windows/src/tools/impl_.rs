@@ -5000,11 +5000,11 @@ impl Tool for TypeTextTool {
             Err(error) => return ToolResult::error(error.to_string()),
         };
 
-        // 3. Legacy Win32 / GDI / Chromium-IME — PostMessage WM_CHAR, no focus steal.
+        // 3. Legacy Win32 / GDI / Chromium-IME — targeted WM_CHAR, no focus steal.
         //
         // Read-back verification (mirrors macOS type_text): WM_CHAR is silently
         // dropped by some focused targets (notably a VCL/LibreOffice Calc grid
-        // not in cell-edit mode), and PostMessage reports success regardless. So
+        // not in cell-edit mode), and message dispatch reports success regardless. So
         // snapshot the focused element's UIA value before and after; if it did
         // not change we can't confirm the text landed and report "Sent
         // (unverified)" with the foreground-escalation hint, instead of a blind
@@ -5060,7 +5060,7 @@ impl Tool for TypeTextTool {
                 // the same as "the text didn't land": on Windows, UIA's
                 // GetFocusedElement is system-wide (unlike macOS's per-app
                 // AXFocusedUIElement), so when the target isn't the foreground
-                // app we cannot read it back even though a PostMessage WM_CHAR
+                // app we cannot read it back even though a targeted WM_CHAR
                 // may have landed fine. Treating unreadable as failure would
                 // spuriously push agents to foreground and break the
                 // background-first contract. A changed value containing the
@@ -5074,7 +5074,7 @@ impl Tool for TypeTextTool {
                          requested text, but the insertion point is not known). Take a \
                          fresh snapshot to verify the intended final value before retrying."
                     ))
-                    .with_structured(changed_contains_post_message_result(text_len)),
+                    .with_structured(changed_contains_send_message_result(text_len)),
                     (Some(_), Some(_)) => ToolResult::text(format!(
                         "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR, but \
                          the focused field's value did not contain the requested text \
@@ -5083,7 +5083,7 @@ impl Tool for TypeTextTool {
                          Retry with delivery_mode:\"foreground\"."
                     ))
                     .with_structured(serde_json::json!({
-                        "path": "key_events", "characters": text_len,
+                        "path": "send_message", "characters": text_len,
                         "verified": false, "verify": "unchanged",
                         "effect": "unverifiable",
                         "escalation": {
@@ -5101,7 +5101,7 @@ impl Tool for TypeTextTool {
                          delivery_mode:\"foreground\"."
                     ))
                     .with_structured(serde_json::json!({
-                        "path": "key_events", "characters": text_len,
+                        "path": "send_message", "characters": text_len,
                         "verified": false, "verify": "unreadable",
                         "effect": "unverifiable",
                         "escalation": {
@@ -5146,9 +5146,9 @@ fn value_write_structured_result(
     })
 }
 
-fn changed_contains_post_message_result(text_len: usize) -> serde_json::Value {
+fn changed_contains_send_message_result(text_len: usize) -> serde_json::Value {
     serde_json::json!({
-        "path": "key_events",
+        "path": "send_message",
         "characters": text_len,
         "verified": false,
         "verify": "changed_contains",
@@ -6267,7 +6267,7 @@ fn win32_combo_set_value_result(
         ActionEffect::Unverifiable
     };
     let mut record =
-        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsPostMessage, requested)
+        ActionExecutionRecordBuilder::new(effect, ActionTransport::WindowsSendMessage, requested)
             // Window messages reach the control without focusing or raising it.
             .actual_delivery(ActualDelivery::Background)
             .detail(text.clone());
