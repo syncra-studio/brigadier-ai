@@ -733,9 +733,10 @@ fn output_name(entry: &str) -> Option<(&str, &str)> {
 /// Removes from `target`, a fresh copy, every unit of the worktree's own `packages`, in each
 /// profile folder (`debug`, `<triple>/release`, …): its `.fingerprint/<pkg>-<hash>` and
 /// `build/<pkg>-<hash>` folders (a build script compiled for the source's files writes into
-/// them), what it left in `deps/` and `examples/` (by those hashes, or by its crate name), and
-/// `incremental/` whole (Cargo keeps incremental data only for local packages). Cargo then builds
-/// them all again, and reuses only the other packages' units.
+/// them) and what it left in `deps/` (by those hashes, or by its crate name). Every other
+/// folder in a profile goes whole: Cargo keeps incremental data and examples only for local
+/// packages, and the rest (an app bundle) is made from the workspace's own programs. Cargo
+/// then builds them all again, and reuses only the other packages' units.
 fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Result<()> {
     let crates: BTreeSet<String> = packages.iter().map(|name| name.replace('-', "_")).collect();
     let remove = |entry: &fs::DirEntry| -> std::io::Result<()> {
@@ -766,22 +767,23 @@ fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Resu
                 }
             }
         }
-        for outputs in ["deps", "examples"] {
-            for entry in entries(&profile.join(outputs))? {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let Some((krate, hash)) = output_name(&name) else {
-                    continue;
-                };
-                let own = |krate: &str| crates.contains(krate);
-                if hashes.contains(hash) || own(krate) || krate.strip_prefix("lib").is_some_and(own)
-                {
-                    remove(&entry)?;
-                }
+        for entry in entries(&profile.join("deps"))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((krate, hash)) = output_name(&name) else {
+                continue;
+            };
+            let own = |krate: &str| crates.contains(krate);
+            if hashes.contains(hash) || own(krate) || krate.strip_prefix("lib").is_some_and(own) {
+                remove(&entry)?;
             }
         }
-        match fs::remove_dir_all(profile.join("incremental")) {
-            Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err),
-            _ => {}
+        for entry in entries(&profile)? {
+            let name = entry.file_name();
+            if entry.file_type()?.is_dir()
+                && ![".fingerprint", "build", "deps"].contains(&&*name.to_string_lossy())
+            {
+                remove(&entry)?;
+            }
         }
     }
     Ok(())
@@ -2974,7 +2976,10 @@ mod tests {
                 format!("{profile}/deps/app-{bin}"),
                 format!("{profile}/deps/app-{bin}.0abc.rcgu.o"),
                 format!("{profile}/examples/demo-{bin}"),
+                format!("{profile}/examples/demo"),
                 format!("{profile}/incremental/my_core-1ab2cd3ef4gh5/s-x/dep-graph.bin"),
+                format!("{profile}/bundle/macos/My.app/Contents/MacOS/app"),
+                format!("{profile}/app.d"),
                 // A registry package, one named like ours but longer, and its outputs.
                 format!("{profile}/.fingerprint/serde-{registry}/lib-serde.json"),
                 format!("{profile}/.fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
@@ -3005,13 +3010,15 @@ mod tests {
                 format!(".fingerprint/my-app-{bin}"),
                 format!("deps/app-{bin}"),
                 format!("deps/app-{bin}.0abc.rcgu.o"),
-                format!("examples/demo-{bin}"),
+                "examples".into(),
                 "incremental".into(),
+                "bundle".into(),
             ] {
                 assert!(!at(&gone), "{profile}/{gone} is still there");
             }
             for kept in [
                 ".cargo-lock".to_owned(),
+                "app.d".into(),
                 format!(".fingerprint/serde-{registry}/lib-serde.json"),
                 format!(".fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
                 format!("build/serde-{registry}/output"),
