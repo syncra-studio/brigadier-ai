@@ -116,7 +116,6 @@ pub fn enforce(
     if is_listing_tool(tool) {
         return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
     enforce_executable_launch(tool, args, allowed)?;
     let own_pid = i64::from(std::process::id());
     let mut checked_pid = None;
@@ -401,6 +400,20 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
         ))
         || bundle.starts_with("dev.warp.")
         || is_windows_or_linux_terminal(bundle)
+        || is_windows_or_linux_terminal(name)
+        || name == "wmux"
+        || matches!(
+            name,
+            "windows terminal"
+                | "command prompt"
+                | "git bash"
+                | "git cmd"
+                | "windows command processor"
+                | "windows console host"
+        )
+        || name == "windows powershell"
+        || name.starts_with("windows powershell ")
+        || name.starts_with("powershell ")
         || matches!(
             name,
             "terminal"
@@ -648,6 +661,15 @@ fn enforce_executable_launch(
             continue;
         };
         let reference = reference.trim();
+        check(
+            tool,
+            &TargetIdentity {
+                name: app_name_from_reference(reference),
+                bundle_id: None,
+                pid: None,
+            },
+            allowed,
+        )?;
         let token = if let Some(quoted) = reference.strip_prefix('"') {
             quoted.split('"').next().unwrap_or(quoted)
         } else if reference.contains('!') {
@@ -704,9 +726,18 @@ fn enforce_executable_launch(
 
 /// `launch_app` accepts a display name or an app path; compare the app name.
 fn app_name_from_reference(reference: &str) -> String {
-    let trimmed = reference.trim().trim_end_matches('/');
-    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    last.strip_suffix(".app").unwrap_or(last).to_owned()
+    let trimmed = reference
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['/', '\\']);
+    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let lower = last.to_ascii_lowercase();
+    for suffix in [".app", ".exe", ".lnk", ".desktop"] {
+        if lower.ends_with(suffix) {
+            return last[..last.len() - suffix.len()].to_owned();
+        }
+    }
+    last.to_owned()
 }
 
 /// A `brigadier:` (or `brigadier-*:`) URL opens in the user's Brigadier.
@@ -800,6 +831,51 @@ mod tests {
     }
 
     #[test]
+    fn terminal_display_names_paths_and_shell_aliases_are_refused_before_launch() {
+        with_fake_apps(|resolver| {
+            for name in [
+                "Windows PowerShell",
+                "Windows PowerShell (x86)",
+                "Windows PowerShell ISE",
+                "Git CMD",
+                "Windows Command Processor",
+                "Windows Console Host",
+                "PowerShell 7 (x64)",
+                "powershell",
+                "pwsh",
+                "cmd",
+                "wt",
+                "Windows Terminal",
+                "wmux",
+                "bash",
+                "wsl",
+                "conhost",
+                "zsh",
+                "fish",
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "C:\\Users\\user\\Windows PowerShell.lnk",
+                "/bin/bash",
+                "/Applications/Terminal.app",
+            ] {
+                for key in ["name", "path", "launch_path"] {
+                    let args = json!({key:name});
+                    assert_eq!(
+                        reason_of(enforce("launch_app", &args, &[], resolver)).as_deref(),
+                        Some("terminal"),
+                        "{args}"
+                    );
+                }
+            }
+            for name in ["Notepad", "Calculator", "/Applications/Console.app"] {
+                assert!(
+                    enforce("launch_app", &json!({"name":name}), &[], resolver).is_ok(),
+                    "{name}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn console_and_pty_descendants_reveal_unknown_terminal_hosts() {
         for host in ["conhost.exe", "OpenConsole.exe", "pwsh.exe"] {
             let processes = [
@@ -845,7 +921,7 @@ mod tests {
             "foot",
             "tilix",
         ] {
-            if cfg!(target_os = "macos") && matches!(terminal, "wmux" | "tabby" | "git-bash") {
+            if cfg!(target_os = "macos") && matches!(terminal, "tabby" | "git-bash") {
                 assert!(!is_terminal(terminal, terminal), "{terminal}");
                 continue;
             }
@@ -867,6 +943,25 @@ mod tests {
         }
         #[cfg(target_os = "macos")]
         assert!(!is_terminal("com.apple.console", "console"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_launches_are_refused_before_native_target_lookup() {
+        let resolver = TargetResolver {
+            app_for_pid: &|_| panic!("shell launch must be refused before native lookup"),
+            pid_for_window: &|_| panic!("shell launch must be refused before native lookup"),
+        };
+        for args in [
+            json!({"name":"Windows PowerShell"}),
+            json!({"path":"C:\\Windows\\System32\\cmd.exe"}),
+            json!({"launch_path":"wt.exe"}),
+        ] {
+            assert_eq!(
+                reason_of(enforce("launch_app", &args, &[], &resolver)).as_deref(),
+                Some("terminal")
+            );
+        }
     }
 
     #[cfg(windows)]
