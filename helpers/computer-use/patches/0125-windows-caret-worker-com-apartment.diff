@@ -1,0 +1,14 @@
+Why: Initialize and balance COM on the dedicated caret-insertion deadline thread before using retained UIA interfaces.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 1afb8566d..98e5d08a1 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5107,6 +5107,7 @@ impl Tool for TypeTextTool {
+                     "caret insertion", std::time::Duration::from_secs(30),
+                     "unconfirmed insertion; no automatic retry",
+                     move |cancelled| -> anyhow::Result<_> {
++                        let _com = super::launch_browser::Apartment::new();
+                         // Retain target protection even if a provider outlives
+                         // the caller; cancellation is checked before mutations.
+                         let _noact = crate::input::NoActivateGuard::arm(

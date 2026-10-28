@@ -5107,6 +5107,7 @@ impl Tool for TypeTextTool {
                     "caret insertion", std::time::Duration::from_secs(30),
                     "unconfirmed insertion; no automatic retry",
                     move |cancelled| -> anyhow::Result<_> {
+                        let _com = super::launch_browser::Apartment::new();
                         // Retain target protection even if a provider outlives
                         // the caller; cancellation is checked before mutations.
                         let _noact = crate::input::NoActivateGuard::arm(

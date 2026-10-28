@@ -132,6 +132,8 @@ Patches applied, in order:
 
 - `patches/0124-windows-termination-frame-proof.diff`: Refuse termination when a foreground shared Store frame cannot prove its hosted app identity instead of treating ApplicationFrameHost as an unrelated app.
 
+- `patches/0125-windows-caret-worker-com-apartment.diff`: Initialize and balance COM on the dedicated caret-insertion deadline thread before using retained UIA interfaces.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
