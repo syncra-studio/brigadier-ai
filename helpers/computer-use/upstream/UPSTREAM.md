@@ -92,6 +92,7 @@ Patches applied, in order:
 - `patches/0104-windows-fresh-launch-documents.diff`: request fresh browser windows, exclude pre-existing URL matches, open a unique blank Notepad file and confirm its selected tab, and disclose additional/restored tabs.
 - `patches/0105-windows-launch-read-evidence-hardening.diff`: reject conflicting document/address evidence, avoid returning prior browser windows, and distinguish the visible confirmed URL from other requested tabs.
 - `patches/0106-windows-browser-launch-confirmation-facts.diff`: scan native browser windows once per poll and report an opened window separately from its unconfirmed requested URL without reading unrelated content.
+- `patches/0107-windows-notepad-file-launch-route.diff`: pass fresh Notepad files through its executable alias and avoid claiming URL confirmation when only the app window was verified.
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -319,6 +319,7 @@ mod text_run_tests {
 pub(crate) fn named_desktop_executable(name: &str) -> Option<&'static str> {
     match name.trim().to_ascii_lowercase().as_str() {
         "file explorer" | "windows explorer" | "explorer" | "explorer.exe" => Some("explorer.exe"),
+        "notepad" | "notepad.exe" => Some("notepad.exe"),
         _ => None,
     }
 }

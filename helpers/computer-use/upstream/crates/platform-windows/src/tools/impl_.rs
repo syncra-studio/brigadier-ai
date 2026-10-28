@@ -3343,7 +3343,7 @@ impl Tool for LaunchAppTool {
             for window in &windows_json {
                 if let Some(hwnd) = window["window_id"].as_u64() {
                     match super::launch_browser::additional_tabs(hwnd, urls.len().max(1)).await {
-                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. Only the requested document was confirmed; do not read the other tabs.")),
+                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. These additional tabs were not read; do not read them as the requested document.")),
                         None => restored_content_note.push_str(" Windows did not expose a reliable tab count; other restored content could not be ruled out."),
                         _ => {}
                     }
