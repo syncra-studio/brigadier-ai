@@ -130,6 +130,8 @@ Patches applied, in order:
 
 - `patches/0123-windows-untargeted-page-deadline.diff`: Apply the shared four-second single-flight UIA deadline to page reads without URL hints as well as matched reads.
 
+- `patches/0124-windows-termination-frame-proof.diff`: Refuse termination when a foreground shared Store frame cannot prove its hosted app identity instead of treating ApplicationFrameHost as an unrelated app.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

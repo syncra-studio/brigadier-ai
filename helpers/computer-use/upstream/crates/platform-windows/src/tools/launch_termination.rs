@@ -81,11 +81,20 @@ pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Resul
     use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOTOWNER};
     let foreground = unsafe { GetForegroundWindow() };
     let owner = unsafe { GetAncestor(foreground, GA_ROOTOWNER) };
-    if let Some(reason) = super::launch_policy::termination_front_refusal(
-        pid,
-        crate::win32::window_app_pid(foreground.0 as u64),
-        crate::win32::window_app_pid(owner.0 as u64),
-    ) {
+    let app_pid = |hwnd: windows::Win32::Foundation::HWND| {
+        let id = hwnd.0 as u64;
+        let owner_pid = crate::win32::window_owner_pid(id)?;
+        if crate::input::delivery::read_class_name(id) == "ApplicationFrameWindow" {
+            // A shared host is not proof that another Store app is in front.
+            // Refuse if the hosted app identity cannot be established.
+            crate::win32::resolve_uwp_app_pid(owner_pid, id)
+        } else {
+            Some(owner_pid)
+        }
+    };
+    if let Some(reason) =
+        super::launch_policy::termination_front_refusal(pid, app_pid(foreground), app_pid(owner))
+    {
         return Err(reason.into());
     }
     let request = unsafe { TerminateProcess(process.0, 1) };
