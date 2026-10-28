@@ -69,7 +69,7 @@ pub(crate) struct Workspace {
     /// The branch it merges back into.
     pub target: Option<String>,
     pub scratch: PathBuf,
-    /// Folders copied in from the user's checkout (dependency installs, build caches).
+    /// Folders copied in before it started (older tasks; see `TaskWorkspace::warmed`).
     pub warmed: Vec<String>,
     /// A merge task: what it merges into its target.
     pub merge: Option<crate::work::MergeInputs>,
@@ -1125,18 +1125,19 @@ impl SessionManager {
             .await
     }
 
-    /// Makes the worktree `path` of `repo` as `spec` says, recorded under `owner` first, and
-    /// with `warm` copies the checkout's dependency installs and build caches into it (best
-    /// effort; see `warm`). Returns the folders copied.
+    /// Makes the worktree `path` of `repo` as `spec` says, recorded under `owner` first, then
+    /// copies the project's dependency installs and build caches into it in the background
+    /// (best effort; see `warm`), from `parent` (the workspace it was made from) first. Nothing
+    /// waits for the copies.
     pub(super) async fn make_worktree(
         &self,
         owner: &str,
         repo: &Path,
         path: &Path,
         spec: WorktreeSpec,
-        warm: bool,
+        parent: Option<PathBuf>,
         task_id: &TaskId,
-    ) -> Result<Vec<String>> {
+    ) -> Result<()> {
         let ledger = self.runtime.ledger();
         ledger
             .record(
@@ -1155,40 +1156,73 @@ impl SessionManager {
                 },
             )
             .await?;
-        let (git, repo_path, path) = (self.git.clone(), repo.to_owned(), path.to_owned());
-        let (platform, task_id) = (self.runtime.platform().clone(), task_id.clone());
+        let (git, repo_path, made) = (self.git.clone(), repo.to_owned(), path.to_owned());
         blocking(move || {
-            if let Some(parent) = path.parent() {
+            if let Some(parent) = made.parent() {
                 std::fs::create_dir_all(parent).map_err(|err| Error::Invalid(err.to_string()))?;
             }
             let repo = git.open(&repo_path).map_err(git_error)?;
-            repo.add_worktree(&path, spec).map_err(git_error)?;
-            super::sidecars::stand_in_at(&git, &path);
-            let mut copied = Vec::new();
-            if warm {
-                let started = std::time::Instant::now();
-                match git.open(&path) {
-                    Ok(worktree) => {
-                        let installing = || warm::install_running(&*platform, repo.root());
-                        let warmed =
-                            warm::warm_worktree(&repo, &[repo_path], &worktree, &installing);
-                        tracing::info!(
-                            task = %task_id,
-                            copied = ?warmed.copied,
-                            skipped = ?warmed.skipped,
-                            ms = started.elapsed().as_millis() as u64,
-                            "warmed the task's worktree"
-                        );
-                        copied = warmed.copied;
-                    }
-                    Err(err) => {
-                        tracing::warn!(task = %task_id, %err, "couldn't open the worktree to warm it");
-                    }
-                }
-            }
-            Ok(copied)
+            repo.add_worktree(&made, spec).map_err(git_error)?;
+            super::sidecars::stand_in_at(&git, &made);
+            Ok(())
         })
-        .await
+        .await?;
+        let warming = self.warm_job(repo, path, parent, format!("task {task_id}"), || false);
+        self.spawn(async move {
+            warming.await;
+        });
+        Ok(())
+    }
+
+    /// Copies the project's dependency installs and build caches into the new `worktree` of
+    /// `repo` (best effort; see `warm`): from `parent` first, else from another worktree of the
+    /// project or its checkout. Registered at once, so removing the worktree stops it and
+    /// waits for it first; it also stops once `cut_off` says so. It runs when awaited, and
+    /// resolves to the folders copied in.
+    fn warm_job(
+        &self,
+        repo: &Path,
+        worktree: &Path,
+        parent: Option<PathBuf>,
+        label: String,
+        cut_off: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> impl std::future::Future<Output = Vec<String>> + Send + 'static {
+        let warming = warm::Warming::begin(worktree);
+        let (git, repo, path) = (self.git.clone(), repo.to_owned(), worktree.to_owned());
+        let platform = self.runtime.platform().clone();
+        async move {
+            blocking(move || {
+                let checkout = git.open(&repo).map_err(git_error)?;
+                let worktree = git.open(&path).map_err(git_error)?;
+                let started = std::time::Instant::now();
+                let aliases = [repo];
+                let sources = warm::Sources {
+                    checkout: &checkout,
+                    aliases: &aliases,
+                    parent: parent.as_deref(),
+                };
+                let warmed = warm::warm_worktree(
+                    &sources,
+                    &worktree,
+                    &|dir| warm::install_running(&*platform, dir),
+                    &|| warming.stopped() || cut_off(),
+                );
+                tracing::info!(
+                    worktree = %path.display(),
+                    of = %label,
+                    copied = ?warmed.copied,
+                    skipped = ?warmed.skipped,
+                    ms = started.elapsed().as_millis() as u64,
+                    "warmed a worktree"
+                );
+                Ok(warmed.folders())
+            })
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(%err, "couldn't warm a worktree");
+                Vec::new()
+            })
+        }
     }
 
     /// Where a new-worktree session's worktree is made, each time it is: one path per session.
@@ -1401,7 +1435,7 @@ impl SessionManager {
         }
     }
 
-    /// Copies the checkout's dependency installs and build caches into the session's new
+    /// Copies the project's dependency installs and build caches into the session's new
     /// `worktree` (best effort; see `warm`), so the thread builds and tests there as a worker
     /// does in its own, instead of failing its first check and reinstalling them (BUILD-PLAN
     /// C7). It goes on behind the thread's first turn, which never waits for it (it took 30 to
@@ -1417,31 +1451,14 @@ impl SessionManager {
         let Ok(guard) = self.enter(conversation_id) else {
             return;
         };
-        let (manager, id) = (self.arc(), conversation_id.clone());
-        let (git, repo, path) = (self.git.clone(), repo.to_owned(), worktree.to_owned());
-        let platform = self.runtime.platform().clone();
+        // A session that starts closing doesn't wait for the copy: it stops.
+        let guard = Arc::new(guard);
+        let (manager, id, held) = (self.arc(), conversation_id.clone(), guard.clone());
+        let warming = self.warm_job(repo, worktree, None, format!("session {id}"), move || {
+            held.cut_off()
+        });
         self.spawn(async move {
-            let warmed = blocking(move || {
-                let alias = repo.clone();
-                let repo = git.open(&repo).map_err(git_error)?;
-                let worktree = git.open(&path).map_err(git_error)?;
-                let started = std::time::Instant::now();
-                let installing = || warm::install_running(&*platform, repo.root());
-                let warmed = warm::warm_worktree(&repo, &[alias], &worktree, &installing);
-                tracing::info!(
-                    worktree = %path.display(),
-                    copied = ?warmed.copied,
-                    skipped = ?warmed.skipped,
-                    ms = started.elapsed().as_millis() as u64,
-                    "warmed the session's worktree"
-                );
-                Ok(warmed.copied)
-            })
-            .await
-            .unwrap_or_else(|err| {
-                tracing::warn!(conversation = %id, %err, "couldn't warm the session's worktree");
-                Vec::new()
-            });
+            let warmed = warming.await;
             if !warmed.is_empty()
                 && !guard.cut_off()
                 && let Ok(conv) = manager.conv(&id)
