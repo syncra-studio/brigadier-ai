@@ -2543,9 +2543,11 @@ impl Tool for LaunchAppTool {
                     ));
                     Some(path)
                 }
-                Err(error) => return ToolResult::error(format!(
+                Err(error) => {
+                    return ToolResult::error(format!(
                     "No app was launched: a fresh Notepad document could not be created: {error}"
-                )),
+                ))
+                }
             }
         } else {
             None
@@ -2938,56 +2940,71 @@ impl Tool for LaunchAppTool {
             }
         }
 
+        let mut confirmed_url: Option<String> = None;
+        let mut url_confirmation_note = String::new();
         if web_launch {
             let executable = target_file_opt.as_deref().unwrap_or("");
-            let mut confirmed = Vec::new();
-            // One budget for the whole request, including every URL/provider.
+            let url = urls.last().expect("web launch has at least one URL");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
-            for url in urls.last().into_iter() {
-                let mut found = None;
-                for _ in 0..30 {
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    if remaining.is_zero() {
-                        break;
-                    }
-                    found = match super::launch_browser::window_showing_url(executable, url, remaining, preexisting_windows.clone()).await {
-                        Ok(window) => window,
-                        Err(error) => return ToolResult::error(format!(
-                            "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
-                        )).with_structured(json!({"code": "browser_url_unconfirmed", "launched_pid": pid})),
-                    };
-                    if found.is_some() {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut found = None;
+            for _ in 0..30 {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
                 }
-                let Some(window) = found else {
-                    let note = foreground_guard
-                        .as_ref()
-                        .map(|guard| guard.report().0)
-                        .unwrap_or("");
-                    return ToolResult::error(format!(
-                        "Launch was requested in {display}, but Windows did not expose a visible document with URL {url:?} in that browser. No unrelated browser window is being returned. The URL may be loading, redirected, or in an inactive tab; inspect that browser with list_windows/get_window_state. {note}"
-                    )).with_structured(json!({"code": "browser_url_unconfirmed", "requested_url": url, "launched_pid": pid}));
-                };
-                confirmed.push(window);
-            }
-            resolved_pid = confirmed[0].pid;
-            for window in confirmed {
-                if window.pid != resolved_pid {
-                    continue;
-                }
-                if windows_json
-                    .iter()
-                    .any(|value| value["window_id"].as_u64() == Some(window.hwnd))
+                match super::launch_browser::window_showing_url(
+                    executable,
+                    url,
+                    remaining,
+                    preexisting_windows.clone(),
+                )
+                .await
                 {
-                    continue;
+                    Ok(window) => found = window,
+                    Err(error) => {
+                        url_confirmation_note = format!(" URL verification stopped: {error}.");
+                        break;
+                    }
                 }
+                if found.is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            if let Some(window) = found {
+                confirmed_url = Some(url.clone());
+                resolved_pid = window.pid;
                 windows_json.push(json!({
                     "window_id": window.hwnd, "title": window.title,
                     "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
                     "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
                 }));
+            } else {
+                // A confirmed app window and an unconfirmed URL are different
+                // facts. Never call an opened browser a failed app launch, or
+                // claim that its requested page loaded without URL evidence.
+                let executable = super::launch_policy::executable_name(executable);
+                let pids: std::collections::HashSet<_> = crate::win32::list_processes()
+                    .into_iter()
+                    .filter(|p| super::launch_policy::executable_name(&p.name) == executable)
+                    .map(|p| p.pid)
+                    .collect();
+                let windows: Vec<_> = crate::win32::list_windows_via_win32(None)
+                    .into_iter()
+                    .filter(|w| pids.contains(&w.pid) && !preexisting_windows.contains(&w.hwnd))
+                    .collect();
+                if let Some(window) = windows.first().filter(|_| windows.len() == 1) {
+                    resolved_pid = window.pid;
+                    windows_json.push(json!({
+                        "window_id": window.hwnd, "title": window.title,
+                        "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
+                        "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
+                    }));
+                    url_confirmation_note.push_str(&format!(" This new browser window is open, but URL {url:?} is unconfirmed. No page content was read; use page with target_url_contains to confirm the requested tab before reading."));
+                } else {
+                    return ToolResult::text(format!("Launch requested for {display}, but neither a unique new browser window nor URL {url:?} was confirmed.{url_confirmation_note} No pre-existing window or page content is returned. Inspect list_windows before retrying."))
+                        .with_structured(json!({"code": "browser_launch_unconfirmed", "launch_confirmed": false, "url_confirmed": false, "requested_url": url, "launched_pid": pid, "windows": []}));
+                }
             }
         }
 
@@ -3157,7 +3174,11 @@ impl Tool for LaunchAppTool {
                 // by falling through to the re-scan again.
             }
         }
-        if fresh_browser_launch && !web_launch {
+        if (fresh_browser_launch && !web_launch)
+            || target_file_opt
+                .as_deref()
+                .is_some_and(|target| super::launch_policy::executable_name(target) == "explorer")
+        {
             windows_json.retain(|window| {
                 window["window_id"]
                     .as_u64()
@@ -3345,7 +3366,11 @@ impl Tool for LaunchAppTool {
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
         summary.push_str(&restored_content_note);
-        if web_launch && urls.len() > 1 {
+        summary.push_str(&url_confirmation_note);
+        if let Some(url) = confirmed_url.as_ref() {
+            summary.push_str(&format!(" Confirmed visible URL: {url}."));
+        }
+        if confirmed_url.is_some() && urls.len() > 1 {
             summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
         }
         if fresh_browser_launch && windows_json.is_empty() {
@@ -3393,6 +3418,9 @@ impl Tool for LaunchAppTool {
                 pid != 0 && foreground_pid == pid
             },
             "foreground_note": foreground_note,
+            "url_confirmed": confirmed_url.is_some(),
+            "confirmed_url": confirmed_url,
+            "url_confirmation_note": url_confirmation_note,
             "document_path": fresh_document_path.as_ref().map(|path| path.to_string_lossy()),
             "restored_content_note": restored_content_note,
             "windows":   windows_json,

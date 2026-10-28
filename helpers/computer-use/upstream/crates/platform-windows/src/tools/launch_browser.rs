@@ -214,20 +214,27 @@ pub(super) async fn window_showing_url(
             "no unverified browser window",
             move |cancelled| {
                 let _com = Apartment::new();
-                for process in crate::win32::list_processes() {
-                    if super::launch_policy::executable_name(&process.name) != executable {
+                let browser_pids: std::collections::HashSet<_> = crate::win32::list_processes()
+                    .into_iter()
+                    .filter(|process| {
+                        super::launch_policy::executable_name(&process.name) == executable
+                    })
+                    .map(|process| process.pid)
+                    .collect();
+                // Browser renderer/helper processes have no top-level window.
+                // Scan native windows once instead of paying a global UIA
+                // timeout for every renderer pid.
+                for window in crate::win32::list_windows_via_win32(None) {
+                    if !browser_pids.contains(&window.pid)
+                        || preexisting_windows.contains(&window.hwnd)
+                    {
                         continue;
                     }
-                    for window in crate::win32::list_windows_win32_first(process.pid) {
-                        if preexisting_windows.contains(&window.hwnd) {
-                            continue;
-                        }
-                        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                            return None;
-                        }
-                        if unsafe { matching_document(window.hwnd, &url, true) }.is_ok() {
-                            return Some(window);
-                        }
+                    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                        return None;
+                    }
+                    if matching_document(window.hwnd, &url, true).is_ok() {
+                        return Some(window);
                     }
                 }
                 None
