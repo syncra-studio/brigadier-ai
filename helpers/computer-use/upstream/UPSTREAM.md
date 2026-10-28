@@ -117,6 +117,9 @@ Patches applied, in order:
 
 - `patches/0113-kept-ancestor-tree-depths.diff`: Indent rows by actual retained ancestors, observing omitted native siblings before query filtering, while keeping native depths for traversal limits.
 
+
+- `patches/0114-windows-complete-observation-rows.diff`: Include read-only UIA rows in internal verification observations before claiming complete coverage, preserving public addressable rows and documenting Settings window Close.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
