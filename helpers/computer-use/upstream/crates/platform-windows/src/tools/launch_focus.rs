@@ -1,8 +1,10 @@
 //! Launch-time foreground observation uses the same event-backed guard as input.
 use crate::input::inject::foreground_watch::{ForegroundWatch, Target};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(super) struct LaunchForegroundGuard {
     watch: ForegroundWatch,
+    reported_foreground: AtomicUsize,
     _lock: crate::input::ForegroundLockGuard,
 }
 
@@ -53,15 +55,22 @@ impl LaunchForegroundGuard {
         Self {
             watch: ForegroundWatch::start(prior, Target::launch(expected)),
             _lock: lock,
+            reported_foreground: AtomicUsize::new(0),
         }
     }
 
-    #[allow(dead_code)] // Used by the launch call-site integration.
     pub(super) fn register_pid(&self, pid: u32) {
         self.watch.register_pid(pid);
     }
 
     pub(super) fn report(&self) -> (&'static str, bool) {
-        self.watch.report()
+        let (note, failed, foreground) = self.watch.report();
+        self.reported_foreground
+            .store(foreground, Ordering::Release);
+        (note, failed)
+    }
+
+    pub(super) fn reported_foreground(&self) -> usize {
+        self.reported_foreground.load(Ordering::Acquire)
     }
 }

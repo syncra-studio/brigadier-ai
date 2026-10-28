@@ -39,7 +39,7 @@ impl Target {
 struct State {
     observation: policy::Observation,
     ended: Option<Instant>,
-    target_pids: Vec<u32>,
+    evidence: policy::ActivationEvidence,
     holders: usize,
 }
 
@@ -59,7 +59,7 @@ thread_local! {
 
 pub(crate) struct ForegroundWatch {
     watch: Arc<Watch>,
-    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
+    requests: mpsc::Sender<mpsc::SyncSender<(policy::Observation, usize)>>,
 }
 
 // Reuse an existing app watch across nested guards and successive run_steps.
@@ -67,7 +67,7 @@ pub(crate) struct ForegroundWatch {
 // for every click in a burst. A retired watch is never reused.
 struct LiveWatch {
     watch: Weak<Watch>,
-    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
+    requests: mpsc::Sender<mpsc::SyncSender<(policy::Observation, usize)>>,
 }
 static LIVE: Mutex<Vec<LiveWatch>> = Mutex::new(Vec::new());
 
@@ -124,15 +124,17 @@ impl Watch {
         let pid = window_process(event_hwnd);
         let target = match &self.target {
             Target::Processes(targets) => pid != 0 && targets.contains(&pid),
-            Target::Launch(names) => {
-                self.state.lock().unwrap().target_pids.contains(&pid)
-                    || process_name(pid).is_some_and(|name| names.contains(&name))
-            }
+            Target::Launch(names) => process_name(pid).is_some_and(|name| names.contains(&name)),
+        };
+        let target = {
+            let mut state = self.state.lock().unwrap();
+            let target = state.evidence.observe(pid, target);
+            state.observation.activated = state.evidence.activated;
+            target
         };
         if !target {
             return;
         }
-        self.state.lock().unwrap().observation.activated = true;
         // An event may describe a transient switch already restored by Windows.
         // Record it, but never overwrite a newer foreground from an old event.
         if policy::may_hand_back(
@@ -145,11 +147,12 @@ impl Watch {
         }
     }
 
-    fn snapshot(&self) -> policy::Observation {
+    fn snapshot(&self) -> (policy::Observation, usize) {
         self.observe(unsafe { GetForegroundWindow() });
         let mut result = self.state.lock().unwrap().observation;
-        result.restored = unsafe { GetForegroundWindow() } == HWND(self.prior as *mut _);
-        result
+        let foreground = unsafe { GetForegroundWindow() }.0 as usize;
+        result.restored = foreground == self.prior;
+        (result, foreground)
     }
 }
 
@@ -252,11 +255,11 @@ impl ForegroundWatch {
             state: Mutex::new(State {
                 observation: policy::Observation::default(),
                 ended: None,
-                target_pids: Vec::new(),
+                evidence: policy::ActivationEvidence::default(),
                 holders: 1,
             }),
         });
-        let (requests, receive) = mpsc::channel::<mpsc::SyncSender<policy::Observation>>();
+        let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
         let (ready, armed) = mpsc::sync_channel(1);
         let worker = watch.clone();
         std::thread::spawn(move || {
@@ -338,24 +341,29 @@ impl ForegroundWatch {
         Self { watch, requests }
     }
 
-    #[allow(dead_code)] // Launch call sites register broker-returned pids.
     pub(crate) fn register_pid(&self, pid: u32) {
         if pid != 0 {
-            self.watch.state.lock().unwrap().target_pids.push(pid);
+            let mut state = self.watch.state.lock().unwrap();
+            state.evidence.bind(pid);
+            state.observation.activated = state.evidence.activated;
         }
     }
 
-    pub(crate) fn report(&self) -> (&'static str, bool) {
+    pub(crate) fn report(&self) -> (&'static str, bool, usize) {
         let (reply, receive) = mpsc::sync_channel(1);
         if self.requests.send(reply).is_ok() {
-            if let Ok(observation) = receive.recv_timeout(Duration::from_millis(100)) {
-                return observation.report();
+            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
+            {
+                let (note, failed) = observation.report();
+                return (note, failed, foreground);
             }
         }
         let mut observation = self.watch.state.lock().unwrap().observation;
-        observation.restored = unsafe { GetForegroundWindow() }.0 as usize == self.watch.prior;
+        let foreground = unsafe { GetForegroundWindow() }.0 as usize;
+        observation.restored = foreground == self.watch.prior;
         observation.monitoring = false;
-        observation.report()
+        let (note, failed) = observation.report();
+        (note, failed, foreground)
     }
 }
 

@@ -69,9 +69,79 @@ pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
     expected
 }
 
+/// Attribution can arrive after a broker's brief foreground event. Keep
+/// bounded evidence until its real pid is returned; never infer activation
+/// from calling SetForegroundWindow successfully on an already-front window.
+#[derive(Default)]
+pub(crate) struct ActivationEvidence {
+    known: Vec<u32>,
+    pending: Vec<u32>,
+    pub(crate) activated: bool,
+}
+
+impl ActivationEvidence {
+    pub(crate) fn observe(&mut self, pid: u32, name_matches: bool) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        if name_matches || self.known.contains(&pid) {
+            self.activated = true;
+            return true;
+        }
+        if self.pending.len() < 64 && !self.pending.contains(&pid) {
+            self.pending.push(pid);
+        }
+        false
+    }
+
+    pub(crate) fn bind(&mut self, pid: u32) {
+        if pid == 0 {
+            return;
+        }
+        if !self.known.contains(&pid) {
+            self.known.push(pid);
+        }
+        self.activated |= self.pending.contains(&pid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_broker_pid_binds_a_brief_event_recorded_before_activation_returned() {
+        let mut evidence = ActivationEvidence::default();
+        assert!(!evidence.observe(42, false));
+        assert!(!evidence.activated);
+        evidence.bind(42);
+        assert!(evidence.activated);
+        assert!(evidence.observe(42, false));
+    }
+
+    #[test]
+    fn unrelated_events_and_a_successful_noop_restore_are_not_activation_evidence() {
+        let mut evidence = ActivationEvidence::default();
+        evidence.observe(17, false);
+        evidence.bind(42);
+        assert!(!evidence.activated);
+        assert!(!evidence.observe(0, true));
+        assert!(evidence.observe(42, false));
+        let mut named = ActivationEvidence::default();
+        assert!(named.observe(99, true));
+        assert!(named.activated);
+    }
+
+    #[test]
+    fn pending_broker_evidence_is_bounded() {
+        let mut evidence = ActivationEvidence::default();
+        for pid in 1..=1000 {
+            evidence.observe(pid, false);
+        }
+        assert_eq!(evidence.pending.len(), 64);
+        evidence.bind(0);
+        assert!(!evidence.activated);
+    }
 
     #[test]
     fn launch_attribution_covers_reported_shell_and_store_delegates() {

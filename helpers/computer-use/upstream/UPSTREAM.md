@@ -87,6 +87,7 @@ Patches applied, in order:
 - `patches/0072-windows-background-pointer-refusal.diff`: refuse MSAA real-mouse clicks in background mode and keep the Chromium fallback off SendInput.
 - `patches/0080-windows-foreground-observation.diff`: Record brief and delegated foreground activations through bounded WinEvents, preserve late-window hand-back, and remove synthetic-key UWP restoration hidden from launch reports.
 - `patches/0081-windows-background-input-guard.diff`: Guard all posted key/text actions and dialog-owner activation, with overlapping style leases and late hand-back for run_steps and Save As dismissal.
+- `patches/0082-windows-launch-focus-evidence.diff`: Bind broker and resolved app pids to launch observations, sample active and focus wording together, and keep confirmed opening distinct from unconfirmed foreground preservation.
 - `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
 - `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
 - `patches/0092-windows-common-dialog-save.diff`: Native common-dialog Save sends the exact IDOK WM_COMMAND before UIA Invoke and confirms only observed dialog closure.

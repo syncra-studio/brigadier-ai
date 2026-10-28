@@ -2904,6 +2904,9 @@ impl Tool for LaunchAppTool {
         // descendant + name-related processes and pick the first one with a
         // window. The resolved pid is reflected in the response's `pid` field
         // so callers can target it with subsequent calls. See #1615.
+        if let Some(guard) = foreground_guard.as_ref() {
+            guard.register_pid(pid);
+        }
         let mut windows_json: Vec<serde_json::Value> = Vec::new();
         let mut resolved_pid: u32 = pid;
 
@@ -3364,6 +3367,9 @@ impl Tool for LaunchAppTool {
                 })
                 .await
                 .unwrap_or(false));
+        if let Some(guard) = foreground_guard.as_ref() {
+            guard.register_pid(pid);
+        }
         let (foreground_note, foreground_failed) = foreground_guard
             .as_ref()
             .map(|guard| guard.report())
@@ -3430,7 +3436,24 @@ impl Tool for LaunchAppTool {
             "windows":   windows_json,
         });
         let mut result = ToolResult::text(summary).with_structured(structured);
-        if foreground_failed || !running {
+        // Use one foreground sample for active and observation wording.
+        let foreground_at_report = foreground_guard
+            .as_ref()
+            .map(|guard| guard.reported_foreground())
+            .unwrap_or(0);
+        if let Some(content) = result.structured_content.as_mut() {
+            content["active"] = json!(
+                windows_json
+                    .iter()
+                    .any(|window| window["window_id"].as_u64() == Some(foreground_at_report as u64))
+                    || (pid != 0
+                        && crate::input::inject::foreground_watch::window_process(
+                            windows::Win32::Foundation::HWND(foreground_at_report as *mut _)
+                        ) == pid)
+            );
+            content["focus_hand_back_unconfirmed"] = json!(foreground_failed);
+        }
+        if !running {
             result.is_error = Some(true);
         }
         result
