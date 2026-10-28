@@ -1022,12 +1022,23 @@ mod tests {
                     );
                 }
             }
-            for name in ["Notepad", "Calculator", "/Applications/Console.app"] {
+            for name in ["Notepad", "Calculator"] {
                 assert!(
                     enforce("launch_app", &json!({"name":name}), &[], resolver).is_ok(),
                     "{name}"
                 );
             }
+            // Console is a log viewer on macOS, but a terminal name elsewhere.
+            assert_eq!(
+                enforce(
+                    "launch_app",
+                    &json!({"name": "/Applications/Console.app"}),
+                    &[],
+                    resolver,
+                )
+                .is_ok(),
+                cfg!(target_os = "macos")
+            );
         });
     }
 
