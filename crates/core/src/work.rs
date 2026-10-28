@@ -400,8 +400,9 @@ pub struct TaskWorkspace {
     pub target: Option<String>,
     /// Its scratch folder outside the repository.
     pub scratch: String,
-    /// Dependency installs and build caches copied in from the user's checkout
-    /// (repo-relative folders), which its worker is told not to reinstall.
+    /// Dependency installs and build caches copied in from the user's checkout before its
+    /// worker started (repo-relative folders): older tasks only; the copies now come in the
+    /// background, and the log says what came.
     #[serde(default)]
     #[ts(skip)]
     pub warmed: Vec<String>,
