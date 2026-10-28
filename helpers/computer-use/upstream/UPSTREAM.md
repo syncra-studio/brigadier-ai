@@ -144,6 +144,8 @@ Patches applied, in order:
 
 - `patches/0133-windows-caption-close-without-disabling.diff`: Keep native caption Close enabled under the revocable no-activation guard so Notepad processes WM_CLOSE instead of ignoring it while disabled.
 
+- `patches/0134-windows-uia-cached-leaf-coverage.diff`: Treat a successful null cached-child array as a leaf while preserving real COM failures, so complete Windows trees are not mislabeled as failed provider walks.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

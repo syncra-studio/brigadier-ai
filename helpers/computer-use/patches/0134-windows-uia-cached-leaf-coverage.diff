@@ -1,0 +1,97 @@
+Why: Treat a successful null cached-child array as a leaf while preserving real COM failures, so complete Windows trees are not mislabeled as failed provider walks.
+
+diff --git a/crates/platform-windows/src/uia/mod.rs b/crates/platform-windows/src/uia/mod.rs
+index a99191373..9d00a367f 100644
+--- a/crates/platform-windows/src/uia/mod.rs
++++ b/crates/platform-windows/src/uia/mod.rs
+@@ -577,6 +577,23 @@ unsafe fn walk_cached(
+     );
+ }
+ 
++/// A cached leaf returns S_OK with a null array. The generated wrapper maps
++/// that null interface to E_POINTER, losing the distinction from an RPC error.
++unsafe fn cached_children(
++    element: &IUIAutomationElement,
++) -> windows::core::Result<Option<windows::Win32::UI::Accessibility::IUIAutomationElementArray>> {
++    let mut raw = std::ptr::null_mut();
++    let status = unsafe {
++        (Interface::vtable(element).GetCachedChildren)(Interface::as_raw(element), &mut raw)
++    };
++    status.ok()?;
++    Ok(if raw.is_null() {
++        None
++    } else {
++        Some(unsafe { windows::Win32::UI::Accessibility::IUIAutomationElementArray::from_raw(raw) })
++    })
++}
++
+ #[allow(clippy::too_many_arguments)]
+ unsafe fn walk_cached_bounded(
+     element: &IUIAutomationElement,
+@@ -612,32 +629,34 @@ unsafe fn walk_cached_bounded(
+     );
+ 
+     // Recurse using cached children (no additional RPC).
+-    if let Ok(children) = element.GetCachedChildren() {
+-        let len = children.Length().unwrap_or_else(|_| {
+-            coverage.provider_errors += 1;
+-            0
+-        });
+-        for i in 0..len {
+-            if let Ok(child) = children.GetElement(i) {
+-                walk_cached_bounded(
+-                    &child,
+-                    depth + 1,
+-                    emitted_parent,
+-                    in_web_content || control_type.eq_ignore_ascii_case("Document"),
+-                    nodes,
+-                    lines,
+-                    counter,
+-                    budget,
+-                    max_depth,
+-                    coverage,
+-                    projection,
+-                );
+-            } else {
++    match cached_children(element) {
++        Ok(Some(children)) => {
++            let len = children.Length().unwrap_or_else(|_| {
+                 coverage.provider_errors += 1;
++                0
++            });
++            for i in 0..len {
++                if let Ok(child) = children.GetElement(i) {
++                    walk_cached_bounded(
++                        &child,
++                        depth + 1,
++                        emitted_parent,
++                        in_web_content || control_type.eq_ignore_ascii_case("Document"),
++                        nodes,
++                        lines,
++                        counter,
++                        budget,
++                        max_depth,
++                        coverage,
++                        projection,
++                    );
++                } else {
++                    coverage.provider_errors += 1;
++                }
+             }
+         }
+-    } else {
+-        coverage.provider_errors += 1;
++        Ok(None) => {}
++        Err(_) => coverage.provider_errors += 1,
+     }
+ }
+ 
+@@ -760,7 +779,7 @@ unsafe fn walk_native_level(
+     if control_type.eq_ignore_ascii_case("Document") {
+         return Ok(());
+     }
+-    let Ok(children) = element.GetCachedChildren() else {
++    let Ok(Some(children)) = cached_children(element) else {
+         return Ok(());
+     };
+     for i in 0..children.Length().unwrap_or(0) {
