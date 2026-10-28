@@ -128,6 +128,8 @@ Patches applied, in order:
 
 - `patches/0122-windows-caret-provider-deadline.diff`: Run caret insertion and its provider reads under one 30-second single-flight deadline; check cancellation before focus and each character so late provider returns cannot continue typing.
 
+- `patches/0123-windows-untargeted-page-deadline.diff`: Apply the shared four-second single-flight UIA deadline to page reads without URL hints as well as matched reads.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
