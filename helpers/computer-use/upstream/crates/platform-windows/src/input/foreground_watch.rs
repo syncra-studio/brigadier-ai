@@ -2,7 +2,7 @@
 //! Out-of-context WinEvents record even switches shorter than a polling tick.
 //! Restoration uses no synthetic keys and never moves the pointer.
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -17,8 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindow, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
     EVENT_SYSTEM_FOREGROUND, GA_ROOT, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED,
     LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
-    WM_SYSKEYDOWN, WM_XBUTTONDOWN,
+    WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 #[path = "foreground_policy.rs"]
@@ -49,7 +50,7 @@ struct Watch {
     user_selected: AtomicBool,
     // Any physical key or button press: the user may be opening something.
     user_active: AtomicBool,
-    first_input: AtomicU32,
+    first_input: AtomicU64,
     input_generation: u64,
     hold_lock: bool,
     started: Instant,
@@ -113,12 +114,18 @@ impl Watch {
             && window_process(prior) == self.prior_pid;
         let input_unchanged = !self.user_active.load(Ordering::Acquire)
             && super::foreground_generation() == self.input_generation;
-        let first = self.first_input.load(Ordering::Acquire);
+        let first = self
+            .first_input
+            .load(Ordering::Acquire)
+            .checked_sub(1)
+            .map(|time| time as u32)
+            .or_else(super::foreground_input_time);
         // A queued pre-input event is still evidence, never permission to restore.
-        let record = input_unchanged
-            || event_time.is_some_and(|time| first != 0 && (time.wrapping_sub(first) as i32) <= 0);
+        let record = policy::record_before_input(input_unchanged, event_time, first);
         if !input_unchanged || !prior_valid {
-            self.state.lock().unwrap().observation.interrupted = true;
+            let mut state = self.state.lock().unwrap();
+            state.observation.interrupted = true;
+            state.observation.user_input |= !input_unchanged;
         }
         if !record {
             return;
@@ -198,7 +205,16 @@ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM)
     if code >= 0
         && matches!(
             wparam.0 as u32,
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+            WM_LBUTTONDOWN
+                | WM_RBUTTONDOWN
+                | WM_MBUTTONDOWN
+                | WM_XBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_RBUTTONUP
+                | WM_MBUTTONUP
+                | WM_XBUTTONUP
+                | WM_MOUSEWHEEL
+                | WM_MOUSEHWHEEL
         )
     {
         let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
@@ -207,10 +223,15 @@ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM)
                 if event.flags & LLMHF_INJECTED == 0 {
                     watch
                         .first_input
-                        .compare_exchange(0, event.time, Ordering::AcqRel, Ordering::Acquire)
+                        .compare_exchange(
+                            0,
+                            u64::from(event.time) + 1,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
                         .ok();
                     watch.user_active.store(true, Ordering::Release);
-                    super::revoke_foreground_lock();
+                    super::revoke_foreground_lock(event.time);
                 }
                 let clicked = unsafe { GetAncestor(WindowFromPoint(event.pt), GA_ROOT) };
                 if policy::switch_click(
@@ -226,17 +247,27 @@ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM)
 }
 
 unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
+    if code >= 0
+        && matches!(
+            wparam.0 as u32,
+            WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
+        )
+    {
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if !event.flags.contains(LLKHF_INJECTED) {
             CURRENT.with(|slot| {
                 if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
                     watch
                         .first_input
-                        .compare_exchange(0, event.time, Ordering::AcqRel, Ordering::Acquire)
+                        .compare_exchange(
+                            0,
+                            u64::from(event.time) + 1,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
                         .ok();
                     watch.user_active.store(true, Ordering::Release);
-                    super::revoke_foreground_lock();
+                    super::revoke_foreground_lock(event.time);
                 }
             });
         }
@@ -292,7 +323,7 @@ impl ForegroundWatch {
             prior_pid: window_process(HWND(prior as *mut _)),
             user_selected: AtomicBool::new(false),
             user_active: AtomicBool::new(false),
-            first_input: AtomicU32::new(0),
+            first_input: AtomicU64::new(0),
             input_generation: super::foreground_generation(),
             hold_lock,
             started: Instant::now(),

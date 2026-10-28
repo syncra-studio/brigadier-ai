@@ -7,10 +7,17 @@ pub(crate) struct Observation {
     pub restored: bool,
     pub monitoring: bool,
     pub interrupted: bool,
+    pub user_input: bool,
 }
 
 impl Observation {
     pub(crate) fn report(self) -> (&'static str, bool) {
+        if self.user_input {
+            return ("Real user input ended automatic focus restoration; any recorded activation may reflect your own actions. Keeping the original window in front is unconfirmed.", true);
+        }
+        if self.interrupted {
+            return ("The captured window is no longer valid; automatic restoration stopped. Keeping it in front is unconfirmed.", true);
+        }
         if !self.activated && self.uncertain_broker {
             return ("A Windows broker activation event could not be attributed to this launch. Keeping your window in front is unconfirmed.", true);
         }
@@ -334,5 +341,34 @@ mod input_host_tests {
         assert!(input_window_matches(true, true, true));
         assert!(!input_window_matches(false, true, true));
         assert!(input_window_matches(true, false, false));
+    }
+}
+
+/// Preserve queued pre-input WinEvents, including across the tick-count wrap.
+/// Polling after interruption is never evidence of an app-caused activation.
+pub(crate) fn record_before_input(unchanged: bool, event: Option<u32>, input: Option<u32>) -> bool {
+    unchanged
+        || event
+            .is_some_and(|time| input.is_some_and(|first| (time.wrapping_sub(first) as i32) <= 0))
+}
+#[cfg(test)]
+mod input_time_tests {
+    use super::*;
+    #[test]
+    fn queued_pre_input_events_survive_zero_and_wrap_but_later_polls_do_not() {
+        assert!(record_before_input(true, None, None));
+        assert!(!record_before_input(false, None, Some(10)));
+        assert!(record_before_input(false, Some(9), Some(10)));
+        assert!(!record_before_input(false, Some(11), Some(10)));
+        assert!(record_before_input(false, Some(u32::MAX), Some(0)));
+        assert!(!record_before_input(false, Some(1), Some(u32::MAX)));
+        assert!(Observation {
+            user_input: true,
+            activated: true,
+            ..Default::default()
+        }
+        .report()
+        .0
+        .starts_with("Real user input ended"));
     }
 }

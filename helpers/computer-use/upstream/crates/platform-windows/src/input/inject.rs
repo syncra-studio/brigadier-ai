@@ -98,7 +98,17 @@ impl ForegroundLockGuard {
 
 /// Revoke every overlapping launch lease on physical input. Stale drops
 /// cannot unlock a later generation, and no existing lease can re-lock it.
-pub(crate) fn revoke_foreground_lock() {
+static LAST_PHYSICAL_INPUT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn foreground_input_time() -> Option<u32> {
+    LAST_PHYSICAL_INPUT
+        .load(std::sync::atomic::Ordering::Acquire)
+        .checked_sub(1)
+        .map(|time| time as u32)
+}
+
+pub(crate) fn revoke_foreground_lock(time: u32) {
+    LAST_PHYSICAL_INPUT.store(u64::from(time) + 1, std::sync::atomic::Ordering::Release);
     let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
     if state.revoke() {
         let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };

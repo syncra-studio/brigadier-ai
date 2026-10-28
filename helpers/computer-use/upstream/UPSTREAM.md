@@ -150,6 +150,8 @@ Patches applied, in order:
 
 - `patches/0136-windows-input-shared-frame-attribution.diff`: Require the exact guarded frame for shared or unreadable host processes instead of treating any window in ApplicationFrameHost as the input target.
 
+- `patches/0137-windows-yield-on-physical-release-and-keep-event-evidence.diff`: Yield foreground protection on physical releases and wheel input as well as presses, preserve queued pre-input events at zero or wrapped timestamps, and report user-input interruption explicitly.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
