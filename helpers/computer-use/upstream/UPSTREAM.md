@@ -126,6 +126,8 @@ Patches applied, in order:
 
 - `patches/0121-windows-preserve-foreground-selection.diff`: Respect physical window selection after pointer injection, avoid disabling the front window, and refuse terminating the foreground app or its popup owner.
 
+- `patches/0122-windows-caret-provider-deadline.diff`: Run caret insertion and its provider reads under one 30-second single-flight deadline; check cancellation before focus and each character so late provider returns cannot continue typing.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

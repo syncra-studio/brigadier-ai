@@ -5087,29 +5087,6 @@ impl Tool for TypeTextTool {
             );
         }
 
-        // Resolve before sending anything. Accessibility whole-value writes are
-        // explicitly excluded: they can reset the caret and bypass dirty tracking.
-        let native = admitted.as_ref().filter(|e| e.is_uia()).and_then(|e| {
-            use windows::core::Interface;
-            let element = std::mem::ManuallyDrop::new(unsafe {
-                windows::Win32::UI::Accessibility::IUIAutomationElement::from_raw(
-                    e.as_ptr() as *mut _
-                )
-            });
-            unsafe { element.CurrentNativeWindowHandle() }
-                .ok()
-                .map(|h| h.0 as usize as u64)
-        });
-        let text_target = match crate::input::keyboard::background_text_target(
-            hwnd,
-            native,
-            admitted.as_ref().and_then(|e| e.rect),
-            elem_idx.is_some(),
-        ) {
-            Ok(target) => target,
-            Err(error) => return ToolResult::error(error.to_string()),
-        };
-
         // 3. Legacy Win32 / GDI / Chromium-IME — targeted WM_CHAR, no focus steal.
         //
         // Read-back verification (mirrors macOS type_text): WM_CHAR is silently
@@ -5126,46 +5103,68 @@ impl Tool for TypeTextTool {
         let result = tokio::task::spawn_blocking({
             let admitted = admitted.clone();
             move || {
-                let _admission = &admitted;
-                // Prefer a focus-independent read of the *specific* cached element
-                // when we have its index; only fall back to the (flaky, focus-
-                // dependent) system focused element when typing into "whatever is
-                // focused" with no element_token.
-                let read = |idx: Option<usize>| match idx {
-                    Some(_) => read_cached_element_value(&admitted),
-                    None => read_focused_value_uia(verify_pid),
-                };
-                crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
-                let before = read(verify_idx);
-                let post_res = (|| -> anyhow::Result<()> {
-                    // A renderer HWND is shared by DOM controls. Focus exactly the
-                    // token's editor while activation is shielded, then deliver to
-                    // that renderer rather than the Chrome_WidgetWin_1 frame.
-                    if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
-                        if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
-                            element.focus_element().map_err(|error| anyhow::anyhow!(
-                                "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
-                            ))?;
-                        } else {
-                            anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
-                        }
-                    }
-                    crate::input::keyboard::post_insert_text(text_target, &text_for_post, _delay_ms.min(200))
-                })();
-                std::thread::sleep(std::time::Duration::from_millis(40));
-                let after = read(verify_idx);
-                let observed = post_message_readback_observed(
-                    before.as_deref(),
-                    after.as_deref(),
-                    &text_for_post,
-                );
-                (post_res, before, after, observed)
-                })
+                crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                    "caret insertion", std::time::Duration::from_secs(30),
+                    "unconfirmed insertion; no automatic retry",
+                    move |cancelled| -> anyhow::Result<_> {
+                        // Retain target protection even if a provider outlives
+                        // the caller; cancellation is checked before mutations.
+                        let _noact = crate::input::NoActivateGuard::arm(
+                            windows::Win32::Foundation::HWND(hwnd as *mut _),
+                        );
+                        let native = admitted.as_ref().filter(|e| e.is_uia()).and_then(|e| {
+                            use windows::core::Interface;
+                            let element = std::mem::ManuallyDrop::new(unsafe {
+                                windows::Win32::UI::Accessibility::IUIAutomationElement::from_raw(
+                                    e.as_ptr() as *mut _
+                                )
+                            });
+                            unsafe { element.CurrentNativeWindowHandle() }
+                                .ok().map(|h| h.0 as usize as u64)
+                        });
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let text_target = crate::input::keyboard::background_text_target(
+                            hwnd, native, admitted.as_ref().and_then(|e| e.rect), elem_idx.is_some(),
+                        )?;
+                        let read = |idx: Option<usize>| match idx {
+                            Some(_) => read_cached_element_value(&admitted),
+                            None => read_focused_value_uia(verify_pid),
+                        };
+                        let before = read(verify_idx);
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                            (|| -> anyhow::Result<()> {
+                                crate::uia::click::ensure_active(&cancelled)?;
+                                if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
+                                    if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
+                                        element.focus_element().map_err(|error| anyhow::anyhow!(
+                                            "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
+                                        ))?;
+                                    } else {
+                                        anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
+                                    }
+                                }
+                                crate::input::keyboard::post_insert_text_cancelable(
+                                    text_target, &text_for_post, _delay_ms.min(200), &cancelled,
+                                )
+                            })()
+                        });
+                        std::thread::sleep(std::time::Duration::from_millis(40));
+                        crate::uia::click::ensure_active(&cancelled)?;
+                        let after = read(verify_idx);
+                        let observed = post_message_readback_observed(
+                            before.as_deref(), after.as_deref(), &text_for_post,
+                        );
+                        Ok((post_res, before, after, observed))
+                    },
+                ).map_err(|error| anyhow::anyhow!(
+                    "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
+                    crate::uia::click::deadline_reason(error),
+                ))?
             }
-        })
-        .await;
+        }).await;
         match result {
-            Ok((Ok(()), before, after, observed)) => {
+            Ok(Ok((Ok(()), before, after, observed))) => {
                 // Three-way verdict. Crucially, "couldn't read the field" is NOT
                 // the same as "the text didn't land": on Windows, UIA's
                 // GetFocusedElement is system-wide (unlike macOS's per-app
@@ -5223,7 +5222,8 @@ impl Tool for TypeTextTool {
                     })),
                 }
             }
-            Ok((Err(e), _, _, _)) => ToolResult::error(e.to_string()),
+            Ok(Ok((Err(e), _, _, _))) => ToolResult::error(e.to_string()),
+            Ok(Err(e)) => ToolResult::error(e.to_string()),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
     }

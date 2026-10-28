@@ -338,10 +338,27 @@ pub fn background_text_target(
 /// Deliver characters synchronously to exactly the proven editor. A timed-out
 /// handler may have consumed a prefix; never retry or change routes automatically.
 pub fn post_insert_text(target: u64, text: &str, delay_ms: u64) -> Result<()> {
+    post_insert_text_cancelable(
+        target,
+        text,
+        delay_ms,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+pub fn post_insert_text_cancelable(
+    target: u64,
+    text: &str,
+    delay_ms: u64,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
     if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
         bail!(message);
     }
     for unit in super::text_policy::text_units(text) {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            bail!("Text insertion stopped at its deadline. Some text may have been inserted; read fresh state before retrying.");
+        }
         let sent = unsafe {
             windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
                 HWND(target as *mut _),
