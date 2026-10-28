@@ -3,7 +3,7 @@ name: computer-use
 description: Read and operate apps through computer MCP tools in the background.
 ---
 
-Brigadier manages your session; omit `session` and never call start_session/end_session.
+Brigadier manages the session and agent cursor; omit `session`.
 
 1. Open only apps the task needs with `launch_app`. Choose your pid/window_id from its reply and call `get_window_state`.
 2. Prefer fresh element_token targets: snapshot_id S and row [N] give `S:N`. A new tree read replaces that window's snapshot: use the newest ids, obey reindexed mappings, never borrow another window's tokens. On stale-token errors, read that window again. Truncated trees need query or higher max_elements (default 250).

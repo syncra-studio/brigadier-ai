@@ -88,7 +88,7 @@ fn description(name: &str) -> &'static str {
         "get_window_state" => "Read a window's accessibility tree; screenshots only on request or a thin tree. Row [N] with snapshot_id S is element_token S:N. A new read stales the previous tokens. Re-read with since:\"latest\" for a diff and fresh ids; obey reindexed mappings. Use a screenshot before zoom or pixel actions. Partial trees say truncated; narrow query or increase limits.",
         "list_windows" => "List windows, titles and ids. Prefer an app or pid filter. Use the returned pid/window_id for reads and actions.",
         "list_apps" => "List running and installed apps, one short entry each. To open a known app, call launch_app directly.",
-        "page" => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. CDP may need launch_app with cdp_debugging_port; select a unique tab with target_url_contains. Safari uses Apple Events (enabling requires user confirmation and restarts the browser). Focus the DOM field before inserting text. AX fallback has fewer DOM capabilities.",
+        "page" => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Safari uses Apple Events (enabling requires user confirmation and restarts the browser). Focus the DOM field before inserting text. AX fallback has fewer DOM capabilities.",
         "zoom" => "Crop the last screenshot; take get_window_state with include_screenshot:true first. Region uses that image's pixels. Omit pid to resolve the unique session/window snapshot. Click in the zoom image with from_zoom:true.",
         "click" => "Click a fresh element_token (preferred) or x/y in the target window's last screenshot. Default AX action press. Unsupported actions are refused; listed AX actions are hints, not proof of delivery. Read again to verify the outcome.",
         "double_click" => "Double-click a fresh element_token or screenshot x/y in a specific window. Verify with a read.",
@@ -121,6 +121,15 @@ fn shorten_schema(schema: &mut Value) {
                 properties.remove("session");
                 let has_element_target = properties.contains_key("element_token");
                 for (name, property) in properties {
+                    if name == "tool" {
+                        if let Some(choices) =
+                            property.get_mut("enum").and_then(Value::as_array_mut)
+                        {
+                            choices.retain(|choice| {
+                                choice.as_str().is_some_and(|name| ROSTER.contains(&name))
+                            });
+                        }
+                    }
                     if name == "target" {
                         if let Some(fields) = property
                             .get_mut("properties")
@@ -204,6 +213,7 @@ fn property_description(name: &str) -> Option<&'static str> {
         "exists" => "Element exists:false is rejected: incomplete walks cannot prove absence. Window predicates support absence.",
         "state_timeout_ms" => "Per-turn accessibility-walk budget in ms; partial walks are marked truncated.",
         "observe" => "One final get_window_state: {} uses last window. Defaults since:latest, include_screenshot:false, max_elements:250. since:null requests full read. Omit to skip.",
+        "tool" => "Offered action tool to run in this step.",
         "steps" => "Ordered actions and/or checks; stop at first failure. Each: {tool,args} or {<tool>:args}, optional wait_for/expect/timeout_ms.",
         _ => return None,
     })
@@ -394,6 +404,10 @@ fn offered_tool_prose_around_trees(text: &str, trees: &[String]) -> String {
 }
 
 fn offered_tool_prose(text: &str) -> String {
+    let text = text.replace(
+        "launch_app with cdp_debugging_port",
+        "an existing CDP server selected with cdp_port",
+    );
     text.split('\n')
         .map(|line| {
             let row = line
@@ -401,6 +415,12 @@ fn offered_tool_prose(text: &str) -> String {
                 .trim_start_matches(['-', '+', '~', '*', ' ']);
             if row.starts_with('[') && row[1..].starts_with(|c: char| c.is_ascii_digit()) {
                 return line.to_owned();
+            }
+            if line.contains("move_cursor") {
+                return "Steps may call click, double_click, right_click, type_text, set_value, press_key, hotkey, scroll or invoke_menu.".into();
+            }
+            if line.contains("cdp_debugging_port") {
+                return "Browser JavaScript needs an available CDP server; use cdp_port to select an existing server, or get_window_state for accessibility reads.".into();
             }
             if line.contains("escalate_session") || line.contains("bring_to_front") {
                 return "Use list_windows, then get_window_state for the target window; ask the user to handle unsupported steps.".into();
