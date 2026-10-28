@@ -125,5 +125,10 @@ fn make_guard(host_hwnd: isize) -> Option<DisabledHwndGuard> {
     // cleanly via the AppFrame root.
     let root = unsafe { GetAncestor(h, GA_ROOT) };
     let target = if root.0.is_null() { h } else { root };
+    // Disabling the user's foreground window can itself deactivate it. An
+    // already-front target needs no shield against self-activation.
+    if unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } == target {
+        return None;
+    }
     Some(DisabledHwndGuard::disable(target))
 }

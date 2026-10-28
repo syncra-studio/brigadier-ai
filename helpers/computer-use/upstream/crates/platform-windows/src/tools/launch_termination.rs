@@ -76,6 +76,18 @@ pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Resul
     if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
         return Ok(false);
     }
+    // Hosted Store windows belong to ApplicationFrameHost at the Win32 level;
+    // use their actual app pid, including the owner of a foreground popup.
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOTOWNER};
+    let foreground = unsafe { GetForegroundWindow() };
+    let owner = unsafe { GetAncestor(foreground, GA_ROOTOWNER) };
+    if let Some(reason) = super::launch_policy::termination_front_refusal(
+        pid,
+        crate::win32::window_app_pid(foreground.0 as u64),
+        crate::win32::window_app_pid(owner.0 as u64),
+    ) {
+        return Err(reason.into());
+    }
     let request = unsafe { TerminateProcess(process.0, 1) };
     let wait = unsafe { WaitForSingleObject(process.0, 2000) };
     use super::launch_policy::{termination_observation, TerminationObservation};

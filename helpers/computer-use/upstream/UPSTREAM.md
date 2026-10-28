@@ -124,6 +124,8 @@ Patches applied, in order:
 
 - `patches/0120-windows-launch-timeout-honesty.diff`: Bound packaged-app activation and preserve submitted documents across uncertain launch outcomes; a timeout never claims cancellation.
 
+- `patches/0121-windows-preserve-foreground-selection.diff`: Respect physical window selection after pointer injection, avoid disabling the front window, and refuse terminating the foreground app or its popup owner.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

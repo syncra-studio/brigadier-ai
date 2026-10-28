@@ -51,6 +51,21 @@ pub(crate) fn is_shared_frame_host(executable: &str) -> bool {
     executable_name(executable) == "applicationframehost"
 }
 
+pub(crate) fn termination_front_refusal(
+    pid: u32,
+    foreground_pid: Option<u32>,
+    owner_pid: Option<u32>,
+) -> Option<&'static str> {
+    match (foreground_pid, owner_pid) {
+        (Some(front), Some(owner)) if front != 0 && owner != 0 => {
+            (pid == front || pid == owner).then_some(
+                "Terminating this app could close your front window or its owned dialog. No termination was attempted.",
+            )
+        }
+        _ => Some("Windows could not identify the front window and its owner. No termination was attempted."),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TerminationObservation {
     Terminated,
@@ -74,6 +89,14 @@ pub(crate) fn termination_observation(
 #[cfg(test)]
 mod hosted_termination_tests {
     use super::*;
+    #[test]
+    fn termination_leaves_the_front_app_and_its_popup_owner_alive() {
+        assert!(termination_front_refusal(42, Some(7), Some(7)).is_none());
+        assert!(termination_front_refusal(42, Some(42), Some(42)).is_some());
+        assert!(termination_front_refusal(42, Some(7), Some(42)).is_some());
+        assert!(termination_front_refusal(42, None, Some(7)).is_some());
+        assert!(termination_front_refusal(42, Some(7), Some(0)).is_some());
+    }
     #[test]
     fn each_frame_maps_to_its_own_launched_app_without_owning_the_shared_host() {
         assert_eq!(

@@ -404,28 +404,11 @@ pub fn inject_click_screen(
              no-foreground contract). Escalate to delivery_mode:\"foreground\"."
         );
     }
-    // Remember who the user had in front so we can re-assert it below.
-    let prev_fg = unsafe { GetForegroundWindow() };
     // Make the target non-activatable for the click so click-activation can't
-    // steal foreground. No z-order raise.
-    let result = {
-        let _noact = NoActivateGuard::arm(target_h);
-        // One synthetic device does all `count` taps (single/double/triple click).
-        pen_taps(sx, sy, barrel, count)
-    };
-    // `WS_EX_NOACTIVATE` is NOT categorical against a Chromium/Electron content
-    // window that calls `SetForegroundWindow(self)` from its (async) click
-    // handler. Re-assert the USER's foreground (this restores focus where the
-    // user left it — it never raises the target). Short settle + repeat to win
-    // the race against the async self-activation.
-    unsafe {
-        if result.is_ok() && !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-            sleep(Duration::from_millis(12));
-            force_foreground_attached(prev_fg);
-        }
-    }
-    result
+    // steal foreground. The shared watch attributes activation and yields to
+    // physical window selection; never blindly restore an old foreground.
+    let _noact = NoActivateGuard::arm(target_h);
+    pen_taps(sx, sy, barrel, count)
 }
 
 /// True when `target`'s top-level root is the window actually visible at screen
@@ -799,7 +782,6 @@ pub fn inject_drag_screen(
              — it is occluded by another window. Escalate to delivery_mode:\"foreground\"."
         );
     }
-    let prev_fg = unsafe { GetForegroundWindow() };
     // Left drag → touch contact (coordinate-routed). Right/barrel drag has no
     // touch equivalent, so fall back to a pen (rare).
     let stroke = |()| {
@@ -809,18 +791,9 @@ pub fn inject_drag_screen(
             touch_drag(sx0, sy0, sx1, sy1, steps)
         }
     };
-    // Chromium/GTK: pointer-aware, process injection in the background — hold
-    // non-activatable (no raise), inject, then re-assert the user's foreground.
-    let r = {
-        let _noact = NoActivateGuard::arm(target_h);
-        stroke(())
-    };
-    unsafe {
-        if !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-        }
-    }
-    r
+    // The watch, rather than an unconditional restore, respects user switches.
+    let _noact = NoActivateGuard::arm(target_h);
+    stroke(())
 }
 
 // (Removed inject_key_cloaked / inject_text_cloaked.) The macOS-aligned
