@@ -1,0 +1,864 @@
+Why: reject conflicting document/address evidence, avoid returning prior browser windows, and distinguish the visible confirmed URL from other requested tabs.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -58,19 +58,36 @@
+         };
+         let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+         let host = &rest[..end];
+-        if host.is_empty() || host.contains('@') ||
+-            !(host.contains('.') || host.starts_with("localhost") || host.starts_with('[')) {
++        if host.is_empty()
++            || host.contains('@')
++            || !(host.contains('.') || host.starts_with("localhost") || host.starts_with('['))
++        {
+             return None;
+         }
+         let tail = &rest[end..];
+-        Some((scheme, format!("{}{}", host.to_ascii_lowercase(), if tail == "/" { "" } else { tail })))
+-    }
+-    let Some((actual_scheme, actual)) = parts(actual) else { return false; };
++        Some((
++            scheme,
++            format!(
++                "{}{}",
++                host.to_ascii_lowercase(),
++                if tail == "/" { "" } else { tail }
++            ),
++        ))
++    }
++    let Some((actual_scheme, actual)) = parts(actual) else {
++        return false;
++    };
+     let requested = requested.trim();
+-    if requested.is_empty() { return false; }
++    if requested.is_empty() {
++        return false;
++    }
+     if exact {
+-        let Some((requested_scheme, requested)) = parts(requested) else { return false; };
+-        return (actual_scheme.is_none() || requested_scheme.is_none() || actual_scheme == requested_scheme)
++        let Some((requested_scheme, requested)) = parts(requested) else {
++            return false;
++        };
++        return (actual_scheme.is_none()
++            || requested_scheme.is_none()
++            || actual_scheme == requested_scheme)
+             && actual == requested;
+     }
+     if let Some((requested_scheme, normalized)) = parts(requested) {
+@@ -82,14 +99,23 @@
+ }
+ 
+ pub(crate) fn is_omnibox(automation_id: &str, class_name: &str) -> bool {
+-    matches!(automation_id.to_ascii_lowercase().as_str(), "addresseditbox" | "omnibox" | "urlbar")
+-        || class_name.eq_ignore_ascii_case("OmniboxView")
++    matches!(
++        automation_id.to_ascii_lowercase().as_str(),
++        "addresseditbox" | "omnibox" | "urlbar"
++    ) || class_name.eq_ignore_ascii_case("OmniboxView")
+ }
+ 
+ /// Address-bar evidence binds only a single visible top-level document with
+ /// no conflicting URL of its own. Never use a title or a page's search field.
+-pub(crate) fn omnibox_binds_document(visible_documents: usize, document_url: Option<&str>, bar: &str, requested: &str, exact: bool) -> bool {
+-    visible_documents == 1 && url_matches(bar, requested, exact)
++pub(crate) fn omnibox_binds_document(
++    visible_documents: usize,
++    document_url: Option<&str>,
++    bar: &str,
++    requested: &str,
++    exact: bool,
++) -> bool {
++    visible_documents == 1
++        && url_matches(bar, requested, exact)
+         && document_url.is_none_or(|url| url_matches(url, requested, exact))
+ }
+ 
+@@ -98,24 +124,65 @@
+     use super::*;
+     #[test]
+     fn edge_address_value_matches_displayed_scheme_and_root_slash_variants() {
+-        for actual in ["https://example.com", "https://example.com/", "example.com", "EXAMPLE.COM/"] {
++        for actual in [
++            "https://example.com",
++            "https://example.com/",
++            "example.com",
++            "EXAMPLE.COM/",
++        ] {
+             assert!(url_matches(actual, "https://example.com/", true));
+             assert!(url_matches(actual, "example.com", false));
+         }
+-        assert!(!url_matches("http://example.com", "https://example.com", true));
+-        assert!(!url_matches("https://example.com/Other", "https://example.com/other", true));
++        assert!(!url_matches(
++            "http://example.com",
++            "https://example.com",
++            true
++        ));
++        assert!(!url_matches(
++            "https://example.com/Other",
++            "https://example.com/other",
++            true
++        ));
+         assert!(!url_matches("Example Domain", "Example", false));
+-        assert!(!url_matches("https://example.com.evil/", "https://example.com", true));
++        assert!(!url_matches(
++            "https://example.com.evil/",
++            "https://example.com",
++            true
++        ));
+     }
+     #[test]
+     fn omnibox_never_selects_between_documents_or_overrides_a_conflict() {
+         assert!(is_omnibox("addressEditBox", ""));
+         assert!(is_omnibox("", "OmniboxView"));
+         assert!(!is_omnibox("search", "Edit"));
+-        assert!(omnibox_binds_document(1, None, "example.com", "example.com", false));
+-        assert!(!omnibox_binds_document(2, None, "example.com", "example.com", false));
+-        assert!(!omnibox_binds_document(0, None, "example.com", "example.com", false));
+-        assert!(!omnibox_binds_document(1, Some("https://other.com"), "example.com", "example.com", false));
++        assert!(omnibox_binds_document(
++            1,
++            None,
++            "example.com",
++            "example.com",
++            false
++        ));
++        assert!(!omnibox_binds_document(
++            2,
++            None,
++            "example.com",
++            "example.com",
++            false
++        ));
++        assert!(!omnibox_binds_document(
++            0,
++            None,
++            "example.com",
++            "example.com",
++            false
++        ));
++        assert!(!omnibox_binds_document(
++            1,
++            Some("https://other.com"),
++            "example.com",
++            "example.com",
++            false
++        ));
+     }
+ }
+ 
+@@ -147,6 +214,8 @@
+     }
+     #[test]
+     fn url_checks_do_not_accept_page_titles_or_different_pages() {
++        assert!(is_web_url("https://example.com"));
++        assert!(!is_web_url("Example Domain"));
+         assert!(url_matches(
+             "https://example.com/",
+             "https://example.com",
+@@ -210,11 +279,15 @@
+ /// Accessibility providers may expose each inline text run separately. Keep
+ /// their internal whitespace and add a boundary when the provider omitted it.
+ pub(crate) fn append_text_run(output: &mut String, run: &str) {
+-    if run.is_empty() { return; }
++    if run.is_empty() {
++        return;
++    }
+     if let (Some(left), Some(right)) = (output.chars().last(), run.chars().next()) {
+-        if !left.is_whitespace() && !right.is_whitespace()
++        if !left.is_whitespace()
++            && !right.is_whitespace()
+             && !matches!(right, ',' | '.' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
+-            && !matches!(left, '(' | '[' | '{') {
++            && !matches!(left, '(' | '[' | '{')
++        {
+             output.push(' ');
+         }
+     }
+@@ -227,12 +300,16 @@
+     #[test]
+     fn inline_runs_keep_word_boundaries_and_existing_spacing() {
+         let mut text = String::new();
+-        for run in ["The", "new", "rule", " taking ", "effect", "…", "Hello", ",", "world", "!"] {
++        for run in [
++            "The", "new", "rule", " taking ", "effect", "…", "Hello", ",", "world", "!",
++        ] {
+             append_text_run(&mut text, run);
+         }
+         assert_eq!(text, "The new rule taking effect … Hello, world!");
+         let mut text = String::new();
+-        for run in ["αβ", "γδ", "\n", "next\tline", ""] { append_text_run(&mut text, run); }
++        for run in ["αβ", "γδ", "\n", "next\tline", ""] {
++            append_text_run(&mut text, run);
++        }
+         assert_eq!(text, "αβ γδ\nnext\tline");
+     }
+ }
+@@ -251,9 +328,15 @@
+     use super::*;
+     #[test]
+     fn explorer_folder_launch_uses_the_executable_and_keeps_one_argument() {
+-        assert_eq!(named_desktop_executable("File Explorer"), Some("explorer.exe"));
++        assert_eq!(
++            named_desktop_executable("File Explorer"),
++            Some("explorer.exe")
++        );
+         assert_eq!(named_browser_executable("File Explorer"), None);
+-        assert_eq!(quote_argument(r"C:\Users\A User\Documents"), r#""C:\Users\A User\Documents""#);
++        assert_eq!(
++            quote_argument(r"C:\Users\A User\Documents"),
++            r#""C:\Users\A User\Documents""#
++        );
+         assert_eq!(named_desktop_executable("unregistered app"), None);
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -135,9 +135,18 @@
+     use super::*;
+     #[test]
+     fn protocol_resolution_never_uses_an_unrelated_process_or_host() {
+-        assert!(is_settings_protocol_launch(false, &["ms-settings:about".into()]));
+-        assert!(!is_settings_protocol_launch(true, &["ms-settings:about".into()]));
+-        assert!(!is_settings_protocol_launch(false, &["https://example.com".into()]));
++        assert!(is_settings_protocol_launch(
++            false,
++            &["ms-settings:about".into()]
++        ));
++        assert!(!is_settings_protocol_launch(
++            true,
++            &["ms-settings:about".into()]
++        ));
++        assert!(!is_settings_protocol_launch(
++            false,
++            &["https://example.com".into()]
++        ));
+         assert!(!is_settings_protocol_launch(false, &[]));
+         assert!(is_settings_process("SystemSettings.exe"));
+         assert!(!is_settings_process("ApplicationFrameHost.exe"));
+@@ -147,7 +156,9 @@
+ 
+ pub(crate) fn is_notepad_target(target: &str) -> bool {
+     executable_name(target) == "notepad"
+-        || target.to_ascii_lowercase().starts_with("microsoft.windowsnotepad_")
++        || target
++            .to_ascii_lowercase()
++            .starts_with("microsoft.windowsnotepad_")
+ }
+ 
+ pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
+@@ -161,7 +172,12 @@
+ pub(crate) fn document_title_matches(title: &str, filename: &str) -> bool {
+     let title = title.trim().trim_start_matches('*');
+     let stem = filename.strip_suffix(".txt").unwrap_or(filename);
+-    [filename, stem].iter().any(|name| title == *name || title.strip_prefix(name).is_some_and(|tail| tail.starts_with(" - ")))
++    [filename, stem].iter().any(|name| {
++        title == *name
++            || title
++                .strip_prefix(name)
++                .is_some_and(|tail| tail.starts_with(" - "))
++    })
+ }
+ 
+ #[cfg(test)]
+@@ -169,18 +185,35 @@
+     use super::*;
+     #[test]
+     fn only_supported_apps_get_fresh_window_flags() {
+-        assert_eq!(fresh_window_argument("Microsoft Edge"), Some("--new-window"));
++        assert_eq!(
++            fresh_window_argument("Microsoft Edge"),
++            Some("--new-window")
++        );
+         assert_eq!(fresh_window_argument("chrome.exe"), Some("--new-window"));
+         assert_eq!(fresh_window_argument("notepad"), None);
+-        assert!(is_notepad_target("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"));
++        assert!(is_notepad_target(
++            "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
++        ));
+         assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
+         assert!(!is_notepad_target("Notepad++"));
+     }
+     #[test]
+     fn restored_document_titles_cannot_match_the_new_file() {
+-        assert!(document_title_matches("brigadier-cu-123.txt - Notepad", "brigadier-cu-123.txt"));
+-        assert!(document_title_matches("brigadier-cu-123", "brigadier-cu-123.txt"));
+-        assert!(!document_title_matches("my resume - Notepad", "brigadier-cu-123.txt"));
+-        assert!(!document_title_matches("brigadier-cu-1234.txt", "brigadier-cu-123.txt"));
+-    }
+-}
++        assert!(document_title_matches(
++            "brigadier-cu-123.txt - Notepad",
++            "brigadier-cu-123.txt"
++        ));
++        assert!(document_title_matches(
++            "brigadier-cu-123",
++            "brigadier-cu-123.txt"
++        ));
++        assert!(!document_title_matches(
++            "my resume - Notepad",
++            "brigadier-cu-123.txt"
++        ));
++        assert!(!document_title_matches(
++            "brigadier-cu-1234.txt",
++            "brigadier-cu-123.txt"
++        ));
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -48,40 +48,85 @@
+ 
+ /// Only browser chrome can supply fallback URL evidence. A web page's own
+ /// Edit controls must never impersonate an omnibox.
+-unsafe fn inside_document(automation: &IUIAutomation, element: &IUIAutomationElement, root: &IUIAutomationElement) -> bool {
+-    let Ok(walker) = automation.ControlViewWalker() else { return true; };
++unsafe fn inside_document(
++    automation: &IUIAutomation,
++    element: &IUIAutomationElement,
++    root: &IUIAutomationElement,
++) -> bool {
++    let Ok(walker) = automation.ControlViewWalker() else {
++        return true;
++    };
+     let mut current = element.clone();
+     for _ in 0..128 {
+-        let Ok(parent) = walker.GetParentElement(&current) else { return true; };
+-        if automation.CompareElements(&parent, root).map(|same| same.as_bool()).unwrap_or(false) {
++        let Ok(parent) = walker.GetParentElement(&current) else {
++            return true;
++        };
++        if automation
++            .CompareElements(&parent, root)
++            .map(|same| same.as_bool())
++            .unwrap_or(false)
++        {
+             return false;
+         }
+-        if parent.CurrentControlType().ok() == Some(UIA_DocumentControlTypeId) { return true; }
++        if parent.CurrentControlType().ok() == Some(UIA_DocumentControlTypeId) {
++            return true;
++        }
+         current = parent;
+     }
+     true
+ }
+ 
+-unsafe fn address_bar_url(automation: &IUIAutomation, root: &IUIAutomationElement) -> Option<String> {
+-    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_EditControlTypeId.0.into()).ok()?;
++unsafe fn address_bar_url(
++    automation: &IUIAutomation,
++    root: &IUIAutomationElement,
++) -> Option<String> {
++    let condition = automation
++        .CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_EditControlTypeId.0.into())
++        .ok()?;
+     let edits = root.FindAll(TreeScope_Subtree, &condition).ok()?;
+     let mut result = None;
+     for index in 0..edits.Length().ok()? {
+         let edit = edits.GetElement(index).ok()?;
+-        if edit.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(automation, &edit, root) { continue; }
+-        let id = edit.CurrentAutomationId().ok().map(|s| s.to_string()).unwrap_or_default();
+-        let class = edit.CurrentClassName().ok().map(|s| s.to_string()).unwrap_or_default();
+-        if !super::browser_target::is_omnibox(&id, &class) { continue; }
++        if edit
++            .CurrentIsOffscreen()
++            .map(|off| off.as_bool())
++            .unwrap_or(true)
++            || inside_document(automation, &edit, root)
++        {
++            continue;
++        }
++        let id = edit
++            .CurrentAutomationId()
++            .ok()
++            .map(|s| s.to_string())
++            .unwrap_or_default();
++        let class = edit
++            .CurrentClassName()
++            .ok()
++            .map(|s| s.to_string())
++            .unwrap_or_default();
++        if !super::browser_target::is_omnibox(&id, &class) {
++            continue;
++        }
+         // Edge often exposes the address on its Edit, not its Document. The
+         // value may omit https://, so document_url's scheme filter cannot apply.
+-        let value = edit.GetCurrentPropertyValue(UIA_ValueValuePropertyId).ok()
+-            .and_then(|v| windows::core::BSTR::try_from(&v).ok()).map(|s| s.to_string())
++        let value = edit
++            .GetCurrentPropertyValue(UIA_ValueValuePropertyId)
++            .ok()
++            .and_then(|v| windows::core::BSTR::try_from(&v).ok())
++            .map(|s| s.to_string())
+             .filter(|s| !s.is_empty())
+             .or_else(|| {
+-                let pattern: IUIAutomationLegacyIAccessiblePattern = edit.GetCurrentPattern(UIA_LegacyIAccessiblePatternId).ok()?.cast().ok()?;
++                let pattern: IUIAutomationLegacyIAccessiblePattern = edit
++                    .GetCurrentPattern(UIA_LegacyIAccessiblePatternId)
++                    .ok()?
++                    .cast()
++                    .ok()?;
+                 pattern.CurrentValue().ok().map(|s| s.to_string())
+             })?;
+-        if result.replace(value).is_some() { return None; }
++        if result.replace(value).is_some() {
++            return None;
++        }
+     }
+     result
+ }
+@@ -93,15 +138,28 @@
+ ) -> anyhow::Result<(IUIAutomation, IUIAutomationElement, String)> {
+     let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+     let root = automation.ElementFromHandle(HWND(hwnd as *mut _))?;
+-    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_DocumentControlTypeId.0.into())?;
++    let condition = automation.CreatePropertyCondition(
++        UIA_ControlTypePropertyId,
++        &UIA_DocumentControlTypeId.0.into(),
++    )?;
+     let documents = root.FindAll(TreeScope_Subtree, &condition)?;
+     let mut visible = Vec::new();
+     let mut matching = None;
+     for index in 0..documents.Length()? {
+         let document = documents.GetElement(index)?;
+-        if document.CurrentIsOffscreen().map(|off| off.as_bool()).unwrap_or(true) || inside_document(&automation, &document, &root) { continue; }
++        if document
++            .CurrentIsOffscreen()
++            .map(|off| off.as_bool())
++            .unwrap_or(true)
++            || inside_document(&automation, &document, &root)
++        {
++            continue;
++        }
+         let url = document_url(&document);
+-        if url.as_deref().is_some_and(|url| super::browser_target::url_matches(url, requested, exact)) {
++        if url
++            .as_deref()
++            .is_some_and(|url| super::browser_target::url_matches(url, requested, exact))
++        {
+             if matching.is_some() {
+                 anyhow::bail!("More than one visible document matches {requested:?}; use a more specific URL. No other page was read.");
+             }
+@@ -109,15 +167,30 @@
+         }
+         visible.push((document, url));
+     }
+-    if let Some((doc, url)) = matching { return Ok((automation, doc, url)); }
++    if let Some((doc, url)) = matching {
++        if address_bar_url(&automation, &root)
++            .as_deref()
++            .is_some_and(|bar| !super::browser_target::url_matches(bar, requested, exact))
++        {
++            anyhow::bail!("The document and address bar disagree in window {hwnd}; navigation may still be loading. No page was read.");
++        }
++        return Ok((automation, doc, url));
++    }
+     let browser = crate::win32::window_owner_pid(hwnd).is_some_and(|pid| {
+-        crate::win32::list_processes().iter().any(|p| p.pid == pid &&
+-            super::browser_target::named_browser_executable(&p.name).is_some())
++        crate::win32::list_processes().iter().any(|p| {
++            p.pid == pid && super::browser_target::named_browser_executable(&p.name).is_some()
++        })
+     });
+     if browser {
+         if let Some(bar) = address_bar_url(&automation, &root) {
+             if let Some((document, url)) = visible.first() {
+-                if super::browser_target::omnibox_binds_document(visible.len(), url.as_deref(), &bar, requested, exact) {
++                if super::browser_target::omnibox_binds_document(
++                    visible.len(),
++                    url.as_deref(),
++                    &bar,
++                    requested,
++                    exact,
++                ) {
+                     return Ok((automation, document.clone(), bar));
+                 }
+             }
+@@ -146,7 +219,9 @@
+                         continue;
+                     }
+                     for window in crate::win32::list_windows_win32_first(process.pid) {
+-                        if preexisting_windows.contains(&window.hwnd) { continue; }
++                        if preexisting_windows.contains(&window.hwnd) {
++                            continue;
++                        }
+                         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                             return None;
+                         }
+@@ -182,60 +257,121 @@
+ /// agent's actual document, reported to the caller; never overwrite an old file.
+ pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
+     let mut nonce = [0u8; 16];
+-    getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("Could not create a fresh document name: {error}"))?;
++    getrandom::fill(&mut nonce)
++        .map_err(|error| anyhow::anyhow!("Could not create a fresh document name: {error}"))?;
+     let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+     let path = std::env::temp_dir().join(format!("brigadier-cu-{nonce}.txt"));
+-    std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
++    std::fs::OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .open(&path)?;
+     Ok(path)
+ }
+ 
+-pub(super) async fn notepad_document_window(filename: String) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
++pub(super) async fn notepad_document_window(
++    filename: String,
++) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+-            "fresh Notepad document verification", std::time::Duration::from_secs(2), "no unverified document",
++            "fresh Notepad document verification",
++            std::time::Duration::from_secs(2),
++            "no unverified document",
+             move |cancelled| unsafe {
+-                use windows::Win32::UI::Accessibility::{IUIAutomationSelectionItemPattern, UIA_SelectionItemPatternId, UIA_TabItemControlTypeId};
++                use windows::Win32::UI::Accessibility::{
++                    IUIAutomationSelectionItemPattern, UIA_SelectionItemPatternId,
++                    UIA_TabItemControlTypeId,
++                };
+                 let _com = Apartment::new();
+-                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+-                let pids: std::collections::HashSet<_> = crate::win32::list_processes().into_iter()
+-                    .filter(|process| super::launch_policy::is_notepad_target(&process.name)).map(|process| process.pid).collect();
++                let automation: IUIAutomation =
++                    CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
++                let pids: std::collections::HashSet<_> = crate::win32::list_processes()
++                    .into_iter()
++                    .filter(|process| super::launch_policy::is_notepad_target(&process.name))
++                    .map(|process| process.pid)
++                    .collect();
+                 for window in crate::win32::list_windows_via_win32(None) {
+-                    if cancelled.load(std::sync::atomic::Ordering::Acquire) { return None; }
+-                    if !pids.contains(&window.pid) { continue; }
+-                    let root = automation.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
+-                    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
++                    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
++                        return None;
++                    }
++                    if !pids.contains(&window.pid) {
++                        continue;
++                    }
++                    let root = automation
++                        .ElementFromHandle(HWND(window.hwnd as *mut _))
++                        .ok()?;
++                    let condition = automation
++                        .CreatePropertyCondition(
++                            UIA_ControlTypePropertyId,
++                            &UIA_TabItemControlTypeId.0.into(),
++                        )
++                        .ok()?;
+                     let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
+-                    if tabs.Length().ok()? == 0 && super::launch_policy::document_title_matches(&window.title, &filename) {
++                    if tabs.Length().ok()? == 0
++                        && super::launch_policy::document_title_matches(&window.title, &filename)
++                    {
+                         return Some(window); // classic Notepad has no tabs
+                     }
+                     for index in 0..tabs.Length().ok()? {
+                         let tab = tabs.GetElement(index).ok()?;
+                         let name = tab.CurrentName().ok()?.to_string();
+-                        if !super::launch_policy::document_title_matches(&name, &filename) { continue; }
+-                        let pattern: IUIAutomationSelectionItemPattern = tab.GetCurrentPattern(UIA_SelectionItemPatternId).ok()?.cast().ok()?;
+-                        if pattern.CurrentIsSelected().ok()?.as_bool() { return Some(window); }
++                        if !super::launch_policy::document_title_matches(&name, &filename) {
++                            continue;
++                        }
++                        let pattern: IUIAutomationSelectionItemPattern = tab
++                            .GetCurrentPattern(UIA_SelectionItemPatternId)
++                            .ok()?
++                            .cast()
++                            .ok()?;
++                        if pattern.CurrentIsSelected().ok()?.as_bool() {
++                            return Some(window);
++                        }
+                     }
+                 }
+                 None
+-            }
+-        ).map_err(|error| anyhow::anyhow!("Fresh document verification stopped because {}", crate::uia::click::deadline_reason(error)))
+-    }).await?
++            },
++        )
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "Fresh document verification stopped because {}",
++                crate::uia::click::deadline_reason(error)
++            )
++        })
++    })
++    .await?
+ }
+ 
+ pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<usize> {
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+-            "launch tab count", std::time::Duration::from_millis(500), "unknown tab count", move |_| unsafe {
++            "launch tab count",
++            std::time::Duration::from_millis(500),
++            "unknown tab count",
++            move |_| unsafe {
+                 use windows::Win32::UI::Accessibility::UIA_TabItemControlTypeId;
+                 let _com = Apartment::new();
+-                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
++                let automation: IUIAutomation =
++                    CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+                 let root = automation.ElementFromHandle(HWND(hwnd as *mut _)).ok()?;
+-                let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
+-                let count = root.FindAll(TreeScope_Subtree, &condition).ok()?.Length().ok()? as usize;
++                let condition = automation
++                    .CreatePropertyCondition(
++                        UIA_ControlTypePropertyId,
++                        &UIA_TabItemControlTypeId.0.into(),
++                    )
++                    .ok()?;
++                let count = root
++                    .FindAll(TreeScope_Subtree, &condition)
++                    .ok()?
++                    .Length()
++                    .ok()? as usize;
+                 Some(count.saturating_sub(requested_tabs))
+-            }
+-        ).ok().flatten()
+-    }).await.ok().flatten()
++            },
++        )
++        .ok()
++        .flatten()
++    })
++    .await
++    .ok()
++    .flatten()
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -638,7 +638,10 @@
+ /// whitespace. Read named static-text runs instead, retaining whitespace in
+ /// each run and explicit boundaries between runs. Traverse in document order;
+ /// stop below a named Text node so its inline descendants are not duplicated.
+-unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElement) -> anyhow::Result<String> {
++unsafe fn document_text(
++    automation: &IUIAutomation,
++    document: &IUIAutomationElement,
++) -> anyhow::Result<String> {
+     let walker = automation.RawViewWalker()?;
+     let mut stack = vec![document.clone()];
+     let mut text = String::new();
+@@ -649,7 +652,9 @@
+             anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+         }
+         let control = element.CurrentControlType().ok();
+-        if matches!(control, Some(UIA_TextControlTypeId | UIA_EditControlTypeId)) {
++        if control.is_some_and(|control| {
++            [UIA_TextControlTypeId, UIA_EditControlTypeId].contains(&control)
++        }) {
+             if let Ok(name) = element.CurrentName() {
+                 let name = name.to_string();
+                 if !name.is_empty() {
+@@ -662,7 +667,9 @@
+         if let Ok(mut child) = walker.GetFirstChildElement(&element) {
+             loop {
+                 children.push(child.clone());
+-                let Ok(next) = walker.GetNextSiblingElement(&child) else { break; };
++                let Ok(next) = walker.GetNextSiblingElement(&child) else {
++                    break;
++                };
+                 child = next;
+                 if children.len() > 20_000 {
+                     anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
+@@ -671,14 +678,28 @@
+         }
+         // Link/button/heading names can be the only exposed text. Use them
+         // only when there are no children to avoid reading ancestor labels twice.
+-        if children.is_empty() && matches!(control, Some(UIA_HyperlinkControlTypeId | UIA_ButtonControlTypeId | UIA_HeaderControlTypeId | UIA_ImageControlTypeId)) {
++        if children.is_empty()
++            && control.is_some_and(|control| {
++                [
++                    UIA_HyperlinkControlTypeId,
++                    UIA_ButtonControlTypeId,
++                    UIA_HeaderControlTypeId,
++                    UIA_ImageControlTypeId,
++                ]
++                .contains(&control)
++            })
++        {
+             if let Ok(name) = element.CurrentName() {
+                 super::browser_target::append_text_run(&mut text, &name.to_string());
+             }
+         }
+         stack.extend(children.into_iter().rev());
+     }
+-    if text.trim().is_empty() { text_pattern_dump(document) } else { Ok(text) }
++    if text.trim().is_empty() {
++        text_pattern_dump(document)
++    } else {
++        Ok(text)
++    }
+ }
+ 
+ /// Try `TextPattern.DocumentRange.GetText(-1)` on `elem`. Returns an error if
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2435,10 +2435,10 @@
+         // CreateProcess semantics, not Start Menu activation.
+         let mut name_lookup_missed = false;
+         let mut shell_target_from_name: Option<String> = None;
+-        let browser_from_name = name_opt
+-            .as_deref()
+-            .and_then(|name| super::browser_target::named_browser_executable(name)
+-                .or_else(|| super::browser_target::named_desktop_executable(name)));
++        let browser_from_name = name_opt.as_deref().and_then(|name| {
++            super::browser_target::named_browser_executable(name)
++                .or_else(|| super::browser_target::named_desktop_executable(name))
++        });
+         let aumid_for_uwp: Option<String> = if launch_path_opt.is_some() || path_opt.is_some() {
+             None
+         } else if let Some(a) = aumid_opt.clone() {
+@@ -2529,23 +2529,46 @@
+             );
+         }
+ 
+-        let fresh_document_path = if urls.is_empty() && extra_args.is_empty()
+-            && aumid_for_uwp.as_deref().or(resolved_target.as_deref()).is_some_and(super::launch_policy::is_notepad_target) {
++        let fresh_document_path = if urls.is_empty()
++            && extra_args.is_empty()
++            && aumid_for_uwp
++                .as_deref()
++                .or(resolved_target.as_deref())
++                .is_some_and(super::launch_policy::is_notepad_target)
++        {
+             match super::launch_browser::create_notepad_document() {
+                 Ok(path) => {
+-                    extra_args.push(super::browser_target::quote_argument(&path.to_string_lossy()));
++                    extra_args.push(super::browser_target::quote_argument(
++                        &path.to_string_lossy(),
++                    ));
+                     Some(path)
+                 }
+-                Err(error) => return ToolResult::error(format!("No app was launched: a fresh Notepad document could not be created: {error}")),
+-            }
+-        } else { None };
+-        if let Some(flag) = resolved_target.as_deref().and_then(super::launch_policy::fresh_window_argument) {
+-            if !extra_args.iter().any(|arg| arg == flag) { extra_args.insert(0, flag.into()); }
++                Err(error) => return ToolResult::error(format!(
++                    "No app was launched: a fresh Notepad document could not be created: {error}"
++                )),
++            }
++        } else {
++            None
++        };
++        let fresh_browser_launch = resolved_target.as_deref().is_some_and(|target| {
++            let (file, _) = split_launchable_target(target);
++            super::launch_policy::fresh_window_argument(&file).is_some()
++        });
++        if let Some(flag) = resolved_target.as_deref().and_then(|target| {
++            let (file, _) = split_launchable_target(target);
++            super::launch_policy::fresh_window_argument(&file)
++        }) {
++            if !extra_args.iter().any(|arg| arg == flag) {
++                extra_args.insert(0, flag.into());
++            }
+         }
+         // Snapshot native HWNDs before launch. A pre-existing browser window
+         // with the same URL is not proof that this launch opened a fresh one.
+-        let preexisting_windows: std::collections::HashSet<u64> = crate::win32::list_windows_via_win32(None)
+-            .into_iter().map(|window| window.hwnd).collect();
++        let preexisting_windows: std::collections::HashSet<u64> =
++            crate::win32::list_windows_via_win32(None)
++                .into_iter()
++                .map(|window| window.hwnd)
++                .collect();
+ 
+         // Single launch path. `display` is the human-readable identifier
+         // we report in the success header; for the packaged path it's
+@@ -2884,11 +2907,14 @@
+             // launcher fallback on every poll.
+             for _ in 0..30 {
+                 let window = tokio::task::spawn_blocking(|| {
+-                    let settings_pids: std::collections::HashSet<_> = crate::win32::list_processes()
+-                        .into_iter()
+-                        .filter(|process| super::launch_policy::is_settings_process(&process.name))
+-                        .map(|process| process.pid)
+-                        .collect();
++                    let settings_pids: std::collections::HashSet<_> =
++                        crate::win32::list_processes()
++                            .into_iter()
++                            .filter(|process| {
++                                super::launch_policy::is_settings_process(&process.name)
++                            })
++                            .map(|process| process.pid)
++                            .collect();
+                     let mut windows = crate::win32::list_windows_via_win32(None)
+                         .into_iter()
+                         .filter(|window| settings_pids.contains(&window.pid));
+@@ -2896,7 +2922,9 @@
+                     // Multiple Settings frames cannot be attributed to this
+                     // protocol activation without additional evidence.
+                     windows.next().is_none().then_some(first)
+-                }).await.unwrap_or(None);
++                })
++                .await
++                .unwrap_or(None);
+                 if let Some(window) = window {
+                     resolved_pid = window.pid;
+                     windows_json.push(json!({
+@@ -2915,7 +2943,7 @@
+             let mut confirmed = Vec::new();
+             // One budget for the whole request, including every URL/provider.
+             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+-            for url in &urls {
++            for url in urls.last().into_iter() {
+                 let mut found = None;
+                 for _ in 0..30 {
+                     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+@@ -2964,7 +2992,11 @@
+         }
+ 
+         if let Some(path) = fresh_document_path.as_ref() {
+-            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
++            let filename = path
++                .file_name()
++                .unwrap_or_default()
++                .to_string_lossy()
++                .into_owned();
+             for _ in 0..20 {
+                 match super::launch_browser::notepad_document_window(filename.clone()).await {
+                     Ok(Some(window)) => {
+@@ -3124,6 +3156,13 @@
+                 // total_attempts cap. The loop body handles the empty queue
+                 // by falling through to the re-scan again.
+             }
++        }
++        if fresh_browser_launch && !web_launch {
++            windows_json.retain(|window| {
++                window["window_id"]
++                    .as_u64()
++                    .is_some_and(|hwnd| !preexisting_windows.contains(&hwnd))
++            });
+         }
+         let pid = resolved_pid;
+ 
+@@ -3306,6 +3345,12 @@
+             .unwrap_or(("Foreground preservation was not confirmed.", true));
+         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+         summary.push_str(&restored_content_note);
++        if web_launch && urls.len() > 1 {
++            summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
++        }
++        if fresh_browser_launch && windows_json.is_empty() {
++            summary.push_str(" A new browser window was not confirmed; pre-existing windows were excluded from this reply.");
++        }
+         if let Some(path) = fresh_document_path.as_ref() {
+             summary.push_str(&format!(" Fresh document: {}.", path.display()));
+         }

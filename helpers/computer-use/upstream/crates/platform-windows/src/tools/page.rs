@@ -638,7 +638,10 @@ unsafe fn find_document_descendant(
 /// whitespace. Read named static-text runs instead, retaining whitespace in
 /// each run and explicit boundaries between runs. Traverse in document order;
 /// stop below a named Text node so its inline descendants are not duplicated.
-unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElement) -> anyhow::Result<String> {
+unsafe fn document_text(
+    automation: &IUIAutomation,
+    document: &IUIAutomationElement,
+) -> anyhow::Result<String> {
     let walker = automation.RawViewWalker()?;
     let mut stack = vec![document.clone()];
     let mut text = String::new();
@@ -649,7 +652,9 @@ unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElem
             anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
         }
         let control = element.CurrentControlType().ok();
-        if matches!(control, Some(UIA_TextControlTypeId | UIA_EditControlTypeId)) {
+        if control.is_some_and(|control| {
+            [UIA_TextControlTypeId, UIA_EditControlTypeId].contains(&control)
+        }) {
             if let Ok(name) = element.CurrentName() {
                 let name = name.to_string();
                 if !name.is_empty() {
@@ -662,7 +667,9 @@ unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElem
         if let Ok(mut child) = walker.GetFirstChildElement(&element) {
             loop {
                 children.push(child.clone());
-                let Ok(next) = walker.GetNextSiblingElement(&child) else { break; };
+                let Ok(next) = walker.GetNextSiblingElement(&child) else {
+                    break;
+                };
                 child = next;
                 if children.len() > 20_000 {
                     anyhow::bail!("The page text exceeds the UI Automation traversal limit; no partial text was returned.");
@@ -671,14 +678,28 @@ unsafe fn document_text(automation: &IUIAutomation, document: &IUIAutomationElem
         }
         // Link/button/heading names can be the only exposed text. Use them
         // only when there are no children to avoid reading ancestor labels twice.
-        if children.is_empty() && matches!(control, Some(UIA_HyperlinkControlTypeId | UIA_ButtonControlTypeId | UIA_HeaderControlTypeId | UIA_ImageControlTypeId)) {
+        if children.is_empty()
+            && control.is_some_and(|control| {
+                [
+                    UIA_HyperlinkControlTypeId,
+                    UIA_ButtonControlTypeId,
+                    UIA_HeaderControlTypeId,
+                    UIA_ImageControlTypeId,
+                ]
+                .contains(&control)
+            })
+        {
             if let Ok(name) = element.CurrentName() {
                 super::browser_target::append_text_run(&mut text, &name.to_string());
             }
         }
         stack.extend(children.into_iter().rev());
     }
-    if text.trim().is_empty() { text_pattern_dump(document) } else { Ok(text) }
+    if text.trim().is_empty() {
+        text_pattern_dump(document)
+    } else {
+        Ok(text)
+    }
 }
 
 /// Try `TextPattern.DocumentRange.GetText(-1)` on `elem`. Returns an error if

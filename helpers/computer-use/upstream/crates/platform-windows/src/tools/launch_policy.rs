@@ -135,9 +135,18 @@ mod settings_protocol_tests {
     use super::*;
     #[test]
     fn protocol_resolution_never_uses_an_unrelated_process_or_host() {
-        assert!(is_settings_protocol_launch(false, &["ms-settings:about".into()]));
-        assert!(!is_settings_protocol_launch(true, &["ms-settings:about".into()]));
-        assert!(!is_settings_protocol_launch(false, &["https://example.com".into()]));
+        assert!(is_settings_protocol_launch(
+            false,
+            &["ms-settings:about".into()]
+        ));
+        assert!(!is_settings_protocol_launch(
+            true,
+            &["ms-settings:about".into()]
+        ));
+        assert!(!is_settings_protocol_launch(
+            false,
+            &["https://example.com".into()]
+        ));
         assert!(!is_settings_protocol_launch(false, &[]));
         assert!(is_settings_process("SystemSettings.exe"));
         assert!(!is_settings_process("ApplicationFrameHost.exe"));
@@ -147,7 +156,9 @@ mod settings_protocol_tests {
 
 pub(crate) fn is_notepad_target(target: &str) -> bool {
     executable_name(target) == "notepad"
-        || target.to_ascii_lowercase().starts_with("microsoft.windowsnotepad_")
+        || target
+            .to_ascii_lowercase()
+            .starts_with("microsoft.windowsnotepad_")
 }
 
 pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
@@ -161,7 +172,12 @@ pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
 pub(crate) fn document_title_matches(title: &str, filename: &str) -> bool {
     let title = title.trim().trim_start_matches('*');
     let stem = filename.strip_suffix(".txt").unwrap_or(filename);
-    [filename, stem].iter().any(|name| title == *name || title.strip_prefix(name).is_some_and(|tail| tail.starts_with(" - ")))
+    [filename, stem].iter().any(|name| {
+        title == *name
+            || title
+                .strip_prefix(name)
+                .is_some_and(|tail| tail.starts_with(" - "))
+    })
 }
 
 #[cfg(test)]
@@ -169,18 +185,35 @@ mod fresh_document_tests {
     use super::*;
     #[test]
     fn only_supported_apps_get_fresh_window_flags() {
-        assert_eq!(fresh_window_argument("Microsoft Edge"), Some("--new-window"));
+        assert_eq!(
+            fresh_window_argument("Microsoft Edge"),
+            Some("--new-window")
+        );
         assert_eq!(fresh_window_argument("chrome.exe"), Some("--new-window"));
         assert_eq!(fresh_window_argument("notepad"), None);
-        assert!(is_notepad_target("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"));
+        assert!(is_notepad_target(
+            "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+        ));
         assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
         assert!(!is_notepad_target("Notepad++"));
     }
     #[test]
     fn restored_document_titles_cannot_match_the_new_file() {
-        assert!(document_title_matches("brigadier-cu-123.txt - Notepad", "brigadier-cu-123.txt"));
-        assert!(document_title_matches("brigadier-cu-123", "brigadier-cu-123.txt"));
-        assert!(!document_title_matches("my resume - Notepad", "brigadier-cu-123.txt"));
-        assert!(!document_title_matches("brigadier-cu-1234.txt", "brigadier-cu-123.txt"));
+        assert!(document_title_matches(
+            "brigadier-cu-123.txt - Notepad",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(document_title_matches(
+            "brigadier-cu-123",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(!document_title_matches(
+            "my resume - Notepad",
+            "brigadier-cu-123.txt"
+        ));
+        assert!(!document_title_matches(
+            "brigadier-cu-1234.txt",
+            "brigadier-cu-123.txt"
+        ));
     }
 }

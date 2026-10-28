@@ -2435,10 +2435,10 @@ impl Tool for LaunchAppTool {
         // CreateProcess semantics, not Start Menu activation.
         let mut name_lookup_missed = false;
         let mut shell_target_from_name: Option<String> = None;
-        let browser_from_name = name_opt
-            .as_deref()
-            .and_then(|name| super::browser_target::named_browser_executable(name)
-                .or_else(|| super::browser_target::named_desktop_executable(name)));
+        let browser_from_name = name_opt.as_deref().and_then(|name| {
+            super::browser_target::named_browser_executable(name)
+                .or_else(|| super::browser_target::named_desktop_executable(name))
+        });
         let aumid_for_uwp: Option<String> = if launch_path_opt.is_some() || path_opt.is_some() {
             None
         } else if let Some(a) = aumid_opt.clone() {
@@ -2529,23 +2529,46 @@ impl Tool for LaunchAppTool {
             );
         }
 
-        let fresh_document_path = if urls.is_empty() && extra_args.is_empty()
-            && aumid_for_uwp.as_deref().or(resolved_target.as_deref()).is_some_and(super::launch_policy::is_notepad_target) {
+        let fresh_document_path = if urls.is_empty()
+            && extra_args.is_empty()
+            && aumid_for_uwp
+                .as_deref()
+                .or(resolved_target.as_deref())
+                .is_some_and(super::launch_policy::is_notepad_target)
+        {
             match super::launch_browser::create_notepad_document() {
                 Ok(path) => {
-                    extra_args.push(super::browser_target::quote_argument(&path.to_string_lossy()));
+                    extra_args.push(super::browser_target::quote_argument(
+                        &path.to_string_lossy(),
+                    ));
                     Some(path)
                 }
-                Err(error) => return ToolResult::error(format!("No app was launched: a fresh Notepad document could not be created: {error}")),
+                Err(error) => return ToolResult::error(format!(
+                    "No app was launched: a fresh Notepad document could not be created: {error}"
+                )),
             }
-        } else { None };
-        if let Some(flag) = resolved_target.as_deref().and_then(super::launch_policy::fresh_window_argument) {
-            if !extra_args.iter().any(|arg| arg == flag) { extra_args.insert(0, flag.into()); }
+        } else {
+            None
+        };
+        let fresh_browser_launch = resolved_target.as_deref().is_some_and(|target| {
+            let (file, _) = split_launchable_target(target);
+            super::launch_policy::fresh_window_argument(&file).is_some()
+        });
+        if let Some(flag) = resolved_target.as_deref().and_then(|target| {
+            let (file, _) = split_launchable_target(target);
+            super::launch_policy::fresh_window_argument(&file)
+        }) {
+            if !extra_args.iter().any(|arg| arg == flag) {
+                extra_args.insert(0, flag.into());
+            }
         }
         // Snapshot native HWNDs before launch. A pre-existing browser window
         // with the same URL is not proof that this launch opened a fresh one.
-        let preexisting_windows: std::collections::HashSet<u64> = crate::win32::list_windows_via_win32(None)
-            .into_iter().map(|window| window.hwnd).collect();
+        let preexisting_windows: std::collections::HashSet<u64> =
+            crate::win32::list_windows_via_win32(None)
+                .into_iter()
+                .map(|window| window.hwnd)
+                .collect();
 
         // Single launch path. `display` is the human-readable identifier
         // we report in the success header; for the packaged path it's
@@ -2884,11 +2907,14 @@ impl Tool for LaunchAppTool {
             // launcher fallback on every poll.
             for _ in 0..30 {
                 let window = tokio::task::spawn_blocking(|| {
-                    let settings_pids: std::collections::HashSet<_> = crate::win32::list_processes()
-                        .into_iter()
-                        .filter(|process| super::launch_policy::is_settings_process(&process.name))
-                        .map(|process| process.pid)
-                        .collect();
+                    let settings_pids: std::collections::HashSet<_> =
+                        crate::win32::list_processes()
+                            .into_iter()
+                            .filter(|process| {
+                                super::launch_policy::is_settings_process(&process.name)
+                            })
+                            .map(|process| process.pid)
+                            .collect();
                     let mut windows = crate::win32::list_windows_via_win32(None)
                         .into_iter()
                         .filter(|window| settings_pids.contains(&window.pid));
@@ -2896,7 +2922,9 @@ impl Tool for LaunchAppTool {
                     // Multiple Settings frames cannot be attributed to this
                     // protocol activation without additional evidence.
                     windows.next().is_none().then_some(first)
-                }).await.unwrap_or(None);
+                })
+                .await
+                .unwrap_or(None);
                 if let Some(window) = window {
                     resolved_pid = window.pid;
                     windows_json.push(json!({
@@ -2915,7 +2943,7 @@ impl Tool for LaunchAppTool {
             let mut confirmed = Vec::new();
             // One budget for the whole request, including every URL/provider.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
-            for url in &urls {
+            for url in urls.last().into_iter() {
                 let mut found = None;
                 for _ in 0..30 {
                     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -2964,7 +2992,11 @@ impl Tool for LaunchAppTool {
         }
 
         if let Some(path) = fresh_document_path.as_ref() {
-            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             for _ in 0..20 {
                 match super::launch_browser::notepad_document_window(filename.clone()).await {
                     Ok(Some(window)) => {
@@ -3124,6 +3156,13 @@ impl Tool for LaunchAppTool {
                 // total_attempts cap. The loop body handles the empty queue
                 // by falling through to the re-scan again.
             }
+        }
+        if fresh_browser_launch && !web_launch {
+            windows_json.retain(|window| {
+                window["window_id"]
+                    .as_u64()
+                    .is_some_and(|hwnd| !preexisting_windows.contains(&hwnd))
+            });
         }
         let pid = resolved_pid;
 
@@ -3306,6 +3345,12 @@ impl Tool for LaunchAppTool {
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
         summary.push_str(&restored_content_note);
+        if web_launch && urls.len() > 1 {
+            summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
+        }
+        if fresh_browser_launch && windows_json.is_empty() {
+            summary.push_str(" A new browser window was not confirmed; pre-existing windows were excluded from this reply.");
+        }
         if let Some(path) = fresh_document_path.as_ref() {
             summary.push_str(&format!(" Fresh document: {}.", path.display()));
         }
