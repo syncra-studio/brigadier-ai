@@ -8,6 +8,7 @@
 //! [`Error::Unsupported`] for credential storage and login-shell resolution until their
 //! platform phase.
 
+pub mod build_slots;
 pub mod clone;
 pub mod footprint;
 #[cfg(windows)]

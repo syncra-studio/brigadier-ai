@@ -299,6 +299,17 @@ impl SessionManager {
                 env.push(("PATH".to_owned(), path.to_string_lossy().into_owned()));
             }
         }
+        if let Ok(wrapper) = brigadier_sandbox::build_slots::wrapper_path() {
+            env.extend(brigadier_sandbox::build_slots::environment(
+                &wrapper,
+                |name| {
+                    self.runtime
+                        .cli_env()
+                        .var(name)
+                        .map(|value| value.to_string_lossy().into_owned())
+                },
+            ));
+        }
         env
     }
 

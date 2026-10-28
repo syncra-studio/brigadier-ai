@@ -192,6 +192,15 @@ fn start(platform: Arc<dyn Platform>) -> anyhow::Result<ExitCode> {
         tracing::info!("another brigadierd owns this data directory; exiting");
         return Ok(ExitCode::SUCCESS);
     };
+    let cli_name = if cfg!(windows) {
+        "brigadier.exe"
+    } else {
+        "brigadier"
+    };
+    let cli = std::env::current_exe()
+        .context("locating brigadierd")?
+        .with_file_name(cli_name);
+    brigadier_sandbox::build_slots::prepare(&cli).context("preparing compiler slots")?;
     // Folders of the command gate and git guard earlier versions kept (workers now run as the
     // permission level says, with nothing on their PATH or in their git config).
     for old in ["gate", "git-guard"] {

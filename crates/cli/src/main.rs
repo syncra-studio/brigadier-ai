@@ -3,6 +3,9 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    if brigadier_sandbox::build_slots::is_wrapper() {
+        brigadier_sandbox::build_slots::main();
+    }
     let words: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|word| word.to_string_lossy().into_owned())
