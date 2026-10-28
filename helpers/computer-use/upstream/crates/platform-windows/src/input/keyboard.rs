@@ -222,6 +222,91 @@ pub fn wait_for_focused_descendant(hwnd: u64, timeout: Duration) -> Option<u64> 
     }
 }
 
+/// Resolve a real editor, without UIA SetFocus or activating the window.
+/// A token's native handle wins; otherwise its rectangle scopes candidates.
+pub fn background_text_target(
+    hwnd: u64,
+    native: Option<u64>,
+    rect: Option<(i32, i32, i32, i32)>,
+    indexed: bool,
+) -> Result<u64> {
+    let root = HWND(hwnd as *mut _);
+    let belongs = |h: HWND| h == root || unsafe { IsChild(root, h) }.as_bool();
+    if let Some(native) = native.filter(|h| *h != 0) {
+        let h = HWND(native as *mut _);
+        if belongs(h) && class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+            return Ok(native);
+        }
+    }
+    struct Scan {
+        rect: Option<(i32, i32, i32, i32)>,
+        matches: Vec<u64>,
+    }
+    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+        let scan = &mut *(data.0 as *mut Scan);
+        if !class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+            return TRUE;
+        }
+        if let Some((x, y, w, hgt)) = scan.rect {
+            let mut r = windows::Win32::Foundation::RECT::default();
+            if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+                || x + w / 2 < r.left
+                || x + w / 2 >= r.right
+                || y + hgt / 2 < r.top
+                || y + hgt / 2 >= r.bottom
+            {
+                return TRUE;
+            }
+        }
+        if windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(h).as_bool() {
+            scan.matches.push(h.0 as usize as u64);
+        }
+        TRUE
+    }
+    let mut scan = Scan {
+        rect,
+        matches: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumChildWindows(root, Some(collect), LPARAM(&mut scan as *mut _ as isize));
+    }
+    if scan.matches.len() == 1 {
+        return Ok(scan.matches[0]);
+    }
+    if !indexed {
+        if let Some(focused) = focused_descendant(root) {
+            if class_name(focused).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+                return Ok(focused.0 as usize as u64);
+            }
+        }
+        if !is_xaml_host_hwnd(hwnd) && !crate::input::delivery::is_wpf_target_window(hwnd) {
+            return Ok(focused_descendant(root).unwrap_or(root).0 as usize as u64);
+        }
+    }
+    bail!(super::text_policy::INSERTION_UNAVAILABLE)
+}
+
+/// Queue text to exactly the proven editor; never re-resolve focus per character.
+pub fn post_insert_text(target: u64, text: &str, delay_ms: u64) -> Result<()> {
+    if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
+        bail!(message);
+    }
+    for unit in super::text_policy::text_units(text) {
+        unsafe {
+            PostMessageW(
+                HWND(target as *mut _),
+                WM_CHAR,
+                WPARAM(unit as usize),
+                LPARAM(1),
+            )?;
+        }
+        if delay_ms > 0 {
+            sleep(Duration::from_millis(delay_ms));
+        }
+    }
+    Ok(())
+}
+
 /// Post a Unicode character as WM_CHAR.
 pub fn post_char(hwnd: u64, ch: char) -> Result<()> {
     if let Some(msg) = crate::input::post_message_blocked_by_uipi(hwnd) {
@@ -1096,6 +1181,33 @@ mod text_unit_tests {
         for input in &events[..2] {
             let flags = unsafe { input.Anonymous.ki.dwFlags };
             assert_eq!(flags.0 & KEYEVENTF_UNICODE.0, 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod caret_insertion_tests {
+    use super::*;
+    use windows::core::w;
+    use windows::Win32::UI::Controls::{EM_GETMODIFY, EM_SETSEL};
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW, PeekMessageW, SendMessageW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_POPUP, WM_SETTEXT};
+
+    #[test]
+    fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
+        unsafe {
+            let parent = CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!(""), WS_POPUP, 0,0,200,100, None, None, None, None).unwrap();
+            let edit = CreateWindowExW(WINDOW_EX_STYLE(0), w!("EDIT"), w!(""), WS_CHILD | WINDOW_STYLE(4), 0,0,180,80, parent, None, None, None).unwrap();
+            SendMessageW(edit, WM_SETTEXT, WPARAM(0), LPARAM(w!("abcdef").as_ptr() as isize));
+            SendMessageW(edit, EM_SETSEL, WPARAM(2), LPARAM(4));
+            assert_eq!(background_text_target(parent.0 as usize as u64, Some(edit.0 as usize as u64), None, true).unwrap(), edit.0 as usize as u64);
+            post_insert_text(edit.0 as usize as u64, "X😀", 0).unwrap();
+            let mut message = MSG::default();
+            while PeekMessageW(&mut message, edit, WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
+            let mut text = [0u16;64];
+            let n = GetWindowTextW(edit, &mut text);
+            assert_eq!(String::from_utf16(&text[..n as usize]).unwrap(), "abX😀ef");
+            assert_ne!(SendMessageW(edit, EM_GETMODIFY, WPARAM(0), LPARAM(0)).0, 0);
+            DestroyWindow(parent).unwrap();
         }
     }
 }

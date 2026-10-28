@@ -97,6 +97,7 @@ Patches applied, in order:
 - `patches/0109-windows-fresh-document-launch-cleanup.diff`: keep the native UIA call explicitly unsafe and remove untouched fresh Notepad files when launch is refused or fails before Windows accepts it.
 - `patches/0110-plain-administrator-refusal.diff`: State the administrator refusal in one plain sentence, followed by a labelled hint shared by reads and input.
 
+- `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
