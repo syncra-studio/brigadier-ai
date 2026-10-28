@@ -233,7 +233,7 @@ pub(super) async fn window_showing_url(
                     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                         return None;
                     }
-                    if matching_document(window.hwnd, &url, true).is_ok() {
+                    if unsafe { matching_document(window.hwnd, &url, true) }.is_ok() {
                         return Some(window);
                     }
                 }
@@ -395,5 +395,50 @@ mod fresh_document_tests {
         assert!(std::fs::read(&first).unwrap().is_empty());
         std::fs::remove_file(first).unwrap();
         std::fs::remove_file(second).unwrap();
+    }
+}
+
+/// Remove only our newly created empty document if launch is refused or fails
+/// before Windows accepts it. Once launched, the path is the user's document
+/// and stays available for saving/reading until the caller cleans it up.
+pub(super) struct UnlaunchedDocument(Option<std::path::PathBuf>);
+impl UnlaunchedDocument {
+    pub(super) fn new(path: Option<std::path::PathBuf>) -> Self {
+        Self(path)
+    }
+    pub(super) fn launched(&mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for UnlaunchedDocument {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.as_ref() {
+            // Do not remove anything if another actor has put content in it.
+            if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == 0) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod unlaunched_document_tests {
+    use super::*;
+    #[test]
+    fn failed_launch_cleans_only_an_untouched_blank_file() {
+        let failed = create_notepad_document().unwrap();
+        drop(UnlaunchedDocument::new(Some(failed.clone())));
+        assert!(!failed.exists());
+        let launched = create_notepad_document().unwrap();
+        let mut guard = UnlaunchedDocument::new(Some(launched.clone()));
+        guard.launched();
+        drop(guard);
+        assert!(launched.exists());
+        std::fs::remove_file(launched).unwrap();
+        let edited = create_notepad_document().unwrap();
+        std::fs::write(&edited, "keep this content").unwrap();
+        drop(UnlaunchedDocument::new(Some(edited.clone())));
+        assert!(edited.exists());
+        std::fs::remove_file(edited).unwrap();
     }
 }

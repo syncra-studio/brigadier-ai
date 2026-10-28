@@ -2552,6 +2552,8 @@ impl Tool for LaunchAppTool {
         } else {
             None
         };
+        let mut fresh_document_cleanup =
+            super::launch_browser::UnlaunchedDocument::new(fresh_document_path.clone());
         let fresh_browser_launch = resolved_target.as_deref().is_some_and(|target| {
             let (file, _) = split_launchable_target(target);
             super::launch_policy::fresh_window_argument(&file).is_some()
@@ -2887,6 +2889,8 @@ impl Tool for LaunchAppTool {
                 }
             }
         };
+
+        fresh_document_cleanup.launched();
 
         // Resolve the pid's windows so the caller can skip a list_windows
         // round-trip — same approach as Swift's `resolveWindows`. Retry
