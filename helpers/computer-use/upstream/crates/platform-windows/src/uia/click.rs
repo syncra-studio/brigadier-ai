@@ -16,10 +16,10 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
-    IsWindowEnabled, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND,
-    WM_NCHITTEST,
+    SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_NCHITTEST,
 };
 
 struct ComApartment(bool);
@@ -156,10 +156,27 @@ fn class_name(hwnd: HWND) -> String {
 
 /// Bounded synchronous dispatch keeps the background guard alive while the
 /// target handles the command. A timeout is never retried: it may have run.
-fn send_command(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> windows::core::Result<()> {
+fn send_command(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::core::Result<()> {
     let mut result = 0usize;
-    let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG, 1000, Some(&mut result)) };
-    if sent.0 == 0 { return Err(windows::core::Error::from_win32()); }
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            message,
+            wparam,
+            lparam,
+            SMTO_ABORTIFHUNG,
+            1000,
+            Some(&mut result),
+        )
+    };
+    if sent.0 == 0 {
+        return Err(windows::core::Error::from_win32());
+    }
     Ok(())
 }
 
@@ -167,23 +184,36 @@ fn send_command(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> win
 /// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
 fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
     unsafe {
-        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId { return None; }
+        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId {
+            return None;
+        }
         let button = GetDlgItem(hwnd, 1).ok()?;
-        if !crate::input::action_policy::common_dialog_accept(&class_name(hwnd), &class_name(button), GetDlgCtrlID(button))
-            || GetParent(button).ok()? != hwnd || !IsWindowEnabled(button).as_bool() { return None; }
+        if !crate::input::action_policy::common_dialog_accept(
+            &class_name(hwnd),
+            &class_name(button),
+            GetDlgCtrlID(button),
+        ) || GetParent(button).ok()? != hwnd
+            || !IsWindowEnabled(button).as_bool()
+        {
+            return None;
+        }
         let native = element.CurrentNativeWindowHandle().ok();
-        if native == Some(button) { return Some(button); }
-        if element.CurrentAutomationId().ok()?.to_string() != "1" { return None; }
+        if native == Some(button) {
+            return Some(button);
+        }
+        if element.CurrentAutomationId().ok()?.to_string() != "1" {
+            return None;
+        }
         let r = element.CurrentBoundingRectangle().ok()?;
         let mut b = windows::Win32::Foundation::RECT::default();
         GetWindowRect(button, &mut b).ok()?;
-        let x = r.left + (r.right-r.left)/2;
-        let y = r.top + (r.bottom-r.top)/2;
+        let x = r.left + (r.right - r.left) / 2;
+        let y = r.top + (r.bottom - r.top) / 2;
         (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
     }
 }
 
-/// Only a Close button under a TitleBar qualifies; Close Tab must stay an Invoke.
+/// Identify native/WinUI caption Close; Close Tab must stay an Invoke.
 fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
     unsafe {
         if element.CurrentControlType().ok() != Some(UIA_ButtonControlTypeId) {
@@ -201,17 +231,29 @@ fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
         // than a UIA TitleBar. Native non-client hit-test or its exact caption
         // id at the top-right identifies it without confusing Close Tab.
         if let Ok(rect) = element.CurrentBoundingRectangle() {
-            let x = rect.left + (rect.right-rect.left)/2;
-            let y = rect.top + (rect.bottom-rect.top)/2;
+            let x = rect.left + (rect.right - rect.left) / 2;
+            let y = rect.top + (rect.bottom - rect.top) / 2;
             let mut hit = 0usize;
             if let Ok(packed) = crate::lparam::pack_xy(x, y) {
-                let _ = SendMessageTimeoutW(HWND(hwnd as *mut _), WM_NCHITTEST, WPARAM(0), LPARAM(packed as isize), SMTO_ABORTIFHUNG, 100, Some(&mut hit));
+                let _ = SendMessageTimeoutW(
+                    HWND(hwnd as *mut _),
+                    WM_NCHITTEST,
+                    WPARAM(0),
+                    LPARAM(packed as isize),
+                    SMTO_ABORTIFHUNG,
+                    100,
+                    Some(&mut hit),
+                );
             }
             let mut window = windows::Win32::Foundation::RECT::default();
             let top_right = GetWindowRect(HWND(hwnd as *mut _), &mut window).is_ok()
-                && x >= window.right - 100 && x < window.right
-                && y >= window.top && y < window.top + 80;
-            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) { return true; }
+                && x >= window.right - 100
+                && x < window.right
+                && y >= window.top
+                && y < window.top + 80;
+            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) {
+                return true;
+            }
         }
         if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
             return false;
@@ -291,14 +333,31 @@ fn try_click(
     let readback = Readback::new(hwnd, Some(ptr));
     if !expand_only {
         if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
-            let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+            return super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
                 ensure_active(cancelled)?;
-                send_command(HWND(hwnd as *mut _), WM_COMMAND, WPARAM(1), LPARAM(button.0 as isize))
+                let dispatch = send_command(
+                    HWND(hwnd as *mut _),
+                    WM_COMMAND,
+                    WPARAM(1),
+                    LPARAM(button.0 as isize),
+                );
+                let observed = readback.finish(
+                    Some(ptr),
+                    "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
+                    ActionTransport::WindowsPostMessage,
+                );
+                if let Err(error) = dispatch {
+                    if observed
+                        .structured_content
+                        .as_ref()
+                        .and_then(|s| s["verified"].as_bool())
+                        != Some(true)
+                    {
+                        anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
+                    }
+                }
+                Ok(Some(observed))
             });
-            if let Err(error) = result {
-                anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
-            }
-            return Ok(Some(readback.finish(Some(ptr), "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)", ActionTransport::WindowsPostMessage)));
         }
     }
     let order = pattern_order(titlebar_close(hwnd, &element), expand_only);
@@ -322,7 +381,9 @@ fn try_click(
                 let pattern = source.GetCurrentPattern(id);
                 // Non-client Close has a precise WM_CLOSE fallback. Ordinary
                 // client mouse messages do not implement a title-bar hit.
-                if *action == ClickPattern::WindowClose && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd)) {
+                if *action == ClickPattern::WindowClose
+                    && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd))
+                {
                     ensure_active(cancelled)?;
                     send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                     return Ok(Some((
@@ -376,9 +437,10 @@ fn try_click(
             Ok(None)
         }
     };
-    let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, dispatch)
-        .map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
-    Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
+    super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+        let result = dispatch().map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
+        Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
+    })
 }
 
 /// Search inside the addressed window, never ElementFromPoint on the user's

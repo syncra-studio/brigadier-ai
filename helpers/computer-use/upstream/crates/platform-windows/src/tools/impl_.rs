@@ -5031,8 +5031,9 @@ impl Tool for TypeTextTool {
                     Some(_) => read_cached_element_value(&admitted),
                     None => read_focused_value_uia(verify_pid),
                 };
+                crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
                 let before = read(verify_idx);
-                let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || -> anyhow::Result<()> {
+                let post_res = (|| -> anyhow::Result<()> {
                     // A renderer HWND is shared by DOM controls. Focus exactly the
                     // token's editor while activation is shielded, then deliver to
                     // that renderer rather than the Chrome_WidgetWin_1 frame.
@@ -5044,7 +5045,7 @@ impl Tool for TypeTextTool {
                         }
                     }
                     crate::input::keyboard::post_insert_text(text_target, &text_for_post, _delay_ms.min(200))
-                });
+                })();
                 std::thread::sleep(std::time::Duration::from_millis(40));
                 let after = read(verify_idx);
                 let observed = post_message_readback_observed(
@@ -5053,6 +5054,7 @@ impl Tool for TypeTextTool {
                     &text_for_post,
                 );
                 (post_res, before, after, observed)
+                })
             }
         })
         .await;
@@ -5071,14 +5073,14 @@ impl Tool for TypeTextTool {
                 // prove final state from a fresh snapshot before any retry.
                 match (&before, &after) {
                     (Some(_), Some(_)) if observed => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
                          ({_delay_ms}ms delay; the field changed and now contains the \
                          requested text, but the insertion point is not known). Take a \
                          fresh snapshot to verify the intended final value before retrying."
                     ))
                     .with_structured(changed_contains_post_message_result(text_len)),
                     (Some(_), Some(_)) => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage, but \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR, but \
                          the focused field's value did not contain the requested text \
                          after dispatch — delivery was incomplete or dropped (e.g. a \
                          VCL/LibreOffice grid not in cell-edit mode). \
@@ -5096,7 +5098,7 @@ impl Tool for TypeTextTool {
                         },
                     })),
                     _ => ToolResult::text(format!(
-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
+                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
                          ({_delay_ms}ms delay; not verified — could not read \
                          the focused field back, e.g. the target isn't foreground or \
                          exposes no ValuePattern). If it didn't land, retry with \

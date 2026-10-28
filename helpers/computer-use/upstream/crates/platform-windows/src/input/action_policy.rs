@@ -3,7 +3,12 @@ pub fn common_dialog_accept(dialog_class: &str, button_class: &str, control_id: 
     dialog_class == "#32770" && button_class.eq_ignore_ascii_case("button") && control_id == 1
 }
 
-pub fn caption_close(button: bool, native_hit: isize, automation_id: &str, top_right: bool) -> bool {
+pub fn caption_close(
+    button: bool,
+    native_hit: isize,
+    automation_id: &str,
+    top_right: bool,
+) -> bool {
     button && (native_hit == 20 || (automation_id.eq_ignore_ascii_case("CloseButton") && top_right))
 }
 

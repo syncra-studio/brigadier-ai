@@ -124,18 +124,22 @@ pub fn post_message_blocked_by_uipi(hwnd: u64) -> Option<String> {
     if unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) } == 0 || pid == 0 {
         return None;
     }
-    let target_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let message = process_control_integrity_refusal(target_handle).ok().flatten();
+    let target_handle =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let message = process_control_integrity_refusal(target_handle)
+        .ok()
+        .flatten();
     let _ = unsafe { CloseHandle(target_handle) };
     message
-
 }
 
 /// Check the exact process handle used by kill_app, including targets with no
 /// windows. Fail closed if either token cannot be inspected.
 pub(crate) fn process_control_integrity_refusal(target: HANDLE) -> Result<Option<String>, String> {
-    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }
-        .ok_or_else(|| "Windows could not inspect this helper's privileges. No termination was attempted.".to_owned())?;
+    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }.ok_or_else(|| {
+        "Windows could not inspect this helper's privileges. No termination was attempted."
+            .to_owned()
+    })?;
     let target = unsafe { process_integrity_rid(target) }
         .ok_or_else(|| "Windows could not inspect the target process's privileges. No termination was attempted.".to_owned())?;
     Ok(integrity_block_message(own, target).map(str::to_owned))
@@ -144,6 +148,18 @@ pub(crate) fn process_control_integrity_refusal(target: HANDLE) -> Result<Option
 #[cfg(test)]
 mod integrity_tests {
     use super::*;
+
+    #[test]
+    fn process_control_checks_exact_handles_and_refuses_unknown_privilege() {
+        assert!(
+            process_control_integrity_refusal(unsafe { GetCurrentProcess() })
+                .unwrap()
+                .is_none()
+        );
+        assert!(process_control_integrity_refusal(HANDLE::default())
+            .unwrap_err()
+            .contains("could not inspect the target process's privileges"));
+    }
 
     #[test]
     fn administrator_windows_explain_the_read_and_input_limit_plainly() {
@@ -163,3 +179,6 @@ mod integrity_tests {
         assert!(!message.contains("administrator"));
     }
 }
+
+#[cfg(test)]
+mod native_text_tests;
