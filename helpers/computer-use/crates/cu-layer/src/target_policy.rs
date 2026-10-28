@@ -220,7 +220,12 @@ fn unresolved_identity(tool: &str) -> ToolResult {
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
-        Some(RefusalReason::SecuritySurface) if reads_settings(tool, identity) => Ok(()),
+        Some(RefusalReason::SecuritySurface)
+            if reads_settings(tool, identity)
+                || tool == "kill_app" && is_windows_settings(identity) =>
+        {
+            Ok(())
+        }
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
     }
@@ -234,6 +239,17 @@ fn reads_settings(tool: &str, identity: &TargetIdentity) -> bool {
             tool,
             "launch_app" | "get_window_state" | "verify_state" | "get_accessibility_tree" | "zoom"
         )
+}
+
+/// Windows Settings owns a separate app process; terminating it cannot change
+/// a setting. Other security surfaces and platform Settings retain their policy.
+fn is_windows_settings(identity: &TargetIdentity) -> bool {
+    let id = identity
+        .bundle_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    id == "systemsettings" || id.starts_with("windows.immersivecontrolpanel")
 }
 
 /// Whether `identity` is System Settings.
@@ -761,7 +777,7 @@ const SETTINGS_REFUSAL: &str =
      setting, ask the user to do this step.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
-    "Settings can be opened and read, never clicked or typed into. To read a page, open it \
+    "Settings can be opened, read and closed with kill_app; all other input is refused. To read a page, open it \
      directly: launch_app with urls [\"ms-settings:<page>\"], for example ms-settings:about \
      (the Windows version), ms-settings:windowsupdate, ms-settings:display or \
      ms-settings:network, then get_window_state. To change a setting, ask the user to do \
@@ -1163,6 +1179,49 @@ mod tests {
                 Some("driver")
             );
         });
+    }
+
+    #[test]
+    fn windows_settings_can_be_terminated_but_other_input_stays_refused() {
+        for id in [
+            "systemsettings",
+            "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+        ] {
+            let identity = TargetIdentity {
+                name: "Settings".into(),
+                bundle_id: Some(id.into()),
+                pid: Some(42),
+            };
+            assert!(check("kill_app", &identity, &[]).is_ok());
+            assert!(check("get_window_state", &identity, &[]).is_ok());
+            for tool in [
+                "click",
+                "double_click",
+                "right_click",
+                "press_key",
+                "hotkey",
+                "type_text",
+                "set_value",
+                "scroll",
+                "invoke_menu",
+            ] {
+                assert!(check(tool, &identity, &[]).is_err(), "{tool}");
+            }
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "regedit",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let identity = TargetIdentity {
+                name: id.into(),
+                bundle_id: Some(id.into()),
+                pid: Some(43),
+            };
+            assert!(check("kill_app", &identity, &[]).is_err(), "{id}");
+        }
     }
 
     #[test]
