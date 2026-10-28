@@ -1575,7 +1575,7 @@ pub fn windows_integrity_message(own: u32, target: u32) -> Option<&'static str> 
     if target <= own {
         None
     } else if target >= 0x3000 {
-        Some("This window runs as administrator and cannot be read or controlled from a normal session. Open the app without administrator privileges, or restart the computer-use helper as administrator.")
+        Some("This window runs as administrator and cannot be read or controlled here.\nHint: open the app without administrator privileges, or restart the computer-use helper as administrator.")
     } else {
         Some("This window runs with higher privileges than the computer-use helper and cannot be read or controlled from this session. Open the app with the same privileges as the helper.")
     }
@@ -1592,6 +1592,11 @@ mod windows_integrity_tests {
         assert!(windows_integrity_message(0x3000, 0x3000).is_none());
         let admin = windows_integrity_message(0x2000, 0x3000).unwrap();
         assert!(admin.contains("runs as administrator"));
+        assert_eq!(
+            admin.split("\nHint:").next().unwrap().matches('.').count(),
+            1
+        );
+        assert!(admin.contains("\nHint:"));
         assert!(admin.contains("cannot be read or controlled"));
         assert!(admin.contains("restart the computer-use helper as administrator"));
         let restricted = windows_integrity_message(0x1000, 0x2000).unwrap();
