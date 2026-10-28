@@ -17,11 +17,25 @@ impl Drop for ProcessHandle {
 /// A true return means Windows accepted termination and confirmed exit; false
 /// means it confirmed the process exited independently. A timeout is an error.
 pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Result<bool, String> {
+    // Inspect privileges before asking for terminate rights, so elevated
+    // targets get the same plain refusal as reads/actions, even when opening
+    // with PROCESS_TERMINATE would fail first.
+    let query = ProcessHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+        .map_err(|error| format!("Windows could not inspect app process {pid}: {error}. No termination was attempted."))?);
+    if let Some(message) = crate::input::process_control_integrity_refusal(query.0)? {
+        return Err(message);
+    }
     let process = ProcessHandle(unsafe {
         OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
     }.map_err(|error| format!(
         "Windows could not open app process {pid} for verified termination: {error}. No termination was attempted."
     ))?);
+
+    // Check the termination handle as well: PID reuse must not substitute a
+    // higher-integrity process between the query and opening this handle.
+    if let Some(message) = crate::input::process_control_integrity_refusal(process.0)? {
+        return Err(message);
+    }
 
     let mut path = vec![0u16; 32768];
     let mut path_len = path.len() as u32;

@@ -123,13 +123,21 @@ pub fn post_message_blocked_by_uipi(hwnd: u64) -> Option<String> {
     if unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) } == 0 || pid == 0 {
         return None;
     }
-    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }?;
-    let target_handle =
-        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let target = unsafe { process_integrity_rid(target_handle) };
+    let target_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let message = process_control_integrity_refusal(target_handle).ok().flatten();
     let _ = unsafe { CloseHandle(target_handle) };
-    let target = target?;
-    integrity_block_message(own, target).map(str::to_owned)
+    message
+
+}
+
+/// Check the exact process handle used by kill_app, including targets with no
+/// windows. Fail closed if either token cannot be inspected.
+pub(crate) fn process_control_integrity_refusal(target: HANDLE) -> Result<Option<String>, String> {
+    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }
+        .ok_or_else(|| "Windows could not inspect this helper's privileges. No termination was attempted.".to_owned())?;
+    let target = unsafe { process_integrity_rid(target) }
+        .ok_or_else(|| "Windows could not inspect the target process's privileges. No termination was attempted.".to_owned())?;
+    Ok(integrity_block_message(own, target).map(str::to_owned))
 }
 
 #[cfg(test)]

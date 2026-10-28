@@ -98,6 +98,7 @@ Patches applied, in order:
 - `patches/0110-plain-administrator-refusal.diff`: State the administrator refusal in one plain sentence, followed by a labelled hint shared by reads and input.
 
 - `patches/0090-windows-caret-insertion.diff`: type_text uses caret insertion into a real editor; whole-document replacement remains exclusive to set_value.
+- `patches/0091-windows-elevated-kill-refusal.diff`: kill_app checks process token integrity before termination and shares the administrator refusal used by reads and actions.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
