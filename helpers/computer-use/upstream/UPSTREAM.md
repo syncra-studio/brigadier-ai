@@ -112,6 +112,9 @@ Patches applied, in order:
 
 - `patches/0111-windows-settings-window-close.diff`: Allow only an exact unmodified Settings window Close through WM_CLOSE, refuse closing the front window, and confirm only observed window destruction.
 
+
+- `patches/0112-windows-walk-completeness.diff`: Report complete UIA walks truthfully and mark depth cuts, provider enumeration failures, time/node stops and partial MSAA sources as incomplete.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

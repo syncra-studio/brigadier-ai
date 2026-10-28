@@ -1511,6 +1511,10 @@ impl Tool for GetWindowStateTool {
                              delivery_mode:\"foreground\" for a dialog's default accelerator.)"
                         ),
                         nodes: Vec::new(),
+                        coverage: cua_driver_core::window_state_view::WindowsReadCoverage {
+                            source_partial: true,
+                            ..Default::default()
+                        },
                     };
                     let payload = crate::uia::snapshot::UiaSnapshot::from_nodes(
                         &[],
@@ -1593,8 +1597,16 @@ impl Tool for GetWindowStateTool {
                         .iter()
                         .filter(|n| n.element_index.is_some())
                         .count();
+                    tr.coverage.apply(
+                        &walk,
+                        &mut structured,
+                        query
+                            .as_deref()
+                            .is_some_and(|query| !query.trim().is_empty()),
+                        count > 0,
+                    );
                     let mut header = format!("window_id={hwnd} pid={pid} elements={count}\n");
-                    if let Some(note) = walk.note() {
+                    if let Some(note) = tr.coverage.note(&walk) {
                         header.push_str(&note);
                         header.push('\n');
                     }
@@ -1603,12 +1615,7 @@ impl Tool for GetWindowStateTool {
                         header + &tr.tree_markdown,
                     ));
                     structured["element_count"] = json!(count);
-                    // UIA currently does not expose whether a bounded walk
-                    // exhausted every subtree. Keep negative existence
-                    // conservative until that proof is available.
-                    structured["elements_complete"] = json!(false);
                     structured["tree_markdown"] = json!(tr.tree_markdown);
-                    walk.apply(&mut structured);
 
                     let (snapshot_id, replaced) = (!observation_only)
                         .then(|| {

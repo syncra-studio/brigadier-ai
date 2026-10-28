@@ -1817,3 +1817,161 @@ mod windows_settings_close_tests {
         }
     }
 }
+
+/// Windows traversal facts not represented by the shared time/node budget.
+/// Zero counters mean every discovered subtree was visited; fallback sources
+/// which cannot establish authoritative coverage remain explicitly partial.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WindowsReadCoverage {
+    pub depth_cuts: usize,
+    pub provider_errors: usize,
+    pub source_partial: bool,
+}
+impl WindowsReadCoverage {
+    pub fn admits_depth(&mut self, depth: usize, max_depth: usize) -> bool {
+        if depth <= max_depth {
+            true
+        } else {
+            self.depth_cuts += 1;
+            false
+        }
+    }
+    pub fn apply(
+        &self,
+        walk: &crate::walk_budget::WalkOutcome,
+        structured: &mut Value,
+        filtered: bool,
+        has_elements: bool,
+    ) {
+        walk.apply(structured);
+        let reason = if self.depth_cuts > 0 {
+            Some("max_depth")
+        } else if self.provider_errors > 0 {
+            Some("provider_error")
+        } else if self.source_partial {
+            Some("partial_source")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            structured["truncated"] = json!(true);
+            if !walk.truncated() {
+                structured["truncation_reason"] = json!(reason);
+            }
+        }
+        if self.depth_cuts > 0 {
+            structured["depth_cuts"] = json!(self.depth_cuts);
+        }
+        if self.provider_errors > 0 {
+            structured["provider_errors"] = json!(self.provider_errors);
+        }
+        structured["elements_complete"] =
+            json!(has_elements && !filtered && structured["truncated"] == false);
+    }
+    pub fn note(&self, walk: &crate::walk_budget::WalkOutcome) -> Option<String> {
+        let mut notes = Vec::new();
+        if let Some(note) = walk.note() {
+            notes.push(note);
+        }
+        if self.depth_cuts > 0 {
+            notes.push(format!("Partial tree: the depth limit omitted {} subtree(s); increase max_depth where supported to read deeper.",self.depth_cuts));
+        }
+        if self.provider_errors > 0 {
+            notes.push(format!("Partial tree: the accessibility provider could not enumerate {} subtree(s); read fresh state before assuming an element is absent.",self.provider_errors));
+        }
+        if self.source_partial {
+            notes.push("Partial tree: this fallback source cannot establish complete accessibility coverage.".into());
+        }
+        (!notes.is_empty()).then(|| notes.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod windows_coverage_tests {
+    use super::*;
+    use crate::walk_budget::WalkBudget;
+    #[test]
+    fn depth_boundary_includes_the_limit_but_records_omitted_children() {
+        let mut coverage = WindowsReadCoverage::default();
+        assert!(coverage.admits_depth(0, 0));
+        assert!(!coverage.admits_depth(1, 0));
+        assert!(coverage.admits_depth(25, 25));
+        assert!(!coverage.admits_depth(26, 25));
+        assert_eq!(coverage.depth_cuts, 2);
+    }
+    #[test]
+    fn only_a_complete_unfiltered_walk_can_claim_complete_elements() {
+        let mut budget = WalkBudget::nodes_only(10);
+        assert!(budget.admit());
+        let walk = budget.outcome();
+        for (coverage, filtered, has_elements, complete, reason) in [
+            (WindowsReadCoverage::default(), false, true, true, None),
+            (WindowsReadCoverage::default(), true, true, false, None),
+            (WindowsReadCoverage::default(), false, false, false, None),
+            (
+                WindowsReadCoverage {
+                    depth_cuts: 2,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("max_depth"),
+            ),
+            (
+                WindowsReadCoverage {
+                    provider_errors: 1,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("provider_error"),
+            ),
+            (
+                WindowsReadCoverage {
+                    source_partial: true,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("partial_source"),
+            ),
+        ] {
+            let mut state = json!({});
+            coverage.apply(&walk, &mut state, filtered, has_elements);
+            assert_eq!(state["elements_complete"], complete, "{state}");
+            assert_eq!(state["truncation_reason"].as_str(), reason);
+            assert_eq!(state["truncated"], reason.is_some());
+            if reason == Some("max_depth") {
+                assert_eq!(state["depth_cuts"], 2);
+                assert!(coverage.note(&walk).unwrap().contains("depth limit"));
+            }
+        }
+        for timeout in [false, true] {
+            let mut limited = WalkBudget::nodes_only(1);
+            if timeout {
+                limited.stop_for_timeout();
+            } else {
+                limited.admit();
+                limited.admit();
+            }
+            let walk = limited.outcome();
+            let coverage = WindowsReadCoverage {
+                depth_cuts: 1,
+                ..Default::default()
+            };
+            let mut state = json!({});
+            coverage.apply(&walk, &mut state, false, true);
+            assert_eq!(state["elements_complete"], false);
+            assert_eq!(state["truncated"], true);
+            assert_eq!(state["depth_cuts"], 1);
+            assert_eq!(
+                state["truncation_reason"],
+                if timeout { "timeout" } else { "node_budget" }
+            );
+            assert!(coverage.note(&walk).unwrap().contains("depth limit"));
+        }
+    }
+}
