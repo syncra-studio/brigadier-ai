@@ -302,6 +302,16 @@ pub fn guarded_post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> 
     super::keyboard::post_key(hwnd, key, modifiers)
 }
 
+pub fn guarded_post_key_to(
+    hwnd: u64,
+    child: Option<u64>,
+    key: &str,
+    modifiers: &[&str],
+) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_key_to(hwnd, child, key, modifiers)
+}
+
 pub fn guarded_post_char(hwnd: u64, ch: char) -> Result<()> {
     let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
     super::keyboard::post_char(hwnd, ch)

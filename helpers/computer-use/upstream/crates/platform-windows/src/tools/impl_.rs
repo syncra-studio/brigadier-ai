@@ -5719,6 +5719,19 @@ impl Tool for PressKeyTool {
         let background_webview_focus = elem_idx.is_some()
             && delivery == DeliveryMode::Background
             && crate::input::has_chromium_descendant(hwnd);
+        // UIA SetFocus activates hosts such as Notepad's editor window. A
+        // control with its own child window takes a posted, modifier-free key
+        // directly, without any focus change.
+        let direct_child = admitted
+            .as_ref()
+            .filter(|_| {
+                elem_idx.is_some()
+                    && delivery == DeliveryMode::Background
+                    && !background_webview_focus
+                    && mods.is_empty()
+            })
+            .and_then(|element| element.native_window())
+            .filter(|child| crate::input::is_descendant_window(hwnd, *child));
         let mut noact = if elem_idx.is_some() && delivery == DeliveryMode::Background {
             Some(crate::input::NoActivateGuard::arm(
                 windows::Win32::Foundation::HWND(hwnd as *mut _),
@@ -5765,7 +5778,10 @@ impl Tool for PressKeyTool {
             {
                 return error;
             }
-        } else if elem_idx.is_some() && delivery != DeliveryMode::Foreground {
+        } else if elem_idx.is_some()
+            && delivery != DeliveryMode::Foreground
+            && direct_child.is_none()
+        {
             let focused = tokio::task::spawn_blocking({
                 let admitted = admitted.clone();
                 move || {
@@ -5828,7 +5844,7 @@ impl Tool for PressKeyTool {
             move || {
                 let _admission = &admitted;
                 let m: Vec<&str> = mods.iter().map(String::as_str).collect();
-                crate::input::post_key(hwnd, &key, &m)
+                crate::input::post_key_to(hwnd, direct_child, &key, &m)
             }
         })
         .await;

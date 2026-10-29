@@ -168,6 +168,8 @@ Patches applied, in order:
 
 - `patches/0145-windows-classic-dialogs-outside-xaml-shield.diff`: Exempt classic #32770 dialogs owned by XAML apps from the EnableWindow activation shield: disabling them made UIA report their buttons as not enabled (0x80040200) and restoring the lease re-enabled dialogs beneath a newer modal.
 
+- `patches/0146-windows-press-key-to-control-window-without-focus.diff`: Post modifier-free background press_key input straight to an addressed control that has its own child window instead of calling UIA SetFocus, which activated hosts such as Notepad's editor before the hand-back.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

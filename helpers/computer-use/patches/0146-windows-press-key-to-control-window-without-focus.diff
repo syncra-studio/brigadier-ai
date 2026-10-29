@@ -1,0 +1,153 @@
+Why: Post modifier-free background press_key input straight to an addressed control that has its own child window instead of calling UIA SetFocus, which activated hosts such as Notepad's editor before the hand-back.
+
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index 26eb42c9e..8425b419b 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -302,6 +302,16 @@ pub fn guarded_post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()>
+     super::keyboard::post_key(hwnd, key, modifiers)
+ }
+ 
++pub fn guarded_post_key_to(
++    hwnd: u64,
++    child: Option<u64>,
++    key: &str,
++    modifiers: &[&str],
++) -> Result<()> {
++    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
++    super::keyboard::post_key_to(hwnd, child, key, modifiers)
++}
++
+ pub fn guarded_post_char(hwnd: u64, ch: char) -> Result<()> {
+     let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+     super::keyboard::post_char(hwnd, ch)
+diff --git a/crates/platform-windows/src/input/keyboard.rs b/crates/platform-windows/src/input/keyboard.rs
+index 1165d028f..74636361e 100644
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -492,6 +492,12 @@ pub fn post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> R
+ 
+ /// Press a named key (and optional modifiers) via WM_KEYDOWN/WM_KEYUP.
+ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
++    post_key_to(hwnd, None, key, modifiers)
++}
++
++/// [`post_key`] to an exact descendant control of `hwnd`, such as an editor
++/// with its own window, without asking for focus first.
++pub fn post_key_to(hwnd: u64, child: Option<u64>, key: &str, modifiers: &[&str]) -> Result<()> {
+     if let Some(msg) = crate::input::post_message_blocked_by_uipi(hwnd) {
+         anyhow::bail!(msg);
+     }
+@@ -500,7 +506,11 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+     // Posting only to the top-level frame reports success but never reaches
+     // the renderer; mirror the WM_CHAR path and retarget to that child when
+     // the target thread exposes one.
+-    let target = focused_descendant(hwnd_win).unwrap_or(hwnd_win);
++    let target = match child {
++        Some(child) if is_descendant_window(hwnd, child) => HWND(child as *mut _),
++        Some(_) => anyhow::bail!("the addressed control is not inside the target window"),
++        None => focused_descendant(hwnd_win).unwrap_or(hwnd_win),
++    };
+     let vk = key_name_to_vk(key)?;
+     let has_alt = modifiers.iter().any(|m| *m == "alt" || *m == "menu");
+ 
+@@ -1257,3 +1267,9 @@ mod text_unit_tests {
+         }
+     }
+ }
++
++/// True when `child` is a descendant control window of the top-level `top`.
++pub fn is_descendant_window(top: u64, child: u64) -> bool {
++    let (top, child) = (HWND(top as *mut _), HWND(child as *mut _));
++    !child.0.is_null() && child != top && unsafe { IsChild(top, child) }.as_bool()
++}
+diff --git a/crates/platform-windows/src/input/mod.rs b/crates/platform-windows/src/input/mod.rs
+index 3336877cf..86b49d9c0 100644
+--- a/crates/platform-windows/src/input/mod.rs
++++ b/crates/platform-windows/src/input/mod.rs
+@@ -19,14 +19,15 @@ pub mod text_policy;
+ pub(crate) use inject::{force_foreground_assisted, force_foreground_attached};
+ pub use inject::{
+     guarded_post_char as post_char, guarded_post_key as post_key,
+-    guarded_post_type_text as post_type_text,
++    guarded_post_key_to as post_key_to, guarded_post_type_text as post_type_text,
+     guarded_post_type_text_with_delay as post_type_text_with_delay, inject_click_screen,
+     point_in_window_bounds, point_on_virtual_desktop, window_is_iconic, ForegroundLockGuard,
+     NoActivateGuard,
+ };
+ pub use keyboard::{
+-    is_xaml_host_hwnd, send_key_synthesized, send_key_synthesized_after_focus,
+-    send_text_synthesized, send_text_synthesized_after_focus, wait_for_focused_descendant,
++    is_descendant_window, is_xaml_host_hwnd, send_key_synthesized,
++    send_key_synthesized_after_focus, send_text_synthesized, send_text_synthesized_after_focus,
++    wait_for_focused_descendant,
+ };
+ pub use mouse::{
+     has_chromium_descendant, is_chromium_target_window, post_click, post_click_screen,
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 766ebeaa2..be3b7ba63 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5719,6 +5719,19 @@ impl Tool for PressKeyTool {
+         let background_webview_focus = elem_idx.is_some()
+             && delivery == DeliveryMode::Background
+             && crate::input::has_chromium_descendant(hwnd);
++        // UIA SetFocus activates hosts such as Notepad's editor window. A
++        // control with its own child window takes a posted, modifier-free key
++        // directly, without any focus change.
++        let direct_child = admitted
++            .as_ref()
++            .filter(|_| {
++                elem_idx.is_some()
++                    && delivery == DeliveryMode::Background
++                    && !background_webview_focus
++                    && mods.is_empty()
++            })
++            .and_then(|element| element.native_window())
++            .filter(|child| crate::input::is_descendant_window(hwnd, *child));
+         let mut noact = if elem_idx.is_some() && delivery == DeliveryMode::Background {
+             Some(crate::input::NoActivateGuard::arm(
+                 windows::Win32::Foundation::HWND(hwnd as *mut _),
+@@ -5765,7 +5778,10 @@ impl Tool for PressKeyTool {
+             {
+                 return error;
+             }
+-        } else if elem_idx.is_some() && delivery != DeliveryMode::Foreground {
++        } else if elem_idx.is_some()
++            && delivery != DeliveryMode::Foreground
++            && direct_child.is_none()
++        {
+             let focused = tokio::task::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+@@ -5828,7 +5844,7 @@ impl Tool for PressKeyTool {
+             move || {
+                 let _admission = &admitted;
+                 let m: Vec<&str> = mods.iter().map(String::as_str).collect();
+-                crate::input::post_key(hwnd, &key, &m)
++                crate::input::post_key_to(hwnd, direct_child, &key, &m)
+             }
+         })
+         .await;
+diff --git a/crates/platform-windows/src/uia/snapshot.rs b/crates/platform-windows/src/uia/snapshot.rs
+index 5f2e69a7b..d1b2d1805 100644
+--- a/crates/platform-windows/src/uia/snapshot.rs
++++ b/crates/platform-windows/src/uia/snapshot.rs
+@@ -33,6 +33,17 @@ impl RetainedElement {
+         result.map_err(|e| anyhow::anyhow!("UIA SetFocus failed: {e}"))
+     }
+ 
++    /// The element's own native window, when it has one.
++    pub fn native_window(&self) -> Option<u64> {
++        if !self.is_uia() {
++            return None;
++        }
++        let element = unsafe { IUIAutomationElement::from_raw(self.ptr as *mut _) };
++        let hwnd = unsafe { element.CurrentNativeWindowHandle() }.ok();
++        std::mem::forget(element);
++        hwnd.filter(|h| !h.0.is_null()).map(|h| h.0 as usize as u64)
++    }
++
+     pub fn element_has_keyboard_focus(&self) -> Option<bool> {
+         if !self.is_uia() {
+             return None;

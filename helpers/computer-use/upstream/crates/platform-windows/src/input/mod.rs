@@ -19,14 +19,15 @@ pub mod text_policy;
 pub(crate) use inject::{force_foreground_assisted, force_foreground_attached};
 pub use inject::{
     guarded_post_char as post_char, guarded_post_key as post_key,
-    guarded_post_type_text as post_type_text,
+    guarded_post_key_to as post_key_to, guarded_post_type_text as post_type_text,
     guarded_post_type_text_with_delay as post_type_text_with_delay, inject_click_screen,
     point_in_window_bounds, point_on_virtual_desktop, window_is_iconic, ForegroundLockGuard,
     NoActivateGuard,
 };
 pub use keyboard::{
-    is_xaml_host_hwnd, send_key_synthesized, send_key_synthesized_after_focus,
-    send_text_synthesized, send_text_synthesized_after_focus, wait_for_focused_descendant,
+    is_descendant_window, is_xaml_host_hwnd, send_key_synthesized,
+    send_key_synthesized_after_focus, send_text_synthesized, send_text_synthesized_after_focus,
+    wait_for_focused_descendant,
 };
 pub use mouse::{
     has_chromium_descendant, is_chromium_target_window, post_click, post_click_screen,

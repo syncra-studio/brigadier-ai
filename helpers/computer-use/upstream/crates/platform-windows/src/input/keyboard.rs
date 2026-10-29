@@ -492,6 +492,12 @@ pub fn post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> R
 
 /// Press a named key (and optional modifiers) via WM_KEYDOWN/WM_KEYUP.
 pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+    post_key_to(hwnd, None, key, modifiers)
+}
+
+/// [`post_key`] to an exact descendant control of `hwnd`, such as an editor
+/// with its own window, without asking for focus first.
+pub fn post_key_to(hwnd: u64, child: Option<u64>, key: &str, modifiers: &[&str]) -> Result<()> {
     if let Some(msg) = crate::input::post_message_blocked_by_uipi(hwnd) {
         anyhow::bail!(msg);
     }
@@ -500,7 +506,11 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
     // Posting only to the top-level frame reports success but never reaches
     // the renderer; mirror the WM_CHAR path and retarget to that child when
     // the target thread exposes one.
-    let target = focused_descendant(hwnd_win).unwrap_or(hwnd_win);
+    let target = match child {
+        Some(child) if is_descendant_window(hwnd, child) => HWND(child as *mut _),
+        Some(_) => anyhow::bail!("the addressed control is not inside the target window"),
+        None => focused_descendant(hwnd_win).unwrap_or(hwnd_win),
+    };
     let vk = key_name_to_vk(key)?;
     let has_alt = modifiers.iter().any(|m| *m == "alt" || *m == "menu");
 
@@ -1256,4 +1266,10 @@ mod text_unit_tests {
             assert_eq!(flags.0 & KEYEVENTF_UNICODE.0, 0);
         }
     }
+}
+
+/// True when `child` is a descendant control window of the top-level `top`.
+pub fn is_descendant_window(top: u64, child: u64) -> bool {
+    let (top, child) = (HWND(top as *mut _), HWND(child as *mut _));
+    !child.0.is_null() && child != top && unsafe { IsChild(top, child) }.as_bool()
 }
