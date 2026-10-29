@@ -898,7 +898,9 @@ mod tests {
                     );
                 }
             }
-            for name in ["Notepad", "Calculator", "/Applications/Console.app"] {
+            // macOS Console is a log viewer; elsewhere "Console" is GNOME's terminal.
+            let console = cfg!(target_os = "macos").then_some("/Applications/Console.app");
+            for name in ["Notepad", "Calculator"].into_iter().chain(console) {
                 assert!(
                     enforce("launch_app", &json!({"name":name}), &[], resolver).is_ok(),
                     "{name}"
