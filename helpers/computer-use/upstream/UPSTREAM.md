@@ -158,6 +158,8 @@ Patches applied, in order:
 
 - `patches/0140-windows-window-list-platform-wording.diff`: Keep Windows list_windows descriptions and replies about Windows window metadata without claiming unavailable macOS frameworks.
 
+- `patches/0141-windows-chromium-caret-insertion-without-native-focus.diff`: Use exactly bound CDP caret insertion for Chromium page inputs with full value/caret readback, refuse unavailable transports before any native focus or partial text, and unwind emulation on cancellation.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

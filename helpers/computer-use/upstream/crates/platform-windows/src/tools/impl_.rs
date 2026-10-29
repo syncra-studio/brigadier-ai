@@ -4804,7 +4804,7 @@ impl Tool for TypeTextTool {
     fn def(&self) -> &ToolDef {
         TYPE_DEF.get_or_init(|| ToolDef {
             name: "type_text".into(),
-            description: "Insert text at the target control's caret/selection using background character messages to its real editor. Never replaces the document through ValuePattern.SetValue. If no caret-insertion route exists, refuses plainly; set_value retains explicit whole-value replacement. No activation or pointer movement. Use press_key for special keys. delay_ms spaces characters (0–200, default 30).".into(),
+            description: "Insert text at the target control's caret/selection. Windows native editors use background character messages; Chromium page fields require an exactly bound DevTools endpoint and field token. Never replaces the document through ValuePattern.SetValue. If no caret-insertion route exists, refuses before text; set_value retains explicit whole-value replacement. No native focus or pointer input is requested. Use press_key for special keys. delay_ms spaces native characters (0–200, default 30); browser insertion is one operation.".into(),
             input_schema: json!({
                 "type":"object","required":["text"],"properties":{
                     "session": cua_driver_core::tool_schema::session_schema(),
@@ -4881,6 +4881,17 @@ impl Tool for TypeTextTool {
         };
         let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
         let delivery = DeliveryMode::from_args(&args);
+
+        if !delivery.is_foreground()
+            && elem_idx.is_none()
+            && args.get("x").is_some()
+            && hwnd_opt.is_some_and(|hwnd| {
+                crate::input::is_chromium_target_window(hwnd)
+                    || crate::input::has_chromium_descendant(hwnd)
+            })
+        {
+            return ToolResult::error("background_unavailable: Chromium background text needs an element_token for the exact editable page field. Read that field first; no click or text was sent.");
+        }
 
         // ── px form: focus by pixel-click, then type into the focused element ──
         // Pass x,y (no element_token) for an *element px action*: pixel-click the
@@ -5094,7 +5105,16 @@ impl Tool for TypeTextTool {
             );
         }
 
-        // 3. Legacy Win32 / GDI / Chromium-IME — targeted WM_CHAR, no focus steal.
+        // Chromium's UIA SetFocus can activate its native window, and hand-back
+        // then blurs the renderer, dropping a suffix of WM_CHAR input. Never
+        // dispatch that prefix before trying a separate background transport.
+        if crate::input::is_chromium_target_window(hwnd)
+            || crate::input::has_chromium_descendant(hwnd)
+        {
+            return super::chromium_text::insert(pid, hwnd, admitted, &text).await;
+        }
+
+        // 3. Legacy Win32 / GDI — targeted WM_CHAR, no focus steal.
         //
         // Read-back verification (mirrors macOS type_text): WM_CHAR is silently
         // dropped by some focused targets (notably a VCL/LibreOffice Calc grid
@@ -5143,15 +5163,6 @@ impl Tool for TypeTextTool {
                         let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
                             (|| -> anyhow::Result<()> {
                                 crate::uia::click::ensure_active(&cancelled)?;
-                                if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
-                                    if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
-                                        element.focus_element().map_err(|error| anyhow::anyhow!(
-                                            "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
-                                        ))?;
-                                    } else {
-                                        anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
-                                    }
-                                }
                                 crate::input::keyboard::post_insert_text_cancelable(
                                     text_target, &text_for_post, _delay_ms.min(200), &cancelled,
                                 )
