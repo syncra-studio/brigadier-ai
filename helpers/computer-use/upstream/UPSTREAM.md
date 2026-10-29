@@ -178,6 +178,8 @@ Patches applied, in order:
 
 - `patches/0150-windows-recheck-input-after-endpoint-revalidation.diff`: Re-read the physical-input generation immediately after the awaited task-endpoint revalidation and before Input.insertText, so user input arriving during that await stops background insertion before any text is sent.
 
+- `patches/0151-windows-task-manager-refusal-reason.diff`: Correct the Task Manager refusal reason with the user-approved RunAsInvoker evidence: it relaunches itself elevated even from a non-elevated start, so the helper could not read or move its window and that window would cover the user's work.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

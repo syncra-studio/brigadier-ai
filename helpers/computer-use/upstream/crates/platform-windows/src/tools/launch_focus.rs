@@ -79,8 +79,12 @@ impl LaunchForegroundGuard {
         self.reported_foreground.load(Ordering::Acquire)
     }
 }
-/// Task Manager always ends up elevated, even from a direct non-elevated
-/// start, so the system copy is refused before any process starts.
+/// Task Manager relaunches itself elevated, so the system copy is refused
+/// before any process starts. Live (2026-10-29): a direct non-elevated start
+/// under the activation lock, and one with a per-process RunAsInvoker
+/// compatibility layer inside a kill-on-close job, both ended in an elevated
+/// window that the helper could not read or move and that covered the user's
+/// window (58 s in the RunAsInvoker run, until the job was closed).
 pub(super) fn task_manager_direct_path(target: &str) -> Result<Option<String>, String> {
     use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
     let name = super::launch_policy::executable_name(target);
@@ -100,7 +104,5 @@ pub(super) fn task_manager_direct_path(target: &str) -> Result<Option<String>, S
     {
         return Ok(None);
     }
-    // Live: even a direct, non-elevated start under the activation lock ends
-    // in an administrator window that the helper cannot read, move or close.
-    Err("Task Manager raises itself to administrator after it starts, so this helper could not read, move or close its window, and that window would stay over your work. No process was started; open Task Manager yourself if you need it.".into())
+    Err("Task Manager raises itself to administrator after it starts, even when started without administrator rights, so this helper could not read or move its window and that window would cover your work. No process was started; open Task Manager yourself if you need it.".into())
 }
