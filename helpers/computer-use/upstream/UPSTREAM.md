@@ -154,6 +154,8 @@ Patches applied, in order:
 
 - `patches/0138-windows-refuse-pointer-moving-injection-fallback.diff`: Remove synthetic pen and touch fallbacks that cannot guarantee a stationary system pointer; retain earlier semantic UIA and native posted-message routes and return an explicit no-input refusal for the unsafe rung.
 
+- `patches/0139-windows-share-disabled-window-leases.diff`: Share disabled-window ownership across overlapping UIA workers so only the final holder restores the original state, and ignore recycled HWND identities.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
