@@ -715,6 +715,8 @@ pub(super) async fn insert(
             let current = state(&conn, session, object, None).await?;
             if !matches_before(&current, &field) || current["focused"] != true { bail!("the exact field or selection changed before insertion"); }
             super::task_browser::endpoint_at_use(pid,lifecycle).await?;
+            // The revalidation above awaits; user input may have arrived.
+            if crate::input::inject::foreground_generation() != generation { bail!("physical input interrupted background insertion"); }
             attempted = true;
             conn.call(Some(session), "Input.insertText", json!({"text":text})).await?;
             let mut landed = false;

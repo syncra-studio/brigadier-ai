@@ -176,6 +176,8 @@ Patches applied, in order:
 
 - `patches/0149-windows-contain-task-browsers-and-refuse-orphans.diff`: Start task-owned Chrome/Edge suspended inside a kill-on-close job before resuming, end that job when its endpoint proof fails or its lifecycle retires, and refuse typing into any browser running a marked task profile that no live lifecycle owns before any generic endpoint discovery.
 
+- `patches/0150-windows-recheck-input-after-endpoint-revalidation.diff`: Re-read the physical-input generation immediately after the awaited task-endpoint revalidation and before Input.insertText, so user input arriving during that await stops background insertion before any text is sent.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
