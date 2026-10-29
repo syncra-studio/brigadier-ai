@@ -999,9 +999,7 @@ impl Tool for ListWindowsTool {
                 values are closer to the front; null means stacking order is unavailable and \
                 callers must not infer one), is_on_screen, minimized. To select a frontmost \
                 candidate, take the maximum integer z_index; if every value is null, use an \
-                explicit fallback instead of relying on array order. The macOS-specific \
-                on_current_space / space_ids fields are \
-                omitted on Windows; current_space_id is null.\n\n\
+                explicit fallback instead of relying on array order.\n\n\
                 Inputs: pid (optional pid filter), app (app-name filter), on_screen_only (bool, \
                 default false). Filter with app or pid: an unfiltered call lists every window.".into(),
             input_schema: json!({"type":"object","properties":{
@@ -1099,12 +1097,8 @@ impl Tool for ListWindowsTool {
             .iter()
             .filter(|r| r["is_on_screen"].as_bool().unwrap_or(false))
             .count();
-        // Swift text format 1:1 — append the SPI-unavailable note since
-        // Windows has no equivalent of macOS Spaces.
-        let header = format!(
-            "✅ Found {total} window(s) across {pid_count} app(s); {on_screen} on-screen. \
-             (SkyLight Space SPIs unavailable — on_current_space / space_ids omitted.)"
-        );
+        let header =
+            format!("✅ Found {total} window(s) across {pid_count} app(s); {on_screen} on-screen.");
         let mut lines = vec![header];
         if let Some(warning) = missing_pid_warning {
             lines.push(warning);

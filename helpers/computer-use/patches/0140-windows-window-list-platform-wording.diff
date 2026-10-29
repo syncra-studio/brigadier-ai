@@ -1,0 +1,47 @@
+Why: Keep Windows list_windows descriptions and replies about Windows window metadata without claiming unavailable macOS frameworks.
+
+diff --git a/crates/platform-windows/examples/list_windows_parity.rs b/crates/platform-windows/examples/list_windows_parity.rs
+index 09a42fbec..d67ae21b2 100644
+--- a/crates/platform-windows/examples/list_windows_parity.rs
++++ b/crates/platform-windows/examples/list_windows_parity.rs
+@@ -51,8 +51,8 @@ fn main() {
+         "Header does not match Swift format: {header:?}"
+     );
+     assert!(
+-        header.contains("SkyLight Space SPIs unavailable"),
+-        "Windows should append the SPI-unavailable note (matches Swift's else branch)"
++        !header.contains("SkyLight") && !header.contains("Space SPIs"),
++        "Windows must not claim that a macOS framework is unavailable"
+     );
+ 
+     let wins = v
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 53c706ac7..bf20d4990 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -999,9 +999,7 @@ impl Tool for ListWindowsTool {
+                 values are closer to the front; null means stacking order is unavailable and \
+                 callers must not infer one), is_on_screen, minimized. To select a frontmost \
+                 candidate, take the maximum integer z_index; if every value is null, use an \
+-                explicit fallback instead of relying on array order. The macOS-specific \
+-                on_current_space / space_ids fields are \
+-                omitted on Windows; current_space_id is null.\n\n\
++                explicit fallback instead of relying on array order.\n\n\
+                 Inputs: pid (optional pid filter), app (app-name filter), on_screen_only (bool, \
+                 default false). Filter with app or pid: an unfiltered call lists every window.".into(),
+             input_schema: json!({"type":"object","properties":{
+@@ -1099,12 +1097,8 @@ impl Tool for ListWindowsTool {
+             .iter()
+             .filter(|r| r["is_on_screen"].as_bool().unwrap_or(false))
+             .count();
+-        // Swift text format 1:1 — append the SPI-unavailable note since
+-        // Windows has no equivalent of macOS Spaces.
+-        let header = format!(
+-            "✅ Found {total} window(s) across {pid_count} app(s); {on_screen} on-screen. \
+-             (SkyLight Space SPIs unavailable — on_current_space / space_ids omitted.)"
+-        );
++        let header =
++            format!("✅ Found {total} window(s) across {pid_count} app(s); {on_screen} on-screen.");
+         let mut lines = vec![header];
+         if let Some(warning) = missing_pid_warning {
+             lines.push(warning);

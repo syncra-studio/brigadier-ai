@@ -156,6 +156,8 @@ Patches applied, in order:
 
 - `patches/0139-windows-share-disabled-window-leases.diff`: Share disabled-window ownership across overlapping UIA workers so only the final holder restores the original state, and ignore recycled HWND identities.
 
+- `patches/0140-windows-window-list-platform-wording.diff`: Keep Windows list_windows descriptions and replies about Windows window metadata without claiming unavailable macOS frameworks.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
