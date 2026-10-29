@@ -372,6 +372,7 @@ fn has_trusted_authenticode_identity(
 }
 
 fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
     // Some Windows PowerShell 5.1 builds cannot resolve a `\\?\` verbatim
     // path through `-LiteralPath` ("A drive named '\?\C' does not exist"),
     // which would make every candidate look unsigned. Pass the plain path.
@@ -402,6 +403,8 @@ fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::pro
         // PowerShell, ignoring an incompatible inherited PSModulePath. Pass the
         // browser path as data so PowerShell never parses it as command text.
         .env("CUA_BROWSER_ATTEST_PATH", &executable)
+        // A windowless helper would otherwise get a new, activated console.
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
         .stdin(Stdio::null())
         .output()
 }
@@ -770,6 +773,7 @@ async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
             "-Command",
             &script,
         ])
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

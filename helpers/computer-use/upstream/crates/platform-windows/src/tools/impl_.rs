@@ -8779,6 +8779,7 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
 "#,
         pid = pid
     );
+    use std::os::windows::process::CommandExt;
     let out = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
@@ -8788,6 +8789,7 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
             "-Command",
             &script,
         ])
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
         .output()
         .ok()?;
     if !out.status.success() {

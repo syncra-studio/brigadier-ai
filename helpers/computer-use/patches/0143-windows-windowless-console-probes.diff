@@ -1,0 +1,66 @@
+Why: Start the Windows helper's PowerShell and cmd probes with CREATE_NO_WINDOW so a windowless helper never opens a new, activated console window (Windows Terminal) during launches, browser checks or diagnostics.
+
+diff --git a/crates/platform-windows/src/browser_platform.rs b/crates/platform-windows/src/browser_platform.rs
+index 65db11591..7f97cd61a 100644
+--- a/crates/platform-windows/src/browser_platform.rs
++++ b/crates/platform-windows/src/browser_platform.rs
+@@ -372,6 +372,7 @@ fn has_trusted_authenticode_identity(
+ }
+ 
+ fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::process::Output> {
++    use std::os::windows::process::CommandExt;
+     // Some Windows PowerShell 5.1 builds cannot resolve a `\\?\` verbatim
+     // path through `-LiteralPath` ("A drive named '\?\C' does not exist"),
+     // which would make every candidate look unsigned. Pass the plain path.
+@@ -402,6 +403,8 @@ fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::pro
+         // PowerShell, ignoring an incompatible inherited PSModulePath. Pass the
+         // browser path as data so PowerShell never parses it as command text.
+         .env("CUA_BROWSER_ATTEST_PATH", &executable)
++        // A windowless helper would otherwise get a new, activated console.
++        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+         .stdin(Stdio::null())
+         .output()
+ }
+@@ -770,6 +773,7 @@ async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
+             "-Command",
+             &script,
+         ])
++        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+         .stdin(Stdio::null())
+         .stderr(Stdio::null())
+         .output()
+diff --git a/crates/platform-windows/src/health_report.rs b/crates/platform-windows/src/health_report.rs
+index 43a5783c1..ee0217ea1 100644
+--- a/crates/platform-windows/src/health_report.rs
++++ b/crates/platform-windows/src/health_report.rs
+@@ -178,8 +178,10 @@ fn probe_d3d11_device() -> Result<(), String> {
+ fn ver_string() -> Option<String> {
+     #[cfg(target_os = "windows")]
+     {
++        use std::os::windows::process::CommandExt;
+         let output = std::process::Command::new("cmd")
+             .args(["/c", "ver"])
++            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+             .output()
+             .ok()?;
+         if !output.status.success() {
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 869d30f13..148805c8d 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -8779,6 +8779,7 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
+ "#,
+         pid = pid
+     );
++    use std::os::windows::process::CommandExt;
+     let out = std::process::Command::new("powershell.exe")
+         .args([
+             "-NoProfile",
+@@ -8788,6 +8789,7 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
+             "-Command",
+             &script,
+         ])
++        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+         .output()
+         .ok()?;
+     if !out.status.success() {

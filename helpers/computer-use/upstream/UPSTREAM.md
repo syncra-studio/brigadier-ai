@@ -162,6 +162,8 @@ Patches applied, in order:
 
 - `patches/0142-windows-truthful-debugging-launch-refusal.diff`: Explain Windows DevTools launch refusal without directing agents to a browser-setup action absent from the offered tools.
 
+- `patches/0143-windows-windowless-console-probes.diff`: Start the Windows helper's PowerShell and cmd probes with CREATE_NO_WINDOW so a windowless helper never opens a new, activated console window (Windows Terminal) during launches, browser checks or diagnostics.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
