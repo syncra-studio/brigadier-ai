@@ -170,6 +170,8 @@ Patches applied, in order:
 
 - `patches/0146-windows-press-key-to-control-window-without-focus.diff`: Post modifier-free background press_key input straight to an addressed control that has its own child window instead of calling UIA SetFocus, which activated hosts such as Notepad's editor before the hand-back.
 
+- `patches/0147-windows-refuse-self-elevating-task-manager.diff`: Refuse launching the system Task Manager before any process starts: even a direct non-elevated start under the activation lock is raised to administrator, leaving a window over the user's work that the helper cannot read, move or close.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
