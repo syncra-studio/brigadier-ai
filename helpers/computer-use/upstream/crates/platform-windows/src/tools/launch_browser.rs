@@ -204,6 +204,7 @@ pub(super) async fn window_showing_url(
     url: &str,
     timeout: std::time::Duration,
     preexisting_windows: std::collections::HashSet<u64>,
+    owner_pid: Option<u32>,
 ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
     let executable = super::launch_policy::executable_name(executable);
     let url = url.to_owned();
@@ -217,7 +218,8 @@ pub(super) async fn window_showing_url(
                 let browser_pids: std::collections::HashSet<_> = crate::win32::list_processes()
                     .into_iter()
                     .filter(|process| {
-                        super::launch_policy::executable_name(&process.name) == executable
+                        owner_pid.is_none_or(|pid| process.pid == pid)
+                            && super::launch_policy::executable_name(&process.name) == executable
                     })
                     .map(|process| process.pid)
                     .collect();

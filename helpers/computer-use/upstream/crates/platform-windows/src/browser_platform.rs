@@ -83,6 +83,67 @@ impl WindowsBrowserPlatform {
             browser_cursors: Arc::new(Mutex::new(BrowserCursorTracker::default())),
         }
     }
+
+    /// Resolve the exact Chrome/Edge installation named by a task launch,
+    /// retaining the same installation/write/signature checks as browser setup.
+    pub(crate) fn task_browser_executable(
+        &self,
+        requested: &str,
+    ) -> Result<Option<String>, BrowserRefusal> {
+        let name = std::path::Path::new(requested)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(name.as_str(), "chrome" | "msedge") {
+            return Ok(None);
+        }
+        let explicit = requested.contains(['\\', '/']);
+        let requested_real = if explicit {
+            Some(std::fs::canonicalize(requested).map_err(|error| {
+                refusal(
+                    BrowserRefusalCode::BrowserRouteUnavailable,
+                    format!("cannot resolve the requested browser executable: {error}"),
+                )
+            })?)
+        } else {
+            None
+        };
+        let context = browser_launch_context()?;
+        for (candidate, trusted_root, expected_cn, expected_org) in isolated_browser_candidates()? {
+            if candidate
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&name))
+            {
+                continue;
+            }
+            let installation =
+                launch_token_installation_write_access(&context, &candidate, &trusted_root);
+            let Some(executable) = installation.executable.filter(|_| installation.installed)
+            else {
+                continue;
+            };
+            if requested_real.as_ref().is_some_and(|path| {
+                plain_windows_path(&path.to_string_lossy())
+                    .is_none_or(|path| !path.eq_ignore_ascii_case(&executable))
+            }) {
+                continue;
+            }
+            if installation.write_access == InstallationWriteAccess::Untrusted
+                || !has_trusted_authenticode_identity(
+                    std::path::Path::new(&executable),
+                    expected_cn,
+                    expected_org,
+                )
+            {
+                continue;
+            }
+            return Ok(Some(executable));
+        }
+        Err(refusal(BrowserRefusalCode::BrowserRouteUnavailable,
+            "the requested Chrome/Edge installation could not be proven protected and vendor-signed; no task browser was launched"))
+    }
 }
 
 impl Default for WindowsBrowserPlatform {
@@ -945,7 +1006,7 @@ fn canonical_discovered_websocket_url(url: &str, expected_port: u16) -> Option<S
         })
 }
 
-fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
+pub(crate) fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|_| {
             refusal(

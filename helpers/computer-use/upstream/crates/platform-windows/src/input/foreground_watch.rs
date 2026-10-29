@@ -53,6 +53,7 @@ struct Watch {
     first_input: AtomicU64,
     input_generation: u64,
     hold_lock: bool,
+    restore_allowed: bool,
     started: Instant,
     cancelled: AtomicBool,
     target: Target,
@@ -160,12 +161,14 @@ impl Watch {
         if !target {
             return;
         }
-        if policy::may_hand_back(
-            prior_valid,
-            input_unchanged,
-            target,
-            unsafe { GetForegroundWindow() } == event_hwnd,
-        ) {
+        if self.restore_allowed
+            && policy::may_hand_back(
+                prior_valid,
+                input_unchanged,
+                target,
+                unsafe { GetForegroundWindow() } == event_hwnd,
+            )
+        {
             unsafe {
                 super::hand_back_foreground(prior, event_hwnd, || {
                     !self.user_active.load(Ordering::Acquire)
@@ -291,6 +294,22 @@ impl ForegroundWatch {
     /// `hold_lock` keeps other processes from taking the front for the whole
     /// watch, not just the call; it is lifted at the user's first own input.
     pub(crate) fn start(prior: usize, target: Target, hold_lock: bool) -> Self {
+        Self::start_mode(prior, target, hold_lock, true)
+    }
+
+    /// Records input/event evidence without acquiring a lock or restoring a
+    /// window. Used by transports which must not manipulate native focus.
+    pub(crate) fn start_observing(prior: usize, target: Target) -> Self {
+        Self::start_mode(prior, target, false, false)
+    }
+
+    /// Holds the activation-prevention lock like [`Self::start`] (lifted at
+    /// the user's first own input) but never restores a window.
+    pub(crate) fn start_locked_observing(prior: usize, target: Target) -> Self {
+        Self::start_mode(prior, target, true, false)
+    }
+
+    fn start_mode(prior: usize, target: Target, hold_lock: bool, restore_allowed: bool) -> Self {
         let mut live = LIVE.lock().unwrap();
         live.retain(|entry| {
             entry
@@ -301,6 +320,8 @@ impl ForegroundWatch {
         for entry in live.iter() {
             if let Some(watch) = entry.watch.upgrade() {
                 if watch.prior == prior
+                    && watch.restore_allowed == restore_allowed
+                    && watch.hold_lock == hold_lock
                     && watch.target == target
                     && matches!(target, Target::Processes(_, _))
                     && watch.started.elapsed() < Duration::from_secs(20)
@@ -326,6 +347,7 @@ impl ForegroundWatch {
             first_input: AtomicU64::new(0),
             input_generation: super::foreground_generation(),
             hold_lock,
+            restore_allowed,
             started: Instant::now(),
             cancelled: AtomicBool::new(false),
             target,
@@ -442,7 +464,7 @@ impl ForegroundWatch {
         if self.requests.send(reply).is_ok() {
             if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
             {
-                let (note, failed) = observation.report();
+                let (note, failed) = self.describe(observation);
                 return (note, failed, foreground);
             }
         }
@@ -450,8 +472,19 @@ impl ForegroundWatch {
         let foreground = unsafe { GetForegroundWindow() }.0 as usize;
         observation.restored = foreground == self.watch.prior;
         observation.monitoring = false;
-        let (note, failed) = observation.report();
+        let (note, failed) = self.describe(observation);
         (note, failed, foreground)
+    }
+
+    fn describe(&self, observation: policy::Observation) -> (&'static str, bool) {
+        if self.watch.restore_allowed {
+            return observation.report();
+        }
+        if observation.activated || observation.uncertain_broker {
+            ("Windows reported that an app window became active during this launch. This launch only observes activation and never switches windows back, so whether your window stayed active is unconfirmed.", true)
+        } else {
+            ("No app activation was recorded before this reply. Activation stays observed but is never reversed, and this is not a guarantee against a later flash.", true)
+        }
     }
 }
 

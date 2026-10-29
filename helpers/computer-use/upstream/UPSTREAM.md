@@ -164,6 +164,8 @@ Patches applied, in order:
 
 - `patches/0143-windows-windowless-console-probes.diff`: Start the Windows helper's PowerShell and cmd probes with CREATE_NO_WINDOW so a windowless helper never opens a new, activated console window (Windows Terminal) during launches, browser checks or diagnostics.
 
+- `patches/0144-windows-task-owned-browser-background-transport.diff`: Give ordinary Chrome/Edge launches a lifecycle-owned isolated profile with a proven DevTools endpoint; open pages as inactive off-screen CDP windows placed behind the active window, keep the launch lock without restoring focus, disable Edge implicit account sign-in, and close the windowless browser after its last window.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

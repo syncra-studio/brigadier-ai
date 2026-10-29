@@ -1947,7 +1947,7 @@ impl Tool for GetWindowStateTool {
 ///
 /// Args are returned trimmed; their internal quoting is preserved as-is so
 /// `--profile-directory="Profile 2"` survives.
-fn split_launchable_target(s: &str) -> (String, String) {
+pub(super) fn split_launchable_target(s: &str) -> (String, String) {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return (String::new(), String::new());
@@ -2595,8 +2595,62 @@ impl Tool for LaunchAppTool {
         {
             inject_chromium_anti_throttling_flags(&mut extra_args);
         }
-        let urls_in_arguments =
-            super::browser_target::urls_belong_to_app(resolved_target.is_some(), !urls.is_empty());
+        // Caller-selected profiles opt out. Internal transport flags are added
+        // only after external debug-argument rejection and exclusive ownership.
+        let task_lifecycle = match super::task_browser::lifecycle(&args) {
+            Ok(key) => key,
+            Err(error) => return ToolResult::error(format!("No app was launched: {error}")),
+        };
+        let task_profile = if aumid_for_uwp.is_none() {
+            if let Some(target) = resolved_target.clone() {
+                let caller_args = extra_args.clone();
+                let key = task_lifecycle.clone();
+                let new_instance = args
+                    .get("creates_new_application_instance")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                match tokio::task::spawn_blocking(move || {
+                    super::task_browser::prepare(&target, &caller_args, &key, new_instance)
+                })
+                .await
+                {
+                    Ok(Ok(profile)) => profile,
+                    Ok(Err(error)) => {
+                        return ToolResult::error(format!("No app was launched: {error}"))
+                    }
+                    Err(error) => {
+                        return ToolResult::error(format!(
+                            "Task-browser preparation unavailable; no app was launched: {error}"
+                        ))
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(profile) = task_profile.as_ref() {
+            if let Some(pid) = profile.known_pid() {
+                if let Err(error) = profile.confirm(pid).await {
+                    return ToolResult::error(format!("The existing task-browser transport could not be re-proven: {error}. No new launch was sent."));
+                }
+            }
+            resolved_target = Some(profile.executable.clone());
+            if let Some(position) = super::task_browser::offscreen_argument(&extra_args) {
+                extra_args.push(position);
+            }
+            extra_args.extend(profile.arguments());
+            for feature in profile.disabled_features() {
+                super::task_browser::disable_feature(&mut extra_args, feature);
+            }
+        }
+        // Task browsers open their pages through the proven endpoint instead.
+        let urls_in_arguments = task_profile.is_none()
+            && super::browser_target::urls_belong_to_app(
+                resolved_target.is_some(),
+                !urls.is_empty(),
+            );
         if urls_in_arguments {
             extra_args.extend(urls.iter().map(|url| {
                 super::browser_target::launch_argument(
@@ -2635,10 +2689,14 @@ impl Tool for LaunchAppTool {
             let (file, _) = split_launchable_target(target);
             super::launch_policy::fresh_window_argument(&file).is_some()
         });
-        if let Some(flag) = resolved_target.as_deref().and_then(|target| {
-            let (file, _) = split_launchable_target(target);
-            super::launch_policy::fresh_window_argument(&file)
-        }) {
+        if let Some(flag) = resolved_target
+            .as_deref()
+            .filter(|_| task_profile.is_none())
+            .and_then(|target| {
+                let (file, _) = split_launchable_target(target);
+                super::launch_policy::fresh_window_argument(&file)
+            })
+        {
             if !extra_args.iter().any(|arg| arg == flag) {
                 extra_args.insert(0, flag.into());
             }
@@ -2704,12 +2762,14 @@ impl Tool for LaunchAppTool {
         // Strict no-activation is available only for the desktop launch path.
         // UWP activation is broker-controlled and retains its existing
         // restore-after-activation behavior.
-        let mut foreground_lock =
-            if (start_minimized || direct_task_manager) && aumid_for_uwp.is_none() {
-                Some(crate::input::ForegroundLockGuard::acquire())
-            } else {
-                None
-            };
+        let mut foreground_lock = if (start_minimized || direct_task_manager)
+            && aumid_for_uwp.is_none()
+            && task_profile.is_none()
+        {
+            Some(crate::input::ForegroundLockGuard::acquire())
+        } else {
+            None
+        };
         if foreground_lock
             .as_ref()
             .is_some_and(|guard| !guard.acquired())
@@ -2743,10 +2803,17 @@ impl Tool for LaunchAppTool {
             }
         }
         let foreground_guard = restore_foreground.then(|| {
-            super::launch_focus::LaunchForegroundGuard::start(
-                foreground_before_addr,
-                foreground_targets,
-            )
+            if task_profile.is_some() {
+                super::launch_focus::LaunchForegroundGuard::observe(
+                    foreground_before_addr,
+                    foreground_targets,
+                )
+            } else {
+                super::launch_focus::LaunchForegroundGuard::start(
+                    foreground_before_addr,
+                    foreground_targets,
+                )
+            }
         });
 
         // Branch: AUMID activation if we resolved one; else legacy
@@ -2786,7 +2853,7 @@ impl Tool for LaunchAppTool {
                 Err(message) => return ToolResult::error(message),
             };
             fresh_document_cleanup.launched();
-            let urls_clone = if urls_in_arguments {
+            let urls_clone = if urls_in_arguments || task_profile.is_some() {
                 Vec::new()
             } else {
                 urls.clone()
@@ -2794,13 +2861,14 @@ impl Tool for LaunchAppTool {
             let target_for_shell = target_file_opt.clone();
             let extra_for_shell = extra_joined.clone();
             let n_show_for_shell = n_show;
-            let direct_background_exe = (start_minimized || direct_task_manager)
-                && target_for_shell.as_deref().is_some_and(|target| {
-                    std::path::Path::new(target).is_file()
-                        && std::path::Path::new(target)
-                            .extension()
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-                });
+            let direct_background_exe =
+                (start_minimized || direct_task_manager || task_profile.is_some())
+                    && target_for_shell.as_deref().is_some_and(|target| {
+                        std::path::Path::new(target).is_file()
+                            && std::path::Path::new(target)
+                                .extension()
+                                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+                    });
             // Bound the shell launch with a timeout. An unregistered protocol
             // or file association makes `ShellExecuteExW` block on a modal shell
             // dialog ("you'll need a new app to open this …") on the *session*
@@ -2986,6 +3054,31 @@ impl Tool for LaunchAppTool {
             }
         };
 
+        let pid = if let Some(profile) = task_profile.as_ref() {
+            match profile.confirm(pid).await {
+                Ok(process)=>process.pid as u32,
+                Err(error)=>return ToolResult::error(format!("Task-owned browser launch was requested (pid {pid}), but its transport is unconfirmed: {error}. No other profile was used and no launch retry was sent. Inspect only this task-owned process before retrying."))
+                    .with_structured(json!({"code":"task_browser_transport_unconfirmed","launched_pid":pid,"windows":[]})),
+            }
+        } else {
+            pid
+        };
+        if let Some(profile) = task_profile.as_ref() {
+            let opened = profile.open_pages(&urls).await;
+            // A windowless task browser is closed by the watcher either way.
+            profile.watch_lifetime(pid);
+            if let Err(error) = opened {
+                return ToolResult::error(format!("Task-owned browser pid {pid} started, but its page window could not be opened through its proven endpoint: {error}. No other route was attempted. Inspect list_windows before retrying."))
+                    .with_structured(json!({"code":"task_browser_page_unopened","launched_pid":pid,"windows":[]}));
+            }
+        }
+        let placement = match task_profile.as_ref() {
+            Some(_) => {
+                Some(super::task_browser::place_new_windows(pid, &preexisting_windows).await)
+            }
+            None => None,
+        };
+
         // Resolve the pid's windows so the caller can skip a list_windows
         // round-trip — same approach as Swift's `resolveWindows`. Retry
         // 5×200ms; Win32 window registration can lag the launch.
@@ -3045,7 +3138,12 @@ impl Tool for LaunchAppTool {
         let mut url_confirmation_note = String::new();
         if web_launch {
             let executable = target_file_opt.as_deref().unwrap_or("");
-            let url = urls.last().expect("web launch has at least one URL");
+            let url = if task_profile.is_some() {
+                urls.first()
+            } else {
+                urls.last()
+            }
+            .expect("web launch has at least one URL");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
             let mut found = None;
             for _ in 0..30 {
@@ -3058,6 +3156,7 @@ impl Tool for LaunchAppTool {
                     url,
                     remaining,
                     preexisting_windows.clone(),
+                    task_profile.as_ref().map(|_| pid),
                 )
                 .await
                 {
@@ -3092,7 +3191,11 @@ impl Tool for LaunchAppTool {
                     .collect();
                 let windows: Vec<_> = crate::win32::list_windows_via_win32(None)
                     .into_iter()
-                    .filter(|w| pids.contains(&w.pid) && !preexisting_windows.contains(&w.hwnd))
+                    .filter(|w| {
+                        pids.contains(&w.pid)
+                            && task_profile.as_ref().is_none_or(|_| w.pid == pid)
+                            && !preexisting_windows.contains(&w.hwnd)
+                    })
                     .collect();
                 if let Some(window) = windows.first().filter(|_| windows.len() == 1) {
                     resolved_pid = window.pid;
@@ -3130,7 +3233,7 @@ impl Tool for LaunchAppTool {
                     Err(_) => break,
                 }
             }
-            if windows_json.is_empty() {
+            if windows_json.is_empty() && task_profile.is_none() {
                 return ToolResult::text(format!("Launch requested for {display}. Notepad has not exposed the fresh document {} as its selected tab. Opening is unconfirmed; no restored document window is returned. Inspect list_windows before retrying.", path.display()))
                     .with_structured(json!({"code": "fresh_document_unconfirmed", "launch_confirmed": false, "launched_pid": pid, "document_path": path.to_string_lossy(), "windows": []}));
             }
@@ -3469,12 +3572,22 @@ impl Tool for LaunchAppTool {
             .map(|guard| guard.report())
             .unwrap_or(("Foreground preservation was not confirmed.", true));
         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
+        if task_profile.is_some() {
+            summary.push_str(
+                " Opened in a lifecycle-owned browser profile; background text transport is ready.",
+            );
+            if let Some(placement) = placement.as_ref() {
+                summary.push_str(placement.note());
+            }
+        }
         summary.push_str(&restored_content_note);
         summary.push_str(&url_confirmation_note);
         if let Some(url) = confirmed_url.as_ref() {
             summary.push_str(&format!(" Confirmed visible URL: {url}."));
         }
-        if confirmed_url.is_some() && urls.len() > 1 {
+        if confirmed_url.is_some() && urls.len() > 1 && task_profile.is_some() {
+            summary.push_str(" Only the first requested URL was confirmed in the new window; the other requested URLs were opened as background tabs but were not verified.");
+        } else if confirmed_url.is_some() && urls.len() > 1 {
             summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
         }
         if fresh_browser_launch && windows_json.is_empty() {
@@ -5111,7 +5224,11 @@ impl Tool for TypeTextTool {
         if crate::input::is_chromium_target_window(hwnd)
             || crate::input::has_chromium_descendant(hwnd)
         {
-            return super::chromium_text::insert(pid, hwnd, admitted, &text).await;
+            let key = match super::task_browser::lifecycle(&args) {
+                Ok(key) => key,
+                Err(error) => return ToolResult::error(error.to_string()),
+            };
+            return super::chromium_text::insert(pid, hwnd, admitted, &text, &key).await;
         }
 
         // 3. Legacy Win32 / GDI — targeted WM_CHAR, no focus steal.
@@ -10273,6 +10390,7 @@ pub fn build_registry_with_provider(
     let snapshots = state.snapshots.clone();
     let session_end_hook =
         cua_driver_core::session::register_scoped_session_end_hook(move |session_id| {
+            super::task_browser::retire(session_id);
             snapshots.retire_session_screenshots(session_id);
             cursor_registry.remove(session_id);
             crate::overlay::remove_cursor(session_id.to_owned());

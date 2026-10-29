@@ -34,6 +34,12 @@ pub(super) fn associated_executable(url: &str) -> Option<String> {
 }
 
 impl LaunchForegroundGuard {
+    pub(super) fn observe(prior: usize, expected: Vec<String>) -> Self {
+        Self {
+            watch: ForegroundWatch::start_locked_observing(prior, Target::launch(expected)),
+            reported_foreground: AtomicUsize::new(0),
+        }
+    }
     pub(super) fn start(prior: usize, expected: Vec<String>) -> Self {
         // Shell/Store registrations delegate to differently named window hosts.
         // These names identify foreground attribution only, never an app pid.

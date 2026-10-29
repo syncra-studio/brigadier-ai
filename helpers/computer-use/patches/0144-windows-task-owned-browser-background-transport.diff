@@ -1,0 +1,1421 @@
+Why: Give ordinary Chrome/Edge launches a lifecycle-owned isolated profile with a proven DevTools endpoint; open pages as inactive off-screen CDP windows placed behind the active window, keep the launch lock without restoring focus, disable Edge implicit account sign-in, and close the windowless browser after its last window.
+
+diff --git a/crates/platform-windows/src/browser_platform.rs b/crates/platform-windows/src/browser_platform.rs
+index 7f97cd61a..a171f4a71 100644
+--- a/crates/platform-windows/src/browser_platform.rs
++++ b/crates/platform-windows/src/browser_platform.rs
+@@ -83,6 +83,67 @@ impl WindowsBrowserPlatform {
+             browser_cursors: Arc::new(Mutex::new(BrowserCursorTracker::default())),
+         }
+     }
++
++    /// Resolve the exact Chrome/Edge installation named by a task launch,
++    /// retaining the same installation/write/signature checks as browser setup.
++    pub(crate) fn task_browser_executable(
++        &self,
++        requested: &str,
++    ) -> Result<Option<String>, BrowserRefusal> {
++        let name = std::path::Path::new(requested)
++            .file_stem()
++            .and_then(|s| s.to_str())
++            .unwrap_or("")
++            .to_ascii_lowercase();
++        if !matches!(name.as_str(), "chrome" | "msedge") {
++            return Ok(None);
++        }
++        let explicit = requested.contains(['\\', '/']);
++        let requested_real = if explicit {
++            Some(std::fs::canonicalize(requested).map_err(|error| {
++                refusal(
++                    BrowserRefusalCode::BrowserRouteUnavailable,
++                    format!("cannot resolve the requested browser executable: {error}"),
++                )
++            })?)
++        } else {
++            None
++        };
++        let context = browser_launch_context()?;
++        for (candidate, trusted_root, expected_cn, expected_org) in isolated_browser_candidates()? {
++            if candidate
++                .file_stem()
++                .and_then(|s| s.to_str())
++                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&name))
++            {
++                continue;
++            }
++            let installation =
++                launch_token_installation_write_access(&context, &candidate, &trusted_root);
++            let Some(executable) = installation.executable.filter(|_| installation.installed)
++            else {
++                continue;
++            };
++            if requested_real.as_ref().is_some_and(|path| {
++                plain_windows_path(&path.to_string_lossy())
++                    .is_none_or(|path| !path.eq_ignore_ascii_case(&executable))
++            }) {
++                continue;
++            }
++            if installation.write_access == InstallationWriteAccess::Untrusted
++                || !has_trusted_authenticode_identity(
++                    std::path::Path::new(&executable),
++                    expected_cn,
++                    expected_org,
++                )
++            {
++                continue;
++            }
++            return Ok(Some(executable));
++        }
++        Err(refusal(BrowserRefusalCode::BrowserRouteUnavailable,
++            "the requested Chrome/Edge installation could not be proven protected and vendor-signed; no task browser was launched"))
++    }
+ }
+ 
+ impl Default for WindowsBrowserPlatform {
+@@ -945,7 +1006,7 @@ fn canonical_discovered_websocket_url(url: &str, expected_port: u16) -> Option<S
+         })
+ }
+ 
+-fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
++pub(crate) fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
+     let handle =
+         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|_| {
+             refusal(
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index 3dd41a3f4..137f38bf9 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -53,6 +53,7 @@ struct Watch {
+     first_input: AtomicU64,
+     input_generation: u64,
+     hold_lock: bool,
++    restore_allowed: bool,
+     started: Instant,
+     cancelled: AtomicBool,
+     target: Target,
+@@ -160,12 +161,14 @@ impl Watch {
+         if !target {
+             return;
+         }
+-        if policy::may_hand_back(
+-            prior_valid,
+-            input_unchanged,
+-            target,
+-            unsafe { GetForegroundWindow() } == event_hwnd,
+-        ) {
++        if self.restore_allowed
++            && policy::may_hand_back(
++                prior_valid,
++                input_unchanged,
++                target,
++                unsafe { GetForegroundWindow() } == event_hwnd,
++            )
++        {
+             unsafe {
+                 super::hand_back_foreground(prior, event_hwnd, || {
+                     !self.user_active.load(Ordering::Acquire)
+@@ -291,6 +294,22 @@ impl ForegroundWatch {
+     /// `hold_lock` keeps other processes from taking the front for the whole
+     /// watch, not just the call; it is lifted at the user's first own input.
+     pub(crate) fn start(prior: usize, target: Target, hold_lock: bool) -> Self {
++        Self::start_mode(prior, target, hold_lock, true)
++    }
++
++    /// Records input/event evidence without acquiring a lock or restoring a
++    /// window. Used by transports which must not manipulate native focus.
++    pub(crate) fn start_observing(prior: usize, target: Target) -> Self {
++        Self::start_mode(prior, target, false, false)
++    }
++
++    /// Holds the activation-prevention lock like [`Self::start`] (lifted at
++    /// the user's first own input) but never restores a window.
++    pub(crate) fn start_locked_observing(prior: usize, target: Target) -> Self {
++        Self::start_mode(prior, target, true, false)
++    }
++
++    fn start_mode(prior: usize, target: Target, hold_lock: bool, restore_allowed: bool) -> Self {
+         let mut live = LIVE.lock().unwrap();
+         live.retain(|entry| {
+             entry
+@@ -301,6 +320,8 @@ impl ForegroundWatch {
+         for entry in live.iter() {
+             if let Some(watch) = entry.watch.upgrade() {
+                 if watch.prior == prior
++                    && watch.restore_allowed == restore_allowed
++                    && watch.hold_lock == hold_lock
+                     && watch.target == target
+                     && matches!(target, Target::Processes(_, _))
+                     && watch.started.elapsed() < Duration::from_secs(20)
+@@ -326,6 +347,7 @@ impl ForegroundWatch {
+             first_input: AtomicU64::new(0),
+             input_generation: super::foreground_generation(),
+             hold_lock,
++            restore_allowed,
+             started: Instant::now(),
+             cancelled: AtomicBool::new(false),
+             target,
+@@ -442,7 +464,7 @@ impl ForegroundWatch {
+         if self.requests.send(reply).is_ok() {
+             if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
+             {
+-                let (note, failed) = observation.report();
++                let (note, failed) = self.describe(observation);
+                 return (note, failed, foreground);
+             }
+         }
+@@ -450,9 +472,20 @@ impl ForegroundWatch {
+         let foreground = unsafe { GetForegroundWindow() }.0 as usize;
+         observation.restored = foreground == self.watch.prior;
+         observation.monitoring = false;
+-        let (note, failed) = observation.report();
++        let (note, failed) = self.describe(observation);
+         (note, failed, foreground)
+     }
++
++    fn describe(&self, observation: policy::Observation) -> (&'static str, bool) {
++        if self.watch.restore_allowed {
++            return observation.report();
++        }
++        if observation.activated || observation.uncertain_broker {
++            ("Windows reported that an app window became active during this launch. This launch only observes activation and never switches windows back, so whether your window stayed active is unconfirmed.", true)
++        } else {
++            ("No app activation was recorded before this reply. Activation stays observed but is never reversed, and this is not a guarantee against a later flash.", true)
++        }
++    }
+ }
+ 
+ impl Drop for ForegroundWatch {
+diff --git a/crates/platform-windows/src/tools/chromium_text.rs b/crates/platform-windows/src/tools/chromium_text.rs
+index 0c6f675dd..f398efe8d 100644
+--- a/crates/platform-windows/src/tools/chromium_text.rs
++++ b/crates/platform-windows/src/tools/chromium_text.rs
+@@ -448,7 +448,7 @@ mod tests {
+ 
+     #[tokio::test]
+     async fn empty_input_never_enters_a_desktop_route_or_deletes_selection() {
+-        let result = insert(0, 0, None, "").await;
++        let result = insert(0, 0, None, "", "test").await;
+         assert_ne!(result.is_error, Some(true));
+         assert_eq!(result.structured_content.unwrap()["characters"], 0);
+     }
+@@ -623,6 +623,7 @@ pub(super) async fn insert(
+     hwnd: u64,
+     retained: Option<RetainedElement>,
+     text: &str,
++    lifecycle: &str,
+ ) -> ToolResult {
+     if text.is_empty() {
+         let record = ActionExecutionRecord::builder(
+@@ -647,7 +648,12 @@ pub(super) async fn insert(
+             .lock_owned()
+             .await,
+     );
+-    let _guard = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
++    let prior =
++        unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as usize;
++    let _observer = crate::input::inject::foreground_watch::ForegroundWatch::start_observing(
++        prior,
++        crate::input::inject::foreground_watch::Target::Processes(vec![pid], vec![hwnd as usize]),
++    );
+     let generation = crate::input::inject::foreground_generation();
+     let mut attempted = false;
+     let result = tokio::time::timeout(Duration::from_secs(20), async {
+@@ -656,7 +662,10 @@ pub(super) async fn insert(
+         let platform = WindowsBrowserPlatform::default();
+         let fingerprint = platform.process_fingerprint(pid.into()).await.map_err(|e| anyhow!(e.message))?;
+         let native = platform.native_window(pid.into(), hwnd).await.map_err(|e| anyhow!(e.message))?;
+-        let endpoint = platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?
++        let endpoint = match super::task_browser::endpoint_at_use(pid,lifecycle).await? {
++            Some(endpoint)=>Some(endpoint),
++            None=>platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?,
++        }
+             .context("this browser has no uniquely owned DevTools endpoint; the native Chromium text path would require application focus")?;
+         static POOL: OnceLock<CdpPool> = OnceLock::new();
+         let conn = POOL.get_or_init(CdpPool::new).get(&endpoint.ws_url).await?;
+@@ -700,6 +709,7 @@ pub(super) async fn insert(
+             { bail!("the browser identity/window or physical input changed before insertion"); }
+             let current = state(&conn, session, object, None).await?;
+             if !matches_before(&current, &field) || current["focused"] != true { bail!("the exact field or selection changed before insertion"); }
++            super::task_browser::endpoint_at_use(pid,lifecycle).await?;
+             attempted = true;
+             conn.call(Some(session), "Input.insertText", json!({"text":text})).await?;
+             let mut landed = false;
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 148805c8d..766ebeaa2 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -1947,7 +1947,7 @@ impl Tool for GetWindowStateTool {
+ ///
+ /// Args are returned trimmed; their internal quoting is preserved as-is so
+ /// `--profile-directory="Profile 2"` survives.
+-fn split_launchable_target(s: &str) -> (String, String) {
++pub(super) fn split_launchable_target(s: &str) -> (String, String) {
+     let trimmed = s.trim();
+     if trimmed.is_empty() {
+         return (String::new(), String::new());
+@@ -2595,8 +2595,62 @@ impl Tool for LaunchAppTool {
+         {
+             inject_chromium_anti_throttling_flags(&mut extra_args);
+         }
+-        let urls_in_arguments =
+-            super::browser_target::urls_belong_to_app(resolved_target.is_some(), !urls.is_empty());
++        // Caller-selected profiles opt out. Internal transport flags are added
++        // only after external debug-argument rejection and exclusive ownership.
++        let task_lifecycle = match super::task_browser::lifecycle(&args) {
++            Ok(key) => key,
++            Err(error) => return ToolResult::error(format!("No app was launched: {error}")),
++        };
++        let task_profile = if aumid_for_uwp.is_none() {
++            if let Some(target) = resolved_target.clone() {
++                let caller_args = extra_args.clone();
++                let key = task_lifecycle.clone();
++                let new_instance = args
++                    .get("creates_new_application_instance")
++                    .and_then(Value::as_bool)
++                    .unwrap_or(false);
++                match tokio::task::spawn_blocking(move || {
++                    super::task_browser::prepare(&target, &caller_args, &key, new_instance)
++                })
++                .await
++                {
++                    Ok(Ok(profile)) => profile,
++                    Ok(Err(error)) => {
++                        return ToolResult::error(format!("No app was launched: {error}"))
++                    }
++                    Err(error) => {
++                        return ToolResult::error(format!(
++                            "Task-browser preparation unavailable; no app was launched: {error}"
++                        ))
++                    }
++                }
++            } else {
++                None
++            }
++        } else {
++            None
++        };
++        if let Some(profile) = task_profile.as_ref() {
++            if let Some(pid) = profile.known_pid() {
++                if let Err(error) = profile.confirm(pid).await {
++                    return ToolResult::error(format!("The existing task-browser transport could not be re-proven: {error}. No new launch was sent."));
++                }
++            }
++            resolved_target = Some(profile.executable.clone());
++            if let Some(position) = super::task_browser::offscreen_argument(&extra_args) {
++                extra_args.push(position);
++            }
++            extra_args.extend(profile.arguments());
++            for feature in profile.disabled_features() {
++                super::task_browser::disable_feature(&mut extra_args, feature);
++            }
++        }
++        // Task browsers open their pages through the proven endpoint instead.
++        let urls_in_arguments = task_profile.is_none()
++            && super::browser_target::urls_belong_to_app(
++                resolved_target.is_some(),
++                !urls.is_empty(),
++            );
+         if urls_in_arguments {
+             extra_args.extend(urls.iter().map(|url| {
+                 super::browser_target::launch_argument(
+@@ -2635,10 +2689,14 @@ impl Tool for LaunchAppTool {
+             let (file, _) = split_launchable_target(target);
+             super::launch_policy::fresh_window_argument(&file).is_some()
+         });
+-        if let Some(flag) = resolved_target.as_deref().and_then(|target| {
+-            let (file, _) = split_launchable_target(target);
+-            super::launch_policy::fresh_window_argument(&file)
+-        }) {
++        if let Some(flag) = resolved_target
++            .as_deref()
++            .filter(|_| task_profile.is_none())
++            .and_then(|target| {
++                let (file, _) = split_launchable_target(target);
++                super::launch_policy::fresh_window_argument(&file)
++            })
++        {
+             if !extra_args.iter().any(|arg| arg == flag) {
+                 extra_args.insert(0, flag.into());
+             }
+@@ -2704,12 +2762,14 @@ impl Tool for LaunchAppTool {
+         // Strict no-activation is available only for the desktop launch path.
+         // UWP activation is broker-controlled and retains its existing
+         // restore-after-activation behavior.
+-        let mut foreground_lock =
+-            if (start_minimized || direct_task_manager) && aumid_for_uwp.is_none() {
+-                Some(crate::input::ForegroundLockGuard::acquire())
+-            } else {
+-                None
+-            };
++        let mut foreground_lock = if (start_minimized || direct_task_manager)
++            && aumid_for_uwp.is_none()
++            && task_profile.is_none()
++        {
++            Some(crate::input::ForegroundLockGuard::acquire())
++        } else {
++            None
++        };
+         if foreground_lock
+             .as_ref()
+             .is_some_and(|guard| !guard.acquired())
+@@ -2743,10 +2803,17 @@ impl Tool for LaunchAppTool {
+             }
+         }
+         let foreground_guard = restore_foreground.then(|| {
+-            super::launch_focus::LaunchForegroundGuard::start(
+-                foreground_before_addr,
+-                foreground_targets,
+-            )
++            if task_profile.is_some() {
++                super::launch_focus::LaunchForegroundGuard::observe(
++                    foreground_before_addr,
++                    foreground_targets,
++                )
++            } else {
++                super::launch_focus::LaunchForegroundGuard::start(
++                    foreground_before_addr,
++                    foreground_targets,
++                )
++            }
+         });
+ 
+         // Branch: AUMID activation if we resolved one; else legacy
+@@ -2786,7 +2853,7 @@ impl Tool for LaunchAppTool {
+                 Err(message) => return ToolResult::error(message),
+             };
+             fresh_document_cleanup.launched();
+-            let urls_clone = if urls_in_arguments {
++            let urls_clone = if urls_in_arguments || task_profile.is_some() {
+                 Vec::new()
+             } else {
+                 urls.clone()
+@@ -2794,13 +2861,14 @@ impl Tool for LaunchAppTool {
+             let target_for_shell = target_file_opt.clone();
+             let extra_for_shell = extra_joined.clone();
+             let n_show_for_shell = n_show;
+-            let direct_background_exe = (start_minimized || direct_task_manager)
+-                && target_for_shell.as_deref().is_some_and(|target| {
+-                    std::path::Path::new(target).is_file()
+-                        && std::path::Path::new(target)
+-                            .extension()
+-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+-                });
++            let direct_background_exe =
++                (start_minimized || direct_task_manager || task_profile.is_some())
++                    && target_for_shell.as_deref().is_some_and(|target| {
++                        std::path::Path::new(target).is_file()
++                            && std::path::Path::new(target)
++                                .extension()
++                                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
++                    });
+             // Bound the shell launch with a timeout. An unregistered protocol
+             // or file association makes `ShellExecuteExW` block on a modal shell
+             // dialog ("you'll need a new app to open this …") on the *session*
+@@ -2986,6 +3054,31 @@ impl Tool for LaunchAppTool {
+             }
+         };
+ 
++        let pid = if let Some(profile) = task_profile.as_ref() {
++            match profile.confirm(pid).await {
++                Ok(process)=>process.pid as u32,
++                Err(error)=>return ToolResult::error(format!("Task-owned browser launch was requested (pid {pid}), but its transport is unconfirmed: {error}. No other profile was used and no launch retry was sent. Inspect only this task-owned process before retrying."))
++                    .with_structured(json!({"code":"task_browser_transport_unconfirmed","launched_pid":pid,"windows":[]})),
++            }
++        } else {
++            pid
++        };
++        if let Some(profile) = task_profile.as_ref() {
++            let opened = profile.open_pages(&urls).await;
++            // A windowless task browser is closed by the watcher either way.
++            profile.watch_lifetime(pid);
++            if let Err(error) = opened {
++                return ToolResult::error(format!("Task-owned browser pid {pid} started, but its page window could not be opened through its proven endpoint: {error}. No other route was attempted. Inspect list_windows before retrying."))
++                    .with_structured(json!({"code":"task_browser_page_unopened","launched_pid":pid,"windows":[]}));
++            }
++        }
++        let placement = match task_profile.as_ref() {
++            Some(_) => {
++                Some(super::task_browser::place_new_windows(pid, &preexisting_windows).await)
++            }
++            None => None,
++        };
++
+         // Resolve the pid's windows so the caller can skip a list_windows
+         // round-trip — same approach as Swift's `resolveWindows`. Retry
+         // 5×200ms; Win32 window registration can lag the launch.
+@@ -3045,7 +3138,12 @@ impl Tool for LaunchAppTool {
+         let mut url_confirmation_note = String::new();
+         if web_launch {
+             let executable = target_file_opt.as_deref().unwrap_or("");
+-            let url = urls.last().expect("web launch has at least one URL");
++            let url = if task_profile.is_some() {
++                urls.first()
++            } else {
++                urls.last()
++            }
++            .expect("web launch has at least one URL");
+             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+             let mut found = None;
+             for _ in 0..30 {
+@@ -3058,6 +3156,7 @@ impl Tool for LaunchAppTool {
+                     url,
+                     remaining,
+                     preexisting_windows.clone(),
++                    task_profile.as_ref().map(|_| pid),
+                 )
+                 .await
+                 {
+@@ -3092,7 +3191,11 @@ impl Tool for LaunchAppTool {
+                     .collect();
+                 let windows: Vec<_> = crate::win32::list_windows_via_win32(None)
+                     .into_iter()
+-                    .filter(|w| pids.contains(&w.pid) && !preexisting_windows.contains(&w.hwnd))
++                    .filter(|w| {
++                        pids.contains(&w.pid)
++                            && task_profile.as_ref().is_none_or(|_| w.pid == pid)
++                            && !preexisting_windows.contains(&w.hwnd)
++                    })
+                     .collect();
+                 if let Some(window) = windows.first().filter(|_| windows.len() == 1) {
+                     resolved_pid = window.pid;
+@@ -3130,7 +3233,7 @@ impl Tool for LaunchAppTool {
+                     Err(_) => break,
+                 }
+             }
+-            if windows_json.is_empty() {
++            if windows_json.is_empty() && task_profile.is_none() {
+                 return ToolResult::text(format!("Launch requested for {display}. Notepad has not exposed the fresh document {} as its selected tab. Opening is unconfirmed; no restored document window is returned. Inspect list_windows before retrying.", path.display()))
+                     .with_structured(json!({"code": "fresh_document_unconfirmed", "launch_confirmed": false, "launched_pid": pid, "document_path": path.to_string_lossy(), "windows": []}));
+             }
+@@ -3469,12 +3572,22 @@ impl Tool for LaunchAppTool {
+             .map(|guard| guard.report())
+             .unwrap_or(("Foreground preservation was not confirmed.", true));
+         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
++        if task_profile.is_some() {
++            summary.push_str(
++                " Opened in a lifecycle-owned browser profile; background text transport is ready.",
++            );
++            if let Some(placement) = placement.as_ref() {
++                summary.push_str(placement.note());
++            }
++        }
+         summary.push_str(&restored_content_note);
+         summary.push_str(&url_confirmation_note);
+         if let Some(url) = confirmed_url.as_ref() {
+             summary.push_str(&format!(" Confirmed visible URL: {url}."));
+         }
+-        if confirmed_url.is_some() && urls.len() > 1 {
++        if confirmed_url.is_some() && urls.len() > 1 && task_profile.is_some() {
++            summary.push_str(" Only the first requested URL was confirmed in the new window; the other requested URLs were opened as background tabs but were not verified.");
++        } else if confirmed_url.is_some() && urls.len() > 1 {
+             summary.push_str(" Only the last requested URL was confirmed in the visible tab; the other requested URLs were passed to the browser but their tabs were not verified.");
+         }
+         if fresh_browser_launch && windows_json.is_empty() {
+@@ -5111,7 +5224,11 @@ impl Tool for TypeTextTool {
+         if crate::input::is_chromium_target_window(hwnd)
+             || crate::input::has_chromium_descendant(hwnd)
+         {
+-            return super::chromium_text::insert(pid, hwnd, admitted, &text).await;
++            let key = match super::task_browser::lifecycle(&args) {
++                Ok(key) => key,
++                Err(error) => return ToolResult::error(error.to_string()),
++            };
++            return super::chromium_text::insert(pid, hwnd, admitted, &text, &key).await;
+         }
+ 
+         // 3. Legacy Win32 / GDI — targeted WM_CHAR, no focus steal.
+@@ -10273,6 +10390,7 @@ pub fn build_registry_with_provider(
+     let snapshots = state.snapshots.clone();
+     let session_end_hook =
+         cua_driver_core::session::register_scoped_session_end_hook(move |session_id| {
++            super::task_browser::retire(session_id);
+             snapshots.retire_session_screenshots(session_id);
+             cursor_registry.remove(session_id);
+             crate::overlay::remove_cursor(session_id.to_owned());
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 69cb5bc45..84e4cf650 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -204,6 +204,7 @@ pub(super) async fn window_showing_url(
+     url: &str,
+     timeout: std::time::Duration,
+     preexisting_windows: std::collections::HashSet<u64>,
++    owner_pid: Option<u32>,
+ ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+     let executable = super::launch_policy::executable_name(executable);
+     let url = url.to_owned();
+@@ -217,7 +218,8 @@ pub(super) async fn window_showing_url(
+                 let browser_pids: std::collections::HashSet<_> = crate::win32::list_processes()
+                     .into_iter()
+                     .filter(|process| {
+-                        super::launch_policy::executable_name(&process.name) == executable
++                        owner_pid.is_none_or(|pid| process.pid == pid)
++                            && super::launch_policy::executable_name(&process.name) == executable
+                     })
+                     .map(|process| process.pid)
+                     .collect();
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+index 545c6431e..dfeb4f4be 100644
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -34,6 +34,12 @@ pub(super) fn associated_executable(url: &str) -> Option<String> {
+ }
+ 
+ impl LaunchForegroundGuard {
++    pub(super) fn observe(prior: usize, expected: Vec<String>) -> Self {
++        Self {
++            watch: ForegroundWatch::start_locked_observing(prior, Target::launch(expected)),
++            reported_foreground: AtomicUsize::new(0),
++        }
++    }
+     pub(super) fn start(prior: usize, expected: Vec<String>) -> Self {
+         // Shell/Store registrations delegate to differently named window hosts.
+         // These names identify foreground attribution only, never an app pid.
+diff --git a/crates/platform-windows/src/tools/mod.rs b/crates/platform-windows/src/tools/mod.rs
+index cf46fb045..a47e2b922 100644
+--- a/crates/platform-windows/src/tools/mod.rs
++++ b/crates/platform-windows/src/tools/mod.rs
+@@ -23,6 +23,8 @@ mod launch_termination;
+ pub(crate) mod page;
+ #[cfg(target_os = "windows")]
+ pub(crate) mod page_bookmark;
++#[cfg(target_os = "windows")]
++mod task_browser;
+ // Pure title parsing for `page_bookmark`; ungated so its tests run on any host.
+ pub(crate) mod page_title_marker;
+ 
+diff --git a/crates/platform-windows/src/tools/task_browser.rs b/crates/platform-windows/src/tools/task_browser.rs
+new file mode 100644
+index 000000000..6188baff7
+--- /dev/null
++++ b/crates/platform-windows/src/tools/task_browser.rs
+@@ -0,0 +1,829 @@
++//! Windows task-browser ownership. No inbound attach, user-profile setup or
++//! recursive deletion. Only internally created, lifecycle-bound profiles get
++//! automatically generated DevTools arguments.
++use crate::browser_platform::WindowsBrowserPlatform;
++use anyhow::{anyhow, bail, Context, Result};
++use cua_driver_core::browser::types::{OwnedEndpoint, ProcessFingerprint};
++use cua_driver_core::browser::{parse_devtools_active_port, BrowserPlatform};
++use serde::{Deserialize, Serialize};
++use serde_json::{json, Value};
++use std::fs::{File, OpenOptions};
++use std::io::{Read, Seek, SeekFrom, Write};
++use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
++use std::os::windows::io::AsRawHandle;
++use std::path::{Path, PathBuf};
++use std::sync::{Arc, Mutex, OnceLock};
++use windows::Win32::Foundation::HANDLE;
++use windows::Win32::Storage::FileSystem::{
++    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
++    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
++};
++
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++struct DirectoryId {
++    volume: u32,
++    index: u64,
++    created: u64,
++}
++
++fn directory_id(file: &File) -> Result<DirectoryId> {
++    let mut info = BY_HANDLE_FILE_INFORMATION::default();
++    unsafe {
++        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info)?;
++    }
++    if info.dwFileAttributes & 0x400 != 0 {
++        bail!("task profile directory is a reparse point");
++    }
++    Ok(DirectoryId {
++        volume: info.dwVolumeSerialNumber,
++        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
++        created: (u64::from(info.ftCreationTime.dwHighDateTime) << 32)
++            | u64::from(info.ftCreationTime.dwLowDateTime),
++    })
++}
++
++fn reject_reparse_ancestors(path: &Path) -> Result<()> {
++    for ancestor in path.ancestors() {
++        if std::fs::symlink_metadata(ancestor)?.file_attributes() & 0x400 != 0 {
++            bail!("task browser profile ancestry contains a reparse point");
++        }
++    }
++    Ok(())
++}
++
++fn nonce() -> Result<String> {
++    let mut bytes = [0u8; 16];
++    getrandom::fill(&mut bytes).map_err(|e| anyhow!("ownership nonce unavailable: {e}"))?;
++    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
++}
++
++static RUNTIME: OnceLock<String> = OnceLock::new();
++static PROFILES: Mutex<Vec<Arc<Profile>>> = Mutex::new(Vec::new());
++
++pub(super) fn lifecycle(args: &Value) -> Result<String> {
++    if let Some(key) = cua_driver_core::tool_args::session_key(args) {
++        return Ok(key.into());
++    }
++    if RUNTIME.get().is_none() {
++        let _ = RUNTIME.set(nonce()?);
++    }
++    Ok(format!("runtime-{}", RUNTIME.get().unwrap()))
++}
++
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++struct Marker {
++    schema: String,
++    nonce: String,
++    lifecycle: String,
++    creator_pid: u32,
++    executable: String,
++    directory: DirectoryId,
++    process: Option<ProcessFingerprint>,
++    endpoint: Option<String>,
++    retired: bool,
++}
++
++pub(super) struct Profile {
++    pub(super) path: PathBuf,
++    pub(super) executable: String,
++    directory: Mutex<Option<File>>,
++    marker_file: Mutex<Option<File>>,
++    record: Mutex<Marker>,
++    watching: std::sync::atomic::AtomicBool,
++}
++
++impl Profile {
++    pub(super) fn known_pid(&self) -> Option<u32> {
++        self.record
++            .lock()
++            .unwrap()
++            .process
++            .as_ref()
++            .and_then(|p| u32::try_from(p.pid).ok())
++    }
++    fn verify(&self) -> Result<Marker> {
++        let expected = self.record.lock().unwrap().clone();
++        if expected.retired {
++            bail!("the task-browser lifecycle has ended");
++        }
++        reject_reparse_ancestors(&self.path)?;
++        let directory = self.directory.lock().unwrap();
++        if directory_id(
++            directory
++                .as_ref()
++                .context("task lifecycle directory handle ended")?,
++        )? != expected.directory
++        {
++            bail!("task profile directory identity changed");
++        }
++        let current = OpenOptions::new()
++            .access_mode(FILE_READ_ATTRIBUTES.0)
++            .share_mode(3)
++            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
++            .open(&self.path)?;
++        if directory_id(&current)? != expected.directory {
++            bail!("task profile path was replaced");
++        }
++        let mut file = self.marker_file.lock().unwrap();
++        let file = file
++            .as_mut()
++            .context("task lifecycle marker handle ended")?;
++        file.seek(SeekFrom::Start(0))?;
++        let mut bytes = Vec::new();
++        (&mut *file).take(65537).read_to_end(&mut bytes)?;
++        if bytes.len() > 65536 || serde_json::from_slice::<Marker>(&bytes)? != expected {
++            bail!("task-browser lifecycle/ownership marker changed");
++        }
++        Ok(expected)
++    }
++
++    fn persist(&self, next: Marker) -> Result<()> {
++        let bytes = serde_json::to_vec(&next)?;
++        let mut file = self.marker_file.lock().unwrap();
++        let file = file
++            .as_mut()
++            .context("task lifecycle marker handle ended")?;
++        file.seek(SeekFrom::Start(0))?;
++        file.set_len(0)?;
++        file.write_all(&bytes)?;
++        file.sync_data()?;
++        *self.record.lock().unwrap() = next;
++        Ok(())
++    }
++
++    pub(super) fn arguments(&self) -> Vec<String> {
++        vec![
++            super::browser_target::quote_argument(&format!(
++                "--user-data-dir={}",
++                self.path.display()
++            )),
++            "--remote-debugging-address=127.0.0.1".into(),
++            "--remote-debugging-port=0".into(),
++            "--no-first-run".into(),
++            "--no-default-browser-check".into(),
++            "--disable-background-mode".into(),
++            // No startup window means no startup activation request; pages
++            // open through the proven endpoint as inactive windows instead.
++            "--no-startup-window".into(),
++        ]
++    }
++
++    /// Open the requested pages as background targets through this profile's
++    /// proven endpoint: the first in a new, inactive, off-screen window, the
++    /// rest as background tabs. Chromium never requests activation for them.
++    pub(super) async fn open_pages(&self, urls: &[String]) -> Result<()> {
++        let record = self.verify()?;
++        let ws = record
++            .endpoint
++            .context("the task-browser endpoint has not been proven")?;
++        let conn = cua_driver_core::browser::cdp_ws::CdpConnection::connect(&ws).await?;
++        let (x, y) = offscreen_origin();
++        let (width, height) = default_window_size();
++        let first = urls
++            .first()
++            .map(|url| page_url(url))
++            .unwrap_or_else(|| "about:blank".into());
++        conn.call(
++            None,
++            "Target.createTarget",
++            json!({"url": first, "newWindow": true, "background": true,
++                   "left": x, "top": y, "width": width, "height": height}),
++        )
++        .await?;
++        for url in urls.iter().skip(1) {
++            conn.call(
++                None,
++                "Target.createTarget",
++                json!({"url": page_url(url), "background": true}),
++            )
++            .await?;
++        }
++        Ok(())
++    }
++
++    pub(super) async fn confirm(&self, launched_pid: u32) -> Result<ProcessFingerprint> {
++        let record = self.verify()?;
++        let platform = WindowsBrowserPlatform::default();
++        let root = record
++            .process
++            .as_ref()
++            .map(|p| p.pid)
++            .unwrap_or(i64::from(launched_pid));
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
++        loop {
++            let attempt: Result<_> = async {
++                let text = std::fs::read_to_string(self.path.join("DevToolsActivePort"))?;
++                let (port, ws_path) = parse_devtools_active_port(&text)
++                    .context("invalid private-profile endpoint file")?;
++                let expected = format!("ws://127.0.0.1:{port}{ws_path}");
++                let endpoint = if record.process.is_some() {
++                    platform
++                        .discover_owned_endpoint(root)
++                        .await
++                        .map_err(|e| anyhow!(e.message))?
++                } else {
++                    platform
++                        .discover_spawned_endpoint(root, &expected)
++                        .await
++                        .map_err(|e| anyhow!(e.message))?
++                }
++                .context("private endpoint is not process-owned")?;
++                if endpoint.ws_url != expected {
++                    bail!("profile endpoint differs from the process-owned endpoint");
++                }
++                let pid = endpoint
++                    .ownership
++                    .listener_pid
++                    .unwrap_or(endpoint.ownership.owner_pid);
++                let process = platform
++                    .process_fingerprint(pid)
++                    .await
++                    .map_err(|e| anyhow!(e.message))?;
++                if process.start_time.is_none()
++                    || process
++                        .executable
++                        .as_deref()
++                        .and_then(crate::browser_installation_path::plain_windows_path)
++                        .is_none_or(|exe| !exe.eq_ignore_ascii_case(&self.executable))
++                {
++                    bail!("private browser executable/lifetime proof failed");
++                }
++                if record.process.as_ref().is_some_and(|old| old != &process) {
++                    bail!("private browser process was replaced");
++                }
++                Ok((process, endpoint))
++            }
++            .await;
++            match attempt {
++                Ok((process, endpoint)) => {
++                    let mut next = record;
++                    next.process = Some(process.clone());
++                    next.endpoint = Some(endpoint.ws_url);
++                    self.persist(next)?;
++                    return Ok(process);
++                }
++                Err(error) if std::time::Instant::now() >= deadline => return Err(error),
++                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
++            }
++        }
++    }
++}
++
++/// Caller profile-selection arguments opt out. Never append debug flags to a
++/// caller-selected directory, even if its name resembles an owned profile.
++pub(super) fn explicit_profile(target: &str, args: &[String]) -> bool {
++    let all = std::iter::once(target).chain(args.iter().map(String::as_str));
++    all.flat_map(|s| s.split(|c: char| c.is_whitespace() || c == '"' || c == '\''))
++        .any(|s| {
++            s.starts_with("--user-data-dir")
++                || s.starts_with("--profile-directory")
++                || s == "--guest"
++                || s == "--incognito"
++        })
++}
++
++pub(super) fn prepare(
++    target: &str,
++    args: &[String],
++    key: &str,
++    new_instance: bool,
++) -> Result<Option<Arc<Profile>>> {
++    if explicit_profile(target, args) {
++        return Ok(None);
++    }
++    let (file, _) = super::impl_::split_launchable_target(target);
++    let Some(executable) = WindowsBrowserPlatform::default()
++        .task_browser_executable(&file)
++        .map_err(|e| anyhow!(e.message))?
++    else {
++        return Ok(None);
++    };
++    if !new_instance {
++        for profile in PROFILES.lock().unwrap().iter().rev() {
++            let record = profile.record.lock().unwrap().clone();
++            if record.lifecycle == key
++                && !record.retired
++                && profile.executable.eq_ignore_ascii_case(&executable)
++            {
++                // A live process is re-proven asynchronously before reuse below.
++                let living = record.process.as_ref().is_some_and(|process| {
++                    crate::browser_platform::process_identity(process.pid as u32).is_ok_and(
++                        |(start, exe)| {
++                            process.start_time == Some(start)
++                                && exe
++                                    .as_deref()
++                                    .and_then(crate::browser_installation_path::plain_windows_path)
++                                    .is_some_and(|exe| {
++                                        exe.eq_ignore_ascii_case(&profile.executable)
++                                    })
++                        },
++                    )
++                });
++                if living && profile.verify().is_ok() {
++                    return Ok(Some(profile.clone()));
++                }
++            }
++        }
++    }
++    // The driver's own profile root (set by the host), else per-user state.
++    let root = std::env::var_os("CUA_DRIVER_BROWSER_PROFILE_ROOT")
++        .filter(|root| !root.is_empty())
++        .map(PathBuf::from)
++        .or_else(|| {
++            std::env::var_os("LOCALAPPDATA").map(|local| {
++                PathBuf::from(local)
++                    .join("CuaDriver")
++                    .join("BrowserProfiles")
++            })
++        })
++        .context("no driver-owned browser profile directory is configured")?
++        .join("task-browsers");
++    std::fs::create_dir_all(&root)?;
++    reject_reparse_ancestors(&root)?;
++    let id = nonce()?;
++    let path = root.join(format!("task-{id}"));
++    std::fs::create_dir(&path)?;
++    let directory = OpenOptions::new()
++        .access_mode(FILE_READ_ATTRIBUTES.0)
++        .share_mode(3)
++        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
++        .open(&path)?;
++    let marker = Marker {
++        schema: "brigadier-task-browser-v1".into(),
++        nonce: id,
++        lifecycle: key.into(),
++        creator_pid: std::process::id(),
++        executable: executable.clone(),
++        directory: directory_id(&directory)?,
++        process: None,
++        endpoint: None,
++        retired: false,
++    };
++    let marker_file = OpenOptions::new()
++        .read(true)
++        .write(true)
++        .create_new(true)
++        .share_mode(1)
++        .open(path.join("brigadier-task-owner.json"))?;
++    let profile = Arc::new(Profile {
++        path,
++        executable,
++        directory: Mutex::new(Some(directory)),
++        marker_file: Mutex::new(Some(marker_file)),
++        record: Mutex::new(marker.clone()),
++        watching: std::sync::atomic::AtomicBool::new(false),
++    });
++    profile.persist(marker)?;
++    PROFILES.lock().unwrap().push(profile.clone());
++    // Retain an exact audit manifest; no failure/drop/session path deletes it.
++    if let Some(home) = std::env::var_os("CUA_DRIVER_STATE_DIR") {
++        let mut audit = OpenOptions::new()
++            .create(true)
++            .append(true)
++            .open(PathBuf::from(home).join("task-browser-profiles.jsonl"))?;
++        writeln!(
++            audit,
++            "{}",
++            json!({"profile":profile.path,"owner":profile.record.lock().unwrap().clone()})
++        )?;
++    }
++    Ok(Some(profile))
++}
++
++pub(super) fn retire(key: &str) {
++    for profile in PROFILES.lock().unwrap().iter() {
++        let record = profile.record.lock().unwrap().clone();
++        if record.lifecycle == key {
++            let mut next = record;
++            next.retired = true;
++            let _ = profile.persist(next);
++            profile.marker_file.lock().unwrap().take();
++            profile.directory.lock().unwrap().take();
++        }
++    }
++}
++
++/// Known task profiles cannot be attached by another lifecycle. Ordinary
++/// pre-existing addressed browsers are not set up or redirected here.
++pub(super) async fn endpoint_at_use(pid: u32, key: &str) -> Result<Option<OwnedEndpoint>> {
++    let profiles = PROFILES.lock().unwrap().clone();
++    for profile in profiles {
++        let record = profile.record.lock().unwrap().clone();
++        if record
++            .process
++            .as_ref()
++            .is_none_or(|p| p.pid != i64::from(pid))
++        {
++            continue;
++        }
++        if record.lifecycle != key || record.retired {
++            bail!("the task browser belongs to a different or ended lifecycle");
++        }
++        profile.verify()?;
++        let platform = WindowsBrowserPlatform::default();
++        let current = platform
++            .process_fingerprint(pid.into())
++            .await
++            .map_err(|e| anyhow!(e.message))?;
++        if Some(&current) != record.process.as_ref() {
++            bail!("the task browser process identity changed");
++        }
++        let endpoint = platform
++            .discover_owned_endpoint(pid.into())
++            .await
++            .map_err(|e| anyhow!(e.message))?
++            .context("task endpoint no longer owned")?;
++        if Some(&endpoint.ws_url) != record.endpoint.as_ref() {
++            bail!("task endpoint changed; no arbitrary attach attempted");
++        }
++        let text = std::fs::read_to_string(profile.path.join("DevToolsActivePort"))?;
++        let (port, path) =
++            parse_devtools_active_port(&text).context("private endpoint file no longer valid")?;
++        if endpoint.ws_url != format!("ws://127.0.0.1:{port}{path}") {
++            bail!("private-profile endpoint file changed");
++        }
++        profile.verify()?;
++        return Ok(Some(endpoint));
++    }
++    Ok(None)
++}
++
++/// Off-screen origin for new task-browser windows: beyond every monitor, so
++/// the new top-level window covers nothing until it is placed.
++fn offscreen_origin() -> (i32, i32) {
++    use windows::Win32::UI::WindowsAndMessaging::{
++        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
++        SM_YVIRTUALSCREEN,
++    };
++    let (x, y, w, h) = unsafe {
++        (
++            GetSystemMetrics(SM_XVIRTUALSCREEN),
++            GetSystemMetrics(SM_YVIRTUALSCREEN),
++            GetSystemMetrics(SM_CXVIRTUALSCREEN),
++            GetSystemMetrics(SM_CYVIRTUALSCREEN),
++        )
++    };
++    (x + w + 3000, y + h + 3000)
++}
++
++/// Command-line launches accepted local paths; CDP targets need URLs.
++fn page_url(value: &str) -> String {
++    let bytes = value.as_bytes();
++    let drive = bytes.len() >= 3
++        && bytes[0].is_ascii_alphabetic()
++        && bytes[1] == b':'
++        && matches!(bytes[2], b'/' | b'\\');
++    let unc = value.starts_with(r"\\") || value.starts_with("//");
++    if !drive && !unc {
++        return value.to_owned();
++    }
++    let path = value.replace('\\', "/");
++    let mut url = String::from(if drive { "file:///" } else { "file:" });
++    for byte in path.bytes() {
++        if byte.is_ascii_alphanumeric() || b"/:-._~!$&'()*+,;=@".contains(&byte) {
++            url.push(byte as char);
++        } else {
++            url.push_str(&format!("%{byte:02X}"));
++        }
++    }
++    url
++}
++
++/// Caller window-geometry flags opt out of off-screen placement.
++pub(super) fn offscreen_argument(caller_args: &[String]) -> Option<String> {
++    let explicit = caller_args.iter().any(|arg| {
++        [
++            "--window-position",
++            "--start-maximized",
++            "--start-fullscreen",
++            "--kiosk",
++            "--app",
++        ]
++        .iter()
++        .any(|flag| arg.contains(flag))
++    });
++    (!explicit).then(|| {
++        let (x, y) = offscreen_origin();
++        format!("--window-position={x},{y}")
++    })
++}
++
++/// How the launch's new windows reached the screen.
++#[derive(Default)]
++pub(super) struct Placement {
++    pub(super) placed: Vec<u64>,
++    pub(super) behind_active: bool,
++    pub(super) on_screen_before_placement: bool,
++}
++
++impl Placement {
++    pub(super) fn note(&self) -> &'static str {
++        if self.placed.is_empty() {
++            " No new browser window was found to place; one may still be off-screen. Inspect list_windows."
++        } else if self.on_screen_before_placement {
++            " A new browser window appeared on screen before it could be placed; it was then moved behind your active window without being activated."
++        } else if self.behind_active {
++            " The browser window opened off-screen and was then placed directly behind your active window, without being activated or covering it."
++        } else {
++            " The browser window opened off-screen and was then placed at the back of the window stack, without being activated."
++        }
++    }
++}
++
++/// Move every new top-level window of the task browser on screen behind the
++/// user's active window, one SetWindowPos each. Never activates, never moves
++/// or restacks the user's window, and never touches a pre-existing window.
++pub(super) async fn place_new_windows(
++    pid: u32,
++    preexisting: &std::collections::HashSet<u64>,
++) -> Placement {
++    let preexisting = preexisting.clone();
++    tokio::task::spawn_blocking(move || {
++        let mut placement = Placement::default();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
++        let mut quiet_since = None;
++        loop {
++            let fresh: Vec<_> = crate::win32::list_windows_via_win32(Some(pid))
++                .into_iter()
++                .filter(|w| {
++                    w.pid == pid
++                        && !w.minimized
++                        && is_browser_frame(w.hwnd)
++                        && !preexisting.contains(&w.hwnd)
++                        && !placement.placed.contains(&w.hwnd)
++                })
++                .collect();
++            for window in &fresh {
++                if let Some(behind) = place_one(window, &mut placement) {
++                    placement.placed.push(window.hwnd);
++                    placement.behind_active |= behind;
++                }
++            }
++            let now = std::time::Instant::now();
++            if !placement.placed.is_empty() && fresh.is_empty() {
++                let since = *quiet_since.get_or_insert(now);
++                if now.duration_since(since) >= std::time::Duration::from_millis(150) {
++                    break;
++                }
++            } else {
++                quiet_since = None;
++            }
++            if now >= deadline {
++                break;
++            }
++            std::thread::sleep(std::time::Duration::from_millis(15));
++        }
++        placement
++    })
++    .await
++    .unwrap_or_default()
++}
++
++/// Returns `Some(true)` when placed directly behind the active window,
++/// `Some(false)` when placed at the back of the stack.
++fn place_one(window: &crate::win32::WindowInfo, placement: &mut Placement) -> Option<bool> {
++    use windows::Win32::Foundation::HWND;
++    use windows::Win32::Graphics::Gdi::{
++        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
++    };
++    use windows::Win32::UI::WindowsAndMessaging::{
++        GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId, SetWindowPos,
++        GWL_EXSTYLE, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
++        WS_EX_TOPMOST,
++    };
++    let hwnd = HWND(window.hwnd as *mut _);
++    let (offscreen_x, offscreen_y) = offscreen_origin();
++    let offscreen = window.x >= offscreen_x - 100 || window.y >= offscreen_y - 100;
++    let active = unsafe { GetForegroundWindow() };
++    let mut active_pid = 0;
++    unsafe { GetWindowThreadProcessId(active, Some(&mut active_pid)) };
++    let mut class = [0u16; 64];
++    let len = unsafe { GetClassNameW(active, &mut class) }.max(0) as usize;
++    let class = String::from_utf16_lossy(&class[..len]);
++    let topmost = unsafe { GetWindowLongW(active, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
++    // Behind the user's window when there is one; otherwise behind everything.
++    let behind_active = !active.is_invalid()
++        && active_pid != window.pid
++        && !topmost
++        && !matches!(
++            class.as_str(),
++            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
++        );
++    let after = if behind_active { active } else { HWND_BOTTOM };
++    let result = if offscreen {
++        let monitor = unsafe { MonitorFromWindow(active, MONITOR_DEFAULTTOPRIMARY) };
++        let mut info = MONITORINFO {
++            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
++            ..Default::default()
++        };
++        if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
++            return None;
++        }
++        let work = info.rcWork;
++        let width = window.width.min(work.right - work.left - 32).max(1);
++        let height = window.height.min(work.bottom - work.top - 32).max(1);
++        unsafe {
++            SetWindowPos(
++                hwnd,
++                after,
++                work.left + 16,
++                work.top + 16,
++                width,
++                height,
++                SWP_NOACTIVATE | SWP_NOOWNERZORDER,
++            )
++        }
++    } else {
++        // Already on screen (the browser ignored the position): end any
++        // covering now without moving it.
++        placement.on_screen_before_placement = true;
++        unsafe {
++            SetWindowPos(
++                hwnd,
++                after,
++                0,
++                0,
++                0,
++                0,
++                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_NOMOVE,
++            )
++        }
++    };
++    result.ok().map(|_| behind_active)
++}
++
++/// A normal window size inside the primary monitor's work area.
++fn default_window_size() -> (i32, i32) {
++    use windows::Win32::Foundation::RECT;
++    use windows::Win32::UI::WindowsAndMessaging::{
++        SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
++    };
++    let mut work = RECT::default();
++    let ok = unsafe {
++        SystemParametersInfoW(
++            SPI_GETWORKAREA,
++            0,
++            Some(&mut work as *mut RECT as *mut _),
++            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
++        )
++    }
++    .is_ok();
++    if !ok {
++        return (1280, 800);
++    }
++    (
++        (work.right - work.left - 32).clamp(640, 1280),
++        (work.bottom - work.top - 32).clamp(480, 900),
++    )
++}
++
++/// Merge `feature` into the one `--disable-features=` switch (Chromium
++/// honours only the last such switch), or add one.
++pub(super) fn disable_feature(extra_args: &mut Vec<String>, feature: &str) {
++    if let Some(index) = extra_args
++        .iter()
++        .rposition(|arg| arg.starts_with("--disable-features="))
++    {
++        if !extra_args[index]
++            .trim_start_matches("--disable-features=")
++            .split(',')
++            .any(|existing| existing.trim() == feature)
++        {
++            extra_args[index] = format!("{},{feature}", extra_args[index]);
++        }
++    } else {
++        extra_args.push(format!("--disable-features={feature}"));
++    }
++}
++
++impl Profile {
++    /// Edge implicitly signs a new profile into the Windows user's account,
++    /// which would sync the user's own data into a task-controlled profile.
++    pub(super) fn disabled_features(&self) -> &'static [&'static str] {
++        let edge = Path::new(&self.executable)
++            .file_stem()
++            .is_some_and(|stem| stem.eq_ignore_ascii_case("msedge"));
++        if edge {
++            &["msImplicitSignin"]
++        } else {
++            &[]
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn disabled_features_merge_into_the_single_switch() {
++        let mut args = vec![
++            "--disable-features=CalculateNativeWinOcclusion".to_owned(),
++            "--new-window".to_owned(),
++        ];
++        disable_feature(&mut args, "msImplicitSignin");
++        disable_feature(&mut args, "msImplicitSignin");
++        assert_eq!(
++            args[0],
++            "--disable-features=CalculateNativeWinOcclusion,msImplicitSignin"
++        );
++        let mut none = vec!["--new-window".to_owned()];
++        disable_feature(&mut none, "msImplicitSignin");
++        assert_eq!(none[1], "--disable-features=msImplicitSignin");
++    }
++
++    #[test]
++    fn local_paths_become_file_urls_and_urls_pass_through() {
++        assert_eq!(
++            page_url(r"C:\test dir\a#b.html"),
++            "file:///C:/test%20dir/a%23b.html"
++        );
++        assert_eq!(
++            page_url(r"\\server\share\x.html"),
++            "file://server/share/x.html"
++        );
++        assert_eq!(
++            page_url("https://example.com/?q=1"),
++            "https://example.com/?q=1"
++        );
++    }
++
++    #[test]
++    fn caller_profile_and_geometry_flags_opt_out() {
++        assert!(explicit_profile(
++            "chrome",
++            &[r"--user-data-dir=C:\x".into()]
++        ));
++        assert!(explicit_profile(
++            "chrome",
++            &["--profile-directory=\"Profile 2\"".into()]
++        ));
++        assert!(!explicit_profile("chrome", &["--new-window".into()]));
++        assert!(offscreen_argument(&["--start-maximized".into()]).is_none());
++        assert!(offscreen_argument(&["--new-window".into()])
++            .is_some_and(|arg| arg.starts_with("--window-position=")));
++    }
++}
++
++impl Profile {
++    /// `--no-startup-window` keeps Chromium alive without windows. Once the
++    /// task browser has shown a window and then has none for two checks, close
++    /// it through its own proven endpoint. Never deletes the profile.
++    pub(super) fn watch_lifetime(self: &Arc<Self>, pid: u32) {
++        if self
++            .watching
++            .swap(true, std::sync::atomic::Ordering::AcqRel)
++        {
++            return;
++        }
++        let profile = self.clone();
++        tokio::spawn(async move {
++            let mut empty = 0;
++            loop {
++                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
++                let Ok(record) = profile.verify() else { break };
++                let Some(process) = record.process.clone() else {
++                    break;
++                };
++                let alive = crate::browser_platform::process_identity(pid)
++                    .is_ok_and(|(start, _)| process.start_time == Some(start));
++                if !alive {
++                    break;
++                }
++                let windows = crate::win32::list_windows_via_win32(Some(pid))
++                    .into_iter()
++                    .filter(|window| window.pid == pid)
++                    .count();
++                empty = if windows == 0 { empty + 1 } else { 0 };
++                if empty < 2 {
++                    continue;
++                }
++                if let Ok(Some(endpoint)) = endpoint_at_use(pid, &record.lifecycle).await {
++                    if let Ok(conn) =
++                        cua_driver_core::browser::cdp_ws::CdpConnection::connect(&endpoint.ws_url)
++                            .await
++                    {
++                        let _ = conn.call(None, "Browser.close", json!({})).await;
++                    }
++                }
++                break;
++            }
++            profile
++                .watching
++                .store(false, std::sync::atomic::Ordering::Release);
++        });
++    }
++}
++
++/// Browser frames only: owned bubbles and tool windows stay where the
++/// browser anchors them.
++fn is_browser_frame(hwnd: u64) -> bool {
++    use windows::Win32::Foundation::HWND;
++    use windows::Win32::UI::WindowsAndMessaging::{
++        GetWindow, GetWindowLongW, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
++    };
++    let hwnd = HWND(hwnd as *mut _);
++    let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.is_invalid());
++    let tool = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOOLWINDOW.0 != 0;
++    !owned && !tool
++}

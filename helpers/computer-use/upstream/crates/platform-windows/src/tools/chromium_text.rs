@@ -448,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_input_never_enters_a_desktop_route_or_deletes_selection() {
-        let result = insert(0, 0, None, "").await;
+        let result = insert(0, 0, None, "", "test").await;
         assert_ne!(result.is_error, Some(true));
         assert_eq!(result.structured_content.unwrap()["characters"], 0);
     }
@@ -623,6 +623,7 @@ pub(super) async fn insert(
     hwnd: u64,
     retained: Option<RetainedElement>,
     text: &str,
+    lifecycle: &str,
 ) -> ToolResult {
     if text.is_empty() {
         let record = ActionExecutionRecord::builder(
@@ -647,7 +648,12 @@ pub(super) async fn insert(
             .lock_owned()
             .await,
     );
-    let _guard = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+    let prior =
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as usize;
+    let _observer = crate::input::inject::foreground_watch::ForegroundWatch::start_observing(
+        prior,
+        crate::input::inject::foreground_watch::Target::Processes(vec![pid], vec![hwnd as usize]),
+    );
     let generation = crate::input::inject::foreground_generation();
     let mut attempted = false;
     let result = tokio::time::timeout(Duration::from_secs(20), async {
@@ -656,7 +662,10 @@ pub(super) async fn insert(
         let platform = WindowsBrowserPlatform::default();
         let fingerprint = platform.process_fingerprint(pid.into()).await.map_err(|e| anyhow!(e.message))?;
         let native = platform.native_window(pid.into(), hwnd).await.map_err(|e| anyhow!(e.message))?;
-        let endpoint = platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?
+        let endpoint = match super::task_browser::endpoint_at_use(pid,lifecycle).await? {
+            Some(endpoint)=>Some(endpoint),
+            None=>platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?,
+        }
             .context("this browser has no uniquely owned DevTools endpoint; the native Chromium text path would require application focus")?;
         static POOL: OnceLock<CdpPool> = OnceLock::new();
         let conn = POOL.get_or_init(CdpPool::new).get(&endpoint.ws_url).await?;
@@ -700,6 +709,7 @@ pub(super) async fn insert(
             { bail!("the browser identity/window or physical input changed before insertion"); }
             let current = state(&conn, session, object, None).await?;
             if !matches_before(&current, &field) || current["focused"] != true { bail!("the exact field or selection changed before insertion"); }
+            super::task_browser::endpoint_at_use(pid,lifecycle).await?;
             attempted = true;
             conn.call(Some(session), "Input.insertText", json!({"text":text})).await?;
             let mut landed = false;
