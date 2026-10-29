@@ -150,6 +150,12 @@ fn make_guard(host_hwnd: isize) -> Option<DisabledHwndGuard> {
     // cleanly via the AppFrame root.
     let root = unsafe { GetAncestor(h, GA_ROOT) };
     let target = if root.0.is_null() { h } else { root };
+    // A classic dialog (#32770) in a XAML app is plain Win32: disabling it
+    // makes UIA report its buttons as not enabled (0x80040200), and restoring
+    // it can re-enable a dialog that a newer modal had disabled.
+    if is_classic_dialog(target) {
+        return None;
+    }
     // Disabling the user's foreground window can itself deactivate it. An
     // already-front target needs no shield against self-activation.
     if unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } == target {
@@ -276,4 +282,10 @@ mod disable_lease_tests {
         worker.join().unwrap();
         assert!(window.enabled());
     }
+}
+
+fn is_classic_dialog(hwnd: HWND) -> bool {
+    let mut class = [0u16; 16];
+    let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut class) };
+    len > 0 && String::from_utf16_lossy(&class[..len as usize]) == "#32770"
 }

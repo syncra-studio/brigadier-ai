@@ -166,6 +166,8 @@ Patches applied, in order:
 
 - `patches/0144-windows-task-owned-browser-background-transport.diff`: Give ordinary Chrome/Edge launches a lifecycle-owned isolated profile with a proven DevTools endpoint; open pages as inactive off-screen CDP windows placed behind the active window, keep the launch lock without restoring focus, disable Edge implicit account sign-in, and close the windowless browser after its last window.
 
+- `patches/0145-windows-classic-dialogs-outside-xaml-shield.diff`: Exempt classic #32770 dialogs owned by XAML apps from the EnableWindow activation shield: disabling them made UIA report their buttons as not enabled (0x80040200) and restoring the lease re-enabled dialogs beneath a newer modal.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
