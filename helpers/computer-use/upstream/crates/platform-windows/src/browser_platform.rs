@@ -784,7 +784,7 @@ fn is_windows_absolute_path(path: &std::path::Path) -> bool {
         || value.starts_with(r"\\")
 }
 
-fn user_data_dir_from_command_line(
+pub(crate) fn user_data_dir_from_command_line(
     command_line: &str,
     default: Option<PathBuf>,
 ) -> Result<Option<PathBuf>, BrowserRefusal> {
@@ -821,7 +821,7 @@ fn system_powershell_path() -> Result<PathBuf, BrowserRefusal> {
     Ok(system_directory_path()?.join("WindowsPowerShell\\v1.0\\powershell.exe"))
 }
 
-async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
+pub(crate) async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
     let powershell = system_powershell_path()?;
     let script = format!(
         "$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); (Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' -ErrorAction Stop).CommandLine"

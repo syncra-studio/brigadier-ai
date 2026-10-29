@@ -90,6 +90,8 @@ pub(super) struct Profile {
     marker_file: Mutex<Option<File>>,
     record: Mutex<Marker>,
     watching: std::sync::atomic::AtomicBool,
+    /// Kill-on-close job holding every process this profile started.
+    job: Mutex<Option<Job>>,
 }
 
 impl Profile {
@@ -325,19 +327,7 @@ pub(super) fn prepare(
             }
         }
     }
-    // The driver's own profile root (set by the host), else per-user state.
-    let root = std::env::var_os("CUA_DRIVER_BROWSER_PROFILE_ROOT")
-        .filter(|root| !root.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("LOCALAPPDATA").map(|local| {
-                PathBuf::from(local)
-                    .join("CuaDriver")
-                    .join("BrowserProfiles")
-            })
-        })
-        .context("no driver-owned browser profile directory is configured")?
-        .join("task-browsers");
+    let root = task_root()?;
     std::fs::create_dir_all(&root)?;
     reject_reparse_ancestors(&root)?;
     let id = nonce()?;
@@ -372,6 +362,7 @@ pub(super) fn prepare(
         marker_file: Mutex::new(Some(marker_file)),
         record: Mutex::new(marker.clone()),
         watching: std::sync::atomic::AtomicBool::new(false),
+        job: Mutex::new(None),
     });
     profile.persist(marker)?;
     PROFILES.lock().unwrap().push(profile.clone());
@@ -397,6 +388,8 @@ pub(super) fn retire(key: &str) {
             let mut next = record;
             next.retired = true;
             let _ = profile.persist(next);
+            // Close what the lifecycle opened; the profile itself is kept.
+            let _ = profile.terminate();
             profile.marker_file.lock().unwrap().take();
             profile.directory.lock().unwrap().take();
         }
@@ -826,4 +819,212 @@ fn is_browser_frame(hwnd: u64) -> bool {
     let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.is_invalid());
     let tool = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOOLWINDOW.0 != 0;
     !owned && !tool
+}
+
+/// The driver's own task-browser root (set by the host), else per-user state.
+fn task_root() -> Result<PathBuf> {
+    Ok(std::env::var_os("CUA_DRIVER_BROWSER_PROFILE_ROOT")
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|local| {
+                PathBuf::from(local)
+                    .join("CuaDriver")
+                    .join("BrowserProfiles")
+            })
+        })
+        .context("no driver-owned browser profile directory is configured")?
+        .join("task-browsers"))
+}
+
+/// A kill-on-close job object: closing it (helper exit, crash, retire or a
+/// failed proof) ends every process the task browser started.
+struct Job(windows::Win32::Foundation::HANDLE);
+// SAFETY: a job handle is a kernel handle usable from any thread.
+unsafe impl Send for Job {}
+unsafe impl Sync for Job {}
+impl Drop for Job {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+fn kill_on_close_job() -> Result<Job> {
+    use windows::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    let job = Job(unsafe { CreateJobObjectW(None, None) }?);
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    }?;
+    Ok(job)
+}
+
+/// Start `command_line` suspended, place it in `job`, and only then resume
+/// it. A process that cannot be contained is ended before it ever runs.
+fn spawn_in_job(job: &Job, command_line: &str, show: u16, flags: u32) -> Result<u32> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+    use windows::Win32::System::Threading::{
+        CreateProcessW, ResumeThread, TerminateProcess, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS,
+        PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    };
+    let mut command: Vec<u16> = command_line.encode_utf16().chain(Some(0)).collect();
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESHOWWINDOW,
+        wShowWindow: show,
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    unsafe {
+        CreateProcessW(
+            None,
+            PWSTR(command.as_mut_ptr()),
+            None,
+            None,
+            false,
+            CREATE_SUSPENDED | PROCESS_CREATION_FLAGS(flags),
+            None,
+            None,
+            &startup,
+            &mut process,
+        )?;
+        let contained = AssignProcessToJobObject(job.0, process.hProcess);
+        if contained.is_err() || ResumeThread(process.hThread) == u32::MAX {
+            let _ = TerminateProcess(process.hProcess, 1);
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+            bail!("the task browser could not be contained in its owned job; it was ended before running");
+        }
+        let _ = CloseHandle(process.hThread);
+        let _ = CloseHandle(process.hProcess);
+    }
+    Ok(process.dwProcessId)
+}
+
+/// What [`Profile::terminate`] did, for replies.
+pub(super) struct Closed(bool);
+impl Closed {
+    pub(super) fn note(&self) -> &'static str {
+        if self.0 {
+            " The task-owned browser it started was closed."
+        } else {
+            ""
+        }
+    }
+}
+
+impl Profile {
+    /// Launch through this profile's kill-on-close job (created on first use).
+    pub(super) fn spawn_contained(&self, command_line: &str, show: u16) -> Result<u32> {
+        let mut job = self.job.lock().unwrap();
+        if job.is_none() {
+            *job = Some(kill_on_close_job()?);
+        }
+        spawn_in_job(
+            job.as_ref().expect("job just created"),
+            command_line,
+            show,
+            0,
+        )
+    }
+
+    /// End every process this profile started. Never touches other browsers.
+    pub(super) fn terminate(&self) -> Closed {
+        Closed(self.job.lock().unwrap().take().is_some_and(|job| {
+            unsafe { windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1) }.is_ok()
+        }))
+    }
+}
+
+/// True when `command_line` runs a profile under this driver's task-browser
+/// root (any lifecycle, including one from before a helper restart).
+fn is_task_profile_command_line(command_line: &str, root: &Path) -> bool {
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    command_line
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .split("--user-data-dir=")
+        .skip(1)
+        .any(|rest| rest.trim_start_matches('"').starts_with(&root))
+}
+
+/// Refuse a generic endpoint for a browser running a task profile that no
+/// live lifecycle owns: its transport belongs to an ended lifecycle.
+pub(super) async fn refuse_orphaned_task_profile(pid: u32) -> Result<()> {
+    let command_line = crate::browser_platform::browser_command_line(pid)
+        .await
+        .map_err(|e| anyhow!(e.message))?;
+    // Any driver's task profile carries the ownership marker; ambiguous or
+    // unreadable profile arguments fail closed.
+    let marked = crate::browser_platform::user_data_dir_from_command_line(&command_line, None)
+        .map_err(|e| anyhow!(e.message))?
+        .is_some_and(|dir| dir.join("brigadier-task-owner.json").exists());
+    if marked || is_task_profile_command_line(&command_line, &task_root()?) {
+        bail!("this browser runs a task-owned profile from another or ended helper lifecycle; its transport is not attached");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod containment_tests {
+    use super::*;
+
+    #[test]
+    fn task_profile_command_lines_are_recognized_only_under_the_root() {
+        let root = Path::new(r"C:\State\browser-profiles\task-browsers");
+        assert!(is_task_profile_command_line(
+            r#""C:\Chrome\chrome.exe" "--user-data-dir=C:\State\browser-profiles\task-browsers\task-ab" --no-first-run"#,
+            root
+        ));
+        assert!(is_task_profile_command_line(
+            r#"chrome.exe --user-data-dir=c:/state/browser-profiles/task-browsers/task-ab"#,
+            root
+        ));
+        assert!(!is_task_profile_command_line(
+            r#"chrome.exe --user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"#,
+            root
+        ));
+        assert!(!is_task_profile_command_line(
+            r#"chrome.exe --new-window"#,
+            root
+        ));
+    }
+
+    /// A process placed in the job before it runs ends when the job closes.
+    #[test]
+    fn closing_the_job_ends_a_contained_process() {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_SYNCHRONIZE,
+        };
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let job = kill_on_close_job().unwrap();
+        // A windowless console process that would otherwise run for a minute.
+        let pid = spawn_in_job(
+            &job,
+            &format!(r#""{system}\System32\PING.EXE" -n 60 127.0.0.1"#),
+            0,
+            CREATE_NO_WINDOW.0,
+        )
+        .unwrap();
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.unwrap();
+        drop(job);
+        let ended = unsafe { WaitForSingleObject(process, 5000) } == WAIT_OBJECT_0;
+        let _ = unsafe { CloseHandle(process) };
+        assert!(ended, "the contained process outlived its job");
+    }
 }

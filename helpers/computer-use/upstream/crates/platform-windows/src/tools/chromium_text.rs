@@ -664,7 +664,12 @@ pub(super) async fn insert(
         let native = platform.native_window(pid.into(), hwnd).await.map_err(|e| anyhow!(e.message))?;
         let endpoint = match super::task_browser::endpoint_at_use(pid,lifecycle).await? {
             Some(endpoint)=>Some(endpoint),
-            None=>platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?,
+            None=>{
+                // A task profile no live lifecycle owns (e.g. after a helper
+                // restart) is refused before any generic endpoint discovery.
+                super::task_browser::refuse_orphaned_task_profile(pid).await?;
+                platform.discover_owned_endpoint(pid.into()).await.map_err(|e| anyhow!(e.message))?
+            }
         }
             .context("this browser has no uniquely owned DevTools endpoint; the native Chromium text path would require application focus")?;
         static POOL: OnceLock<CdpPool> = OnceLock::new();

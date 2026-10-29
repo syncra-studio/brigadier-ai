@@ -174,6 +174,8 @@ Patches applied, in order:
 
 - `patches/0148-windows-windowless-ffmpeg-tools.diff`: Start ffmpeg, ffprobe and the Windows where probe through one helper that sets CREATE_NO_WINDOW on Windows, so recording, rendering and probing never open an activated console window; other platforms keep plain Command::new.
 
+- `patches/0149-windows-contain-task-browsers-and-refuse-orphans.diff`: Start task-owned Chrome/Edge suspended inside a kill-on-close job before resuming, end that job when its endpoint proof fails or its lifecycle retires, and refuse typing into any browser running a marked task profile that no live lifecycle owns before any generic endpoint discovery.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

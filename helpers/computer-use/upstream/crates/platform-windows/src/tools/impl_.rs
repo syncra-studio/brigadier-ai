@@ -2633,7 +2633,8 @@ impl Tool for LaunchAppTool {
         if let Some(profile) = task_profile.as_ref() {
             if let Some(pid) = profile.known_pid() {
                 if let Err(error) = profile.confirm(pid).await {
-                    return ToolResult::error(format!("The existing task-browser transport could not be re-proven: {error}. No new launch was sent."));
+                    let closed = profile.terminate();
+                    return ToolResult::error(format!("The existing task-browser transport could not be re-proven: {error}. No new launch was sent.{}", closed.note()));
                 }
             }
             resolved_target = Some(profile.executable.clone());
@@ -2878,6 +2879,7 @@ impl Tool for LaunchAppTool {
             // UI so that case fails fast with an error code; the timeout is the
             // backstop for any *other* blocking broker dialog (SmartScreen, an
             // elevation/consent surface) so a bad target can't hang the daemon.
+            let task_spawn = task_profile.clone();
             let launch = tokio::task::spawn_blocking(move || -> anyhow::Result<u32> {
                 use windows::core::{PCWSTR, PWSTR};
                 use windows::Win32::Foundation::CloseHandle;
@@ -2911,7 +2913,12 @@ impl Tool for LaunchAppTool {
                     } else {
                         format!(r#""{target}" {extra_for_shell}"#)
                     };
-                    if let AppLaunchToken::StandardUser(token) = &launch_token {
+                    if let Some(profile) = task_spawn.as_ref() {
+                        if matches!(launch_token, AppLaunchToken::StandardUser(_)) {
+                            anyhow::bail!("an elevated helper cannot contain a task-owned browser; no browser was started");
+                        }
+                        profile.spawn_contained(&command_line_text, n_show_for_shell as u16)?
+                    } else if let AppLaunchToken::StandardUser(token) = &launch_token {
                         crate::standard_user_launch::create_process(
                             token,
                             target,
@@ -3056,9 +3063,12 @@ impl Tool for LaunchAppTool {
 
         let pid = if let Some(profile) = task_profile.as_ref() {
             match profile.confirm(pid).await {
-                Ok(process)=>process.pid as u32,
-                Err(error)=>return ToolResult::error(format!("Task-owned browser launch was requested (pid {pid}), but its transport is unconfirmed: {error}. No other profile was used and no launch retry was sent. Inspect only this task-owned process before retrying."))
-                    .with_structured(json!({"code":"task_browser_transport_unconfirmed","launched_pid":pid,"windows":[]})),
+                Ok(process) => process.pid as u32,
+                Err(error) => {
+                    let closed = profile.terminate();
+                    return ToolResult::error(format!("Task-owned browser launch was requested (pid {pid}), but its transport is unconfirmed: {error}. No other profile was used and no launch retry was sent.{}", closed.note()))
+                        .with_structured(json!({"code":"task_browser_transport_unconfirmed","launched_pid":pid,"windows":[]}));
+                }
             }
         } else {
             pid
