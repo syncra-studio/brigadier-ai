@@ -160,6 +160,8 @@ Patches applied, in order:
 
 - `patches/0141-windows-chromium-caret-insertion-without-native-focus.diff`: Use exactly bound CDP caret insertion for Chromium page inputs with full value/caret readback, refuse unavailable transports before any native focus or partial text, and unwind emulation on cancellation.
 
+- `patches/0142-windows-truthful-debugging-launch-refusal.diff`: Explain Windows DevTools launch refusal without directing agents to a browser-setup action absent from the offered tools.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

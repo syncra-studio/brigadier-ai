@@ -2429,7 +2429,7 @@ impl Tool for LaunchAppTool {
             .unwrap_or_default();
         if args.get("cdp_debugging_port").is_some() {
             return ToolResult::error(
-                "cdp_debugging_port moved to browser_prepare so DevTools is never enabled on an unproven user profile",
+                "Windows launch_app does not enable DevTools on browser profiles. No app was launched. Background page typing needs an already-enabled, verified DevTools endpoint.",
             );
         }
         if launch_path_opt
@@ -2441,7 +2441,7 @@ impl Tool for LaunchAppTool {
             .any(cua_driver_core::launch_guard::contains_remote_debugging_flag)
         {
             return ToolResult::error(
-                cua_driver_core::launch_guard::REMOTE_DEBUGGING_LAUNCH_REFUSAL,
+                "Windows launch_app does not enable DevTools on browser profiles. No app was launched. Background page typing needs an already-enabled, verified DevTools endpoint.",
             );
         }
 
