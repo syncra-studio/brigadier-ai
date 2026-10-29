@@ -218,13 +218,12 @@ fn nodes(state: &Value) -> Vec<Node> {
                 n
             });
             // Windows Notepad exposes its editable text body as Document,
-            // unlike an image/canvas document. Its value is already readable.
+            // unlike an image/canvas document. Empty editors can omit value.
             if cfg!(target_os = "windows")
                 && state["app_name"]
                     .as_str()
                     .is_some_and(|name| name.eq_ignore_ascii_case("notepad.exe"))
                 && element["role"] == "Document"
-                && element["value"].is_string()
                 && element["actions"]
                     .as_array()
                     .is_some_and(|actions| actions.iter().any(|action| action == "text"))
@@ -420,6 +419,14 @@ mod windows_text_document_tests {
         assert!(
             !assess(&state).thin,
             "empty text editor remains an exposed editor"
+        );
+        state["elements"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+        assert!(
+            !assess(&state).thin,
+            "the Windows provider omits value for a genuinely empty editor"
         );
         state["app_name"] = "image-viewer.exe".into();
         assert!(
