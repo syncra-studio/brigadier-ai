@@ -172,6 +172,8 @@ Patches applied, in order:
 
 - `patches/0147-windows-refuse-self-elevating-task-manager.diff`: Refuse launching the system Task Manager before any process starts: even a direct non-elevated start under the activation lock is raised to administrator, leaving a window over the user's work that the helper cannot read, move or close.
 
+- `patches/0148-windows-windowless-ffmpeg-tools.diff`: Start ffmpeg, ffprobe and the Windows where probe through one helper that sets CREATE_NO_WINDOW on Windows, so recording, rendering and probing never open an activated console window; other platforms keep plain Command::new.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

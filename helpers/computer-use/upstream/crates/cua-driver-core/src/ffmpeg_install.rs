@@ -25,7 +25,9 @@ impl InstallPlan {
 /// Is `name` an executable on PATH?
 fn cmd_exists(name: &str) -> bool {
     #[cfg(target_os = "windows")]
-    let probe = Command::new("where").arg(name).output();
+    let probe = crate::video_ffmpeg::tool_command("where")
+        .arg(name)
+        .output();
     #[cfg(not(target_os = "windows"))]
     let probe = Command::new("sh")
         .arg("-c")

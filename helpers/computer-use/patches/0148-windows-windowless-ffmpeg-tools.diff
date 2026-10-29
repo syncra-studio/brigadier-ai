@@ -1,0 +1,104 @@
+Why: Start ffmpeg, ffprobe and the Windows where probe through one helper that sets CREATE_NO_WINDOW on Windows, so recording, rendering and probing never open an activated console window; other platforms keep plain Command::new.
+
+diff --git a/crates/cua-driver-core/src/ffmpeg_install.rs b/crates/cua-driver-core/src/ffmpeg_install.rs
+index b1431fdb5..a8a1cddf1 100644
+--- a/crates/cua-driver-core/src/ffmpeg_install.rs
++++ b/crates/cua-driver-core/src/ffmpeg_install.rs
+@@ -25,7 +25,9 @@ impl InstallPlan {
+ /// Is `name` an executable on PATH?
+ fn cmd_exists(name: &str) -> bool {
+     #[cfg(target_os = "windows")]
+-    let probe = Command::new("where").arg(name).output();
++    let probe = crate::video_ffmpeg::tool_command("where")
++        .arg(name)
++        .output();
+     #[cfg(not(target_os = "windows"))]
+     let probe = Command::new("sh")
+         .arg("-c")
+diff --git a/crates/cua-driver-core/src/recording_loader.rs b/crates/cua-driver-core/src/recording_loader.rs
+index c0f45902b..8eb5d4b0e 100644
+--- a/crates/cua-driver-core/src/recording_loader.rs
++++ b/crates/cua-driver-core/src/recording_loader.rs
+@@ -131,9 +131,8 @@ fn load_session_metadata(
+ /// parseable — the renderer falls back to 1920×1080 only as an
+ /// absolute last resort.
+ fn probe_video_dimensions(video_path: &Path) -> Option<(u32, u32)> {
+-    use std::process::Command;
+     let ffprobe = crate::video_ffmpeg::find_ffprobe()?;
+-    let out = Command::new(ffprobe)
++    let out = crate::video_ffmpeg::tool_command(ffprobe)
+         .args([
+             "-v",
+             "error",
+diff --git a/crates/cua-driver-core/src/recording_render.rs b/crates/cua-driver-core/src/recording_render.rs
+index 733be1922..16d45912a 100644
+--- a/crates/cua-driver-core/src/recording_render.rs
++++ b/crates/cua-driver-core/src/recording_render.rs
+@@ -32,7 +32,7 @@
+ //! updates.
+ 
+ use std::path::{Path, PathBuf};
+-use std::process::{Command, Stdio};
++use std::process::Stdio;
+ 
+ use crate::recording_loader::{load, LoadError};
+ use crate::recording_zoom::{generate_zoom_regions, ZoomRegion};
+@@ -144,7 +144,7 @@ pub fn render(
+     };
+ 
+     // Build ffmpeg command.
+-    let mut cmd = Command::new(&ffmpeg);
++    let mut cmd = crate::video_ffmpeg::tool_command(&ffmpeg);
+     cmd.arg("-y")
+         .arg("-loglevel")
+         .arg("error")
+@@ -255,7 +255,7 @@ fn build_zoompan_expressions(
+ /// but the sendcmd tail may stop earlier than the actual frames.
+ fn probe_duration_ms(video_path: &Path) -> Option<f64> {
+     let ffprobe = find_ffprobe()?;
+-    let out = Command::new(ffprobe)
++    let out = crate::video_ffmpeg::tool_command(ffprobe)
+         .args([
+             "-v",
+             "error",
+diff --git a/crates/cua-driver-core/src/video_ffmpeg.rs b/crates/cua-driver-core/src/video_ffmpeg.rs
+index 36d108c8c..01cff35a5 100644
+--- a/crates/cua-driver-core/src/video_ffmpeg.rs
++++ b/crates/cua-driver-core/src/video_ffmpeg.rs
+@@ -60,7 +60,7 @@ impl FfmpegVideoBackend {
+             })?;
+         }
+ 
+-        let mut cmd = Command::new(&ffmpeg);
++        let mut cmd = tool_command(&ffmpeg);
+         cmd.arg("-y").arg("-loglevel").arg("error");
+ 
+         platform_input_args(&mut cmd);
+@@ -209,7 +209,7 @@ pub fn find_ffprobe() -> Option<PathBuf> {
+ }
+ 
+ pub(crate) fn find_ffmpeg() -> Option<PathBuf> {
+-    if Command::new("ffmpeg")
++    if tool_command("ffmpeg")
+         .arg("-version")
+         .stdout(Stdio::null())
+         .stderr(Stdio::null())
+@@ -329,3 +329,18 @@ fn platform_input_args(cmd: &mut Command) {
+         let _ = cmd;
+     }
+ }
++
++/// A console tool (ffmpeg, ffprobe, `where`) started without a console
++/// window. On Windows a helper that has no console of its own would otherwise
++/// open a new, activated terminal window for every such child.
++pub(crate) fn tool_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
++    #[allow(unused_mut)]
++    let mut command = Command::new(program);
++    #[cfg(target_os = "windows")]
++    {
++        use std::os::windows::process::CommandExt;
++        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
++        command.creation_flags(CREATE_NO_WINDOW);
++    }
++    command
++}

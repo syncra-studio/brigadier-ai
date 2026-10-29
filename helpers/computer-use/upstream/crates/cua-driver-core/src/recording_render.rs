@@ -32,7 +32,7 @@
 //! updates.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::recording_loader::{load, LoadError};
 use crate::recording_zoom::{generate_zoom_regions, ZoomRegion};
@@ -144,7 +144,7 @@ pub fn render(
     };
 
     // Build ffmpeg command.
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = crate::video_ffmpeg::tool_command(&ffmpeg);
     cmd.arg("-y")
         .arg("-loglevel")
         .arg("error")
@@ -255,7 +255,7 @@ fn build_zoompan_expressions(
 /// but the sendcmd tail may stop earlier than the actual frames.
 fn probe_duration_ms(video_path: &Path) -> Option<f64> {
     let ffprobe = find_ffprobe()?;
-    let out = Command::new(ffprobe)
+    let out = crate::video_ffmpeg::tool_command(ffprobe)
         .args([
             "-v",
             "error",
