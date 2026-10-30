@@ -229,8 +229,9 @@ impl Parser {
                 }]
             }
             "permission.asked" => {
-                let request = approval(data);
                 let call = data.pointer("/source/id").and_then(Value::as_str);
+                let called = call.and_then(|call| self.calls.get(call));
+                let request = approval(data, called.map(|(_, input)| input));
                 self.asked.insert(
                     request.id.clone(),
                     (
@@ -355,9 +356,10 @@ fn tool_event(
     }
 }
 
-/// A permission request (`permission.asked`) as an approval card. OpenCode's "always" answer
+/// A permission request (`permission.asked`) as an approval card, `called` its tool call's input:
+/// a command's request holds only its parts (`a; b || c` asks for `a`, `b`, `c`). OpenCode's "always" answer
 /// saves the rule for good, so none is offered ([`ApprovalRequest::grant`] stays empty).
-fn approval(data: &Value) -> ApprovalRequest {
+fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
     let action = data["action"].as_str().unwrap_or_default();
     let resources: Vec<String> = data["resources"]
         .as_array()
@@ -368,7 +370,12 @@ fn approval(data: &Value) -> ApprovalRequest {
     let (kind, command, paths) = match action {
         "shell" => (
             ApprovalKind::Command,
-            Some(resources.join(" && ")),
+            // A sub-agent's call isn't followed: its parts, then.
+            Some(
+                called
+                    .and_then(|input| input["command"].as_str())
+                    .map_or_else(|| resources.join(" && "), str::to_owned),
+            ),
             Vec::new(),
         ),
         "edit" => (ApprovalKind::FileChange, None, resources),
@@ -895,11 +902,12 @@ mod tests {
                 ),
                 line(
                     "session.tool.called",
-                    json!({"sessionID": S, "id": "call_s", "input": {"command": "cat a.txt"}}),
+                    json!({"sessionID": S, "id": "call_s", "input": {"command": "sleep 1; echo hi 2>/dev/null || true"}, "executed": false}),
                 ),
                 line(
                     "permission.asked",
-                    json!({"id": "per_2", "sessionID": S, "action": "shell", "resources": ["ls -la", "cat a.txt"], "save": ["ls *", "cat *"], "source": {"type": "tool", "messageID": "msg_a", "id": "call_s"}}),
+                    // As OpenCode 2.2.3 asks it (checked live): the command's parts only.
+                    json!({"id": "per_2", "sessionID": S, "action": "shell", "resources": ["sleep 1", "echo hi 2>/dev/null", "true"], "save": ["sleep *", "echo *", "true *"], "source": {"type": "tool", "messageID": "msg_a", "id": "call_s"}}),
                 ),
                 line(
                     "permission.replied",
@@ -938,7 +946,11 @@ mod tests {
             panic!("no approval: {events:?}")
         };
         assert_eq!(request.kind, ApprovalKind::Command);
-        assert_eq!(request.command.as_deref(), Some("ls -la && cat a.txt"));
+        // The command as it runs, not its parts joined.
+        assert_eq!(
+            request.command.as_deref(),
+            Some("sleep 1; echo hi 2>/dev/null || true")
+        );
         assert!(
             matches!(&events[5], ProviderEvent::Command { status: ItemStatus::Declined, output: Some(why), .. } if why.contains("Unable"))
         );

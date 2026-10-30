@@ -1621,17 +1621,28 @@ sys.stdin.read()
             mut mid: Option<TurnInput>,
         ) -> (TurnStatus, Option<bool>) {
             let mut steered = None;
+            let mut commands = Vec::new();
             loop {
                 let event = tokio::time::timeout(Duration::from_secs(300), events.recv()).await;
                 let event = match event {
                     Ok(Some(event)) => event,
                     other => panic!("no turn end: {other:?}"),
                 };
+                if let ProviderEvent::Command { command, .. } = &event {
+                    commands.push(command.clone());
+                }
                 match &event {
-                    ProviderEvent::ApprovalRequested { request } => session
-                        .answer(request.id.clone(), ApprovalDecision::Allow)
-                        .await
-                        .unwrap(),
+                    ProviderEvent::ApprovalRequested { request } => {
+                        // A command's card shows the command its call runs, not its parts.
+                        if request.kind == ApprovalKind::Command {
+                            let asked = request.command.clone().unwrap_or_default();
+                            assert!(commands.contains(&asked), "{asked:?} not in {commands:?}");
+                        }
+                        session
+                            .answer(request.id.clone(), ApprovalDecision::Allow)
+                            .await
+                            .unwrap();
+                    }
                     ProviderEvent::Command { .. } if mid.is_some() => {
                         steered = Some(session.steer_running(mid.take().unwrap()).await.unwrap());
                     }
