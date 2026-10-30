@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, ThreadView, UserRequest } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
 
@@ -244,4 +245,19 @@ test("a lead that waits on its own background command says so until the command'
   // The command's end starts the lead's turn for it: that turn's own line shows.
   assert.deepEqual(head(input({ ...leading, requests: working(1) })), { text: "Thinking", tone: "busy" });
   assert.deepEqual(head(input({ requests: working() })), { text: "Thinking", tone: "busy" });
+});
+
+test("a subagent's approval wait in a CLI turn reads as awaiting approval, on the request the CLI's message carries", () => {
+  const view: ThreadView = {
+    entries: [
+      { event: { type: "message", itemId: "cli-u1", role: "user", text: "Use a subagent" }, atMs: 1000, requests: ["r1"] },
+      { event: { type: "toolCall", itemId: "agent", name: "Agent", input: '{"description":"Run sleep"}', status: "inProgress", output: null }, atMs: 1100 },
+      { event: { type: "command", itemId: "sub-c", command: "sleep 40", cwd: null, status: "inProgress", exitCode: null, output: null, durationMs: null }, atMs: 1200, parent: "agent" },
+    ],
+    turns: [],
+  };
+  const [block] = cliBlocks(view, "c");
+  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
+  assert.deepEqual(head(input({ ...leading, approvals: byId([approval]) }, { requestIds: block!.requestIds })),
+    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
 });
