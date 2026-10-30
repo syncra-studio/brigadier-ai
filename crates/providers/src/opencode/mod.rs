@@ -1328,7 +1328,20 @@ impl Replayer for OpenCodeReplayer {
     fn feed(&mut self, dir: Direction, line: &str) -> Vec<ProviderEvent> {
         match dir {
             Direction::Out => self.parser.feed(line),
-            Direction::In => Vec::new(),
+            Direction::In => {
+                // The session prompted is the recording's own: a sub-agent's events are left
+                // out, as live.
+                if self.parser.session.is_none() {
+                    let sent: Value = serde_json::from_str(line).unwrap_or_default();
+                    self.parser.session = sent["path"]
+                        .as_str()
+                        .and_then(|path| {
+                            path.strip_prefix("/api/session/")?.strip_suffix("/prompt")
+                        })
+                        .map(str::to_owned);
+                }
+                Vec::new()
+            }
         }
     }
 }
@@ -1340,6 +1353,37 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A replay keeps to the session it prompted: a sub-agent's text and its turn's end are
+    /// not the recording's.
+    #[test]
+    fn a_replay_leaves_out_a_sub_agents_events() {
+        let line = |kind: &str, data: Value| {
+            json!({"id": "evt", "created": 1, "type": kind, "data": data}).to_string()
+        };
+        // As `replayer` makes it: no session known until the recording names it.
+        let mut replay = OpenCodeReplayer {
+            parser: Parser::new(None, None),
+        };
+        let prompt = json!({"method": "POST", "path": "/api/session/ses_1/prompt", "body": {}});
+        assert!(replay.feed(Direction::In, &prompt.to_string()).is_empty());
+        let events: Vec<_> = [
+            line("session.execution.started", json!({"sessionID": "ses_1"})),
+            line("session.execution.started", json!({"sessionID": "ses_sub"})),
+            line("session.text.ended", json!({"sessionID": "ses_sub", "assistantMessageID": "m2", "ordinal": 0, "text": "child"})),
+            line("session.execution.succeeded", json!({"sessionID": "ses_sub"})),
+        ]
+        .iter()
+        .flat_map(|line| replay.feed(Direction::Out, line))
+        .collect();
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                ProviderEvent::Message { .. } | ProviderEvent::TurnCompleted { .. }
+            )),
+            "{events:?}"
+        );
+    }
 
     fn spec() -> SessionSpec {
         SessionSpec {
