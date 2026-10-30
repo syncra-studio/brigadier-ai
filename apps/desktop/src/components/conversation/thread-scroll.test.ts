@@ -267,6 +267,20 @@ test("scrolled up, content changing above the view keeps what shows still; below
   assert.equal(fake.scrollTop, top);
 });
 
+test("scrolled up, a fold inside the row crossing the view's top moves nothing shown: the first row starting in view keeps its place", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  userScroll(fake, scroller, 2000);
+  const crossing = fake.rows.find((row) => row.getBoundingClientRect().bottom > VIEW_TOP)!;
+  assert.ok(crossing.getBoundingClientRect().top < VIEW_TOP);
+  const shown = fake.rows[fake.rows.indexOf(crossing) + 1]!;
+  const before = fake.offset(shown);
+  crossing.height -= 30;
+  scroller.resized();
+  assert.equal(fake.offset(shown), before);
+});
+
 test("following starts when the user scrolls to the bottom and stops when they scroll up", () => {
   const fake = new Fake();
   conversation(fake, 10);
@@ -586,16 +600,17 @@ test("scrolled up from a sent turn, the room shrinks by as much and goes once us
   assert.equal(fake.scrollTop, fake.max);
 });
 
-test("the user's own scroll to the very bottom clears the room; so does content that fits without it at the bottom", () => {
+test("the user's own scroll to the very bottom keeps the room it shows (never gone at once); content that fits without it at the bottom clears it", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
   const scroller = open(fake, id, true);
   send(fake, scroller, id);
   assert.ok(fake.room > 0);
-  // From 1px above the bottom, a wheel down to the very bottom.
+  // From 1px above the bottom, a wheel down to the very bottom: the room in view stays.
+  const room = fake.room;
   userScroll(fake, scroller, fake.max);
-  assert.equal(fake.room, 0);
+  assert.equal(fake.room, room);
   // Coming from within 24px, it doesn't follow by that.
   assert.equal(scroller.following, false);
 
@@ -1228,7 +1243,7 @@ test("the follow modes change as the spec's table says", () => {
   assert.notEqual(s3.mode, "user_follow");
 });
 
-test("a turn followed to its end is followed through its own last layout, then the view is static", () => {
+test("a turn followed to its end stays followed: its last layout and anything late after it are in view", () => {
   const now = performance.now;
   let clock = 50_000;
   performance.now = () => clock;
@@ -1243,13 +1258,12 @@ test("a turn followed to its end is followed through its own last layout, then t
     fake.rows.at(-1)!.height += 32;
     scroller.resized();
     assert.equal(fake.scrollTop, fake.max);
-    // Later, a late line: not followed.
+    // Later, a late line: still followed, the end in view.
     clock += 1_000;
-    const top = fake.scrollTop;
     fake.rows.at(-1)!.height += 60;
     scroller.resized();
-    assert.equal(scroller.mode, "static");
-    assert.equal(fake.scrollTop, top);
+    assert.equal(scroller.mode, "user_follow");
+    assert.equal(fake.scrollTop, fake.max);
   } finally {
     performance.now = now;
   }

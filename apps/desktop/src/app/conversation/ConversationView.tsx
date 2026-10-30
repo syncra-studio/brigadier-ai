@@ -1,4 +1,4 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace, ThreadListContext, ThreadListSource, type ThreadHolding } from "@/components/conversation";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace, ThreadListContext, ThreadListSource, type ThreadHolding, ThreadTurnRuns } from "@/components/conversation";
 import {
   type FC,
   memo,
@@ -1138,12 +1138,15 @@ export function ConversationView({
                               <SummaryPane summary={summary}>
                                 {summary && <SessionSummary conversation={conversation} />}
                                 <VisualsContext.Provider value={visuals}>
+                                {/* Its scrolling follows its own CLI's turn, not its workers' (spec D16). */}
+                                <ThreadTurnRuns.Provider value={running || waitingForQuota || answerWorking}>
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
                                   scrollKey={conversation?.id}
                                 />
+                                </ThreadTurnRuns.Provider>
                                 </VisualsContext.Provider>
                               </SummaryPane>
                             </div>

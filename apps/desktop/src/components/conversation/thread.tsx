@@ -152,6 +152,8 @@ export const Thread = memo<ThreadProps>(function Thread({
 });
 
 const ThreadScrollContext = createContext<ThreadScroller | null>(null);
+/** Whether this thread's own CLI turn runs, for its scrolling (not its workers'); none given: the thread's running state. */
+export const ThreadTurnRuns = createContext<boolean | null>(null);
 /** The key the thread keeps its place and its messages' parts under (the conversation). */
 const ThreadKeyContext = createContext<string | null>(null);
 
@@ -199,7 +201,8 @@ function useThreadScroll(
 
   // A sent turn's room lasts while the thread works on it. Told before attaching, so a
   // conversation shown again knows whether its kept room's turn still runs.
-  const running = useAuiState((s) => s.thread.isRunning);
+  const threadRuns = useAuiState((s) => s.thread.isRunning);
+  const running = useContext(ThreadTurnRuns) ?? threadRuns;
   useLayoutEffect(() => {
     scroller.setRunning(running);
   }, [scroller, running]);
@@ -763,7 +766,7 @@ function useFeedKeys(ids: readonly string[], scroller: ThreadScroller) {
         const element = group.querySelector<HTMLElement>(`:scope > [data-thread-row][data-index="${next}"]`);
         if (element) {
           element.focus({ preventScroll: true });
-          element.scrollIntoView({ block: "nearest" });
+          scroller.reveal(element, "nearest");
           return;
         }
         if (tries > 0) requestAnimationFrame(() => focus(tries - 1));

@@ -2,21 +2,22 @@
  * The thread's scrolling. The thread lays out top-down with the browser's own scroll anchoring
  * off (WebKit has none), so content growing below the view moves nothing. What does move is
  * decided here:
- * - An anchor keeps its place on screen while anything above it changes size or loads: the row
- *   crossing the view's top, or for a moment the toggle the user just clicked.
+ * - An anchor keeps its place on screen while anything above it changes size or loads: the first
+ *   row starting in the view (the row crossing its top when none does), or for a moment the
+ *   toggle the user just clicked.
  * - Following, the bottom stays put: new content, a fold opening or closing in view and the
  *   floating composer changing size all move what is above it instead. The first turn of a
  *   thread is followed from the start; following stops when the user scrolls further than
  *   `FOLLOW_PX` from the bottom, and starts again from the scroll button, or when the user scrolls
- *   back to within `FOLLOW_PX` from further away with no more room than that below. When the turn
- *   ends, following ends too, once the turn's own last layout is followed.
+ *   back to within `FOLLOW_PX` from further away with no more room than that below. A turn's end
+ *   changes nothing: followed, its last layout and what comes late are in view.
  * - A message sent with the view within `PLACE_PX` of its bottom (its room aside) gets room under
  *   it: `roomFor` the view, as tall as it was when sent. The view springs to 1px from the bottom,
  *   the turn's end a third of the view down (at least 240px), and the turn's growth uses the room
  *   up, so nothing moves while its work and answer fill it; past that the answer grows below the
  *   view, not followed. The room only ever shrinks: by the turn's growth, by what the user scrolls
  *   up, to the view's new size when it or the composer resizes, and to nothing once it is all
- *   below the view, the user scrolls to the very bottom, or the content no longer needs it. Sent
+ *   below the view or the content no longer needs it; never at once while it shows. Sent
  *   from further up, nothing moves: the turn is added below.
  * - While the turn works before its answer, it is watched: if it reaches past the view's bottom
  *   while its room is still more than `FOLLOW_PX`, the room goes and the turn is followed. Its
@@ -140,9 +141,11 @@ const scrollers = new WeakMap<object, ThreadScroller>();
  * first, with that or the view: the move is the user's jump (see `ThreadScroller.release`),
  * where a scroll with no input of theirs is the browser's and undone while the view follows.
  */
-export function jumpInThread(target: Element | null | undefined): void {
+export function jumpInThread(target: Element | null | undefined, block?: "center" | "nearest"): void {
   const viewport = target?.closest("[data-slot=aui_thread-viewport]");
-  if (viewport) scrollers.get(viewport)?.release();
+  const scroller = viewport ? scrollers.get(viewport) : undefined;
+  if (target && block) scroller?.reveal(target, block);
+  else scroller?.release();
 }
 
 /**
@@ -247,8 +250,6 @@ export class ThreadScroller {
   private modeNow: FollowMode = "user_follow";
   /** The newest turn's final answer started. */
   private answering = false;
-  /** The turn ended while followed: following ends once this is past, its own last layout followed. */
-  private followEndsAtMs: number | null = null;
   /** scrollTop as last set or seen here: a scroll to anywhere else is the user's, or the browser's. */
   private expected = 0;
   /** When the user last wheeled, touched, pressed or typed in the thread, or jumped in it. */
@@ -354,7 +355,6 @@ export class ThreadScroller {
     this.paddingPx = layout.padding();
     this.modeNow = "user_follow";
     this.answering = false;
-    this.followEndsAtMs = null;
     this.anchor = null;
     this.held = null;
     this.restore = null;
@@ -438,8 +438,7 @@ export class ThreadScroller {
     this.running = running;
     if (resumed) {
       this.answering = false;
-      this.followEndsAtMs = null;
-      if (this.started) this.workStarted();
+        if (this.started) this.workStarted();
     }
     if (ended) this.turnEnded();
   }
@@ -469,7 +468,6 @@ export class ThreadScroller {
       if (layout.rows().length > 0) this.start();
       return;
     }
-    this.endFollowIfOver();
     // Shown again: the browser may have reset the view's top while it was hidden.
     const shown = this.hidden;
     this.hidden = false;
@@ -531,7 +529,6 @@ export class ThreadScroller {
       this.resized();
       return;
     }
-    this.endFollowIfOver();
     // A jump's scroll is the user's, but code's: it moves no history in (`wantsEarlier`).
     const jump = this.jumped;
     this.jumped = false;
@@ -560,14 +557,11 @@ export class ThreadScroller {
       this.setRoomPx(Math.max(0, this.roomPx - (this.expected - viewport.scrollTop)));
       if (this.roomPx === 0 || this.roomHidden()) this.clearRoom();
     }
-    // At the very bottom, the room goes.
-    if (this.roomPx > 0 && maxScroll(viewport) - viewport.scrollTop < 0.5) this.clearRoom();
     const distance = maxScroll(viewport) - viewport.scrollTop;
     if (up) {
       if (distance > FOLLOW_PX && this.follow) {
         // Away from the bottom: nothing follows; work before the answer is watched again.
-        this.followEndsAtMs = null;
-        this.modeNow = this.running && !this.answering ? "prework_watch" : "static";
+            this.modeNow = this.running && !this.answering ? "prework_watch" : "static";
       }
     } else if (distance <= FOLLOW_PX && before > FOLLOW_PX && this.roomPx <= FOLLOW_PX) {
       this.followFromHere();
@@ -652,8 +646,23 @@ export class ThreadScroller {
     this.jumped = true;
     this.interrupt();
     this.modeNow = "static";
-    this.followEndsAtMs = null;
   };
+
+  /** Brings `element` into the view above the footer (centred, or to the nearer edge) as the user's own jump. */
+  reveal(element: { getBoundingClientRect(): Rect }, block: "center" | "nearest"): void {
+    const viewport = this.layout?.viewport;
+    if (!viewport) return;
+    this.release();
+    const top = viewport.getBoundingClientRect().top;
+    const end = top + this.visible();
+    const box = element.getBoundingClientRect();
+    const by = block === "center"
+      ? (box.top + box.bottom) / 2 - (top + end) / 2
+      : box.top < top ? box.top - top : box.bottom > end ? Math.min(box.bottom - end, box.top - top) : 0;
+    if (Math.abs(by) < 0.5) return;
+    this.setTop(Math.max(0, Math.min(maxScroll(viewport), viewport.scrollTop + by)));
+    this.record();
+  }
 
   /**
    * A click in the thread: a button or toggle keeps its place while what it opens or closes
@@ -672,8 +681,7 @@ export class ThreadScroller {
     this.held = { row: toggle, offset: top - viewTop, untilMs: performance.now() + HOLD_MS };
     if (fold) {
       this.modeNow = "static";
-      this.followEndsAtMs = null;
-    }
+      }
   }
 
   /**
@@ -757,7 +765,6 @@ export class ThreadScroller {
     this.interrupt();
     // Placed, the view holds still; its turn's work, already started or starting, is watched.
     this.modeNow = "static";
-    this.followEndsAtMs = null;
     this.answering = false;
     if (this.running) this.workStarted();
     this.dropRoom();
@@ -779,19 +786,11 @@ export class ThreadScroller {
   /** Follows from here: the view stays at the bottom as content comes. */
   private followFromHere(): void {
     this.modeNow = "user_follow";
-    this.followEndsAtMs = null;
   }
 
   /** The newest turn's work starts: from a still view, it is watched. */
   private workStarted(): void {
     if (this.modeNow === "static") this.modeNow = "prework_watch";
-  }
-
-  /** The turn ended while followed and its own last layout is followed: from here nothing is. */
-  private endFollowIfOver(): void {
-    if (this.followEndsAtMs === null || performance.now() < this.followEndsAtMs) return;
-    this.followEndsAtMs = null;
-    this.modeNow = "static";
   }
 
   /** Whether the newest user row starts the thread: its turn is the first. */
@@ -845,10 +844,9 @@ export class ThreadScroller {
     if (atEnd && viewport.scrollHeight - this.roomPx <= viewport.clientHeight) this.clearRoom();
   }
 
-  /** The newest turn ended: it is no longer watched; followed, it is until its last layout is. */
+  /** The newest turn ended: it is no longer watched; followed, it stays followed, so its end is always in view. */
   private turnEnded(): void {
     if (this.modeNow === "prework_watch") this.modeNow = "static";
-    if (this.follow) this.followEndsAtMs = performance.now() + HOLD_MS;
   }
 
   private dropRoom(): void {
@@ -990,7 +988,14 @@ export class ThreadScroller {
       if ((rows[middle]?.getBoundingClientRect().bottom ?? 0) > viewTop) high = middle;
       else low = middle + 1;
     }
-    const row = rows[Math.min(low, rows.length - 1)];
+    // The first row starting in the view, so a change anywhere above it (also inside the row
+    // crossing the view's top: a fold, a split) moves nothing shown; else the row crossing it.
+    const crossing = rows[Math.min(low, rows.length - 1)];
+    const next = rows[low + 1];
+    const viewEnd = viewTop + viewport.clientHeight;
+    const crossingTop = crossing?.getBoundingClientRect().top ?? viewTop;
+    const nextTop = next?.getBoundingClientRect().top ?? viewEnd;
+    const row = crossingTop < viewTop && nextTop < viewEnd ? next : crossing;
     if (measured || this.anchor?.row !== row) {
       this.anchor = row ? { row, offset: row.getBoundingClientRect().top - viewTop } : null;
     }

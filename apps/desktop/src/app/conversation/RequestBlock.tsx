@@ -147,8 +147,7 @@ export const RequestBlock: FC = () => {
     // Once the work and the groups holding them have opened: the first in view, then ready for another click.
     const timer = window.setTimeout(() => {
       const declined = body.current?.querySelector("[data-step-state=declined]");
-      jumpInThread(declined);
-      declined?.scrollIntoView({ block: "center" });
+      jumpInThread(declined, "center");
       setRevealDenied(false);
     }, 50);
     return () => window.clearTimeout(timer);
