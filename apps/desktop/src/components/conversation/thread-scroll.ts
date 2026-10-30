@@ -452,6 +452,8 @@ export class ThreadScroller {
    */
   answerStarted(requestIds: readonly string[]): void {
     if (this.answering || this.newestUser === null || !requestIds.includes(this.newestUser)) return;
+    // Its last growth may come in the same update as its end: heard first, while the watch holds.
+    if (this.modeNow === "prework_watch") this.resized();
     this.answering = true;
     if (this.modeNow === "prework_follow") this.modeNow = "user_follow";
     else if (this.modeNow === "prework_watch") this.modeNow = "static";
@@ -477,14 +479,22 @@ export class ThreadScroller {
     // a resize in this one: the view is where the jump put it, not at the anchor from before.
     if (this.jumped && Math.abs(viewport.scrollTop - this.expected) >= 1) this.scrolled();
     const wasAtBottom = this.atBottom;
-    const viewChanged =
+    let viewChanged =
       viewport.clientWidth !== this.size.width ||
       viewport.clientHeight !== this.size.height ||
       layout.padding() !== this.paddingPx;
+    // The footer alone changing size (a card or strip above the composer coming or going) at a
+    // sent turn's room: the room takes it, so nothing shown moves.
+    const footerBy = viewport.clientWidth === this.size.width && viewport.clientHeight === this.size.height ? layout.padding() - this.paddingPx : 0;
     this.size = { width: viewport.clientWidth, height: viewport.clientHeight };
     this.paddingPx = layout.padding();
+    if (footerBy !== 0 && wasAtBottom && this.roomPx > 0) {
+      // Taken whole by the room, the view is as it was.
+      if (this.roomPx - footerBy >= 0) viewChanged = false;
+      this.setRoomPx(Math.max(0, this.roomPx - footerBy));
+    }
     // A smaller view or a taller composer trims the room to the size it would be given now.
-    if (viewChanged) this.trimRoom();
+    if (viewChanged && footerBy >= 0) this.trimRoom();
     this.updateRoom();
     // Kept only here: a frame runs its scroll events before its resize observers, so a scroll of
     // the view's own heard after the content grew would take in the growth this should follow.

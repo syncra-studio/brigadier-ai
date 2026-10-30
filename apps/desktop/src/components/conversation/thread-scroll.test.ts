@@ -714,11 +714,10 @@ test("in a short view a sent turn gets no room; a resize trims the room to the n
   tall.clientHeight = 976;
   placing.resized();
   assert.ok(Math.abs(tall.room - 158.06) < 0.001, `${tall.room}`);
-  // A taller composer trims it too.
+  // A taller composer takes it, as far as it goes.
   tall.footer = 600;
   placing.resized();
-  assert.equal(tall.room, roomFor(976 - 600 - SCROLL_PAD_PX));
-  assert.ok(tall.room < 158.06);
+  assert.equal(tall.room, 0);
 });
 
 test("a message is placed only when sent within PLACE_PX of the bottom, the room aside; from further up nothing moves and the room goes", () => {
@@ -1587,4 +1586,41 @@ test("a turn's answer keeps its place while its work folds by itself above it; f
   conversation(followed, 6);
   const bottom = open(followed);
   assert.equal(bottom.holdStill(followed.rows.at(-1)!), false);
+});
+
+test("a card or strip above the composer coming or going under a sent turn's room moves nothing: the room takes it", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  const { user } = send(fake, scroller, id, 40);
+  const room = fake.room;
+  const top = fake.scrollTop;
+  const offset = fake.offset(user);
+  // An approval card closes: the footer shrinks.
+  fake.footer -= 60;
+  scroller.resized();
+  assert.equal(fake.room, room + 60);
+  assert.equal(fake.scrollTop, top);
+  assert.equal(fake.offset(user), offset);
+  // A strip shows: the footer grows.
+  fake.footer += 100;
+  scroller.resized();
+  assert.equal(fake.room, room - 40);
+  assert.equal(fake.scrollTop, top);
+  assert.equal(fake.offset(user), offset);
+});
+
+test("a watched turn's last growth heard with its end is still followed past its room", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  const { reply } = send(fake, scroller, id, 40);
+  // Its last burst and its end come together: the end is told before the resize is heard.
+  reply.height += fake.room + 300;
+  scroller.answerStarted(["sent"]);
+  scroller.resized();
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
 });
