@@ -257,6 +257,22 @@ async fn list_models(server: &Server) -> Result<Vec<Value>> {
     Ok(Vec::new())
 }
 
+/// Brigadier's default OpenCode model (D42), while OpenCode lists it enabled.
+const DEFAULT_MODEL: &str = "opencode-go/glm-5.3";
+
+/// The model a session starts on when none is named: [`DEFAULT_MODEL`] among `models`, else
+/// OpenCode's own default.
+async fn default_model(server: &Server, models: &[Value]) -> Result<Option<String>> {
+    if models
+        .iter()
+        .any(|model| model["enabled"] != false && model_id(model).as_deref() == Some(DEFAULT_MODEL))
+    {
+        return Ok(Some(DEFAULT_MODEL.into()));
+    }
+    let default = server.call(Method::GET, "/api/model/default", None).await?;
+    Ok(model_id(&default["data"]))
+}
+
 /// A model's id as Brigadier shows and passes it: `<provider>/<model>`.
 fn model_id(model: &Value) -> Option<String> {
     Some(format!(
@@ -542,8 +558,8 @@ impl Provider for OpenCode {
             let (models, default) = self
                 .control(async |server: &Server| {
                     let models = list_models(server).await?;
-                    let default = server.call(Method::GET, "/api/model/default", None).await?;
-                    Ok((models, model_id(&default["data"])))
+                    let default = default_model(server, &models).await?;
+                    Ok((models, default))
                 })
                 .await?;
             let mut models: Vec<ModelInfo> = models
@@ -864,17 +880,17 @@ async fn open_session(
         .map(|dir| dir.display().to_string())
         .collect();
     let permissions = parse::permissions(spec.access, spec.tools, &folders);
-    // No model named: OpenCode's own default (D18), at the effort asked for, if any.
-    let model = match (&spec.model, &spec.effort) {
-        (Some(model), effort) => Some(model_ref(model, effort.as_deref())?),
-        (None, Some(effort)) => {
-            let default = server.call(Method::GET, "/api/model/default", None).await?;
-            model_id(&default["data"])
-                .map(|id| model_ref(&id, Some(effort)))
-                .transpose()?
-        }
-        (None, None) => None,
+    // No model named: the default the picker tags (D42), at the effort asked for, if any; a
+    // reopened session asked for no effort keeps its own model.
+    let reopened = matches!(spec.origin, Origin::Resume { .. } | Origin::Fork { .. });
+    let model = match &spec.model {
+        Some(model) => Some(model.clone()),
+        None if reopened && spec.effort.is_none() => None,
+        None => default_model(server, &list_models(server).await?).await?,
     };
+    let model = model
+        .map(|id| model_ref(&id, spec.effort.as_deref()))
+        .transpose()?;
     let session = match &spec.origin {
         // OpenCode names its own sessions: a chosen id is recorded by the caller as it comes.
         Origin::New | Origin::NewAs { .. } => {
@@ -1550,6 +1566,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.answer(200, {"data": {"ses_1": {"type": "running"}} if os.path.exists(os.environ["ACTIVE"]) else {}})
         elif self.path.endswith("/prompt"):
             self.answer(200, {"data": {"id": "msg_1", "type": "user", "delivery": "steer"}})
+        elif self.path == "/api/model/default":
+            self.answer(200, {"data": {"id": "big-pickle", "providerID": "opencode"}})
         elif self.path.startswith("/api/command"):
             self.answer(200, {"location": {}, "data": [{"name": "init", "description": "guided AGENTS.md setup"}, {"name": "review"}]})
         elif self.command == "DELETE":
@@ -1652,6 +1670,23 @@ sys.stdin.read()
             Some("guided AGENTS.md setup")
         );
         assert!(said().contains("GET /api/command?location%5Bdirectory%5D="));
+
+        // A new session's default is Brigadier's while OpenCode lists it, else OpenCode's own.
+        let glm = json!({"id": "glm-5.3", "providerID": "opencode-go"});
+        let off = json!({"id": "glm-5.3", "providerID": "opencode-go", "enabled": false});
+        for (models, default) in [
+            (vec![glm], DEFAULT_MODEL),
+            (vec![off], "opencode/big-pickle"),
+            (Vec::new(), "opencode/big-pickle"),
+        ] {
+            assert_eq!(
+                default_model(&session.server, &models)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some(default)
+            );
+        }
         session.close().await;
         std::fs::remove_dir_all(&root).unwrap();
     }
