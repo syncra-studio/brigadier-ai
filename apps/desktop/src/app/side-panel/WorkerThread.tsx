@@ -163,7 +163,9 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
   const brief = briefAt >= 0 ? all[briefAt] : undefined;
   const entries = useMemo(() => all.filter((_, index) => index !== briefAt), [all, briefAt]);
   const activity = workerActivity(entries);
-  const previous = activity.slice(0, Math.max(0, activity.length - 3));
+  // As the lead's work does: all of it in view while it works (or was stopped), its history
+  // folded once it is over, so no row moves into the fold while it is watched.
+  const previous = working || state.kind === "stopped" ? [] : activity.slice(0, Math.max(0, activity.length - 3));
   const previousCount = previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
   const last = entries.at(-1);
