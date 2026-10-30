@@ -217,9 +217,12 @@ pub fn apply_resolved(
     spec.switched_off = resolved.off.clone();
     // Native configs used helpers before injection. Protect newly materialized values in
     // adapter stdio recordings and events too, including inline Codex thread configuration.
+    // Brigadier's own server (computer use) gave its one secret, its token, to the redactor
+    // already; its other values (paths, `brigadier`) are no secrets and must stay readable.
     let values: Vec<_> = spec
         .mcp_servers
         .iter()
+        .filter(|server| !server.trusted)
         .flat_map(|server| server.env.iter().map(|(_, value)| value.clone()))
         .collect();
     spec.redactor = Some(std::sync::Arc::new(match &spec.redactor {
@@ -1095,6 +1098,21 @@ mod lease_grant_tests {
             always_load: false,
         };
         let mut spec = super::overlay_tests::test_spec(Path::new("/unused"));
+        // Brigadier's own computer-use server: its values are no secrets.
+        let own = McpServer {
+            name: "computer".into(),
+            gateway: None,
+            transport: McpTransport::Stdio {
+                command: "/helper".into(),
+                args: Vec::new(),
+                cwd: None,
+            },
+            env: vec![("BRIGADIER_CU_AUDIENCE".into(), "brigadier".into())],
+            tool_timeout_secs: None,
+            trusted: true,
+            always_load: false,
+        };
+        spec.mcp_servers.push(own.clone());
         spec.mcp_servers.push(server.clone());
         let mut bound = server;
         bound.gateway.as_mut().unwrap().url = "http://127.0.0.1:1234/mcp/row".into();
@@ -1113,6 +1131,11 @@ mod lease_grant_tests {
             ProviderKind::Codex,
         )
         .unwrap();
-        assert_eq!(spec.mcp_servers, [bound]);
+        assert_eq!(spec.mcp_servers, [own, bound]);
+        let redactor = spec.redactor.unwrap();
+        assert_eq!(
+            redactor.redact("brigadier wait fixture-capability"),
+            "brigadier wait [redacted]"
+        );
     }
 }
