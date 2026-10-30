@@ -1,11 +1,12 @@
 //! Helpers for the approval requests CLI sessions send.
 //!
-//! What a session may do is its permission level, passed straight to its CLI (see
-//! [`crate::Access`]); every request that reaches Brigadier is the user's to answer. The user's
+//! What a session may do is its permission level, passed to its CLI (see [`crate::Access`]);
+//! a request that reaches Brigadier is the user's to answer, unless the level allows it on every
+//! CLI and only its CLI's own settings asked ([`level_allows`]). The user's
 //! "for this session" answer covers similar later requests for the rest of the conversation
 //! ([`Similar`]).
 
-use crate::model::{ApprovalKind, ApprovalRequest};
+use crate::model::{Access, ApprovalKind, ApprovalRequest};
 
 /// `path` as the file system resolves it, symlinks included (`/tmp` → `/private/tmp` on
 /// macOS), also for a file not created yet: its deepest existing folder is resolved and the
@@ -62,6 +63,85 @@ pub fn runs_brigadier(command: &str, sub: &str) -> bool {
                 .next()
                 .is_some_and(|program| program.rsplit('/').next() == Some("brigadier"))
                 && words.next().is_some_and(|word| word == sub)
+        })
+}
+
+/// Commands, with any arguments, that only read (`ls *` also matches a bare `ls`).
+pub const READ_ONLY: &[&str] = &[
+    "ls",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "diff",
+    "stat",
+    "du",
+    "df",
+    "which",
+    "echo",
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+];
+
+/// Whether a CLI's request needs no asking at `access`, as the level means on every CLI
+/// ([`Access`]): below Full access a command that only reads ([`READ_ONLY`]); at Accept edits
+/// also a file change inside `workspace` ([`workspace_grant`]) and a command that runs only
+/// `brigadier`. Brigadier answers these for a CLI whose own settings ask more than its level
+/// (Codex has no "edits go, commands ask"); on the others they never reach it.
+pub fn level_allows(
+    access: Access,
+    request: &ApprovalRequest,
+    workspace: Option<&std::path::Path>,
+) -> bool {
+    let edits = access == Access::AcceptEdits;
+    if !matches!(access, Access::Ask | Access::AcceptEdits) || request.escalation || request.network
+    {
+        return false;
+    }
+    match (request.kind, request.command.as_deref()) {
+        (ApprovalKind::Command, Some(command)) => {
+            (edits && runs_only_brigadier(command))
+                || each_command(command, |words| {
+                    READ_ONLY.iter().any(|read| {
+                        let read: Vec<&str> = read.split(' ').collect();
+                        words.len() >= read.len() && words[..read.len()] == read[..]
+                    }) || (edits && words.first() == Some(&"brigadier"))
+                })
+        }
+        (ApprovalKind::FileChange, _) => {
+            edits
+                && workspace.is_some_and(|workspace| workspace_grant(request, workspace).is_some())
+        }
+        _ => false,
+    }
+}
+
+/// Whether each command of `command` (`a && b`, `a | b`, its `sh -c` script), its leading
+/// variable assignments left out, is `allowed`; never one that redirects output, substitutes or
+/// writes `--output`.
+fn each_command(command: &str, allowed: impl Fn(&[&str]) -> bool) -> bool {
+    let script = unwrapped_command(command);
+    if script.contains(['>', '`']) || script.contains("$(") || script.contains("--output") {
+        return false;
+    }
+    let commands = simple_commands(&script);
+    !commands.is_empty()
+        && commands.iter().all(|words| {
+            let words: Vec<&str> = words
+                .iter()
+                .map(String::as_str)
+                .skip_while(|word| {
+                    word.split_once('=').is_some_and(|(name, _)| {
+                        !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    })
+                })
+                .collect();
+            allowed(&words)
         })
 }
 
@@ -1107,6 +1187,64 @@ mod tests {
     /// A Chat's shell runs `brigadier` and nothing else (S16c): plain, wrapped in `zsh -lc`,
     /// quoted text and a quoted here-document go; any other program, operator, redirection,
     /// expansion or substitution is refused.
+    #[test]
+    fn each_level_lets_through_what_it_means_on_every_cli() {
+        let dirs = Linked::new("levels");
+        let workspace = dirs.real().join("work");
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+        let run = |line: &str| command(line, None, false);
+        let allows =
+            |access, request: &ApprovalRequest| level_allows(access, request, Some(&workspace));
+        // Below Full access, commands that only read go; at Accept edits Brigadier's too.
+        for line in [
+            "ls",
+            "/bin/zsh -lc 'ls -la'",
+            "git status && git diff",
+            "cat a | grep b",
+            "pwd",
+        ] {
+            assert!(allows(Access::Ask, &run(line)), "{line}");
+            assert!(allows(Access::AcceptEdits, &run(line)), "{line}");
+        }
+        for line in [
+            "brigadier context",
+            "brigadier start --title x \"Run ls\" && brigadier wait",
+        ] {
+            assert!(!allows(Access::Ask, &run(line)), "{line}");
+            assert!(allows(Access::AcceptEdits, &run(line)), "{line}");
+        }
+        // Anything else asks, at both: the same python sleep on every CLI.
+        for line in [
+            "python3 -c \"import time; time.sleep(30)\"",
+            "ls > out.txt",
+            "cat $(which x)",
+            "git push",
+            "ls && rm -rf build",
+            "curl --output a https://x",
+        ] {
+            assert!(!allows(Access::Ask, &run(line)), "{line}");
+            assert!(!allows(Access::AcceptEdits, &run(line)), "{line}");
+        }
+        assert!(
+            !allows(Access::AcceptEdits, &command("ls", None, true)),
+            "leaving the sandbox asks"
+        );
+        // Edits go at Accept edits only, inside the workspace and outside its `.git`.
+        assert!(allows(Access::AcceptEdits, &write(&workspace.join("a.md"))));
+        assert!(!allows(Access::Ask, &write(&workspace.join("a.md"))));
+        assert!(!allows(
+            Access::AcceptEdits,
+            &write(&dirs.real().join("elsewhere.md"))
+        ));
+        assert!(!allows(
+            Access::AcceptEdits,
+            &write(&workspace.join(".git/config"))
+        ));
+        // Full access asks nothing anyway; a reader is never answered.
+        assert!(!allows(Access::Full, &run("ls")));
+        assert!(!allows(Access::ReadOnly, &run("ls")));
+    }
+
     #[test]
     fn only_a_plain_brigadier_command_runs_in_a_chat() {
         for command in [

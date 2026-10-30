@@ -429,27 +429,6 @@ pub(crate) fn classify(error: &Value, will_retry: bool) -> ProviderError {
     }
 }
 
-/// Commands, with any arguments, that only read (`ls *` also matches a bare `ls`).
-const READ_ONLY: &[&str] = &[
-    "ls",
-    "pwd",
-    "cat",
-    "head",
-    "tail",
-    "wc",
-    "grep",
-    "diff",
-    "stat",
-    "du",
-    "df",
-    "which",
-    "echo",
-    "git status",
-    "git diff",
-    "git log",
-    "git show",
-];
-
 /// The permission rules a session runs under, after its agent's own (OpenCode's later rule
 /// wins), so each level means what it means on the other CLIs (see the module docs).
 /// `folders`: the session's extra folders, which it reads and works in without asking.
@@ -461,7 +440,7 @@ pub(crate) fn permissions(access: Access, tools: ToolSet, folders: &[String]) ->
     let commands = |mut rules: Vec<Value>| {
         rules.push(rule("shell", "*", "ask"));
         rules.extend(
-            READ_ONLY
+            crate::policy::READ_ONLY
                 .iter()
                 .map(|command| rule("shell", &format!("{command} *"), "allow")),
         );

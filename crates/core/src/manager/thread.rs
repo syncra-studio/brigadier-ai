@@ -251,7 +251,11 @@ impl SessionManager {
             .as_ref()
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
-        if self.allowed_before(&conv.id, &mut request, workspace) {
+        // What its level allows on every CLI goes, where its CLI asks more (Codex).
+        let level_allows = cli.launch.as_ref().is_some_and(|launch| {
+            brigadier_providers::policy::level_allows(launch.access, &request, workspace)
+        });
+        if level_allows || self.allowed_before(&conv.id, &mut request, workspace) {
             self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
                 .await;
         } else {

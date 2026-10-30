@@ -1802,7 +1802,19 @@ impl SessionManager {
         mut request: ApprovalRequest,
     ) {
         let raised = self.worker_raised_now(live, cli).await;
-        let worktree = live.state.lock().await.worktree.clone();
+        let (worktree, level) = {
+            let state = live.state.lock().await;
+            (state.worktree.clone(), state.level)
+        };
+        // What its level allows on every CLI goes, where its CLI asks more (Codex).
+        let raised = raised
+            || level.is_some_and(|level| {
+                brigadier_providers::policy::level_allows(
+                    level.access(),
+                    &request,
+                    worktree.as_deref(),
+                )
+            });
         if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
         {
             self.ask_user_for_worker(live, cli, request).await;
