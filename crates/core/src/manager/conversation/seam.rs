@@ -232,7 +232,7 @@ impl SessionManager {
         let steered = match cli.filter(|_| steer && running) {
             Some(cli) => {
                 let input = TurnInput::text(text.clone());
-                self.note_sent(&conv.id, &input, &[]);
+                self.note_sent(&conv.id, &input, &[], &[]);
                 cli.session.steer(input).await.is_ok()
             }
             None => false,

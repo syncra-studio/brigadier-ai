@@ -39,7 +39,14 @@ struct Registration {
     /// When it was sent (ms since the epoch): only a message the CLI took after binds to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sent_at: Option<i64>,
+    /// The requests of the user's messages in a send noted with [`note_sent`]: the thread tells
+    /// the CLI's message of it for those stored messages by them, not by when each came.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    requests: Vec<String>,
 }
+/// What Brigadier noted of a send the CLI's message is: the user's words in it, as ranges of its
+/// non-whitespace characters, and the requests of the user's messages it carries.
+pub(super) type Sent = (Vec<(usize, usize)>, Vec<String>);
 pub(super) fn internal(kinds: &[InjectionKind]) -> bool {
     !kinds.is_empty()
         && kinds.iter().all(|kind| {
@@ -94,6 +101,7 @@ pub(super) fn register(
         native: None,
         user: None,
         sent_at: None,
+        requests: Vec::new(),
     });
     save(record, &registrations)?;
     *text = wire;
@@ -154,6 +162,7 @@ pub(super) fn bind_legacy(
         native: Some(native.to_owned()),
         user: None,
         sent_at: None,
+        requests: Vec::new(),
     });
     save(record, &registrations)?;
     Ok(true)
@@ -189,8 +198,15 @@ pub(crate) fn input_words(input: &TurnInput) -> String {
 
 /// Notes text Brigadier sends a CLI, before it sends it, so the thread knows the message the
 /// CLI keeps of it for Brigadier's (D44, L12): `user`, the user's own words in it as ranges of
-/// its non-whitespace characters (none: it is all Brigadier's). Nothing goes on the wire.
-pub(super) fn note_sent(record: &Path, text: &str, user: &[(usize, usize)], at: i64) -> Result<()> {
+/// its non-whitespace characters (none: it is all Brigadier's); `requests`, those of the user's
+/// messages in it. Nothing goes on the wire.
+pub(super) fn note_sent(
+    record: &Path,
+    text: &str,
+    user: &[(usize, usize)],
+    requests: &[String],
+    at: i64,
+) -> Result<()> {
     let solid = solid(text);
     if solid.is_empty() {
         return Ok(());
@@ -206,28 +222,25 @@ pub(super) fn note_sent(record: &Path, text: &str, user: &[(usize, usize)], at: 
         native: None,
         user: Some(user.to_vec()),
         sent_at: Some(at),
+        requests: requests.to_vec(),
     });
     save(record, &registrations)
 }
 
 /// The CLI's message `native` (`<session>:<item>`) with `text`, taken at `at`: the user's
-/// words in it when it is a send Brigadier noted ([`note_sent`]). It binds once, to the oldest
-/// such send of the same words not bound yet and sent before it; read again, it is the same.
-pub(super) fn bind_sent(
-    record: &Path,
-    text: &str,
-    native: &str,
-    at: i64,
-) -> Result<Option<Vec<(usize, usize)>>> {
+/// words in it and the requests it carries when it is a send Brigadier noted ([`note_sent`]).
+/// It binds once, to the oldest such send of the same words not bound yet and sent before it;
+/// read again, it is the same.
+pub(super) fn bind_sent(record: &Path, text: &str, native: &str, at: i64) -> Result<Option<Sent>> {
     let disk = disk(record);
     let _guard = disk.lock().unwrap();
     let mut registrations = read(record)?;
-    if let Some(user) = registrations
+    if let Some(sent) = registrations
         .iter()
         .find(|r| r.native.as_deref() == Some(native))
-        .and_then(|r| r.user.clone())
+        .and_then(|r| Some((r.user.clone()?, r.requests.clone())))
     {
-        return Ok(Some(user));
+        return Ok(Some(sent));
     }
     let solid = solid(text);
     let hash = blake3::hash(solid.as_bytes()).to_hex().to_string();
@@ -241,20 +254,23 @@ pub(super) fn bind_sent(
         return Ok(None);
     };
     registered.native = Some(native.to_owned());
-    let user = registered.user.clone();
+    let sent = registered
+        .user
+        .clone()
+        .map(|user| (user, registered.requests.clone()));
     save(record, &registrations)?;
-    Ok(user)
+    Ok(sent)
 }
 
 /// The CLI's messages bound to sends Brigadier noted, by `<session>:<item>`: the user's words
-/// in each.
-pub(super) fn sent_ids(record: &Path) -> std::collections::HashMap<String, Vec<(usize, usize)>> {
+/// in each, and the requests it carries.
+pub(super) fn sent_ids(record: &Path) -> std::collections::HashMap<String, Sent> {
     let disk = disk(record);
     let _guard = disk.lock().unwrap();
     read(record)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|r| Some((r.native?, r.user?)))
+        .filter_map(|r| Some((r.native?, (r.user?, r.requests))))
         .collect()
 }
 
@@ -337,7 +353,7 @@ mod tests {
         let guard = first_disk.lock().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
-            note_sent(&second, "Another session's input.", &[], 1_000).unwrap();
+            note_sent(&second, "Another session's input.", &[], &[], 1_000).unwrap();
             sent.send(()).unwrap();
         });
         let finished = received.recv_timeout(std::time::Duration::from_secs(2));
@@ -353,13 +369,15 @@ mod tests {
         std::thread::scope(|scope| {
             for n in 0..8 {
                 let dir = &dir;
-                scope.spawn(move || note_sent(dir, &format!("Input {n}."), &[], 1_000).unwrap());
+                scope.spawn(move || {
+                    note_sent(dir, &format!("Input {n}."), &[], &[], 1_000).unwrap()
+                });
             }
         });
         for n in 0..8 {
             assert_eq!(
                 bind_sent(&dir, &format!("Input {n}."), &format!("s:{n}"), 1_001).unwrap(),
-                Some(vec![])
+                Some((vec![], vec![]))
             );
             assert_eq!(
                 bind_sent(&dir, &format!("Input {n}."), &format!("s:copy-{n}"), 1_001).unwrap(),
@@ -403,8 +421,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sent-provenance-{}", uuid::Uuid::now_v7()));
         // Brigadier's own words, sent twice: each copy the CLI keeps binds one send.
         let carry = "Carry on from the hand-off note.";
-        note_sent(&dir, carry, &[], 1_000).unwrap();
-        note_sent(&dir, carry, &[], 2_000).unwrap();
+        note_sent(&dir, carry, &[], &[], 1_000).unwrap();
+        note_sent(&dir, carry, &[], &[], 2_000).unwrap();
         // One the CLI kept before Brigadier sent it is someone else's.
         assert_eq!(
             bind_sent(&dir, carry, "s:early", 1_000 - SENT_SLACK_MS - 1).unwrap(),
@@ -412,16 +430,16 @@ mod tests {
         );
         assert_eq!(
             bind_sent(&dir, "Carry on from\nthe hand-off note.", "s:one", 1_100).unwrap(),
-            Some(vec![])
+            Some((vec![], vec![]))
         );
         assert_eq!(
             bind_sent(&dir, carry, "s:one", 1_100).unwrap(),
-            Some(vec![]),
+            Some((vec![], vec![])),
             "read again, the same"
         );
         assert_eq!(
             bind_sent(&dir, carry, "s:two", 2_100).unwrap(),
-            Some(vec![])
+            Some((vec![], vec![]))
         );
         assert_eq!(
             bind_sent(&dir, carry, "s:three", 3_000).unwrap(),
@@ -436,19 +454,43 @@ mod tests {
         let from = solid_len(frame);
         let user = [(from, from + solid_len(words))];
         let sent = format!("{frame}{words}{note}");
-        note_sent(&dir, &sent, &user, 4_000).unwrap();
+        note_sent(&dir, &sent, &user, &[], 4_000).unwrap();
         let kept = sent.replace("\n\n", "\n");
         let bound = bind_sent(&dir, &kept, "s:mixed", 4_000).unwrap().unwrap();
-        assert_eq!(said(&kept, &bound), Said::Both { user: words.into() });
+        assert_eq!(said(&kept, &bound.0), Said::Both { user: words.into() });
         // All the user's: theirs.
-        note_sent(&dir, words, &[(0, solid_len(words))], 5_000).unwrap();
+        note_sent(&dir, words, &[(0, solid_len(words))], &[], 5_000).unwrap();
         let bound = bind_sent(&dir, words, "s:user", 5_000).unwrap().unwrap();
-        assert_eq!(said(words, &bound), Said::User);
+        assert_eq!(said(words, &bound.0), Said::User);
         let ids = sent_ids(&dir);
         assert_eq!(ids.len(), 4);
         assert!(!ids.contains_key("s:early") && !ids.contains_key("s:three"));
         // None of it is the daemon's internal input, which the thread drops.
         assert!(super::ids(&dir).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_noted_send_carries_its_requests_and_an_older_note_without_them_still_binds() {
+        let dir = std::env::temp_dir().join(format!("sent-requests-{}", uuid::Uuid::now_v7()));
+        let words = "Fix the test.";
+        let user = [(0, solid_len(words))];
+        note_sent(&dir, words, &user, &["r1".into()], 1_000).unwrap();
+        // Stamped long before it was sent: the request, not the clock, says which it is.
+        assert_eq!(
+            bind_sent(&dir, words, "s:one", 1_001).unwrap(),
+            Some((user.to_vec(), vec!["r1".into()]))
+        );
+        assert_eq!(sent_ids(&dir)["s:one"].1, ["r1"]);
+        // A note written before requests were noted reads with none, and binds as ever.
+        let old = r#"[{"nonce":"n","kinds":[],"hash":"HASH","bytes":5,"native":null,"user":[[0,5]],"sent_at":2000}]"#;
+        let hash = blake3::hash(b"Goon.").to_hex().to_string();
+        std::fs::write(dir.join("internal-inputs.json"), old.replace("HASH", &hash)).unwrap();
+        assert_eq!(
+            bind_sent(&dir, "Go on.", "s:old", 2_000).unwrap(),
+            Some((vec![(0, 5)], vec![]))
+        );
+        assert_eq!(sent_ids(&dir)["s:old"], (vec![(0, 5)], vec![]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

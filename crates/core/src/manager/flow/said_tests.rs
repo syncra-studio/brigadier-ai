@@ -322,3 +322,50 @@ async fn a_chats_compact_the_user_asked_for_is_theirs() {
     assert_eq!(flow.manager.noted_said(&chat, "/compact"), Some(Said::User));
     flow.stop().await;
 }
+
+/// The CLI's message of a send carries the requests of the user's messages in it, as Brigadier
+/// noted them when it sent it: live, before the turns are read again, and on a whole read.
+#[tokio::test]
+async fn the_clis_message_of_a_send_carries_its_request_live_and_read() {
+    let (flow, _) = flow("said-requests").await;
+    let mut news = flow.manager.subscribe_thread_news();
+    flow.say("Fix the test.").await;
+    flow.settled().await;
+    let request = flow
+        .core
+        .all_messages(&flow.conversation)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|message| message.text == "Fix the test.")
+        .and_then(|message| message.request_id)
+        .unwrap();
+    let said = |entry: &brigadier_providers::session_file::FileEntry| {
+        matches!(&entry.event, brigadier_providers::ProviderEvent::Message {
+            role: brigadier_providers::Role::User,
+            text,
+            ..
+        } if text.contains("Fix the test."))
+    };
+    let mut live = Vec::new();
+    while let Ok(item) = news.try_recv() {
+        live.extend(
+            item.entries
+                .into_iter()
+                .filter(said)
+                .map(|entry| entry.requests),
+        );
+    }
+    assert_eq!(live, [vec![request.clone()]]);
+    let read: Vec<_> = flow
+        .manager
+        .thread_view(&flow.conversation)
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(said)
+        .map(|entry| entry.requests)
+        .collect();
+    assert_eq!(read, [vec![request]]);
+    flow.stop().await;
+}

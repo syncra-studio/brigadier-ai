@@ -1279,7 +1279,13 @@ impl SessionManager {
                             .await
                         {
                             Ok((input, user)) => {
-                                self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                                self.note_skill_sent(
+                                    &conv.id,
+                                    &input,
+                                    &user,
+                                    std::slice::from_ref(&message),
+                                    cli.provider,
+                                );
                                 cli.session.steer(input).await.is_ok()
                             }
                             Err(_) => false,
@@ -1505,7 +1511,13 @@ impl SessionManager {
                     .await
                 {
                     Ok((input, user)) => {
-                        self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                        self.note_skill_sent(
+                            &conv.id,
+                            &input,
+                            &user,
+                            std::slice::from_ref(&message),
+                            cli.provider,
+                        );
                         cli.session.steer(input).await.is_ok()
                     }
                     Err(_) => false,
@@ -1702,7 +1714,7 @@ impl SessionManager {
             .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         if let Some(cli) = cli {
             let input = TurnInput::text(text.clone());
-            self.note_sent(&conv.id, &input, &[]);
+            self.note_sent(&conv.id, &input, &[], &[]);
             if cli.session.steer(input).await.is_ok() {
                 drop(state);
                 return;
@@ -1750,7 +1762,7 @@ impl SessionManager {
                 }
                 // The rest (another session's message, a seam's word) is Brigadier's too.
                 if !super::cli_thread::internal_input(&input) {
-                    self.note_sent(id, &input, &[]);
+                    self.note_sent(id, &input, &[], &[]);
                 }
                 if cli.session.steer(input).await.is_ok() {
                     drop(state);
@@ -2185,6 +2197,7 @@ impl SessionManager {
                     &id,
                     &input,
                     &[(0, super::cli_thread::solid_len("/compact"))],
+                    &[],
                 );
             }
             cli.session
@@ -2681,7 +2694,7 @@ impl SessionManager {
         }
         // Who wrote what of the rest, the user's words and Brigadier's around them (L12).
         if !super::cli_thread::internal_input(&input) {
-            self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+            self.note_skill_sent(&conv.id, &input, &user, &unsent, cli.provider);
         }
         {
             let mut state = conv.state.lock().await;

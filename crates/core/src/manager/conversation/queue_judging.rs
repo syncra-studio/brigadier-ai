@@ -195,7 +195,13 @@ impl SessionManager {
                 conv.take_frame(&item.id);
                 match input {
                     Ok((input, user)) => {
-                        self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                        self.note_skill_sent(
+                            &conv.id,
+                            &input,
+                            &user,
+                            std::slice::from_ref(&message),
+                            cli.provider,
+                        );
                         // Never a new turn (run2-D46): with none running it waits plainly.
                         matches!(cli.session.steer_running(input).await, Ok(true))
                     }
@@ -486,7 +492,7 @@ impl SessionManager {
         let steered = match cli {
             Some(cli) => {
                 let input = brigadier_providers::TurnInput::text(text.clone());
-                self.note_sent(&conv.id, &input, &[]);
+                self.note_sent(&conv.id, &input, &[], &[]);
                 matches!(cli.session.steer_running(input).await, Ok(true))
             }
             None => false,

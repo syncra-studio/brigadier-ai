@@ -393,14 +393,19 @@ impl SessionManager {
 
     /// A CLI that runs skills from message text (Claude) has the invocation added before every
     /// frame at serialization; record the same words and shift authored ranges so frame text
-    /// never becomes the user's text in the thread.
+    /// never becomes the user's text in the thread. `messages`: the user's messages in it.
     pub(super) fn note_skill_sent(
         &self,
         id: &ConversationId,
         input: &brigadier_providers::TurnInput,
         user: &[(usize, usize)],
+        messages: &[crate::Message],
         provider: ProviderKind,
     ) {
+        let requests: Vec<String> = messages
+            .iter()
+            .map(|message| message.request_id.clone().unwrap_or(message.id.clone()))
+            .collect();
         if commands_as_text(provider)
             && let Some(invocation) = input.parts.iter().find_map(|part| match part {
                 brigadier_providers::InputPart::Skill { invocation, .. } => Some(invocation),
@@ -415,9 +420,9 @@ impl SessionManager {
                 .insert(0, brigadier_providers::InputPart::Text(prefix));
             let mut authored = vec![(0, shift)];
             authored.extend(user.iter().map(|(from, to)| (from + shift, to + shift)));
-            self.note_sent(id, &noted, &authored);
+            self.note_sent(id, &noted, &authored, &requests);
         } else {
-            self.note_sent(id, input, user);
+            self.note_sent(id, input, user, &requests);
         }
     }
 
@@ -906,8 +911,13 @@ mod tests {
                     ],
                     files: vec![],
                 };
-                flow.manager
-                    .note_skill_sent(&flow.conversation, &framed, &[(7, 14)], provider);
+                flow.manager.note_skill_sent(
+                    &flow.conversation,
+                    &framed,
+                    &[(7, 14)],
+                    &[],
+                    provider,
+                );
                 assert_eq!(
                     flow.manager.noted_said(
                         &flow.conversation,

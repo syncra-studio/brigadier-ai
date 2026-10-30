@@ -161,7 +161,12 @@ impl SessionManager {
                 Some(instructions) => format!("/compact {instructions}"),
                 None => "/compact".to_owned(),
             };
-            self.note_sent(&conv.id, &brigadier_providers::TurnInput::text(words), &[]);
+            self.note_sent(
+                &conv.id,
+                &brigadier_providers::TurnInput::text(words),
+                &[],
+                &[],
+            );
         }
         if let Err(err) = cli.session.compact(instructions).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not compact the session"; conversation = %conv.id, error = %err);

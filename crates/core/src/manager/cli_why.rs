@@ -620,6 +620,7 @@ mod tests {
             images: Vec::new(),
             phase: None,
             said: None,
+            requests: Vec::new(),
         };
         // The turn's own generation's file is gone: only a later turn's message is left.
         let entries = [user("later", 50_000)];

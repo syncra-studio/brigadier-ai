@@ -206,6 +206,7 @@ mod tests {
                 images: Vec::new(),
                 phase: None,
                 said: None,
+                requests: Vec::new(),
             }],
             opened: false,
             ended: None,

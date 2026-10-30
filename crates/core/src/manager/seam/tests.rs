@@ -20,6 +20,7 @@ fn message(id: &str, role: Role, text: &str) -> FileEntry {
         images: Vec::new(),
         phase: None,
         said: None,
+        requests: Vec::new(),
     }
 }
 

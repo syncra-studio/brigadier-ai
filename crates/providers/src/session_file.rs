@@ -47,6 +47,11 @@ pub struct FileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub said: Option<Said>,
+    /// The requests of the user's messages Brigadier sent in it, as it noted them when it sent
+    /// it: the stored messages it is, by id, before the turn naming them is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub requests: Vec<String>,
     /// The background job's end it tells: the CLI's notice, or Brigadier's message to the CLI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -77,6 +82,7 @@ impl FileEntry {
             images: Vec::new(),
             phase: None,
             said: None,
+            requests: Vec::new(),
             wake: None,
         }
     }

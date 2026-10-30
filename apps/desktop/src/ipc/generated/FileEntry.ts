@@ -42,6 +42,11 @@ phase?: TextPhase,
  */
 said?: Said, 
 /**
+ * The requests of the user's messages Brigadier sent in it, as it noted them when it sent
+ * it: the stored messages it is, by id, before the turn naming them is read.
+ */
+requests?: Array<string>, 
+/**
  * The background job's end it tells: the CLI's notice, or Brigadier's message to the CLI.
  */
 wake?: Wake, };

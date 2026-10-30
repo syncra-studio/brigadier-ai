@@ -777,7 +777,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      const requests = view.turns[turn]?.requests ?? [];
+      // Before the turns are read again, the requests the engine noted it sent in the message.
+      const requests = view.turns[turn]?.requests ?? entry.requests ?? [];
       const atMs = entry.atMs ?? 0;
       // A turn of a request an earlier turn carried (a background command's end, told after its
       // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message
@@ -785,11 +786,14 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // the request before it may still lead the turn's list.
       const first = requests[0];
       const named = said?.by === "user" ? null : queuedId(event.text);
-      const id = named
-        ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
-        : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
-          ? first
-          : event.itemId;
+      // The request the engine noted it sent in the message says which it is, whenever it came.
+      const id =
+        entry.requests?.[0] ??
+        (named
+          ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+          : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
+            ? first
+            : event.itemId);
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
@@ -818,9 +822,12 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           // its own id (the request it joined as).
           const named = said?.by === "user" ? null : queuedId(event.text);
           const taken = new Set(current.steers.map((steer) => steer.message.id));
-          const id = named
-            ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
-            : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId);
+          for (const request of entry.requests ?? []) if (!current.requestIds.includes(request)) current.requestIds.push(request);
+          const id =
+            entry.requests?.[0] ??
+            (named
+              ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+              : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId));
           current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs), position });
           return;
         }
@@ -1007,25 +1014,19 @@ export function cliThreadTree(
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
   }
-  // A turn whose message the stream said before the turns were read again names no request yet:
-  // its message is the CLI's, under the CLI's id. It is the one Brigadier kept since the turn
-  // before began that no turn carries, so its bubble stays the one shown while it was on its way,
-  // not mounted afresh under another id (the view thrown off the sent turn's place) and again
-  // once the turns are read.
-  const read = new Set(view.turns.map((turn) => turn.userMessage));
-  blocks.forEach((block, index) => {
-    const said = block.user;
-    if (said?.kind !== "message" || said.message.id !== block.key || read.has(block.key)) return;
-    const after = blocks[index - 1]?.startedAtMs ?? Number.NEGATIVE_INFINITY;
-    const sent = stored.find((message) => {
-      const request = message.requestId ?? message.id;
-      return message.role === "user" && message.createdAtMs > after && message.createdAtMs <= block.startedAtMs && !named.has(request) && !drawn.has(request);
-    });
-    if (!sent) return;
-    block.user = { kind: "message", message: sent, text: fullText[sent.id] ?? sent.text };
-    block.requestIds = [sent.requestId ?? sent.id];
-    drawn.add(sent.requestId ?? sent.id);
-  });
+  // A turn's message the CLI said under a request whose message isn't stored here yet (its word
+  // beat the daemon's answer to sending it) is the one still being sent: its bubble stays that
+  // one, not a second bubble under the request. Only turns after the newest one of a message
+  // held here: one before it is older than the messages loaded.
+  const sent = new Map(view.entries.flatMap((entry) => (entry.event.type === "message" && entry.requests?.[0] ? [[entry.event.itemId, entry.requests[0]] as const] : [])));
+  const said = new Set(view.entries.flatMap((entry) => entry.requests ?? []));
+  const newest = blocks.findLastIndex((block) => block.user?.kind === "message" && own.has(block.user.message.id));
+  const sending = [...pending];
+  for (const block of blocks.slice(newest + 1)) {
+    if (block.user?.kind !== "message" || !said.has(block.user.message.id)) continue;
+    const entry = sending.shift();
+    if (entry) block.user = { kind: "pending", pending: entry };
+  }
   // A queued message joins the turn that read it after the CLI had it (the turn names it only
   // once it ends): it is drawn there, not on its way too.
   const carried = new Set([...named, ...drawn]);
@@ -1038,20 +1039,23 @@ export function cliThreadTree(
     const text = fullText[message.id] ?? message.text;
     blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, run));
   }
-  for (const entry of pending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
+  for (const entry of sending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
 
   const nodes: ThreadNode[] = [];
   let parent: string | null = null;
   for (const block of blocks) {
-    if (block.user) {
-      // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
-      // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
-      const id = block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id);
-      nodes.push({ id, parentId: parent, kind: "user", block, head: null });
-      parent = id;
+    // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
+    // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
+    const shown = block.user && (block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id));
+    if (shown) {
+      nodes.push({ id: shown, parentId: parent, kind: "user", block, head: null });
+      parent = shown;
     }
     if (!blockShows(block)) continue;
-    const id = `request:${block.key}`;
+    // Its turn by its message too, else by the request the CLI's message it began with carries
+    // (one not shown yet): the same from sending it to the CLI saying it to its turn read.
+    const lead = sent.get(block.key);
+    const id = `request:${shown || (lead ? shownIdOf(lead) : block.key)}`;
     nodes.push({ id, parentId: parent, kind: "block", block, head: null });
     parent = id;
   }

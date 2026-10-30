@@ -89,6 +89,8 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
         atMs,
         ...(steer && { steer: true }),
         ...(answer && { phase: "answer" as const }),
+        // The request the engine noted it sent in the message, as it says it with the message.
+        ...(message.role === "user" && { requests: [message.requestId ?? message.id] }),
       },
     });
   }

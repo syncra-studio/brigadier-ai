@@ -379,6 +379,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                         images: vec![],
                         phase,
                         said: None,
+                        requests: Vec::new(),
                     };
                     stream = session_file::merge(stream, vec![entry]);
                 }

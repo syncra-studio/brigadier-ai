@@ -47,16 +47,19 @@ impl SessionManager {
 
     /// Notes `input` before Brigadier sends it to conversation `id`'s CLI (L12): `user`, the
     /// user's own words in it as ranges of its non-whitespace characters, none when all of it
-    /// is Brigadier's. The thread then tells the CLI's message of it for whose it is.
+    /// is Brigadier's; `requests`, those of the user's messages in it. The thread then tells the
+    /// CLI's message of it for whose it is, and for which stored messages.
     pub(super) fn note_sent(
         &self,
         id: &ConversationId,
         input: &brigadier_providers::TurnInput,
         user: &[(usize, usize)],
+        requests: &[String],
     ) {
         let record = self.session_dir(id).record();
         let words = envelope_provenance::input_words(input);
-        if let Err(err) = envelope_provenance::note_sent(&record, &words, user, now_ms()) {
+        if let Err(err) = envelope_provenance::note_sent(&record, &words, user, requests, now_ms())
+        {
             tracing::warn!(conversation = %id, error = %err, "could not note what was sent");
         }
     }
@@ -166,16 +169,16 @@ impl SessionManager {
         proven
     }
 
-    /// Who wrote the CLI's user message `event`, taken at `at`, when it is one Brigadier noted
-    /// sending ([`envelope_provenance::note_sent`]); `native_hint`: the CLI session it is in,
-    /// else the newest.
+    /// Who wrote the CLI's user message `event`, taken at `at`, and the requests it carries,
+    /// when it is one Brigadier noted sending ([`envelope_provenance::note_sent`]);
+    /// `native_hint`: the CLI session it is in, else the newest.
     fn note_said(
         &self,
         id: &ConversationId,
         event: Option<&ProviderEvent>,
         native_hint: Option<&str>,
         at: i64,
-    ) -> Option<brigadier_providers::session_file::Said> {
+    ) -> Option<(brigadier_providers::session_file::Said, Vec<String>)> {
         let Some(ProviderEvent::Message {
             role: Role::User,
             item_id,
@@ -191,11 +194,11 @@ impl SessionManager {
                 .last()
                 .map(|entry| entry.session_id.clone())
         })?;
-        let user =
+        let (user, requests) =
             envelope_provenance::bind_sent(&record, text, &format!("{native}:{item_id}"), at)
                 .ok()
                 .flatten()?;
-        Some(envelope_provenance::said(text, &user))
+        Some((envelope_provenance::said(text, &user), requests))
     }
 
     /// Follows the running turn of `conv`'s CLI through one of its events (`None`: the CLI's
@@ -205,10 +208,13 @@ impl SessionManager {
         let daemon_context = self.note_daemon_context(&conv.id, event, None).await;
         let at = now_ms();
         // Who wrote a user message Brigadier sent, as it noted when it sent it (L12).
-        let said = if daemon_context {
-            None
+        let (said, requests) = if daemon_context {
+            (None, Vec::new())
         } else {
             self.note_said(&conv.id, event, None, at)
+                .map_or((None, Vec::new()), |(said, requests)| {
+                    (Some(said), requests)
+                })
         };
         // Brigadier's requests the turn carries, as the conversation knows them now, and whether
         // it joins the work before it: when the CLI says a user message (a turn's, or a steer's)
@@ -377,6 +383,7 @@ impl SessionManager {
                     let entry = FileEntry {
                         steer,
                         said: said.clone(),
+                        requests: requests.clone(),
                         ..entry(event.cloned(), at)
                     };
                     news.push(entry);
@@ -979,11 +986,11 @@ impl SessionManager {
     }
 }
 
-/// `entry` of CLI session `session`'s file, with who wrote it when it is a user message
-/// Brigadier noted sending (`sent`, by `<session>:<item>`).
+/// `entry` of CLI session `session`'s file, with who wrote it and the requests it carries when
+/// it is a user message Brigadier noted sending (`sent`, by `<session>:<item>`).
 fn said_in(
     entry: &FileEntry,
-    sent: &std::collections::HashMap<String, Vec<(usize, usize)>>,
+    sent: &std::collections::HashMap<String, envelope_provenance::Sent>,
     session: &str,
 ) -> FileEntry {
     let mut entry = entry.clone();
@@ -993,9 +1000,10 @@ fn said_in(
         text,
     } = &entry.event
         && entry.parent.is_none()
-        && let Some(user) = sent.get(&format!("{session}:{item_id}"))
+        && let Some((user, requests)) = sent.get(&format!("{session}:{item_id}"))
     {
         entry.said = Some(envelope_provenance::said(text, user));
+        entry.requests.clone_from(requests);
     }
     entry
 }
@@ -1126,6 +1134,7 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
         images: Vec::new(),
         phase: None,
         said: None,
+        requests: Vec::new(),
     }
 }
 
