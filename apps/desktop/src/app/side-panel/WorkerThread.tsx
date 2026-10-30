@@ -23,9 +23,8 @@ import type { ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { request } from "@/ipc/client";
 import { isNativeWorker, type NativeWorker } from "@/state/nativeWorkers";
-import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
+import { loadWorkerThread, useCliThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * A worker's thread, read only: its own CLI's session files (`workerThread`), with its brief and
@@ -118,33 +117,19 @@ function BrigadierWorkerThread({ conversationId, row }: { conversationId: string
   return <WorkerTranscript row={row} view={view} error={error} />;
 }
 
-/** Read only while this native agent is open. Polling never republishes the parent conversation. */
+/**
+ * A subagent's thread: its entries in its session's thread, as that thread is kept (read, live
+ * news, read again at its turn's end), so its last words show even when they come after its call ended.
+ */
 function NativeWorkerThread({ conversationId, row }: { conversationId: string; row: NativeWorker }) {
-  const [view, setView] = useState<ThreadView | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const callId = row.native.callId;
-  useEffect(() => {
-    let current = true;
-    let reading = false;
-    const read = async () => {
-      if (reading) return;
-      reading = true;
-      try {
-        const { view: parent } = await request({ method: "threadView", conversationId });
-        const entries = callId ? parent.entries.filter((entry) => entry.parent === callId) : [];
-        if (current) {
-          setView((held) => JSON.stringify(held?.entries) === JSON.stringify(entries) ? held : { entries, turns: [] });
-          setError(null);
-        }
-      } catch (cause) {
-        if (current) setError(cause instanceof Error ? cause.message : String(cause));
-      } finally { reading = false; }
-    };
-    void read();
-    const timer = row.working ? window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS) : null;
-    return () => { current = false; if (timer !== null) window.clearInterval(timer); };
-  }, [conversationId, callId, row.working]);
-  return <WorkerTranscript row={row} view={view} error={error} native />;
+  // A string, so a change of the session's thread that is not the subagent's repaints nothing.
+  const json = useCliThread((s) => {
+    const parent = s.views[conversationId];
+    return parent ? JSON.stringify(callId ? parent.entries.filter((entry) => entry.parent === callId) : []) : null;
+  });
+  const view = useMemo<ThreadView | null>(() => (json === null ? null : { entries: JSON.parse(json), turns: [] }), [json]);
+  return <WorkerTranscript row={row} view={view} error={null} native />;
 }
 
 function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean }) {

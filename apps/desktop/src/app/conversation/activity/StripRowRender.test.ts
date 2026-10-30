@@ -59,7 +59,7 @@ test("a subagent's strip row is plain: a neutral mark, its task and time, no wor
   }
 });
 
-test("a subagent's panel is headed by its task, as its strip row says it, even when an earlier one had the same", async () => {
+test("a subagent's panel is headed by its task, as its strip row says it, even when an earlier one had the same, and shows its last words from its session's thread", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { WorkersTab } = await server.ssrLoadModule("/src/app/side-panel/Agents.tsx");
@@ -70,12 +70,15 @@ test("a subagent's panel is headed by its task, as its strip row says it, even w
       ...row({ id: `native:c:${call}`, number, title: "Run sleep then ls src" }),
       native: { conversationId: "c", callId: call, backgroundId: null, prompt: "" },
     });
-    Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: [subagent("call1", 1), subagent("call2", 2)] } });
+    // Its last words came after its call ended: the session's thread holds them once read again.
+    const said = { event: { type: "message", itemId: "s1", role: "assistant", text: "Ran it: greet.js, index.js" }, atMs: NOW, parent: "call2" };
+    Object.assign(useCliThread.getInitialState().views, { c: { entries: [said], turns: [], workers: [subagent("call1", 1), { ...subagent("call2", 2), working: false, lastEnd: "done", gone: true }] } });
     const html = ReactDOMServer.renderToStaticMarkup(
       React.createElement(TooltipProvider, null, React.createElement(AgentsPanelContext.Provider, { value: { panel: "native:c:call2", setPanel: () => {} } },
         React.createElement(WorkersTab as React.FC<{ conversationId: string }>, { conversationId: "c" }))),
     );
     assert.match(html, /<h2[^>]*>Run sleep then ls src<\/h2>/);
+    assert.match(html, /Ran it: greet\.js, index\.js/);
   } finally {
     await server.close();
   }
