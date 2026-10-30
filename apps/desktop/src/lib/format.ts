@@ -154,6 +154,14 @@ export function separatesTurn(sentAtMs: number, previousAtMs: number | null, now
   return (previousAtMs === null ? nowMs : sentAtMs) - (previousAtMs ?? sentAtMs) > SEPARATOR_GAP_MS;
 }
 
+/** A folder as written before macOS resolves it: /private/tmp and /private/var are /tmp and /var. */
+const unresolved = (folder: string) => folder.replace(/^\/private(?=\/(tmp|var)(\/|$))/, "");
+
+/** Whether `path` is one of `roots` or inside one, however a CLI reported it. */
+export function inFolders(path: string, roots: (string | null | undefined)[]): boolean {
+  const at = unresolved(path);
+  return roots.some((root) => !!root && (at === unresolved(root) || at.startsWith(`${unresolved(root)}/`)));
+}
 
 /** A home-relative path for display (`~/Development/app`). */
 export function shortPath(path: string): string {

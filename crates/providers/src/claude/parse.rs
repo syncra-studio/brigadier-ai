@@ -1412,13 +1412,10 @@ impl Parser {
             ToolKind::FileChange => ApprovalKind::FileChange,
             ToolKind::Other => ApprovalKind::Tool,
         };
-        let reason = ["decision_reason", "description"]
-            .iter()
-            .find_map(|key| str_of(&request, key))
-            .map(str::to_owned)
-            .or_else(|| {
-                str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"))
-            });
+        // Claude's `decision_reason` is its rule checker's note ("This command requires
+        // approval") and `description` the tool's summary: the card asks its own question,
+        // as on every CLI.
+        let reason = str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"));
         // Brigadier keeps "Allow … for this session" itself, for the whole conversation: the
         // command's first words, or the host Claude's sandbox asks to reach.
         let grant = if tool == policy::NETWORK_TOOL {
@@ -2536,6 +2533,30 @@ mod tests {
             parser.feed(API_ERROR_LIMIT);
             assert_eq!(errors(parser.feed(&assistant.to_string()))[0].kind, kind);
         }
+    }
+
+    /// Claude's rule-checker note isn't the card's title: the card asks its own question, as on
+    /// every CLI.
+    #[test]
+    fn a_command_approval_carries_no_rule_note_as_its_reason() {
+        let request = Parser::live()
+            .feed(
+                &json!({
+                    "type": "control_request", "request_id": "a1",
+                    "request": { "subtype": "can_use_tool", "tool_name": "Bash",
+                        "decision_reason": "This command requires approval", "description": "Sleep",
+                        "input": { "command": "python3 -c 'import time'" } }
+                })
+                .to_string(),
+            )
+            .into_iter()
+            .find_map(|out| match out {
+                Output::Event(ProviderEvent::ApprovalRequested { request }) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(request.reason, None);
+        assert_eq!(request.grant.as_deref(), Some("python3"));
     }
 
     #[test]

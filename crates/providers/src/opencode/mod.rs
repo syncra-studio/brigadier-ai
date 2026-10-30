@@ -1303,13 +1303,11 @@ impl ProviderSession for OpenCodeSession {
                 .get(&approval_id)
                 .map(|(session, _)| session.clone())
                 .ok_or_else(|| Error::Invalid(format!("no pending approval {approval_id}")))?;
-            // OpenCode's "always" is saved for good; Brigadier's grants last a conversation.
+            // OpenCode's "always" is saved for good; Brigadier keeps its grants for the
+            // conversation itself.
             let body = match decision {
-                ApprovalDecision::Allow => json!({ "decision": "once" }),
-                ApprovalDecision::AllowSimilar => {
-                    return Err(Error::Invalid(
-                        "this request has no \"don't ask again\" option".into(),
-                    ));
+                ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
+                    json!({ "decision": "once" })
                 }
                 ApprovalDecision::Deny { message } if message.trim().is_empty() => {
                     json!({ "decision": "reject" })

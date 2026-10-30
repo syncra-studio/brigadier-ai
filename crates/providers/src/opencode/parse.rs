@@ -358,7 +358,7 @@ fn tool_event(
 
 /// A permission request (`permission.asked`) as an approval card, `called` its tool call's input:
 /// a command's request holds only its parts (`a; b || c` asks for `a`, `b`, `c`). OpenCode's "always" answer
-/// saves the rule for good, so none is offered ([`ApprovalRequest::grant`] stays empty).
+/// saves the rule for good, so "Allow … for this session" is Brigadier's own grant, as on every CLI.
 fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
     let action = data["action"].as_str().unwrap_or_default();
     let resources: Vec<String> = data["resources"]
@@ -383,6 +383,7 @@ fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
         _ => (ApprovalKind::Tool, None, resources),
     };
     let metadata = &data["metadata"];
+    let grant = command.as_deref().and_then(crate::policy::command_prefix);
     ApprovalRequest {
         id: data["id"].as_str().unwrap_or_default().to_owned(),
         kind,
@@ -394,7 +395,7 @@ fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
         escalation: action == "external_directory",
         input: (metadata.as_object().is_some_and(|m| !m.is_empty()))
             .then(|| clip(&metadata.to_string(), OUTPUT_CLIP)),
-        grant: None,
+        grant,
         network: matches!(action, "webfetch" | "websearch" | "codesearch"),
     }
 }
@@ -936,6 +937,8 @@ mod tests {
             request.command.as_deref(),
             Some("sleep 1; echo hi 2>/dev/null || true")
         );
+        // "Allow sleep for this session", kept by Brigadier as on every CLI.
+        assert_eq!(request.grant.as_deref(), Some("sleep"));
         assert!(
             matches!(&events[5], ProviderEvent::Command { status: ItemStatus::Declined, output: Some(why), .. } if why.contains("Unable"))
         );
