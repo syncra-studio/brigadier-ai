@@ -2009,9 +2009,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 started_at_ms,
             )?,
         },
-        Request::ThreadView { conversation_id } => Response::ThreadView {
-            view: heap(|| sessions.thread_view_with_workers(&conversation_id)).await?,
-        },
+        Request::ThreadView {
+            conversation_id,
+            newest_turns,
+        } => {
+            let mut view = heap(|| sessions.thread_view_with_workers(&conversation_id)).await?;
+            if let Some(turns) = newest_turns {
+                brigadier_core::thread_view::newest_turns(&mut view, turns as usize);
+            }
+            Response::ThreadView { view }
+        }
         Request::ContinueWaiting { conversation_id } => {
             heap(|| sessions.continue_waiting(&conversation_id)).await?;
             Response::ContinueWaiting

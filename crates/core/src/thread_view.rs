@@ -894,6 +894,31 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
 }
 
 /// The limit an error of the CLI says it hit: a usage window, a spend control or credits.
+/// Only `view`'s newest `turns` turns, from the first one's user message on: what a thread shows
+/// at once when it opens, its older turns coming after with the whole view (D46). A seam whose
+/// message is cut goes with it; a view whose first kept turn's message isn't found stays whole.
+pub fn newest_turns(view: &mut ThreadView, turns: usize) {
+    let Some(first) = view.turns.len().checked_sub(turns).filter(|&cut| cut > 0) else {
+        return;
+    };
+    let message = view.turns[first].user_message.as_str();
+    let Some(at) = view.entries.iter().position(|entry| {
+        entry.parent.is_none()
+            && matches!(&entry.event, ProviderEvent::Message { item_id, role: Role::User, .. } if item_id == message)
+    }) else {
+        return;
+    };
+    view.entries.drain(..at);
+    view.turns.drain(..first);
+    let kept: std::collections::HashSet<&str> = view
+        .entries
+        .iter()
+        .filter_map(|entry| session_file::item_id(&entry.event))
+        .collect();
+    view.seams
+        .retain(|seam| seam.at.as_deref().is_none_or(|at| kept.contains(at)));
+}
+
 pub(crate) fn limit_of(error: &brigadier_providers::ProviderError) -> Option<LimitHit> {
     match (&error.limit, error.kind) {
         (Some(limit), _) => Some(limit.clone()),
@@ -1041,6 +1066,74 @@ mod tests {
 
     /// Brigadier's own word that a command ended after its turn says the job's end, as a CLI's
     /// notice does; a message of the user's says none.
+    #[test]
+    fn a_view_cut_to_its_newest_turns_starts_at_the_first_kept_turns_message() {
+        let turn = |id: &str| ThreadTurn {
+            user_message: id.into(),
+            started_at_ms: None,
+            ended_at_ms: None,
+            end: Some(TurnEnd::Done),
+            error: None,
+            error_kind: None,
+            provider: None,
+            requests: Vec::new(),
+            limit: None,
+            joins: false,
+        };
+        let seam = |at: &str| SeamMark {
+            n: 1,
+            open: false,
+            at: Some(at.into()),
+            carried: false,
+            nudge: None,
+            note: None,
+            start: None,
+            death: None,
+            moved_to: None,
+        };
+        let whole = ThreadView {
+            entries: vec![
+                message("u1", Role::User),
+                message("a1", Role::Assistant),
+                message("u2", Role::User),
+                message("a2", Role::Assistant),
+                message("u3", Role::User),
+                message("a3", Role::Assistant),
+            ],
+            turns: vec![turn("u1"), turn("u2"), turn("u3")],
+            background: vec![],
+            mcp: vec![],
+            workers: vec![],
+            seams: vec![seam("u2"), seam("u3")],
+            jobs: CliJobs::default(),
+            seq: 7,
+        };
+        let ids = |view: &ThreadView| -> Vec<String> {
+            view.entries
+                .iter()
+                .filter_map(|entry| session_file::item_id(&entry.event).map(str::to_owned))
+                .collect()
+        };
+        let mut cut = whole.clone();
+        newest_turns(&mut cut, 2);
+        assert_eq!(ids(&cut), ["u2", "a2", "u3", "a3"]);
+        assert_eq!(cut.turns, vec![turn("u2"), turn("u3")]);
+        assert_eq!(cut.seams.len(), 2);
+        assert_eq!(cut.seq, 7);
+        let mut one = whole.clone();
+        newest_turns(&mut one, 1);
+        assert_eq!(ids(&one), ["u3", "a3"]);
+        assert_eq!(one.seams, vec![seam("u3")]);
+        // As many turns as it has or more, or a first kept message not found: whole.
+        let mut all = whole.clone();
+        newest_turns(&mut all, 3);
+        assert_eq!(all, whole);
+        let mut lost = whole.clone();
+        lost.turns[1].user_message = "gone".into();
+        newest_turns(&mut lost, 2);
+        assert_eq!(lost.entries.len(), 6);
+    }
+
     #[test]
     fn brigadiers_word_of_a_commands_end_is_its_wake() {
         use brigadier_providers::{WakeEnd, WakeJob};

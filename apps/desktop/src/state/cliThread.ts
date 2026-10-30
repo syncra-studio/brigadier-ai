@@ -211,31 +211,54 @@ export function loadThreadView(conversationId: string): Promise<void> {
   const read = { heard: owed.get(conversationId) ?? [], again: false, done: Promise.resolve() };
   owed.delete(conversationId);
   reads.set(conversationId, read);
-  read.done = readThread(conversationId, read);
+  read.done = new Promise((shown) => void readThread(conversationId, read, shown));
   return read.done;
 }
 
-async function readThread(conversationId: string, read: { heard: ThreadNews[]; again: boolean }): Promise<void> {
+/** The turns a thread not held yet shows at once when it opens; the whole of it follows (D46). */
+export const NEWEST_TURNS = 5;
+
+/**
+ * Reads the thread; `shown` once it can be drawn. A thread not held yet comes in two: its newest
+ * turns, drawn at once, then the whole of it, whose older turns fill in above what shows.
+ */
+async function readThread(conversationId: string, read: { heard: ThreadNews[]; again: boolean }, shown: (value: void) => void): Promise<void> {
   try {
-    const { view } = await request({ method: "threadView", conversationId });
-    if (!view) throw new Error("the daemon answered with no thread");
-    // What waits for the frame is in the read or added to it below: none of it is left to draw
-    // again on it.
-    pending.delete(conversationId);
-    draining.delete(conversationId);
-    // News from a turn's start or end this read wasn't asked after: its lists wait for the next.
-    const afterTurn = new Set(owed.get(conversationId));
-    let landed = view;
-    for (const news of read.heard) landed = addNews(landed, news, !afterTurn.has(news), true);
-    setView(conversationId, landed);
+    // Cut, the newest come as just that many turns; with fewer or more they are all there is.
+    const newest = useCliThread.getState().views[conversationId] ? null : await threadView(conversationId, NEWEST_TURNS);
+    if (newest) {
+      land(conversationId, read, newest);
+      shown();
+    }
+    if (!newest || newest.turns.length === NEWEST_TURNS) land(conversationId, read, await threadView(conversationId));
     readFailed(conversationId, false);
   } catch (error) {
     console.error("reading the thread failed", error);
     readFailed(conversationId, true);
   } finally {
+    shown();
     reads.delete(conversationId);
     if (read.again || owed.has(conversationId)) void loadThreadView(conversationId);
   }
+}
+
+async function threadView(conversationId: string, newestTurns?: number): Promise<ThreadView> {
+  const { view } = await request({ method: "threadView", conversationId, ...(newestTurns !== undefined && { newestTurns }) });
+  if (!view) throw new Error("the daemon answered with no thread");
+  return view;
+}
+
+/** A read's view drawn, with what the stream said since it was asked for. */
+function land(conversationId: string, read: { heard: ThreadNews[] }, view: ThreadView): void {
+  // What waits for the frame is in the read or added to it below: none of it is left to draw
+  // again on it.
+  pending.delete(conversationId);
+  draining.delete(conversationId);
+  // News from a turn's start or end this read wasn't asked after: its lists wait for the next.
+  const afterTurn = new Set(owed.get(conversationId));
+  let landed = view;
+  for (const news of read.heard) landed = addNews(landed, news, !afterTurn.has(news), true);
+  setView(conversationId, landed);
 }
 
 /**

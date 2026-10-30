@@ -5,7 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
-import { applyThreadNews, loadThreadView, mergeEntries, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
+import { applyThreadNews, loadThreadView, mergeEntries, NEWEST_TURNS, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
 const command = (status: "inProgress" | "completed", output: string | null = null): ProviderEvent => ({
@@ -101,6 +101,50 @@ test("a thread is read once, follows the stream, and is read again when its turn
     const view = useCliThread.getState().views["conv"];
     assert.deepEqual(view?.turns, done.turns);
     assert.deepEqual(view?.entries.map((entry) => (entry.event.type === "message" ? entry.event.text : entry.event.type)), ["Go", "Done", "Next"]);
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+const turnOf = (index: number) => ({ userMessage: `u${index}`, startedAtMs: index, endedAtMs: index, end: "done" as const, error: null, requests: [] });
+
+const entriesOf = (from: number) =>
+  Array.from({ length: NEWEST_TURNS + 1 - from }, (_, index) => at({ type: "message", itemId: `u${from + index}`, role: "user", text: `Q${from + index}` }, from + index));
+
+test("a thread not held opens on its newest turns, then the whole of it fills in with what streamed meanwhile; one held is read whole", async () => {
+  const whole: ThreadView = { entries: entriesOf(0), turns: Array.from({ length: NEWEST_TURNS + 1 }, (_, index) => turnOf(index)) };
+  const newest: ThreadView = { entries: entriesOf(1), turns: whole.turns.slice(1) };
+  const asked: (number | undefined)[] = [];
+  let landWhole: (() => void) | null = null;
+  mockIPC((cmd, payload) => {
+    if (cmd !== "ipc_request") return null;
+    const { request } = payload as { request: { newestTurns?: number } };
+    asked.push(request.newestTurns);
+    if (request.newestTurns !== undefined) return { method: "threadView", view: newest };
+    return new Promise((resolve) => (landWhole = () => resolve({ method: "threadView", view: whole })));
+  });
+  try {
+    // It opens once the newest turns are there, before the whole thread is.
+    await loadThreadView("long");
+    assert.deepEqual(asked, [NEWEST_TURNS, undefined]);
+    assert.deepEqual(useCliThread.getState().views["long"], newest);
+    // What streams meanwhile shows on them and is kept when the whole thread lands.
+    const said = at({ type: "message", itemId: "m", role: "assistant", text: "More" }, 9);
+    applyThreadNews({ conversationId: "long", entries: [said] });
+    await settle();
+    (landWhole as (() => void) | null)?.();
+    await settle();
+    const view = useCliThread.getState().views["long"];
+    assert.deepEqual(view?.turns, whole.turns);
+    assert.deepEqual(view?.entries, [...whole.entries, said]);
+    // Held, it is read whole, once.
+    asked.length = 0;
+    const again = loadThreadView("long");
+    await settle();
+    (landWhole as (() => void) | null)?.();
+    await again;
+    assert.deepEqual(asked, [undefined]);
   } finally {
     clearMocks();
     useCliThread.setState({ views: {} });

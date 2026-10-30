@@ -732,6 +732,10 @@ pub enum Request {
     /// stream's after them, and its turns. `threadNews` frames extend it.
     ThreadView {
         conversation_id: ConversationId,
+        /// Only its newest this many turns: what it shows at once when it opens (D46).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        newest_turns: Option<u32>,
     },
     /// The user's Continue now on a turn that waits for a usage, spend or credits limit: its
     /// messages go now (MA5).
