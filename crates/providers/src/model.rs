@@ -118,7 +118,8 @@ pub struct ModelInfo {
 }
 
 /// Marks legacy each model with a newer namesake: "Opus 4.8" beside "Opus 5.5", "GPT-6-Sol"
-/// beside "GPT-6.1-Sol". A model without a version in its name is left alone.
+/// beside "GPT-6.1-Sol". A model without a version in its name is left alone. Then names
+/// apart models that share a name ([`name_apart`]).
 pub(crate) fn mark_superseded(models: &mut [ModelInfo]) {
     let named: Vec<_> = models
         .iter()
@@ -133,6 +134,39 @@ pub(crate) fn mark_superseded(models: &mut [ModelInfo]) {
         {
             model.legacy = true;
         }
+    }
+    name_apart(models);
+}
+
+/// Models that share a name read with where they come from, so every picker, pill and header
+/// tells them apart: "GLM-5.3 (opencode)" and "GLM-5.3 (opencode-go)", the part of the id
+/// before its `/`, else the whole id.
+fn name_apart(models: &mut [ModelInfo]) {
+    let source = |id: &str| {
+        id.split_once('/')
+            .map_or(id, |(source, _)| source)
+            .to_owned()
+    };
+    let names: Vec<(String, String)> = models
+        .iter()
+        .map(|model| (model.display_name.clone(), source(&model.id)))
+        .collect();
+    for model in models.iter_mut() {
+        let namesakes: Vec<&String> = names
+            .iter()
+            .filter(|(name, _)| *name == model.display_name)
+            .map(|(_, source)| source)
+            .collect();
+        if namesakes.len() < 2 {
+            continue;
+        }
+        let own = source(&model.id);
+        let shown = if namesakes.iter().filter(|other| ***other == own).count() > 1 {
+            model.id.clone()
+        } else {
+            own
+        };
+        model.display_name = format!("{} ({shown})", model.display_name);
     }
 }
 
@@ -2112,5 +2146,54 @@ mod input_tests {
         assert!(change.diff.unwrap().len() < 1100);
         let none = FileChange::counted("f".into(), FileChangeKind::Update, None, 1024);
         assert_eq!((none.diff, none.added, none.removed), (None, None, None));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    fn model(id: &str, name: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.into(),
+            display_name: name.into(),
+            description: String::new(),
+            resolved: None,
+            efforts: Vec::new(),
+            default_effort: None,
+            is_default: false,
+            input_modalities: Vec::new(),
+            fast: None,
+            legacy: false,
+        }
+    }
+
+    /// Same-named models read with where they come from, on any CLI; others keep their name.
+    #[test]
+    fn same_named_models_read_apart() {
+        let mut models = [
+            model("opencode/glm-5.3", "GLM-5.3"),
+            model("opencode-go/glm-5.3", "GLM-5.3"),
+            model("opencode/glm-5.2", "GLM-5.2"),
+            model("router/a/x", "X"),
+            model("router/b/x", "X"),
+            model("gpt-6", "GPT-6"),
+            model("gpt-6-preview", "GPT-6"),
+        ];
+        mark_superseded(&mut models);
+        let names: Vec<&str> = models.iter().map(|m| m.display_name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "GLM-5.3 (opencode)",
+                "GLM-5.3 (opencode-go)",
+                "GLM-5.2",
+                "X (router/a/x)",
+                "X (router/b/x)",
+                "GPT-6 (gpt-6)",
+                "GPT-6 (gpt-6-preview)",
+            ]
+        );
+        assert!(models[2].legacy, "an older namesake is still legacy");
     }
 }

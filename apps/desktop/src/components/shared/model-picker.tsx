@@ -37,7 +37,10 @@ export type ModelPickerProps = {
   opensOn?: ProviderKind | undefined;
   /** A model picked (`model` null: the agent's default row). */
   onPick: (provider: ProviderKind, model: ModelInfo | null) => void;
-  /** The model a new conversation starts on when nothing is picked: marked Default. */
+  /**
+   * The model a new conversation starts on when nothing is picked: marked Default. Every other
+   * agent's list marks its own default, the model a new session there starts on.
+   */
   defaultModel?: PickerChoice | null | undefined;
   /** The checked model's efforts, under the models while its agent is shown. */
   effort?:
@@ -303,6 +306,9 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
     );
   };
 
+  const isDefault = (row: Row) =>
+    !!defaultModel && (row.provider === defaultModel.provider ? sameRow(row, defaultModel) : row.model?.isDefault === true);
+
   const modelRow = (row: Row) => {
     const rule = reason(row);
     const isChecked = sameRow(row, checked);
@@ -333,7 +339,7 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
             </span>
           )}
         </span>
-        {sameRow(row, defaultModel) && <span className="text-muted-foreground shrink-0 text-xs">Default</span>}
+        {isDefault(row) && <span className="text-muted-foreground shrink-0 text-xs">Default</span>}
         {isChecked && <Check aria-hidden className="size-icon-md shrink-0" />}
       </button>
     );

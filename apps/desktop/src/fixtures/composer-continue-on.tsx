@@ -59,7 +59,7 @@ useApp.setState({
     view: {
       providers: [
         overview("claude", [model("opus", "Opus 5.5", { isDefault: true, ...efforts })]),
-        overview("codex", [model("gpt-5.5", "GPT-5.5", { isDefault: true, ...efforts })]),
+        overview("codex", [model("gpt-5.5", "GPT-5.5", { isDefault: true, ...efforts }), model("gpt-5.5-mini", "GPT-5.5 Mini", efforts)]),
       ],
       sessions: [],
       fixtures: [],
@@ -107,7 +107,7 @@ async function drive() {
 
     // The other agent's list says a pick continues there; a pick moves the session on that model.
     agent("Codex")!.click();
-    await until("Codex's models", () => models().some((row) => row.textContent === "GPT-5.5"));
+    await until("Codex's models", () => models().some((row) => row.textContent?.startsWith("GPT-5.5")));
     seen.codex = { line: line(), models: models().map((row) => row.textContent) };
     models()[0]!.click();
     await until("the move asked for", () => asked.length === 1);
