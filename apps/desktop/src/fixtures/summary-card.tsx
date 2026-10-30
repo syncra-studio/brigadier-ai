@@ -186,7 +186,7 @@ async function drive(): Promise<Record<string, unknown>> {
 
   // A side panel narrowing the pane, the window as it was: the card doesn't float over the thread.
   const main = $("main")!;
-  main.style.width = "600px";
+  main.style.width = "var(--container-thread)";
   await until(() => useSummary.getState().layout === "float", "the narrowed pane to float the card");
   await frames();
   seen.panelNoFloat = !useSummary.getState().floating && useApp.getState().summaryShown.first === true;

@@ -6,6 +6,8 @@ import { createServer } from "vite";
 
 import type { WorkerRow } from "@/ipc/generated";
 
+const turn = (startedAtMs: number, endedAtMs: number | null) => ({ userMessage: "m", startedAtMs, endedAtMs, end: null, error: null, requests: [] });
+
 test("a stopped worker's own view says it stopped, and after how long, from its row", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   Object.assign(globalThis, { document: { documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) });
@@ -22,7 +24,6 @@ test("a stopped worker's own view says it stopped, and after how long, from its 
     assert.equal(header({ merged: true }), "Worked for 3m 10s");
     // Sent a message 18 minutes after its first turn (an app restart between): only its turns count.
     const { workedMs } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");
-    const turn = (startedAtMs: number, endedAtMs: number | null) => ({ userMessage: "m", startedAtMs, endedAtMs, end: null, error: null, requests: [] });
     const later = { id: "t1", startedAtMs: 1000, lastEventAtMs: 1_100_000 } as WorkerRow;
     assert.equal(workedMs(later, [turn(1000, 8000), turn(1_090_000, 1_100_000)], true, 2_000_000), 17_000);
     assert.equal(workedMs(later, [turn(1000, 8000), turn(1_090_000, null)], false, 1_095_000), 12_000);
