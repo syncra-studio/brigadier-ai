@@ -69,5 +69,6 @@ security-framework = "3.7.0"
 workspace = true
 
 [dev-dependencies]
+brigadier-providers = { workspace = true, features = ["fake-cli"] }
 tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

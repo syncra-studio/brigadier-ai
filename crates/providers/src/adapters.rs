@@ -205,6 +205,8 @@ pub static ADAPTERS: &[&Adapter] = &[
     &crate::claude::ADAPTER,
     &crate::codex::ADAPTER,
     &crate::opencode::ADAPTER,
+    #[cfg(feature = "fake-cli")]
+    &crate::fake_cli::ADAPTER,
 ];
 
 /// `kind`'s adapter, when it is registered.

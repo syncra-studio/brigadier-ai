@@ -10,6 +10,8 @@ publish.workspace = true
 [features]
 # Only the `gen-codex` binding generator needs these.
 codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
+# A throwaway fourth CLI for core's tests (`fake_cli`); never shipped.
+fake-cli = []
 
 [dependencies]
 age = { version = "0.12.1", default-features = false }

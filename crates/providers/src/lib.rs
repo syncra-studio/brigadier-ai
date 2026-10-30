@@ -24,6 +24,8 @@ pub mod cli;
 mod cli_config_tests;
 pub mod codex;
 mod events;
+#[cfg(feature = "fake-cli")]
+mod fake_cli;
 pub mod fixtures;
 pub mod history;
 mod history_lines;
