@@ -35,7 +35,6 @@ mod cli_tools;
 mod cli_why;
 mod close_tab;
 mod closing;
-mod codex_children;
 mod computer_host;
 mod models;
 mod open_in_app;

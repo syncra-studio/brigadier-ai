@@ -27,6 +27,7 @@ mod events;
 pub mod fixtures;
 pub mod history;
 mod history_lines;
+pub mod items;
 pub mod leftovers;
 mod logging;
 pub mod login_mark;

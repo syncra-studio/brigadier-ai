@@ -45,6 +45,7 @@
 //! follow only the user's model rules, passed in the session specification.
 
 pub(crate) mod files;
+mod items;
 mod memory;
 pub mod parse;
 pub mod session_file;
@@ -211,7 +212,7 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     subagent_transcripts: true,
     output_hook: true,
     pause_finishes_command: false,
-    child_sessions: false,
+    child_usage: None,
     removes_by_id: false,
     sign_in_code_page: true,
     installer_off_path: true,
@@ -235,6 +236,8 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     installer_folder: CliEnv::local_bin,
     login_mark,
     mcp_stores,
+    item_sources: items::sources,
+    items: items::items,
     read_session: session_file::read,
     session_context: |path| crate::session_file::newest(path, session_file::context_of),
     follow_session: |path| {

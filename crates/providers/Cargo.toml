@@ -15,10 +15,12 @@ codegen = ["dep:typify", "dep:schemars", "dep:syn", "dep:prettyplease"]
 age = { version = "0.12.1", default-features = false }
 aho-corasick = "1.1.5"
 base64.workspace = true
+blake3.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-registry.workspace = true
 brigadier-kind.workspace = true
 dirs.workspace = true
+jiff = "0.2.37"
 # OpenCode's server API and event stream, on loopback.
 reqwest = { version = "0.13.5", features = ["json"] }
 rusqlite.workspace = true

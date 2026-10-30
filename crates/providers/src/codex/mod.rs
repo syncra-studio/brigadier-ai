@@ -31,8 +31,10 @@
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
 
+mod children;
 mod context;
 pub(crate) mod files;
+mod items;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
@@ -234,7 +236,7 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     output_hook: false,
     pause_finishes_command: true,
     // Its auto-review (the "guardian") runs in a child thread.
-    child_sessions: true,
+    child_usage: Some(children::child_usage),
     // Through its own `thread/delete`, which also takes them off the Codex app's lists.
     removes_by_id: true,
     sign_in_code_page: false,
@@ -264,6 +266,8 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     installer_folder,
     login_mark,
     mcp_stores,
+    item_sources: crate::items::own_file,
+    items: items::items,
     read_session: rollout::read,
     session_context: |path| crate::session_file::newest(path, rollout::context_of),
     // Its rollout is read whole each time.

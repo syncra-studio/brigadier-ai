@@ -201,25 +201,22 @@ impl SessionManager {
         conv.running_request().await
     }
 
-    /// Meters the Codex child threads of `cli`'s thread (a worker's or a session thread's) at
-    /// its turn's end. Codex's auto-review (the "guardian"), where it runs, runs in a child
-    /// thread whose use the parent's totals leave out; only its rollout holds it. Each
-    /// child's use is recorded once, as [`StepKind::Guardian`] rows marked with the child's
-    /// id, whichever turn's end sees it grow.
+    /// Meters the child threads of `cli`'s thread (a worker's or a session thread's) at its
+    /// turn's end, for a CLI whose auto-review (Codex's "guardian") runs in a child thread
+    /// whose use the parent's totals leave out ([`brigadier_providers::adapters::Adapter::child_usage`]).
+    /// Each child's use is recorded once, as [`StepKind::Guardian`] rows marked with the
+    /// child's id, whichever turn's end sees it grow.
     pub(crate) async fn meter_child_threads(&self, cli: &Cli, owner: TokenOwner<'_>) {
-        if !brigadier_providers::adapters::adapter(cli.provider)
-            .is_some_and(|adapter| adapter.child_sessions)
-        {
+        let Some(child_usage) = brigadier_providers::adapters::adapter(cli.provider)
+            .and_then(|adapter| adapter.child_usage)
+        else {
             return;
-        }
+        };
         // Scripted CLIs have no rollouts; the user's own are never read in tests.
         #[cfg(test)]
         if self.runtime.faked() {
             return;
         }
-        let Some(sessions) = super::codex_children::codex_sessions(self.runtime.cli_env()) else {
-            return;
-        };
         let Some(store) = self.runtime.routing_store().cloned() else {
             return;
         };
@@ -233,11 +230,10 @@ impl SessionManager {
             .and_then(|at| u64::try_from(at).ok())
             .map(|at| UNIX_EPOCH + Duration::from_millis(at))
             .and_then(|at| at.checked_sub(CHILD_LOOK_SLACK));
-        let children = tokio::task::spawn_blocking(move || {
-            super::codex_children::child_threads_since(&sessions, &thread, since)
-        })
-        .await
-        .unwrap_or_default();
+        let env = self.runtime.cli_env().clone();
+        let children = tokio::task::spawn_blocking(move || child_usage(&env, &thread, since))
+            .await
+            .unwrap_or_default();
         let mut row = self
             .turn_for(&owner, cli.provider, cli.model.model.as_deref(), now_ms())
             .await;
@@ -250,7 +246,7 @@ impl SessionManager {
 pub(crate) async fn meter_children(
     store: &std::sync::Arc<crate::routing::RoutingStore>,
     row: TurnUsage,
-    children: Vec<super::codex_children::ChildThread>,
+    children: Vec<brigadier_providers::adapters::ChildThread>,
 ) {
     for child in children {
         let Some(usage) = child.usage else {
@@ -266,7 +262,7 @@ pub(crate) async fn meter_children(
         turn.duration_ms = None;
         turn.context = None;
         if let Err(err) = store.meter_child_thread(child.id, turn).await {
-            tracing::warn!(error = %err, "could not record a Codex child thread's token use");
+            tracing::warn!(error = %err, "could not record a child thread's token use");
         }
     }
 }
@@ -327,9 +323,18 @@ mod tests {
             token_count(30_000, 20_000, 300),
         ];
         std::fs::write(&guardian, lines.join("\n")).unwrap();
+        // The CLI whose auto-review runs in child threads.
+        let (provider, child_usage) = brigadier_providers::adapters::ADAPTERS
+            .iter()
+            .find_map(|adapter| Some((adapter.kind, adapter.child_usage?)))
+            .unwrap();
+        let env = brigadier_providers::cli::CliEnv::from_vars([(
+            "CODEX_HOME".into(),
+            dir.as_os_str().to_owned(),
+        )]);
         let row = TurnUsage {
             at_ms: 1,
-            provider: ProviderKind::Codex,
+            provider,
             model: "gpt".into(),
             conversation_id: Some("c1".into()),
             project_id: None,
@@ -349,9 +354,8 @@ mod tests {
             opens_turn: false,
             cache: Default::default(),
         };
-        let sessions = dir.join("sessions");
         let turn_end = || async {
-            let children = crate::manager::codex_children::child_threads(&sessions, parent);
+            let children = child_usage(&env, parent, None);
             meter_children(&store, row.clone(), children).await;
         };
         // The first turn end meters what it used so far; the second, with nothing new, adds
@@ -361,7 +365,7 @@ mod tests {
         lines.push(token_count(117_603, 90_880, 641));
         std::fs::write(&guardian, lines.join("\n")).unwrap();
         turn_end().await;
-        let turns = store.turns_since(ProviderKind::Codex, 0).await.unwrap();
+        let turns = store.turns_since(provider, 0).await.unwrap();
         let shown: Vec<_> = turns
             .iter()
             .map(|turn| {

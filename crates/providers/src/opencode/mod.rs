@@ -104,7 +104,7 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     subagent_transcripts: false,
     output_hook: false,
     pause_finishes_command: false,
-    child_sessions: false,
+    child_usage: None,
     // Through its server's `DELETE /api/session/{id}`.
     removes_by_id: true,
     sign_in_code_page: false,
@@ -126,6 +126,9 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     // Its login is a row of its database, which changes with every session.
     login_mark: |_| None,
     mcp_stores: |_, _| Vec::new(),
+    item_sources: crate::items::own_file,
+    // Its display reader is a 1:1 read of its transcript's lines, with the same ids.
+    items: |_, display, describe| crate::items::from_display(display, describe),
     read_session: parse::read_transcript,
     session_context: |path| crate::session_file::newest(path, parse::context_of),
     // Read whole each time.

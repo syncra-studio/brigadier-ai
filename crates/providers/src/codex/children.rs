@@ -1,14 +1,16 @@
 //! The child threads a Codex thread starts (its auto-review "guardian", its subagents), read
 //! from their rollouts: the parent's own totals leave their use out, so Brigadier meters it from
-//! there ([`super::usage`]).
+//! there ([`crate::adapters::Adapter::child_usage`]).
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use brigadier_providers::TokenUsage;
-use brigadier_providers::cli::CliEnv;
 use serde_json::Value;
+
+use crate::TokenUsage;
+use crate::adapters::ChildThread;
+use crate::cli::CliEnv;
 
 /// `$CODEX_HOME`, by default `~/.codex`.
 fn codex_home(env: &CliEnv) -> Option<PathBuf> {
@@ -18,16 +20,16 @@ fn codex_home(env: &CliEnv) -> Option<PathBuf> {
     }
 }
 
-/// Where Codex keeps its rollouts for `env`: `$CODEX_HOME/sessions`.
-pub(crate) fn codex_sessions(env: &CliEnv) -> Option<PathBuf> {
-    codex_home(env).map(|home| home.join("sessions"))
-}
-
-/// A thread another thread started, and what it used.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ChildThread {
-    pub(crate) id: String,
-    pub(crate) usage: Option<TokenUsage>,
+/// The child threads of `thread` among the rollouts in `$CODEX_HOME/sessions`
+/// ([`child_threads_since`]).
+pub(crate) fn child_usage(
+    env: &CliEnv,
+    thread: &str,
+    since: Option<std::time::SystemTime>,
+) -> Vec<ChildThread> {
+    codex_home(env)
+        .map(|home| child_threads_since(&home.join("sessions"), thread, since))
+        .unwrap_or_default()
 }
 
 /// A rollout's token count. Codex counts cached input inside `input_tokens`; Brigadier keeps
@@ -54,7 +56,7 @@ fn codex_usage(usage: &Value) -> TokenUsage {
 /// (a child's names its `parent_thread_id`) and each `token_count` line the thread's total so
 /// far.
 #[cfg(test)]
-pub(crate) fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
+fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
     child_threads_since(sessions, thread, None)
 }
 
@@ -62,7 +64,7 @@ pub(crate) fn child_threads(sessions: &Path, thread: &str) -> Vec<ChildThread> {
 /// its parent or later, so it is looked for in the parent's day folder and the ones after it: a
 /// long-lived thread (a worker resumed the next day, a session's thread) starts children on
 /// later days, and one auto-review child serves its parent's whole life.
-pub(crate) fn child_threads_since(
+fn child_threads_since(
     sessions: &Path,
     thread: &str,
     since: Option<std::time::SystemTime>,

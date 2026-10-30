@@ -23,6 +23,10 @@ pub type Make = fn(Arc<dyn Platform>, Arc<CliEnv>) -> Arc<dyn Provider>;
 /// Finds a CLI's sessions ([`crate::leftovers::find`]).
 type Leftovers = fn(&Path, &[PathBuf], &dyn Fn(&Path) -> bool) -> Vec<FoundSession>;
 
+/// The child sessions of a session's thread, by its native id, started since a time (all
+/// when absent).
+type ChildUsage = fn(&CliEnv, &str, Option<std::time::SystemTime>) -> Vec<ChildThread>;
+
 /// One CLI's adapter: what Brigadier knows of it before running it.
 pub struct Adapter {
     pub kind: ProviderKind,
@@ -99,8 +103,9 @@ pub struct Adapter {
     pub output_hook: bool,
     /// Pausing lets the command it runs finish first.
     pub pause_finishes_command: bool,
-    /// Its auto-review runs in child sessions whose use the parent's totals leave out.
-    pub child_sessions: bool,
+    /// The child sessions a session's thread started, each with what it used, when the
+    /// parent's totals leave their use out (an auto-review's).
+    pub child_usage: Option<ChildUsage>,
     /// Its sessions are removed through the CLI itself, by id, working in its own home.
     pub removes_by_id: bool,
     /// Its sign-in prints a page to paste a code back from.
@@ -130,6 +135,11 @@ pub struct Adapter {
     /// The stores of MCP sign-ins of the account at a home, for that account's environment
     /// ([`crate::mcp_oauth`]).
     pub(crate) mcp_stores: fn(&CliEnv, &Path) -> Vec<crate::mcp_oauth::Store>,
+    /// The files its session file's exact items are read from, each with its subagent scope:
+    /// the session file's own first.
+    pub item_sources: crate::items::Sources,
+    /// Its session file's exact items, before the display reader merges calls and results.
+    pub items: crate::items::Items,
     /// Its session file read back as a thread ([`crate::session_file::read`]).
     pub(crate) read_session: fn(&Path) -> std::io::Result<Vec<FileEntry>>,
     /// The context size its session file last recorded ([`crate::session_file::context`]).
@@ -152,6 +162,13 @@ pub struct Adapter {
     pub(crate) usage_limit: fn(i64) -> Vec<Value>,
     /// How it keeps folder trust in its own settings, when it does ([`crate::trust`]).
     pub(crate) trust: Option<&'static crate::trust::Trust>,
+}
+
+/// A session another session started, and what it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChildThread {
+    pub id: String,
+    pub usage: Option<crate::TokenUsage>,
 }
 
 /// A CLI's mark as one SVG path.
