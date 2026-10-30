@@ -42,6 +42,9 @@ test("the stream extends the file item by item, as the engine merges them", () =
   const ended = mergeEntries(merged, [{ event: end.type === "command" ? { ...end, command: "" } : end, atMs: 7 }]);
   assert.deepEqual(ended[1], { event: command("completed", "one\ntwo\n"), atMs: 2, updatedAtMs: 7 });
   assert.equal(ended.length, 4);
+  // A background job's notice is an item of its own, said once however often it comes.
+  const notice = at({ type: "taskNotice", itemId: "n", text: "Background command finished" }, 8);
+  assert.equal(mergeEntries(mergeEntries(ended, [notice]), [notice]).length, 5);
 });
 
 test("a thread is read once, follows the stream, and is read again when its turn ends", async () => {

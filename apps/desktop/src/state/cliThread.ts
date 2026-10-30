@@ -47,6 +47,7 @@ export function itemIdOf(event: ProviderEvent): string | null {
     case "commandOutputDelta":
     case "fileChanges":
     case "image":
+    case "taskNotice":
       return event.itemId;
     default:
       return null;
@@ -158,8 +159,8 @@ function listsOf(news: ThreadNews): Lists {
  *   doesn't hold and only that, in the order heard, deltas included;
  * - news that comes after a read already holding it adds nothing.
  * News with no number (a session's workers' rows) is whole lists only, and always added. A read
- * or news with no number at all (none from the engine) falls back to adding whole items only:
- * a delta may be in the read already.
+ * or news with no number at all (none from the engine) falls back to adding whole items with ids
+ * only: a delta, or an item with no id (an error), may be in the read already.
  */
 function holds(view: ThreadView, news: ThreadNews): boolean {
   return numbered(view, news) && news.seq! <= view.seq!;
@@ -173,11 +174,8 @@ function numbered(view: ThreadView, news: ThreadNews): boolean {
 function addNews(view: ThreadView, news: ThreadNews, lists: boolean, read: boolean): ThreadView {
   if (holds(view, news)) return view;
   let entries = news.entries;
-  if (read && !numbered(view, news)) {
-    // One without an id of its own (an error) is the view's already when it holds the same.
-    const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
-    entries = entries.filter((entry) => !isDelta(entry.event) && (itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry))));
-  }
+  // Unnumbered, only items whole and with ids of their own: one said again only replaces itself.
+  if (read && !numbered(view, news)) entries = entries.filter((entry) => !isDelta(entry.event) && itemIdOf(entry.event) !== null);
   const added = lists ? listsOf(news) : {};
   if (entries.length === 0 && Object.keys(added).length === 0) return view;
   return { ...view, ...(entries.length > 0 && { entries: mergeEntries(view.entries, entries) }), ...added };
