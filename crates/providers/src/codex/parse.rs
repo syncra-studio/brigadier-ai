@@ -886,7 +886,11 @@ impl Parser {
                 ) else {
                     return self.unsupported(rpc_id, method, out);
                 };
-                // An approved command runs outside the sandbox (see the adapter's docs).
+                // Outside the sandbox only when the model asked for it (its justification is the
+                // reason, as is a retry without the sandbox) or for extra permissions; else an
+                // approved command runs in it (`untrusted` asks before every command).
+                let escalation = ask.reason.is_some() || ask.additional_permissions.is_some();
+                let network = ask.network_approval_context.is_some();
                 let reason = ask.reason.clone();
                 // "Allow … for this session": Brigadier allows later commands with the same first
                 // words itself; Codex's session cache (`acceptForSession`) holds this one.
@@ -911,10 +915,10 @@ impl Parser {
                             ask.network_approval_context
                                 .map(|network| format!("network access to {}", network.host))
                         }),
-                        escalation: true,
+                        escalation,
                         input: ask.command.clone(),
                         grant: grant.clone(),
-                        network: false,
+                        network,
                     },
                     PendingKind::Command {
                         grant: grant.is_some(),
@@ -939,6 +943,8 @@ impl Parser {
                     .unwrap_or_default();
                 // Asking to write a whole folder: a session grant must cover it too.
                 paths.extend(ask.grant_root.clone());
+                // Asking for more than the sandbox's writable roots, else a plain edit.
+                let escalation = ask.grant_root.is_some() || ask.reason.is_some();
                 (
                     ApprovalRequest {
                         id: approval_id.clone(),
@@ -947,7 +953,7 @@ impl Parser {
                         command: None,
                         cwd: None,
                         paths,
-                        escalation: true,
+                        escalation,
                         reason: ask.reason.or_else(|| {
                             ask.grant_root.map(|root| format!("write access to {root}"))
                         }),
@@ -2548,10 +2554,49 @@ mod tests {
             })
             .expect("an approval");
         assert_eq!(request.command.as_deref(), Some("rm -rf /other/wt"));
+        assert!(request.escalation);
         assert_eq!(
             request.paths,
             vec!["write /other/wt", "read /data", "network"]
         );
+    }
+
+    #[test]
+    fn a_plain_ask_is_no_escalation_so_the_level_can_answer_it() {
+        let mut parser = Parser::live();
+        let ask = |parser: &mut Parser, line: Value| {
+            events(parser, &line)
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::ApprovalRequested { request } => Some(request),
+                    _ => None,
+                })
+                .expect("an approval")
+        };
+        let ls = ask(
+            &mut parser,
+            json!({ "id": 1, "method": "item/commandExecution/requestApproval",
+            "params": { "itemId": "c1", "command": "/bin/zsh -c ls", "cwd": "/w", "startedAtMs": 0,
+                "threadId": "t1", "turnId": "u1" }}),
+        );
+        let edit = ask(
+            &mut parser,
+            json!({ "id": 2, "method": "item/fileChange/requestApproval",
+            "params": { "itemId": "f1", "startedAtMs": 0, "threadId": "t1", "turnId": "u1" }}),
+        );
+        let outside = ask(
+            &mut parser,
+            json!({ "id": 3, "method": "item/commandExecution/requestApproval",
+            "params": { "itemId": "c2", "command": "/bin/zsh -c ls", "cwd": "/w", "startedAtMs": 0,
+                "reason": "List a folder outside the workspace", "threadId": "t1", "turnId": "u1" }}),
+        );
+        assert!(!ls.escalation && !edit.escalation && outside.escalation);
+        assert!(crate::policy::level_allows(Access::AcceptEdits, &ls, None));
+        assert!(!crate::policy::level_allows(
+            Access::AcceptEdits,
+            &outside,
+            None
+        ));
     }
 
     #[test]
