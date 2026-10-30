@@ -784,6 +784,11 @@ async fn the_first_thread_read_after_a_start_is_timed() {
     let started = std::time::Instant::now();
     flow.manager.thread_view_with_workers(&id).await.unwrap();
     let second = ms(started);
+    // Once git's last read is old, a read doesn't wait for the next: it comes as news.
+    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+    let started = std::time::Instant::now();
+    flow.manager.thread_view_with_workers(&id).await.unwrap();
+    let stale = ms(started);
     // Its parts, each cold again after another start.
     flow.restart().await;
     let started = std::time::Instant::now();
@@ -800,7 +805,7 @@ async fn the_first_thread_read_after_a_start_is_timed() {
     let serialize = ms(started);
     eprintln!(
         "open speed: file {:.1} MB, {} entries, {} workers; first threadView {first:.1} ms, \
-         second {second:.1} ms; cold parts: worker rows with git {rows:.1} ms (git again {rows_again:.1} ms), \
+         second {second:.1} ms, with git due {stale:.1} ms; cold parts: worker rows with git {rows:.1} ms (git again {rows_again:.1} ms), \
          thread {thread:.1} ms; serialize {serialize:.1} ms for {:.2} MB",
         size as f64 / 1e6,
         view.entries.len(),
