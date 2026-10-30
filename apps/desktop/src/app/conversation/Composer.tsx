@@ -70,9 +70,10 @@ const NO_GROUPS: ModelGroup[] = [];
 export const ConversationComposer = memo(function ConversationComposer({ autoFocus, placeholder }: ComposerProps) {
   const target = useContext(ComposerTargetContext);
   const [modelOpen, setModelOpen] = useState(false);
-  // The user's rules file, read as the composer opens and again as the model picker does, so a
-  // hand edit shows: what it keeps out the picker shows but can't pick.
-  useModelRulesRead();
+  // The user's rules file, read once and again as the model picker opens, so a hand edit shows
+  // there and a switch between conversations reads nothing: what it keeps out the picker shows
+  // but can't pick.
+  useModelRulesRead(true);
   const refusals = useRuleRefusals(target?.resolved.groups ?? NO_GROUPS);
   const openModel = (open: boolean) => {
     if (open) void loadModelRules();

@@ -7,6 +7,8 @@ import { useApp } from "@/state/store";
 
 type Asked = Omit<Extract<Request, { method: "listCliCommands" }>, "method">;
 const NONE: readonly CliCommand[] = [];
+/** The last list read for each target and accounts, for the app's run: a switch back shows it with no read. */
+const known = new Map<string, readonly CliCommand[]>();
 
 export function cliCommandsCacheKey(question: Asked, version: string, account: unknown): string {
   return JSON.stringify([question, version, account]);
@@ -22,7 +24,7 @@ function asked(target: CliTarget | null): Asked | null {
   };
 }
 
-/** A read-only refresh at mount and menu open, versioned by choices and catalog. */
+/** A read-only refresh at the first mount for its target and at each menu open, versioned by choices and catalog. */
 export function useCliCommands(target: CliTarget | null): [readonly CliCommand[], () => void] {
   const initialQuestion = asked(target);
   const questionKey = initialQuestion && JSON.stringify(initialQuestion);
@@ -41,16 +43,18 @@ export function useCliCommands(target: CliTarget | null): [readonly CliCommand[]
       const key = cliCommandsCacheKey(question, catalog.version, accountKey);
       const { commands } = await request({ method: "listCliCommands", ...question });
       if (current !== generation.current) return;
+      known.set(identity, commands);
       setAnswer({ identity, key, commands });
     }).catch((error: unknown) => {
       if (current !== generation.current) return;
+      known.delete(identity);
       setAnswer(null);
       console.warn("couldn't list the CLI's commands", error);
     });
   }, [questionKey, accountKey, identity]);
   useEffect(() => {
-    refresh();
+    if (!known.has(identity)) refresh();
     return () => { generation.current += 1; };
-  }, [refresh]);
-  return [answer?.identity === identity ? answer.commands : NONE, refresh];
+  }, [refresh, identity]);
+  return [answer?.identity === identity ? answer.commands : (known.get(identity) ?? NONE), refresh];
 }
