@@ -332,6 +332,11 @@ impl SessionManager {
                             // The turn before's, until its own user message comes: a turn with
                             // none goes on with that turn, as the thread reads it.
                             user_message: live.user_message.take(),
+                            earlier: [
+                                std::mem::take(&mut live.earlier),
+                                std::mem::take(&mut live.entries),
+                            ]
+                            .concat(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
@@ -352,6 +357,11 @@ impl SessionManager {
                         opened = true;
                         *live = LiveTurn {
                             open: true,
+                            earlier: [
+                                std::mem::take(&mut live.earlier),
+                                std::mem::take(&mut live.entries),
+                            ]
+                            .concat(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
@@ -823,12 +833,15 @@ impl SessionManager {
                 ))
             })
             .collect();
-        let files = std::iter::once(std::sync::Arc::new(forked.entries))
+        let files: Vec<_> = std::iter::once(std::sync::Arc::new(forked.entries))
             .chain(owned.iter().map(|(_, entries)| entries.clone()))
             .collect();
         let mut records = forked.turns;
         records.extend(thread_view::read_turns(&record));
-        let threads = self.cli_threads.lock().unwrap();
+        let mut threads = self.cli_threads.lock().unwrap();
+        if let Some(live) = threads.get_mut(id) {
+            thread_view::keep_unheld(&mut live.earlier, &files);
+        }
         let mut view = thread_view::view(files, threads.get(id), &records);
         view.seq = self.news_seq.load(std::sync::atomic::Ordering::SeqCst);
         thread_view::name_providers(&mut view, &owned, current);

@@ -416,6 +416,9 @@ pub(crate) use persistent_apps::persistent_app;
 #[derive(Debug, Default)]
 pub(crate) struct LiveTurn {
     pub entries: Vec<FileEntry>,
+    /// Earlier turns' stream items their files may lack (a stopped turn's streamed text,
+    /// which Codex never writes): kept past those turns, each with the item before it.
+    pub earlier: Vec<FileEntry>,
     /// The user message that started it, once the stream said it.
     pub user_message: Option<String>,
     /// Its CLI's turn started and its user message is still to come (Codex says it after).
@@ -636,6 +639,7 @@ pub(crate) fn view(
     }
     let running = live.is_some_and(|live| live.open);
     if let Some(live) = live {
+        entries = add_unheld(entries, &live.earlier);
         if running {
             entries = session_file::merge(entries, live.entries.clone());
         } else {
@@ -709,6 +713,27 @@ fn add_unheld(mut entries: Vec<FileEntry>, live: &[FileEntry]) -> Vec<FileEntry>
         before = Some(id);
     }
     entries
+}
+
+/// Drops from `earlier` what `files` now hold, but the item before each they lack: it says
+/// where that one goes ([`add_unheld`]).
+pub(crate) fn keep_unheld(earlier: &mut Vec<FileEntry>, files: &[Arc<Vec<FileEntry>>]) {
+    let held: std::collections::HashSet<&str> = files
+        .iter()
+        .flat_map(|file| file.iter())
+        .filter_map(|entry| session_file::item_id(&entry.event))
+        .collect();
+    earlier.retain(|entry| session_file::item_id(&entry.event).is_some());
+    let lacked: Vec<bool> = earlier
+        .iter()
+        .map(|entry| session_file::item_id(&entry.event).is_some_and(|id| !held.contains(id)))
+        .collect();
+    let mut index = 0;
+    earlier.retain(|_| {
+        let keep = lacked[index] || lacked.get(index + 1) == Some(&true);
+        index += 1;
+        keep
+    });
 }
 
 /// Where each turn of `entries` starts: at each user message that isn't a steer.
@@ -1402,6 +1427,50 @@ mod tests {
         let view = view(vec![Arc::new(file)], Some(&live), &[]);
         assert_eq!(ids(&view), ["u1", "a1", "c1", "c2", "a2", "end"]);
         assert_eq!(view.turns.len(), 1);
+    }
+
+    /// A stopped turn's streamed answer, which Codex never writes to its file, still reads in
+    /// that turn while later turns run and after they end; what the file holds isn't kept.
+    #[test]
+    fn a_stopped_turns_streamed_text_stays_after_later_turns() {
+        let end = || {
+            entry(ProviderEvent::TurnCompleted {
+                turn_id: None,
+                status: TurnStatus::Interrupted,
+                duration_ms: None,
+                usage: None,
+            })
+        };
+        let file = Arc::new(vec![
+            message("u0", Role::User),
+            message("a0", Role::Assistant),
+            end(),
+            message("u1", Role::User),
+            end(),
+            message("u2", Role::User),
+        ]);
+        let mut live = LiveTurn {
+            earlier: vec![
+                message("u0", Role::User),
+                message("a0", Role::Assistant),
+                message("u1", Role::User),
+                message("a1", Role::Assistant),
+            ],
+            entries: vec![message("u2", Role::User), message("a2", Role::Assistant)],
+            open: true,
+            ..LiveTurn::default()
+        };
+        keep_unheld(&mut live.earlier, std::slice::from_ref(&file));
+        assert_eq!(live.earlier.len(), 2, "only a1 and the item before it");
+        let running = view(vec![file.clone()], Some(&live), &[]);
+        assert_eq!(
+            ids(&running),
+            ["u0", "a0", "end", "u1", "a1", "end", "u2", "a2"]
+        );
+        live.open = false;
+        let ended = view(vec![file], Some(&live), &[]);
+        assert_eq!(ids(&ended), ids(&running));
+        assert_eq!(ended.turns.len(), 3);
     }
 
     /// A turn the CLI began on its own for a background job's end goes on with the turn before

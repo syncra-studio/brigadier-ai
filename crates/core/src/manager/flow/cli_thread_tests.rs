@@ -123,6 +123,71 @@ async fn a_restart_keeps_the_thread_and_how_each_turn_ended() {
     flow.stop().await;
 }
 
+/// A stopped turn's answer streamed so far, which the CLI's file never got, still reads in
+/// that turn after the next turn ends.
+#[tokio::test]
+async fn a_stopped_turns_streamed_answer_stays_after_the_next_turn() {
+    let running = Arc::new(tokio::sync::Notify::new());
+    let ran = running.clone();
+    let flow = Flow::start(
+        "cli-thread-stopped-text",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let ran = ran.clone();
+            async move {
+                if turn.input.contains("Write lines") {
+                    turn.emit(brigadier_providers::ProviderEvent::MessageDelta {
+                        item_id: "partial".into(),
+                        text: "1. Peaks".into(),
+                        phase: None,
+                    })
+                    .await;
+                    ran.notify_one();
+                    assert!(turn.stopped().await, "the user stops it");
+                    return Reply::text("");
+                }
+                Reply::text("Looked.")
+            }
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let ended = |flow: &Flow, count: usize| {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == count && view.turns.iter().all(|turn| turn.end.is_some())
+    };
+    flow.say("Write lines.").await;
+    running.notified().await;
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    eventually("the stopped turn ends", || ended(&flow, 1)).await;
+    flow.settled().await;
+    flow.say("Look around.").await;
+    eventually("the next turn ends", || ended(&flow, 2)).await;
+    flow.settled().await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    let texts: Vec<_> = view
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            brigadier_providers::ProviderEvent::Message { text, .. }
+            | brigadier_providers::ProviderEvent::MessageDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        ["Write lines.", "1. Peaks", "Look around.", "Looked."],
+        "{view:#?}"
+    );
+    flow.stop().await;
+}
+
 /// Each turn names Brigadier's requests it carried: its user message's, and a steer's; a
 /// restart reads them back from `record/turns.jsonl`.
 #[tokio::test]
