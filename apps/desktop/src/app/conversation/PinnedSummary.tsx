@@ -54,8 +54,11 @@ export function SummaryPane({
     const gutterFrom = tokenPx("--spacing-summary-gutter-from");
     const besideFrom = tokenPx("--spacing-summary-beside-from");
     let frame = 0;
+    let windowWidth = window.innerWidth;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
+      const resized = window.innerWidth !== windowWidth;
+      windowWidth = window.innerWidth;
       const { width } = entry.contentRect;
       const room = (width - column) / 2;
       const layout: SummaryLayout =
@@ -67,11 +70,12 @@ export function SummaryPane({
         });
       }
       // A summary shown stays shown as the window changes: floating where it floats, pinned
-      // beside the thread elsewhere.
+      // beside the thread elsewhere. A side panel narrowing the pane is moving on to it: the
+      // summary waits behind the top bar's button rather than float over the thread.
       const state = useSummary.getState();
       if (state.layout === layout && state.measured) return;
       if (state.layout === "float" && state.floating) setPinnedSummary(true);
-      const floating = layout === "float" && (state.floating || summaryShownOf(useApp.getState()));
+      const floating = layout === "float" && (state.floating || ((resized || !state.measured) && summaryShownOf(useApp.getState())));
       useSummary.setState({ layout, measured: true, floating });
     });
     observer.observe(element);

@@ -184,6 +184,16 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.messageRight = bubble()?.getBoundingClientRect().right ?? null;
   seen.cardLeft = shown?.getBoundingClientRect().left ?? null;
 
+  // A side panel narrowing the pane, the window as it was: the card doesn't float over the thread.
+  const main = $("main")!;
+  main.style.width = "600px";
+  await until(() => useSummary.getState().layout === "float", "the narrowed pane to float the card");
+  await frames();
+  seen.panelNoFloat = !useSummary.getState().floating && useApp.getState().summaryShown.first === true;
+  main.style.width = "";
+  await until(() => useSummary.getState().layout !== "float", "the pane to widen again");
+  await frames();
+
   toggle()!.click();
   await until(() => !pressed(), "Context to close the card");
   await frames();
