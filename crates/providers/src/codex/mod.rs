@@ -129,9 +129,8 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 /// own).
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
 
-/// Codex's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
-/// memory should grow: a naked worker (D13), a side chat, which leaves nothing, Brigadier's own
-/// one-shots and a control connection.
+/// Codex's own memory, off for every Brigadier session and connection (core-goals D9):
+/// Brigadier's ledger, decisions and transcripts are the memory.
 const MEMORIES: &str = "memories";
 
 /// The user's personal Codex setup, off for a session without it ([`ToolSet::user_setup`]).
@@ -757,14 +756,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     } else {
         USER_SETUP_FEATURES
     };
-    let memory_off = session.is_none_or(|session| {
-        session.naked_worker
-            || matches!(
-                tools,
-                ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat
-            )
-    });
-    let memories: &[&str] = if memory_off { &[MEMORIES] } else { &[] };
+    let memories: &[&str] = &[MEMORIES];
     for feature in DISABLED_FEATURES
         .iter()
         .chain(sealed)
@@ -4116,44 +4108,34 @@ mod tests {
         assert_eq!(args.iter().filter(|arg| *arg == NO_SUB_AGENTS).count(), 1);
     }
 
-    /// STRIP-DOWN-PLAN S19: Codex's own memory follows the user's setting. Every session reads
-    /// the user's `config.toml`, so a thread, a worker and a Chat are given nothing about memory
-    /// and start with the user's `features.memories`, on or off. Only a naked worker (D13), a side
-    /// chat, Brigadier's own one-shots and a control connection go without it.
+    /// core-goals D9: Codex's own memory is off for every session, naked or not, and for a
+    /// control connection.
     #[test]
-    fn codexs_memory_follows_the_users_setting() {
-        let about_memory = |args: &[String]| -> Vec<String> {
-            args.iter()
-                .filter(|arg| arg.contains("memor"))
-                .cloned()
-                .collect()
-        };
+    fn codexs_memory_is_off_for_every_session() {
         let off = |args: &[String]| {
             args.windows(2)
                 .any(|pair| pair[0] == "--disable" && pair[1] == MEMORIES)
         };
+        assert!(off(&app_server_args(None)), "a control connection");
         for tools in [
             ToolSet::Thread,
             ToolSet::Lean,
             ToolSet::Default,
             ToolSet::SideChat,
-        ] {
-            let args = app_server_args(Some(&spec(tools, None)));
-            assert!(about_memory(&args).is_empty(), "{tools:?}: {args:?}");
-        }
-        let mut lean = spec(ToolSet::Lean, None);
-        lean.naked_worker = true;
-        assert!(off(&app_server_args(Some(&lean))), "a naked worker");
-        for tools in [
             ToolSet::TabChat,
             ToolSet::Review,
             ToolSet::Web,
             ToolSet::None,
         ] {
-            let args = app_server_args(Some(&spec(tools, None)));
-            assert!(off(&args), "{tools:?}: {args:?}");
+            for naked_worker in [false, true] {
+                let mut session = spec(tools, None);
+                session.naked_worker = naked_worker;
+                assert!(
+                    off(&app_server_args(Some(&session))),
+                    "{tools:?}, naked {naked_worker}"
+                );
+            }
         }
-        assert!(off(&app_server_args(None)), "a control connection");
     }
 
     /// A session's or Chat's thread keeps Codex's own goals, sleep tool, shell and sub-agents, as
@@ -4168,8 +4150,13 @@ mod tests {
             .filter(|pair| pair[0] == "--disable")
             .map(|pair| pair[1].as_str())
             .collect();
-        // Only what is off for every session: goals, the sleep tool and the shell are Codex's own.
-        assert_eq!(disabled, DISABLED_FEATURES, "{args:?}");
+        // Only what is off for every session (memory too, D9): goals, the sleep tool and the
+        // shell are Codex's own.
+        assert_eq!(
+            disabled,
+            [DISABLED_FEATURES, &[MEMORIES]].concat(),
+            "{args:?}"
+        );
         assert!(!without_sub_agents(&args), "{args:?}");
         assert!(!without_sub_agents(&app_server_args(Some(&spec(
             ToolSet::Lean,
