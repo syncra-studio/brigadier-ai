@@ -14,6 +14,6 @@ const GENERIC_GLYPH: CliFacts["glyph"] = {
 export function cliFacts(id: ProviderKind): CliFacts {
   return CLIS.find((cli) => cli.id === id) ?? {
     id, label: id, vendor: id, maker: id, cliName: id, installGuide: "", usualWindows: [], glyph: GENERIC_GLYPH,
-    oneSkillPerMessage: false, reportsCacheWrites: true, subagentTools: [],
+    oneSkillPerMessage: false, reportsCacheWrites: true, subagentTools: [], extraAccounts: false,
   };
 }

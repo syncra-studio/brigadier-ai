@@ -1,7 +1,7 @@
 //! Settings → Accounts: adding and removing the user's extra CLI accounts. Signing one in is
 //! the CLI's own sign-in, run by the daemon in a terminal with the account's home.
 
-use brigadier_providers::ProviderKind;
+use brigadier_providers::{KindFacts as _, ProviderKind};
 
 use super::SessionManager;
 use crate::accounts::AccountRef;
@@ -12,6 +12,16 @@ impl SessionManager {
     /// Adds an extra account of `provider`: its home is made, linked to the user's own, and
     /// ready for the CLI's own sign-in.
     pub async fn add_account(&self, provider: ProviderKind) -> Result<AccountEntry> {
+        // Refused before it is saved: an entry its CLI can't give a home would stay behind.
+        if brigadier_providers::adapters::adapter(provider)
+            .and_then(|adapter| adapter.home)
+            .is_none()
+        {
+            return Err(Error::Invalid(format!(
+                "{} takes no extra accounts",
+                provider.label()
+            )));
+        }
         let entry = AccountEntry {
             id: format!("acct-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
             provider,

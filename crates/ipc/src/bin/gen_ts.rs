@@ -98,7 +98,7 @@ fn clis_ts() -> String {
              cliName: {cli_name},\n    installGuide: {guide},\n    usualWindows: {windows},\n    \
              glyph: {{\n      viewBox: {view_box},\n      path: {path},\n{class}    }},\n    \
              oneSkillPerMessage: {one_skill},\n    reportsCacheWrites: {cache_writes},\n    \
-             subagentTools: {tools},\n  }},\n",
+             subagentTools: {tools},\n    extraAccounts: {extra_accounts},\n  }},\n",
             id = text(adapter.kind.id()),
             label = text(adapter.label),
             vendor = text(adapter.vendor),
@@ -111,6 +111,7 @@ fn clis_ts() -> String {
             one_skill = adapter.one_skill_per_message,
             cache_writes = adapter.reports_cache_writes,
             tools = list(adapter.subagent_tools),
+            extra_accounts = adapter.home.is_some(),
         ));
     }
     out.push_str("];\n");
@@ -141,6 +142,8 @@ export interface CliFacts {
   reportsCacheWrites: boolean;
   /** The tool names its native subagents start with. */
   subagentTools: string[];
+  /** It takes extra accounts, each signed in at a home of its own. */
+  extraAccounts: boolean;
 }
 
 export const CLIS: readonly CliFacts[] = [

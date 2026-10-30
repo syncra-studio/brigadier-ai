@@ -88,7 +88,8 @@ export function signInFinished(
 
 /**
  * One agent's accounts on its Settings › Providers page, inside a card the caller draws,
- * in routing order, ending in a link that adds another and shows its sign-in.
+ * in routing order, ending (for a CLI that takes extra accounts) in a link that adds another
+ * and shows its sign-in.
  */
 export function ProviderAccounts({
   provider,
@@ -103,7 +104,7 @@ export function ProviderAccounts({
   revealed: Revealed;
   opened: OpenRows;
 }) {
-  const label = cliFacts(provider).vendor;
+  const { vendor: label, extraAccounts } = cliFacts(provider);
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
   // Off the page: a new account added only after that goes again with its sign-in.
@@ -206,7 +207,7 @@ export function ProviderAccounts({
       {rows}
       {terminal ? (
         <div className="px-4 py-3">{terminal}</div>
-      ) : (
+      ) : extraAccounts ? (
         <button
           type="button"
           aria-label={addLabel}
@@ -217,7 +218,7 @@ export function ProviderAccounts({
           <Plus aria-hidden className="size-icon-sm" />
           {addLabel}
         </button>
-      )}
+      ) : null}
     </>
   );
 }

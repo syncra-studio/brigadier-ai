@@ -22,6 +22,8 @@ export interface CliFacts {
   reportsCacheWrites: boolean;
   /** The tool names its native subagents start with. */
   subagentTools: string[];
+  /** It takes extra accounts, each signed in at a home of its own. */
+  extraAccounts: boolean;
 }
 
 export const CLIS: readonly CliFacts[] = [
@@ -41,6 +43,7 @@ export const CLIS: readonly CliFacts[] = [
     oneSkillPerMessage: true,
     reportsCacheWrites: true,
     subagentTools: ["Agent", "Task"],
+    extraAccounts: true,
   },
   {
     id: "codex",
@@ -57,6 +60,7 @@ export const CLIS: readonly CliFacts[] = [
     oneSkillPerMessage: false,
     reportsCacheWrites: false,
     subagentTools: ["spawnAgent", "spawn_agent"],
+    extraAccounts: true,
   },
   {
     id: "opencode",
@@ -73,5 +77,6 @@ export const CLIS: readonly CliFacts[] = [
     oneSkillPerMessage: false,
     reportsCacheWrites: true,
     subagentTools: ["subagent"],
+    extraAccounts: false,
   },
 ];

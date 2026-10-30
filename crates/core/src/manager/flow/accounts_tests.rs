@@ -303,6 +303,24 @@ async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
     flow.stop().await;
 }
 
+/// A CLI that takes no extra accounts refuses one before anything is saved.
+#[tokio::test]
+async fn an_account_its_cli_cannot_take_is_refused_unsaved() {
+    let flow = Flow::start(
+        "accounts-unsupported",
+        Options::default(),
+        logging(&Log::default(), |_| Reply::text("Done.")),
+    )
+    .await;
+    let refused = flow.manager.add_account(ProviderKind::OpenCode).await;
+    assert!(
+        matches!(refused, Err(crate::Error::Invalid(_))),
+        "{refused:?}"
+    );
+    assert!(flow.core.settings().accounts.is_empty());
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_switch_notice_masks_an_account_named_by_its_email() {
     let log = Log::default();
