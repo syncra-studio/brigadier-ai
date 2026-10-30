@@ -195,8 +195,14 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   if (!only) return null;
   // Paused for quota, a lone step keeps its own row, which says it is paused.
   const ownRow = working === undefined || paused ? !line || rowOpen : !working || rowOpen;
+  // Both looks share one root, so a group of one that becomes its step's own row at turn end
+  // never remounts (only what is inside the root changes).
   if (items.length === 1 && ownRow && !summary) {
-    return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
+    return (
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>
+      </Collapsible>
+    );
   }
   const list = <GroupStepList items={items} described={described} renderStep={renderStep} />;
   return (

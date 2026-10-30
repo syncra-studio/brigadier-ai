@@ -20,10 +20,6 @@ export const WorkHeader: FC<{
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
-  /** Its final answer streams or stands while the request still runs: its work is over. */
-  answering: boolean;
-  /** When its final answer started, where its time stops. */
-  answerAtMs: number | undefined;
   /** Over, the workers it started that still work: it says it waits for them, since it ended. */
   workers: number;
   /** Over, the background commands it started that still hold it (D21): it says it waits for them. */
@@ -32,13 +28,12 @@ export const WorkHeader: FC<{
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, open, foldable, quota, answering, answerAtMs, workers, commands = 0, onToggle, denied, onDenied }) => {
+}> = ({ meta, open, foldable, quota, workers, commands = 0, onToggle, denied, onDenied }) => {
   const held = workers > 0 || commands > 0;
   const now = useTicking(isLive(meta.state) || held);
-  const elapsed = held ? Math.max(0, now - (meta.endedAtMs ?? now)) : turnTime(meta, now, answerAtMs);
+  const elapsed = held ? Math.max(0, now - (meta.endedAtMs ?? now)) : turnTime(meta, now);
   // Waiting on its own question card, the turn still reads as working.
-  const onCard = !answering && waitsOnCard(meta);
-  const state = answering ? "done" : onCard ? "working" : meta.state;
+  const state = waitsOnCard(meta) ? "working" : meta.state;
   const failed = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;

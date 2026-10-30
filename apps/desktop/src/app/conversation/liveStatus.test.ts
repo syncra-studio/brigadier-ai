@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { answeredHead, elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest } from "@/ipc/generated";
@@ -224,17 +224,6 @@ test("a worker open in the user's terminal waits on the user", () => {
   // Even while the lead's own turn runs.
   assert.deepEqual(head(input({ ...leading, tasks: byId([task({ state: "takenOver" })]) })),
     { text: "Working in your terminal", tone: "needsYou" });
-});
-
-test("an answered request's line shows once it waits or a late result reopened it", () => {
-  // Still in the same working span: neither waiting nor reopened.
-  const span = { waiting: false, reopened: false };
-  // What the thread merely does between its turns shows only once it waits or a late result reopened it.
-  assert.equal(answeredHead({ text: "Thinking", tone: "busy" }, span), null);
-  assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, reopened: true }), { text: "Thinking", tone: "busy" });
-  // What waits on the user shows whatever else.
-  assert.deepEqual(answeredHead({ text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" }, span),
-    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
 });
 
 test("a run's elapsed time is short", () => {

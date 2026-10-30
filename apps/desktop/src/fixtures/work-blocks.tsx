@@ -350,14 +350,43 @@ async function driveTurn(): Promise<object> {
   // The pace shows what is left within about two seconds.
   await settle(3000);
   out.commentary = seen();
-  // The final answer starts: the work folds at once, the time stops there. The fold is timed from
-  // the first frame that shows the answer starting, by the frames' own clock: a slow machine
-  // takes its time drawing that frame, which is not the fold's. What it took past its 150ms close
-  // is counted in frames, which a loaded machine draws farther apart (#20).
+  // The final answer starts: it streams in its own place under the work, which stays in view
+  // while the turn works (D21, D24).
   const answerAtMs = Date.now() - 1000;
   const answerText = "Fixed the rounding: `round` now rounds half-up, and the tests pass.";
-  // Its first line finished, the next under way (D9 b: a reply shows a finished line at a time).
   change(() => ({ streaming: { messageId: "a1", text: `${answerText}\n\nThe te`, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  await settle();
+  out.answering = seen();
+  out.announcedAnswering = text(one("[data-slot=answer-announcer]", turn() ?? document));
+  // Ticks later it still says the same time.
+  await wait(2200);
+  change(() => ({ streaming: { messageId: "a1", text: `${answerText}\n\nThe tests pass.\n`, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
+  await settle();
+  out.answeringLater = seen();
+  // A question for the user while it streams: its line shows under the answer.
+  change(() => ({ questions: { ask: question } }));
+  await settle();
+  out.answeringAsked = seen();
+  change(() => ({ questions: {} }));
+  await settle();
+  await hold("answering");
+  // Stored, the request still running: still in view, the answer in its place.
+  const stored: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", text: answerText, blob: null, createdAtMs: Date.now(), attachments: [],
+    mentions: [], model: null, requestId: "r1", parentId: "r1", answerAtMs,
+  };
+  daemon.messages = [...daemon.messages, stored];
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ streaming: null, head: "a1" }));
+  await settle();
+  out.stored = seen();
+  // The turn ends: the request is done and its work folds at once. The fold is timed from the
+  // first frame that shows the end, by the frames' own clock: a slow machine takes its time
+  // drawing that frame, which is not the fold's. What it took past its 150ms close is counted in
+  // frames, which a loaded machine draws farther apart (#20).
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await frame();
   const folding = Number(document.timeline.currentTime);
   out.foldFirst = one("[data-slot=request-fold]", turn() ?? document)?.getAttribute("data-fold") ?? "gone";
@@ -374,35 +403,6 @@ async function driveTurn(): Promise<object> {
   }
   out.foldMs = foldMs;
   out.foldLate = foldLate;
-  await settle();
-  out.answering = seen();
-  out.announcedAnswering = text(one("[data-slot=answer-announcer]", turn() ?? document));
-  // Ticks later it still says the same time.
-  await wait(2200);
-  change(() => ({ streaming: { messageId: "a1", text: `${answerText}\n\nThe tests pass.\n`, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
-  await settle();
-  out.answeringLater = seen();
-  // A question for the user while it streams: its line shows under the answer.
-  change(() => ({ questions: { ask: question } }));
-  await settle();
-  out.answeringAsked = seen();
-  change(() => ({ questions: {} }));
-  await settle();
-  await hold("answering");
-  // Stored, the request still running: folded, the same time.
-  const stored: Message = {
-    id: "a1", conversationId: ID, seq: 2, role: "assistant", text: answerText, blob: null, createdAtMs: Date.now(), attachments: [],
-    mentions: [], model: null, requestId: "r1", parentId: "r1", answerAtMs,
-  };
-  daemon.messages = [...daemon.messages, stored];
-  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
-  change(() => ({ streaming: null, head: "a1" }));
-  await settle();
-  out.stored = seen();
-  // The turn ends: the request is done.
-  daemon.run = "idle";
-  change(() => ({ run: "idle", runRequest: null }));
-  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await settle();
   out.done = seen();
   await hold("done");
@@ -493,6 +493,9 @@ async function driveHidden(): Promise<object> {
   const shown = !!one("[data-slot=request-fold]", turn() ?? document);
   Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
   change(() => ({ streaming: { messageId: "a1", text: "Fixed the rounding.\n", requestId: "r1", phase: "answer", startedAtMs: Date.now() } }));
+  daemon.run = "idle";
+  change(() => ({ run: "idle", runRequest: null }));
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await frame();
   return { shown, gone: !one("[data-slot=request-fold]", turn() ?? document) };
 }
@@ -582,13 +585,16 @@ async function foldMotion(act: () => unknown): Promise<{ fold: string; duration:
   };
 }
 
+const sub = (running: boolean) => task("sub1", "agent", "Check the docs", running);
+const ciWatch = (running: boolean) => task("bg1", "shell", "gh run watch", running);
+
 async function driveBackground(): Promise<object> {
   await settle(600);
   const out: Record<string, unknown> = {};
   const header = () => one<HTMLButtonElement>("[data-slot=request-work-header]", turn() ?? document);
   const state = () => ({ fold: seen().fold, header: seen().header, expanded: header()?.getAttribute("aria-expanded") ?? null });
-  // A subagent of the turn works in the background when its final answer starts: it stays open.
-  background([task("sub1", "agent", "Check the docs", true)]);
+  // A subagent of the turn works when its answer comes: the work stays in view.
+  background([sub(true)]);
   await settle();
   const answerAtMs = Date.now();
   const stored: Message = {
@@ -599,54 +605,23 @@ async function driveBackground(): Promise<object> {
   useApp.setState((held) => ({ threads: { ...held.threads, [ID]: { ...held.threads[ID]!, items: daemon.messages } } }));
   change(() => ({ head: "a1" }));
   await settle();
-  out.subagentRuns = state();
-  // It ends: the work folds by itself, in the 150ms close.
-  out.subagentEnds = await foldMotion(() => background([task("sub1", "agent", "Check the docs", false)]));
-  await settle();
-  out.folded = state();
-  // Another starts: open at once, with no motion; it ends, and it folds again.
-  out.subagentAgain = await foldMotion(() => background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", true)]));
-  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false)]);
-  await settle();
-  // A step after the answer while the turn still runs: under the answer, the work still folded,
-  // the header and the answer the same nodes.
-  const headerNode = header();
+  out.answering = state();
   const answerNode = one("[data-answer]", turn() ?? document);
-  steps([...daemon.steps, tool("late", 3, "shell", "npm run lint", "inProgress")]);
-  await settle();
-  out.after = {
-    ...state(),
-    below: text(one("[data-slot=request-after-answer]", turn() ?? document)),
-    sameHeader: header() === headerNode,
-    sameAnswer: one("[data-answer]", turn() ?? document) === answerNode,
-  };
-  steps(daemon.steps.map((step) => (step.kind.type === "tool" && step.kind.itemId === "late" ? tool("late", 3, "shell", "npm run lint", "completed") : step)));
-  await settle();
-  // Done, with a background command still holding the turn: "Worked for", folded.
-  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false), task("bg1", "shell", "gh run watch", true)], ["bg1"]);
+  // Its CLI's turn ends with the subagent and a background command still working: still open (D24).
+  background([sub(true), ciWatch(true)], ["bg1"]);
   daemon.run = "idle";
   change(() => ({ run: "idle", runRequest: null }));
   request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await settle();
   out.held = state();
-  // The command exits: nothing drawn changes, nothing is taken out.
-  const body = one("[data-slot=request-body]", turn() ?? document);
-  const before = { header: header(), answer: one("[data-answer]", turn() ?? document), body };
-  let removed = 0;
-  const removals = new MutationObserver((records) => {
-    for (const record of records) removed += [...record.removedNodes].filter((node) => node instanceof Element).length;
-  });
-  if (body) removals.observe(body, { childList: true, subtree: true });
-  background([task("sub1", "agent", "Check the docs", false), task("sub2", "agent", "Read the spec", false), task("bg1", "shell", "gh run watch", false)], []);
+  // The subagent ends; the command still runs: still open.
+  background([sub(false), ciWatch(true)], ["bg1"]);
   await settle();
-  removals.disconnect();
-  out.exited = {
-    ...state(),
-    removed,
-    sameHeader: header() === before.header,
-    sameAnswer: one("[data-answer]", turn() ?? document) === before.answer,
-    sameBody: one("[data-slot=request-body]", turn() ?? document) === before.body,
-  };
+  out.oneLeft = state();
+  // The command exits too: the work folds by itself, in the 150ms close, the answer the same node.
+  out.allEnded = await foldMotion(() => background([sub(false), ciWatch(false)], []));
+  await settle();
+  out.folded = { ...state(), sameAnswer: one("[data-answer]", turn() ?? document) === answerNode };
   // The header's click: open in 300ms with a slide, closed in 150ms.
   out.clickOpen = await foldMotion(() => fixtureClick(header()!));
   await settle();

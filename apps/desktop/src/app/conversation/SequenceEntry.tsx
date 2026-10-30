@@ -1,5 +1,6 @@
 import { type FC, Suspense } from "react";
 
+import { stepKey } from "@/app/conversation/activity/group";
 import { ImagesRow } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
@@ -56,7 +57,7 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
       return <SteerBubble text={entry.text} atMs={entry.atMs} attachments={entry.attachments} requestId={entry.requestId} />;
     case "orchestrator":
       if (entry.steps.length > 0 && entry.steps.every(isImageStep)) return <ImagesRow steps={entry.steps} />;
-      return <>{entry.steps.map((step) => <ThreadStep key={step.position} step={step} />)}</>;
+      return <>{entry.steps.map((step) => <ThreadStep key={stepKey(step)} step={step} />)}</>;
     case "compaction":
       return <CompactionDivider compaction={entry.compaction} />;
     case "nudge":

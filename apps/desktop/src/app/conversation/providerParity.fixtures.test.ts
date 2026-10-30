@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { turnActivity } from "@/app/conversation/activity/group";
 import { stepLabel, toolStepWords, type ToolStep } from "@/app/conversation/activity/words";
-import { answerIndex, answeringIndex, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
+import { answerIndex, liveAnswer, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { turnParts } from "@/app/conversation/workParts";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
@@ -101,10 +101,10 @@ function seen(view: ThreadView, prompts: RegExp) {
       const sequence = blockSequence({ ...block, steers });
       const finished = blockFinished(block.state);
       const live = isLive(block.state);
-      const answering = !finished && live ? answeringIndex(block.texts, sequence) : null;
-      const done = finished || answering !== null;
-      const answer = answering ?? answerIndex(block.texts, finished);
-      const parts = turnParts(turnActivity(sequence, false), answer, done, live, (index) => {
+      const done = finished;
+      const answer = done ? answerIndex(block.texts, true) : liveAnswer(block.texts, sequence);
+      const shownSequence = done ? sequence : sequence.filter((entry) => entry.kind !== "text" || entry.index !== answer);
+      const parts = turnParts(turnActivity(shownSequence, false), answer, done, live, (index) => {
         const text = block.texts[index];
         return !!text && !text.commentary && !text.update;
       });

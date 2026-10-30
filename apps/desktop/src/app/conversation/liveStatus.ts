@@ -56,17 +56,6 @@ export function commandWords(command: string): string {
   return line.length > 40 ? `${line.slice(0, 39).trimEnd()}…` : line;
 }
 
-/**
- * The line under an answer whose request still waits: what waits on the user first, else what
- * it waits on, or does once a late result reopened it.
- */
-export function answeredHead(head: StatusHead | null, { waiting, reopened }:
-  { waiting: boolean; reopened: boolean }): StatusHead | null {
-  if (head?.tone === "needsYou") return head;
-  // Reopened by a late result: it works again under its answer, so it says so (#107).
-  return waiting || reopened ? head : null;
-}
-
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
 function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
   const ours = (id: string | null) => id !== null && requestIds.includes(id);

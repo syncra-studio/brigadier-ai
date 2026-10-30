@@ -7,7 +7,6 @@ import { settledSession } from "@/fixtures/settledSession";
 import {
   anchorMessage,
   answerIndex,
-  answeringIndex,
   type Block,
   blockFinished,
   type BoardDigest,
@@ -15,9 +14,9 @@ import {
   foldsAway,
   heldForWait,
   isUpdate,
+  liveAnswer,
   judgementCall,
   peerOf,
-  reopenedSince,
   splitReport,
   type SequenceEntry,
   updateIndices,
@@ -656,49 +655,27 @@ test("a reply a wait took or was handed is held for it; a returned one is not", 
 });
 
 test("a block's sequence keeps the anchors on its text", () => {
-  const entries = blockSequence({ texts: [{ position: 1, anchors: ["auto1", "auto2"] }], cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
+  const entries = blockSequence({ texts: [{ messageId: "m1", position: 1, anchors: ["auto1", "auto2"] }], cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
   assert.deepEqual(entries.map((entry) => entry.kind === "text" && entry.anchors), [["auto1", "auto2"]]);
 });
 
-const text = (index: number, position: number): SequenceEntry => ({ kind: "text", index, position });
+const text = (index: number, position: number): SequenceEntry => ({ kind: "text", index, messageId: `m${index}`, position });
 
-test("a block still at work answers with the reply its CLI called the final answer, through what comes after it, until a follow-up or compaction", () => {
+test("a block still at work shows the reply it ends with where its answer stands, until a step or follow-up comes after it", () => {
   const thinking = { kind: "thinking", segment: {} as never, live: true, position: 9 } as SequenceEntry;
-  const texts = [{}, { answerAtMs: 50 }];
-  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3)]), 1);
-  // A thought, a step, a line or a card after it don't take it back.
-  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3), thinking]), 1);
+  const texts = [{}, {}];
+  assert.equal(liveAnswer(texts, [text(0, 1), text(1, 3)]), 1);
+  // A thought after it doesn't take it back.
+  assert.equal(liveAnswer(texts, [text(0, 1), text(1, 3), thinking]), 1);
+  // A step, a follow-up or a compaction after it does: it is a line between steps again.
   const step = { kind: "orchestrator", steps: [], position: 4 } as unknown as SequenceEntry;
-  assert.equal(answeringIndex(texts, [text(0, 1), text(1, 3), step]), 1);
-  assert.equal(answeringIndex([{}, { answerAtMs: 50 }, {}], [text(0, 1), text(1, 3), text(2, 4)]), 1);
-  // A follow-up steered in, or a compaction, after it starts new work.
-  assert.equal(answeringIndex(texts, [text(1, 3), { kind: "steer", position: 4, text: "more", atMs: 0, attachments: [] } as SequenceEntry]), null);
-  assert.equal(answeringIndex(texts, [text(1, 3), { kind: "compaction", compaction: {} as never, position: 4 }]), null);
-  // Before its final answer, a line between steps is no answer.
-  assert.equal(answeringIndex([{}], [text(0, 1)]), null);
-});
-
-test("a late update line written while the request still works stays under the answer it follows (#55)", () => {
-  const texts = [{}, { answerAtMs: 50 }, { answerAtMs: 90, update: true }];
-  const late = { kind: "orchestrator", steps: [], position: 4 } as unknown as SequenceEntry;
-  // The answer stays the answer, its time stopping where it started; the update shows under it.
-  const answering = answeringIndex(texts, [text(0, 1), text(1, 3), late, text(2, 5)]);
-  assert.equal(answering, 1);
-  assert.deepEqual(updateIndices(texts, answering), [2]);
-  // A block of update lines alone answers with its newest.
-  assert.equal(answeringIndex([{ answerAtMs: 1, update: true }], [text(0, 1)]), 0);
+  assert.equal(liveAnswer(texts, [text(0, 1), text(1, 3), step]), null);
+  assert.equal(liveAnswer(texts, [text(1, 3), { kind: "steer", position: 4, text: "more", atMs: 0, attachments: [] } as SequenceEntry]), null);
+  assert.equal(liveAnswer(texts, [text(1, 3), { kind: "compaction", compaction: {} as never, position: 4 }]), null);
+  // An update line is no answer.
+  assert.equal(liveAnswer([{}, { update: true }], [text(0, 1), text(1, 3)]), null);
   // "**Update**:" is an update line too.
   assert.equal(isUpdate("**Update**: CI passed on c9cb8b3."), true);
-});
-
-test("a request that works again after its answer reads as reopened, not as still answering", () => {
-  // Answered at 5s while its span ran on (a review it waits for): still the answer's own work.
-  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: null }], 5_000), false);
-  // Done at 6s, then a late full-checks result made it work again at 9s.
-  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: 6_000 }, { fromMs: 9_000, toMs: null }], 5_000), true);
-  // Done, and nothing reopened it.
-  assert.equal(reopenedSince([{ fromMs: 1_000, toMs: 6_000 }], 5_000), false);
-  assert.equal(reopenedSince([{ fromMs: 9_000, toMs: null }], undefined), false);
 });
 
 const gapCall = (position: number, atMs: number, endedAtMs: number) => ({
@@ -707,7 +684,7 @@ const gapCall = (position: number, atMs: number, endedAtMs: number) => ({
   kind: { type: "tool" as const, itemId: `c${position}`, name: "Read", detail: "a.ts", status: "completed" as const, throughPosition: position, endedAtMs },
 });
 const gapKinds = (steps: ReturnType<typeof gapCall>[], texts: { position: number; atMs: number }[]) =>
-  blockSequence({ texts, cards: [], steers: [], compactions: [], orchestratorSteps: steps, rows: [] }).map((entry) =>
+  blockSequence({ texts: texts.map((each, index) => ({ ...each, messageId: `m${index}` })), cards: [], steers: [], compactions: [], orchestratorSteps: steps, rows: [] }).map((entry) =>
     entry.kind === "gap" ? `gap@${entry.atMs}` : entry.kind,
   );
 

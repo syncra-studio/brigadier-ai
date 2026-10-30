@@ -352,22 +352,13 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
  * The time a turn shows: while it works, waits for quota or for the answer to its question
  * card, how long it has worked so far; while it waits for the user otherwise, how long it has
  * waited; once over, how long it worked. Worked time is on the clock, from its first turn's
- * start to its last one's end (or to where its final answer started), the waits for its
+ * start to its last one's end, the waits for its
  * workers between its turns counted.
  */
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; cardWait: boolean; endedAtMs: number | null },
   now: number,
-  /** When its final answer started: it worked until then, whatever came after. */
-  answerAtMs?: number,
 ): number {
-  if (answerAtMs !== undefined) {
-    const until = (at: number) => Math.min(at, answerAtMs);
-    const spans = meta.worked
-      .filter((span) => span.fromMs < answerAtMs)
-      .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
-    return wallMs(spans, until(now));
-  }
   if (meta.state === "waiting" && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
@@ -557,7 +548,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
 
 /** What a block's work is made of, as its message metadata carries it. */
 export type SequenceSource = {
-  texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number; atMs?: number }[];
+  texts: readonly { messageId: string; position: number; anchors?: readonly string[]; answerAtMs?: number; atMs?: number }[];
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
@@ -572,7 +563,7 @@ export type SequenceSource = {
 /** One line or card of a block's work. */
 export type SequenceEntry =
   | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
-  | { kind: "text"; index: number; position: number; anchors?: readonly string[] }
+  | { kind: "text"; index: number; messageId: string; position: number; anchors?: readonly string[] }
   | { kind: "card"; card: BlockCard; position: number }
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
@@ -613,6 +604,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...source.texts.map((text, index) => ({
       kind: "text" as const,
       index,
+      messageId: text.messageId,
       position: text.position,
       ...(text.anchors && { anchors: text.anchors }),
     })),
@@ -756,36 +748,14 @@ export function foldsWork(done: boolean, answer: number | null, hasWork: boolean
   return done && answer !== null && hasWork;
 }
 
-/** Whether its CLI said a reply is the turn's final answer. */
-const said = (text: { answerAtMs?: number }) => text.answerAtMs !== undefined;
-
 /**
- * The reply a block still at work answers with: the one its CLI said is the turn's final answer.
- * Its work folds the moment it starts and the answer goes under "Worked for …", though the
- * request may still wait (for another session's reply, say); what comes after it while the turn
- * still runs (a step, a notice, a card) shows under it, never opening the work again. A follow-up
- * steered in or a compaction after it starts new work: no answer yet. `null` otherwise, always
- * with a CLI that doesn't say: its work folds once it is done.
+ * The reply a block still at work is writing at its end: its last entry, a thought aside, when
+ * that is a reply and not an update line. It shows where the answer will stand, so nothing moves
+ * when the block ends; a step after it puts it back among the steps. `null` otherwise.
  */
-export function answeringIndex(texts: readonly { answerAtMs?: number; update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
-  // A late event's "Update: …" line goes under the answer it follows, which stays the answer;
-  // a block of update lines alone answers with its newest.
-  const answer = texts.findLastIndex((text) => said(text) && !text.update);
-  const at = answer >= 0 ? answer : texts.findLastIndex(said);
-  if (at < 0) return null;
-  const position = sequence.find((entry) => entry.kind === "text" && entry.index === at)?.position;
-  if (position === undefined) return null;
-  const cut = sequence.some((entry) => entry.position > position && (entry.kind === "steer" || entry.kind === "compaction"));
-  return cut ? null : at;
-}
-
-/**
- * Whether a request works again since its answer started at `answerAtMs`: a late result (a
- * failed full check, say) reopened it, so its answer is no longer what it is doing (#107).
- */
-export function reopenedSince(worked: readonly WorkSpan[], answerAtMs: number | undefined): boolean {
-  const last = worked.at(-1);
-  return answerAtMs !== undefined && last !== undefined && last.toMs === null && last.fromMs > answerAtMs;
+export function liveAnswer(texts: readonly { update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
+  const last = sequence.findLast((entry) => entry.kind !== "thinking");
+  return last?.kind === "text" && !texts[last.index]?.update ? last.index : null;
 }
 
 /**

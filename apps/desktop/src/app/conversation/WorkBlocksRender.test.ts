@@ -15,12 +15,12 @@ async function drive<T>(t: test.TestContext, query: string, options?: Parameters
   return seen;
 }
 
-test("a turn whose answer starts while the window is hidden folds its work at once", { timeout: 120000 }, async (t) => {
+test("a turn that ends while the window is hidden folds its work at once", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ shown: boolean; gone: boolean }>(t, "drive=hidden");
   assert.deepEqual(seen, { shown: true, gone: true });
 });
 
-test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
+test("a turn has one live line, streams its answer in its own place, folds when it ends, and keeps that time through a reload", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "done" | "reloaded", Seen> & {
     foldFirst: string; foldMs: number; foldLate: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
     announcedAnswering: string | null; announcedDone: string | null; time: { text: string | null; opacity: string | null }; html: string | null;
@@ -61,14 +61,20 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
     [seen.commentary.commentary, seen.commentary.commentaryShimmers, seen.commentary.groupRow, seen.commentary.status, seen.commentary.header?.startsWith("Working for")],
     ["I’ll fix the rounding next. Then run the tests again.", false, "Read files, ran commands", null, true],
   );
-  // The final answer starts: the frame that shows it closes the work, gone within the 150ms
-  // close and a frame or two.
+  // The final answer streams in its own place while the turn works: the work stays in view.
+  for (const state of [seen.answering, seen.answeringLater, seen.stored]) {
+    assert.deepEqual([state.fold, state.answerInWork], ["open", false]);
+    assert.match(state.header ?? "", /^Working for /);
+    assert.notEqual(state.answer, null);
+  }
+  // The turn ends: the frame that shows it closes the work, gone within the 150ms close and a
+  // frame or two.
   assert.equal(seen.foldFirst, "closed");
   assert.ok(seen.foldMs >= 0 && seen.foldLate <= 2, `folded in ${seen.foldMs} ms, ${seen.foldLate} frames past its close`);
-  const header = seen.answering.header;
+  const header = seen.done.header;
   assert.match(header ?? "", /^Worked for \d+s$/);
-  for (const state of [seen.answering, seen.answeringLater, seen.stored, seen.done, seen.reloaded]) {
-    // Folded, the answer outside the work, the time stopped where the answer started.
+  for (const state of [seen.done, seen.reloaded]) {
+    // Folded, the answer outside the work, the same time.
     assert.deepEqual([state.fold, state.answerInWork, state.header], ["gone", false, header]);
     assert.notEqual(state.answer, null);
   }
@@ -102,11 +108,11 @@ test("a turn that ends with no reply keeps its work in view, also read again (D4
   }
 });
 
-test("work the user opened inside while the turn ran folds when the answer starts; opened from its header it stays open", { timeout: 120000 }, async (t) => {
+test("work the user opened inside while the turn ran stays in view while it works and folds when it ends; opened from its header it stays open", { timeout: 120000 }, async (t) => {
   type Fold = { fold: string; expanded: string | null };
   const seen = await drive<{ opened: string | null; answering: string; done: string; expanded: string | null; answer: string | null; chosen: Fold; reloaded: Fold }>(t, "drive=opened");
   assert.deepEqual(seen, {
-    opened: "open", answering: "gone", done: "gone", expanded: "false", answer: "Fixed the rounding.",
+    opened: "open", answering: "open", done: "gone", expanded: "false", answer: "Fixed the rounding.",
     chosen: { fold: "open", expanded: "true" }, reloaded: { fold: "open", expanded: "true" },
   });
 });
@@ -114,33 +120,21 @@ test("work the user opened inside while the turn ran folds when the answer start
 type FoldSeen = { fold: string; header: string | null; expanded: string | null };
 type Motion = { fold: string; duration: number | null; easing: string | null; slides: boolean };
 
-test("the work folds when the answer starts, not while a subagent runs; a background command's end changes nothing drawn; the fold's motion by its cause", { timeout: 120000 }, async (t) => {
+test("the work stays in view until its turn and all its background work end, then folds by itself; the fold's motion by its cause (D24)", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
-    subagentRuns: FoldSeen; subagentEnds: Motion; folded: FoldSeen; subagentAgain: Motion;
-    after: FoldSeen & { below: string | null; sameHeader: boolean; sameAnswer: boolean };
-    held: FoldSeen; exited: FoldSeen & { removed: number; sameHeader: boolean; sameAnswer: boolean; sameBody: boolean };
+    answering: FoldSeen; held: FoldSeen; oneLeft: FoldSeen; allEnded: Motion; folded: FoldSeen & { sameAnswer: boolean };
     clickOpen: Motion; clickClose: Motion; reducedOpen: Motion; reducedClose: Motion;
   }>(t, "drive=background");
-  // The answer started while a subagent of the turn works: "Worked for", the work still open.
-  assert.match(seen.subagentRuns.header ?? "", /^Worked for /);
-  assert.deepEqual([seen.subagentRuns.fold, seen.subagentRuns.expanded], ["open", "true"]);
-  // It ends: the work folds by itself, in the 150ms close.
-  assert.deepEqual(seen.subagentEnds, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: true });
-  assert.deepEqual([seen.folded.fold, seen.folded.expanded], ["gone", "false"]);
-  // Opened by anything but the user's click, it is open at once.
-  assert.deepEqual(seen.subagentAgain, { fold: "open", duration: null, easing: null, slides: false });
-  // A step after the answer while the turn runs shows under it; nothing opens or is drawn again.
-  assert.equal(seen.after.fold, "gone");
-  assert.match(seen.after.below ?? "", /npm run lint/);
-  assert.deepEqual([seen.after.sameHeader, seen.after.sameAnswer], [true, true]);
-  // Done with a background command holding the turn: "Worked for", folded.
-  assert.match(seen.held.header ?? "", /^Worked for /);
-  assert.equal(seen.held.fold, "gone");
-  // The command exits: the same header, answer and body, nothing taken out, still folded.
-  assert.deepEqual(
-    [seen.exited.fold, seen.exited.header, seen.exited.removed, seen.exited.sameHeader, seen.exited.sameAnswer, seen.exited.sameBody],
-    ["gone", seen.held.header, 0, true, true, true],
-  );
+  // The answer came while the turn still works: its work stays in view.
+  assert.match(seen.answering.header ?? "", /^Working/);
+  assert.equal(seen.answering.fold, "open");
+  // The turn is over while a subagent and a background command still work: still in view.
+  assert.equal(seen.held.fold, "open");
+  assert.equal(seen.oneLeft.fold, "open");
+  // The last of them ends: the work folds by itself, in the 150ms close, the answer never drawn again.
+  assert.deepEqual(seen.allEnded, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: true });
+  assert.deepEqual([seen.folded.fold, seen.folded.expanded, seen.folded.sameAnswer], ["gone", "false", true]);
+  assert.match(seen.folded.header ?? "", /^Worked for /);
   // The header's click opens in 300ms with an 8px slide and closes in 150ms; with less motion both take 150ms, no slide.
   assert.deepEqual(seen.clickOpen, { fold: "open", duration: 300, easing: "cubic-bezier(0.19, 1, 0.22, 1)", slides: true });
   assert.deepEqual(seen.clickClose, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: true });
@@ -148,9 +142,9 @@ test("the work folds when the answer starts, not while a subagent runs; a backgr
   assert.deepEqual(seen.reducedClose, { fold: "closed", duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)", slides: false });
 });
 
-test("a turn the user stops as its answer starts opens its work again; a background end after changes nothing", { timeout: 120000 }, async (t) => {
+test("a turn the user stops as its answer starts keeps its work in view; a background end after changes nothing", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ answering: string; stopped: { fold: string; header: string | null }; later: { fold: string; header: string | null } }>(t, "drive=stopanswer");
-  assert.equal(seen.answering, "closed");
+  assert.equal(seen.answering, "open");
   assert.equal(seen.stopped.fold, "open");
   assert.match(seen.stopped.header ?? "", /^You stopped after /);
   assert.deepEqual(seen.later, seen.stopped);
@@ -245,8 +239,8 @@ test("a message steered in while a command runs leaves the command's row saying 
   // #445: never "Ran a command" while it still runs.
   assert.match(seen.stillRuns ?? "", /^Running sleep 30/);
   assert.equal(seen.ended, "Ran a command");
-  // The live line moves under the bubble, though the command still runs.
-  assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", true]);
+  // The live line moves under the bubble, though the command still runs: in its own place after the work (spec §2.3).
+  assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", false]);
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);
   assert.equal(seen.steerHeld, "Read when the current command ends · running 2m");
   assert.equal(seen.steerRead, null);

@@ -1,6 +1,6 @@
 import { type FC, useMemo } from "react";
 
-import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import type { BlockState } from "@/app/conversation/blocks";
@@ -68,8 +68,3 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
   );
 };
 
-/** The line under an answer whose request still waits (see `answeredHead`). */
-export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean; reopened: boolean }> = ({ waiting, reopened, ...props }) => {
-  const head = answeredHead(useThreadStatusHead(props), { waiting, reopened });
-  return head ? <StatusLine head={head} /> : null;
-};

@@ -1,7 +1,7 @@
 import { MessagePrimitive, useAuiState, jumpInThread, useThreadAnswerStarted } from "@/components/conversation";
 import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "react";
 
-import { ActivityItems } from "@/app/conversation/ActivityItems";
+import { ActivityItems, TrailingLine } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
 import { BlockError, useBlockQuotaRecovery } from "@/app/conversation/BlockError";
 import { leadTransitions, transitionCoversSeam } from "@/app/conversation/providerTransitions";
@@ -19,7 +19,7 @@ import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
-import { turnParts } from "@/app/conversation/workParts";
+import { turnParts, type WorkPart } from "@/app/conversation/workParts";
 import { runningSubagents } from "@/app/conversation/turnWorkers";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
@@ -36,19 +36,18 @@ import {
   type BlockState,
   type PeerOf,
   answerIndex,
-  answeringIndex,
   blockFinished,
   blockSequence,
   foldsAway,
   foldsWork,
   isFinal,
   isLive,
-  reopenedSince,
+  liveAnswer,
   sentMessageIds,
   type SequenceEntry as Entry,
   updateIndices,
 } from "@/app/conversation/blocks";
-import { AnsweredStatus, type ThreadStatusProps } from "@/app/conversation/ThreadStatus";
+import type { ThreadStatusProps } from "@/app/conversation/ThreadStatus";
 import { useTurnChanged } from "@/app/conversation/ChangesCard";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
@@ -124,6 +123,12 @@ export type BlockMeta = {
  * the turn still runs stay in view. It doesn't fold by itself while subagents or workers the
  * turn started still work; the user's own choice, kept per turn, wins over both.
  */
+/** A run of work's key: the cut it follows, so it keeps its row whatever comes into it or before that cut. */
+function partKey(parts: readonly WorkPart[], index: number): string {
+  const cut = parts.slice(0, index).findLast((part) => part.type === "between");
+  return cut?.type === "between" ? `work:after:${entryKey(cut.entry)}` : "work:first";
+}
+
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
   const fold = useFold(meta?.requestId ?? null);
@@ -186,34 +191,24 @@ export const RequestBlock: FC = () => {
   }, [hasCards]);
   if (!meta) return null;
 
-  const held = holding > 0 || commands > 0;
+  // Its own subagents, workers and background commands that still work hold it open (D24).
+  const subagents = runningSubagents(workerRows, meta.startedAtMs, meta.endedAtMs);
+  const held = holding > 0 || commands > 0 || workersActive || subagents > 0;
   const live = isLive(meta.state) || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  // Done, whatever it started still runs in the background (a CI watch, a worker): its work's
-  // fold doesn't wait for that, so their end changes nothing in it.
-  const finished = blockFinished(meta.state) && quotaWait === null && !(quotaRecovered && turnRuns);
+  // Its CLI's turn is over and nothing it started still works: only then does its work fold, the
+  // same moment on every CLI (D21, D24).
+  const done = blockFinished(meta.state) && !held && quotaWait === null && !(quotaRecovered && turnRuns);
   const transitions = leadTransitions(meta.orchestratorSteps);
-  // Its work folds the moment its CLI starts the final answer, though the request may still wait
-  // (for another session's reply, say), unless the user stopped it. Until then a reply streams in
-  // place.
-  const answering = !quotaWait && !finished && live && meta.state !== "stopped" ? answeringIndex(meta.texts, sequence) : null;
-  const done = finished || answering !== null;
-  const answer = answering ?? answerIndex(meta.texts, finished);
-  const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
-  const updates = updateIndices(meta.texts, answer);
-  // Its own subagents and workers that still work keep it from folding by itself.
-  const keepsOpen = workersActive || holding > 0 || runningSubagents(workerRows, meta.startedAtMs, meta.endedAtMs) > 0;
-  // Decide which peer send is still in flight where the live row state is known.
-  const fullActivity = turnActivity(sequence, false);
-  // What came after the final answer while the turn still runs shows under it (its update lines
-  // apart, which show as such).
-  const answerAt = answering === null ? -1 : fullActivity.findIndex((item) => item.type === "entry" && item.entry.kind === "text" && item.entry.index === answering);
-  const activity = answerAt < 0 ? fullActivity : fullActivity.slice(0, answerAt + 1);
-  const trailing = answerAt < 0 ? [] : fullActivity.slice(answerAt + 1).filter((item) => item.type === "group" || item.entry.kind !== "text" || !meta.texts[item.entry.index]?.update);
-  const trailingEntries = new Set(trailing.flatMap((item) => (item.type === "entry" ? [item.entry] : [])));
+  // The answer: once done, its last reply; until then the reply it is writing at its end, in the
+  // same place, so the answer never moves when the work folds (an answer a step then follows
+  // goes back among the steps).
+  const answer = done ? answerIndex(meta.texts, true) : liveAnswer(meta.texts, sequence);
+  const updates = done ? updateIndices(meta.texts, answer) : [];
+  const activity = turnActivity(done ? sequence : sequence.filter((entry) => entry.kind !== "text" || entry.index !== answer), false);
   // The answer, kept cards and access notices stay outside the fold.
-  const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer) && !trailingEntries.has(entry));
+  const kept = done ? sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer)) : [];
   const allParts = turnParts(activity, answer, done, live, (index) => {
     const text = meta.texts[index];
     return !!text && !text.commentary && !text.update;
@@ -223,7 +218,7 @@ export const RequestBlock: FC = () => {
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
   const foldable = foldsWork(done, answer, parts.some((part) => part.type === "work" && part.items.length > 0));
-  const open = fold.open ?? keepsOpen;
+  const open = fold.open ?? false;
   const header =
     foldable ||
     meta.state === "stopped" ||
@@ -234,6 +229,8 @@ export const RequestBlock: FC = () => {
   const streaming = (entry: Entry) => !quotaWait && !done && entry.kind === "text" && streams(entry.index);
   const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
   const liveThought = quotaWait ? undefined : sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
+  const lastPart = parts.at(-1);
+  const liveWork = live && !done && lastPart?.type === "work" ? lastPart : null;
   const status: ThreadStatusProps = {
     requestIds: meta.requestIds,
     state: isLive(meta.state) ? meta.state : "working",
@@ -270,12 +267,9 @@ export const RequestBlock: FC = () => {
             open={open}
             foldable={foldable}
             quota={quotaWait !== null}
-            answering={answering !== null}
-            answerAtMs={answerAtMs}
-            // Once its answer started or it is done: "Worked for …" whatever command still runs
-            // (its workers still say they are waited for, L3).
+            // Over, it says it waits for its workers and commands (L3, D24).
             workers={holding}
-            commands={done ? 0 : commands}
+            commands={commands}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {
@@ -293,7 +287,7 @@ export const RequestBlock: FC = () => {
               <SequenceEntry entry={part.entry} streaming={false} />
             </div>
           ) : (
-            <Fragment key={`work:${index}`}>
+            <Fragment key={partKey(parts, index)}>
             <WorkFold open={!foldable || open} clicked={fold.clicked} searched={searched}>
               <div
                 data-slot="request-work"
@@ -302,7 +296,7 @@ export const RequestBlock: FC = () => {
                 <ActivityItems
                   activity={part.items}
                   requestIds={meta.requestIds}
-                  live={live && !done && index === parts.length - 1 ? status : null}
+                  live={liveWork === part ? status : null}
                   working={live && !done}
                   thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null}
                   streaming={streaming}
@@ -310,6 +304,9 @@ export const RequestBlock: FC = () => {
                   // A follow-up steered in after it: the work before it is over, whatever still runs.
                   summary={parts.slice(index + 1).some((next) => next.type === "between")}
                   revealDenied={revealDenied}
+                  // The live line goes under the answer (TrailingLine), so it never moves past it.
+                  lineBelow={false}
+                  answered={liveWork === part && answer !== null}
                 />
               </div>
             </WorkFold>
@@ -325,56 +322,36 @@ export const RequestBlock: FC = () => {
             </Fragment>
           ),
         )}
-        {done && (
-          <>
-            {kept.map((entry) => (
-              <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
-                <SequenceEntry entry={entry} streaming={false} />
-              </div>
-            ))}
-            {answer !== null && (
-              <div
-                data-slot="aui_assistant-message-content"
-                data-answer=""
-                // The replies Brigadier sent other sessions with this answer land a jump here.
-                data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
-                className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
-              >
-                <AnswerDetails.Provider value={changed}>
-                  <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
-                </AnswerDetails.Provider>
-              </div>
-            )}
-            {/* What came after the answer while the turn still runs. */}
-            {trailing.length > 0 && (
-              <div data-slot="request-after-answer" className="gap-activity pt-activity flex min-w-0 flex-col">
-                <ActivityItems
-                  activity={trailing}
-                  requestIds={meta.requestIds}
-                  live={null}
-                  working
-                  thought={null}
-                  streaming={streaming}
-                  commentary={commentary}
-                  summary={false}
-                  revealDenied={revealDenied}
-                />
-              </div>
-            )}
-            {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
-            {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} reopened={meta.state === "working" && reopenedSince(meta.worked, answerAtMs)} />}
-            {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
-            {updates.map((index) => (
-              <div
-                key={`update:${index}`}
-                data-slot="answer-update"
-                className="text-foreground mt-activity leading-relaxed wrap-break-word"
-              >
-                <MessagePrimitive.PartByIndex index={index} components={{ Text: UpdateText }} />
-              </div>
-            ))}
-          </>
+        {kept.map((entry) => (
+          <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+            <SequenceEntry entry={entry} streaming={false} />
+          </div>
+        ))}
+        {answer !== null && (
+          <div
+            data-slot="aui_assistant-message-content"
+            data-answer=""
+            data-commentary={(!done && meta.texts[answer]?.commentary) || undefined}
+            // The replies Brigadier sent other sessions with this answer land a jump here.
+            data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
+            className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
+          >
+            <AnswerDetails.Provider value={changed}>
+              <ReplyText index={answer} streaming={!quotaWait && !done && streams(answer)} report={done} />
+            </AnswerDetails.Provider>
+          </div>
         )}
+        {liveWork && <TrailingLine activity={liveWork.items} live={status} thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null} answered={answer !== null} />}
+        {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
+        {updates.map((index) => (
+          <div
+            key={`update:${index}`}
+            data-slot="answer-update"
+            className="text-foreground mt-activity leading-relaxed wrap-break-word"
+          >
+            <MessagePrimitive.PartByIndex index={index} components={{ Text: UpdateText }} />
+          </div>
+        ))}
       </div>
       </TurnEnded.Provider>
       </StoppedBy.Provider>
@@ -384,7 +361,7 @@ export const RequestBlock: FC = () => {
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}
-      <AnswerStarted requestIds={meta.requestIds} started={answering !== null} />
+      <AnswerStarted requestIds={meta.requestIds} started={done} />
       {!live && last >= 0 && (
         <AnswerActions
           session={meta.session}
