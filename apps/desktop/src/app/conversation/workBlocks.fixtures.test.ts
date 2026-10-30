@@ -29,7 +29,7 @@ function load(folder: string, scenario: string): Fixture {
 
 const toolSteps = (block: Block): ToolStep[] => block.orchestratorSteps.flatMap((step) => (step.kind.type === "tool" ? [step.kind] : []));
 
-/** A row's words: a stopped call says so (its row reads "Stopped sleep 30 after 4s"). */
+/** A row's words: a stopped call says so (its row reads "Stopped sleep 30"). */
 function rowWords(kind: ToolStep): string {
   const words = toolStepWords(kind);
   return kind.stopped ? `stopped: ${words.done}` : stepLabel(words, kind.status, kind.exit ?? null);

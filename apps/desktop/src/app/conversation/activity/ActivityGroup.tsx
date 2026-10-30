@@ -47,20 +47,22 @@ function RunningFor({ startedAtMs }: { startedAtMs: number | undefined }) {
   return <>{ms < 1000 ? "Running command" : `Running command for ${formatDuration(ms)}`}</>;
 }
 
-/** What a step the user's Stop cut short says: "Stopped npm test after 4s", "Stopped reading a.ts". */
-export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, atMs: number | null): string {
+/**
+ * What a step the user's Stop cut short says: "Stopped npm test", "Stopped reading a.ts". No time
+ * of its own: the turn's header says when the stop came, once.
+ */
+export function stoppedLabel(words: StepWords): string {
   const what = words.kind === "run" && words.object
     ? words.object
     : words.doing.charAt(0).toLowerCase() + words.doing.slice(1);
-  const ms = startedAtMs !== undefined && atMs !== null ? atMs - startedAtMs : 0;
-  return ms >= 1000 ? `Stopped ${what} after ${formatDuration(ms)}` : `Stopped ${what}`;
+  return `Stopped ${what}`;
 }
 
 /**
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
@@ -100,7 +102,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
       <StepIcon words={words} stopped={stopped} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
         {stopped ? (
-          <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedCall ? (endedAtMs ?? null) : (stoppedBy?.atMs ?? null))} />
+          <Words words={words} label={stoppedLabel(words)} />
         ) : paused ? (
           <Words words={words} label={`Paused · ${words.doing}`} />
         ) : ticking ? (
