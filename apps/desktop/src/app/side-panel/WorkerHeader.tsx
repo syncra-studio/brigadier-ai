@@ -56,7 +56,9 @@ export function WorkerHeader({
             disabled={!onToggleDetails}
             className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground ms-auto flex min-w-0 shrink-1000 rounded-sm text-label transition-colors"
             onClick={onToggleDetails}>
-            <span className="truncate">{model} · {state}</span>
+            {/* The model name gives way before its state, as the pill does before the title. */}
+            <span className="min-w-0 shrink-1000 truncate">{model}</span>
+            <span className="min-w-0 truncate">{"\u00a0· "}{state}</span>
           </button>
         </TooltipTrigger>
         <TooltipContent>Worker details · {model} · {state}</TooltipContent>
