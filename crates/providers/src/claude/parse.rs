@@ -622,10 +622,9 @@ impl Parser {
                     status,
                     exit_code: exit_code(&output, failed),
                     // The exit code is said above; its `Exit code N` line is no output.
-                    output: Some(match output.split_once('\n') {
-                        Some((first, rest)) if first.starts_with("Exit code ") => rest.to_owned(),
-                        None if output.starts_with("Exit code ") => String::new(),
-                        _ => output,
+                    output: Some(match exit_header(&output) {
+                        Some((_, rest)) => rest.to_owned(),
+                        None => output,
                     }),
                     duration_ms: None,
                     kept,
@@ -1771,11 +1770,17 @@ pub(crate) fn saved_file(text: &str) -> Option<String> {
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
 fn exit_code(output: &str, failed: bool) -> Option<i32> {
-    let first = output.lines().next().unwrap_or_default();
-    first
-        .strip_prefix("Exit code ")
-        .and_then(|code| code.trim().parse().ok())
+    exit_header(output)
+        .map(|(code, _)| code)
         .or((!failed).then_some(0))
+}
+
+/// The `Exit code N` first line Claude puts on a failed command, and the output after it;
+/// a line that only begins with those words is the command's own.
+fn exit_header(output: &str) -> Option<(i32, &str)> {
+    let (first, rest) = output.split_once('\n').unwrap_or((output, ""));
+    let code = first.strip_prefix("Exit code ")?.trim().parse().ok()?;
+    Some((code, rest))
 }
 
 fn token_usage(usage: &Value) -> TokenUsage {
@@ -3270,6 +3275,19 @@ mod tests {
         assert!(
             events.iter().any(|output| matches!(output,
                 Output::Event(ProviderEvent::Command { exit_code: Some(1), output: Some(output), .. }) if output == "boom")),
+            "{events:?}"
+        );
+
+        // Ordinary output that only begins with the words keeps its first line.
+        let call = json!({"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "./check"}}]}});
+        let result = json!({"type": "user", "message": {"role": "user", "content": [
+            {"tool_use_id": "t2", "type": "tool_result", "content": "Exit code handling passed\n", "is_error": false}]}});
+        parser.feed(&call.to_string());
+        let events = parser.feed(&result.to_string());
+        assert!(
+            events.iter().any(|output| matches!(output,
+                Output::Event(ProviderEvent::Command { exit_code: Some(0), output: Some(output), .. }) if output == "Exit code handling passed\n")),
             "{events:?}"
         );
     }
