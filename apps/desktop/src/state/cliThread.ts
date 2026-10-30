@@ -148,23 +148,55 @@ function listsOf(news: ThreadNews): Lists {
   };
 }
 
-/** What the stream said for a read to add once it lands. */
-type Heard = { heard: FileEntry[]; lists: Lists };
-
 /**
- * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks,
- * MCP servers and the session's workers when they changed), whether a turn started or ended
- * meanwhile, and the read itself, which a second ask for the thread joins.
+ * How a read and the live stream meet (D5), with no word lost or shown twice. The engine numbers
+ * each piece of news (`seq`) under the same lock that changes the live turn a read is made from,
+ * and a read says the last number it holds. So a piece of news is in a read, or not, whatever
+ * order the two reach the page in:
+ * - news keeps drawing while a thread is read, item by item and delta by delta;
+ * - a read that lands is drawn with the news heard since it was asked for added, the news it
+ *   doesn't hold and only that, in the order heard, deltas included;
+ * - news that comes after a read already holding it adds nothing.
+ * News with no number (a session's workers' rows) is whole lists only, and always added. A read
+ * or news with no number at all (none from the engine) falls back to adding whole items only:
+ * a delta may be in the read already.
  */
-const reads = new Map<string, Heard & { again: boolean; done: Promise<void> }>();
+function holds(view: ThreadView, news: ThreadNews): boolean {
+  return numbered(view, news) && news.seq! <= view.seq!;
+}
+
+function numbered(view: ThreadView, news: ThreadNews): boolean {
+  return view.seq !== undefined && news.seq !== undefined;
+}
+
+/** `view` with what `news` says that it doesn't hold; `lists`: with the lists it carries too. */
+function addNews(view: ThreadView, news: ThreadNews, lists: boolean, read: boolean): ThreadView {
+  if (holds(view, news)) return view;
+  let entries = news.entries;
+  if (read && !numbered(view, news)) {
+    // One without an id of its own (an error) is the view's already when it holds the same.
+    const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
+    entries = entries.filter((entry) => !isDelta(entry.event) && (itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry))));
+  }
+  const added = lists ? listsOf(news) : {};
+  if (entries.length === 0 && Object.keys(added).length === 0) return view;
+  return { ...view, ...(entries.length > 0 && { entries: mergeEntries(view.entries, entries) }), ...added };
+}
 
 /**
- * What the stream said from a turn's start or end on, held for the read of the thread that
- * follows it: its lists come with the turns that read brings, never before them. A background
+ * Reads under way: the news heard since each was asked for, whether to read once more (a
+ * reconnect), and the read itself, which a second ask for the thread joins.
+ */
+const reads = new Map<string, { heard: ThreadNews[]; again: boolean; done: Promise<void> }>();
+
+/**
+ * The news heard from a turn's start or end on, until a read asked for after it: only the engine
+ * knows the turns, so their lists (background tasks, MCP servers, workers, jobs) wait for the
+ * turns that read brings, never shown before them; its items show as they come. A background
  * command's end clears its hold in the same news that opens the turn it starts, and drawn alone
  * the hold's end read as the block's end: its work folded, then opened again (D21).
  */
-const owed = new Map<string, Heard>();
+const owed = new Map<string, ThreadNews[]>();
 
 function setView(conversationId: string, view: ThreadView): void {
   useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: view } }));
@@ -172,39 +204,38 @@ function setView(conversationId: string, view: ThreadView): void {
 
 /**
  * Reads a conversation's thread, or joins the read under way: asked twice, it is read once.
- * What the stream said while it was read is added once it lands:
- * whole items again (they only replace themselves), not deltas, which the view may hold already
- * (their item's own end brings its whole text). News still waiting for the frame when it lands
- * was said while it was read, too. A turn that started or ended meanwhile reads it once more.
+ * What the stream said since it was asked for is added once it lands (see `holds`). A turn
+ * that started or ended meanwhile reads it once more.
  */
 export function loadThreadView(conversationId: string): Promise<void> {
   const going = reads.get(conversationId);
   if (going) return going.done;
-  const read = { ...(owed.get(conversationId) ?? { heard: [], lists: {} }), again: false, done: Promise.resolve() };
+  const read = { heard: owed.get(conversationId) ?? [], again: false, done: Promise.resolve() };
   owed.delete(conversationId);
   reads.set(conversationId, read);
   read.done = readThread(conversationId, read);
   return read.done;
 }
 
-async function readThread(conversationId: string, read: Heard & { again: boolean }): Promise<void> {
+async function readThread(conversationId: string, read: { heard: ThreadNews[]; again: boolean }): Promise<void> {
   try {
     const { view } = await request({ method: "threadView", conversationId });
-    // What waits for the frame goes to the read now, while it is still under way.
+    if (!view) throw new Error("the daemon answered with no thread");
+    // What waits for the frame is drawn first, on the view it replaces: none of it is left to
+    // draw again on this one.
     if (queued.length > 0) flushNews();
-    const heard = read.heard.filter((entry) => !isDelta(entry.event));
-    // One without an id of its own (an error) is the view's already when it holds the same.
-    const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
-    const fresh = heard.filter((entry) => itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry)));
-    const landed = fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view;
-    setView(conversationId, { ...landed, ...read.lists });
+    // News from a turn's start or end this read wasn't asked after: its lists wait for the next.
+    const afterTurn = new Set(owed.get(conversationId));
+    let landed = view;
+    for (const news of read.heard) landed = addNews(landed, news, !afterTurn.has(news), true);
+    setView(conversationId, landed);
     readFailed(conversationId, false);
   } catch (error) {
     console.error("reading the thread failed", error);
     readFailed(conversationId, true);
   } finally {
     reads.delete(conversationId);
-    if (read.again) void loadThreadView(conversationId);
+    if (read.again || owed.has(conversationId)) void loadThreadView(conversationId);
   }
 }
 
@@ -238,39 +269,25 @@ function flushNews(): void {
   const turned = new Set<string>();
   for (const news of batch) {
     const id = news.conversationId;
-    const read = reads.get(id);
-    const view = next[id] ?? views[id];
-    // A turn's start or end reads the thread again, after any read under way: it, and what comes
-    // after it, wait for that read.
-    if ((news.opened || news.ended) && (read || view)) {
-      turned.add(id);
-      if (!owed.has(id)) owed.set(id, { heard: [], lists: {} });
-    }
-    const into = owed.get(id) ?? read;
-    if (into) {
-      into.heard.push(...news.entries);
-      Object.assign(into.lists, listsOf(news));
-      continue;
-    }
+    // A turn's start or end reads the thread again, once any read under way lands.
+    if ((news.opened || news.ended) && owed.has(id)) turned.add(id);
     // A thread not read yet is read whole when it opens.
-    const lists = listsOf(news);
-    if (!view || (news.entries.length === 0 && Object.keys(lists).length === 0)) continue;
-    next[id] = {
-      ...view,
-      ...(news.entries.length > 0 && { entries: mergeEntries(view.entries, news.entries) }),
-      ...lists,
-    };
+    const view = next[id] ?? views[id];
+    if (!view) continue;
+    const drawn = addNews(view, news, !owed.has(id), false);
+    if (drawn !== view) next[id] = drawn;
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
-  for (const id of turned) {
-    const going = reads.get(id);
-    if (going) going.again = true;
-    else void loadThreadView(id);
-  }
+  for (const id of turned) if (!reads.has(id)) void loadThreadView(id);
 }
 
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
 export function applyThreadNews(news: ThreadNews): void {
+  const id = news.conversationId;
+  const read = reads.get(id);
+  read?.heard.push(news);
+  if ((news.opened || news.ended) && (read || useCliThread.getState().views[id]) && !owed.has(id)) owed.set(id, []);
+  owed.get(id)?.push(news);
   queued.push(news);
   if (queued.length === 1) scheduleNews();
 }

@@ -39,4 +39,9 @@ seams?: Array<SeamMark>,
 /**
  * What of its CLI's background work keeps its turn going (D21).
  */
-jobs?: CliJobs, };
+jobs?: CliJobs, 
+/**
+ * The last [`ThreadNews::seq`] it holds: news up to it is in it, news after it isn't,
+ * whichever reaches the app first.
+ */
+seq?: number, };

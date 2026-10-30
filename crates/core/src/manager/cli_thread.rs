@@ -233,6 +233,7 @@ impl SessionManager {
         let mut mcp = None;
         let mut read_output = false;
         let jobs;
+        let seq;
         let mut wake_owed = None;
         {
             let mut threads = self.cli_threads.lock().unwrap();
@@ -447,6 +448,7 @@ impl SessionManager {
                 }
             }
             jobs = said_jobs(live, at);
+            seq = self.next_news_seq();
         }
         if !news.is_empty()
             || opened
@@ -467,6 +469,7 @@ impl SessionManager {
                 mcp,
                 workers: None,
                 jobs,
+                seq,
             });
         }
         if let Some(until) = wake_owed {
@@ -526,9 +529,9 @@ impl SessionManager {
                         changed = true;
                     }
                 }
-                changed.then(|| live.background.clone())
+                changed.then(|| (live.background.clone(), self.next_news_seq()))
             };
-            if let Some(background) = changed {
+            if let Some((background, seq)) = changed {
                 let _ = self.thread_news.send(ThreadNews {
                     conversation_id: id.clone(),
                     entries: Vec::new(),
@@ -540,6 +543,7 @@ impl SessionManager {
                     mcp: None,
                     workers: None,
                     jobs: None,
+                    seq,
                 });
             }
         }
@@ -562,9 +566,9 @@ impl SessionManager {
                     return;
                 }
                 live.waking_until = None;
-                said_jobs(live, now_ms())
+                said_jobs(live, now_ms()).map(|jobs| (jobs, manager.next_news_seq()))
             };
-            if let Some(jobs) = jobs {
+            if let Some((jobs, seq)) = jobs {
                 let _ = manager.thread_news.send(ThreadNews {
                     conversation_id: id,
                     entries: Vec::new(),
@@ -576,9 +580,18 @@ impl SessionManager {
                     mcp: None,
                     workers: None,
                     jobs: Some(jobs),
+                    seq,
                 });
             }
         });
+    }
+
+    /// The next news number: taken under `cli_threads`' lock, after the change it numbers, so a
+    /// read made under it ([`Self::thread_view`]) holds exactly the news numbered up to then.
+    fn next_news_seq(&self) -> u64 {
+        self.news_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
     }
 
     /// Where conversation `id`'s CLI turn stands: open now, else how its last turn ended.
@@ -628,8 +641,15 @@ impl SessionManager {
     }
 
     async fn backfill_daemon_context(&self, id: &ConversationId) {
-        let mut after = 0;
-        let mut legacy = std::collections::HashSet::new();
+        // Where the last read of its inbox stopped, and what it found: each read reads only what
+        // came since.
+        let (mut after, mut legacy) = self
+            .inbox_read
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
         loop {
             let Ok(events) = self
                 .core
@@ -665,6 +685,10 @@ impl SessionManager {
                 break;
             }
         }
+        self.inbox_read
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (after, legacy.clone()));
         let record = self.session_dir(id).record();
         for lineage in read_lineage(&record) {
             let Some(file) = &lineage.file else {
@@ -722,9 +746,14 @@ impl SessionManager {
 
     /// Conversation `id`'s thread as its CLI keeps it, with its workers' rows.
     pub async fn thread_view_with_workers(&self, id: &ConversationId) -> Result<ThreadView> {
-        self.backfill_daemon_context(id).await;
-        let mut view = self.thread_view(id)?;
-        view.workers = self.worker_rows_of(id, false).await?;
+        // The workers' git, read first after a start, takes longest: the thread is read meanwhile.
+        let thread = async {
+            self.backfill_daemon_context(id).await;
+            self.thread_view(id)
+        };
+        let (view, workers) = tokio::join!(thread, self.worker_rows_of(id, false));
+        let mut view = view?;
+        view.workers = workers?;
         Ok(view)
     }
 
@@ -794,6 +823,7 @@ impl SessionManager {
         records.extend(thread_view::read_turns(&record));
         let threads = self.cli_threads.lock().unwrap();
         let mut view = thread_view::view(files, threads.get(id), &records);
+        view.seq = self.news_seq.load(std::sync::atomic::Ordering::SeqCst);
         thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
         Ok(view)

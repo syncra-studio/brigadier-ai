@@ -288,8 +288,14 @@ pub struct SessionManager {
     checkout_saves: tokio::sync::broadcast::Sender<crate::work::WorkspaceTarget>,
     /// Each conversation's running turn as its CLI streams it ([`cli_thread`]).
     cli_threads: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::LiveTurn>>,
+    /// Per conversation, the inbox read so far for Brigadier's own messages its CLI was
+    /// handed ([`cli_thread`]): the last event's sequence, and the texts of those found.
+    inbox_read: std::sync::Mutex<HashMap<ConversationId, (i64, std::collections::HashSet<String>)>>,
     /// What live streams add to threads, for every window.
     thread_news: tokio::sync::broadcast::Sender<crate::thread_view::ThreadNews>,
+    /// The last number given to news (`ThreadNews::seq`), always under `cli_threads`' lock.
+    /// It starts from the clock (in µs), so a daemon started again numbers on past the last.
+    news_seq: std::sync::atomic::AtomicU64,
     /// CLI session files read for threads.
     session_files: crate::thread_view::FileCache,
     /// How sessions go on past a long context ([`seam`]).
@@ -459,7 +465,11 @@ impl SessionManager {
             tab_chats: side_chat::TabChats::default(),
             checkout_saves: tokio::sync::broadcast::channel(16).0,
             cli_threads: std::sync::Mutex::default(),
+            inbox_read: std::sync::Mutex::default(),
             thread_news: tokio::sync::broadcast::channel(1024).0,
+            news_seq: std::sync::atomic::AtomicU64::new(
+                u64::try_from(crate::now_ms()).unwrap_or_default() * 1000,
+            ),
             session_files: crate::thread_view::FileCache::default(),
             seam: std::sync::Mutex::new(seam_config),
             #[cfg(test)]

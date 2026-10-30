@@ -3085,6 +3085,7 @@ mod tests {
             workers: vec![],
             seams: vec![],
             jobs: Default::default(),
+            seq: 0,
         };
         let frame = ServerFrame::Response {
             id: 7,

@@ -111,7 +111,15 @@ async fn a_restart_keeps_the_thread_and_how_each_turn_ended() {
 
     flow.restart().await;
     let after = flow.manager.thread_view(&id).unwrap();
-    assert_eq!(after, before);
+    // The news it holds is numbered on from the restart.
+    assert!(after.seq > before.seq);
+    assert_eq!(
+        ThreadView {
+            seq: before.seq,
+            ..after
+        },
+        before
+    );
     flow.stop().await;
 }
 
@@ -668,7 +676,14 @@ async fn a_fork_shows_the_sources_thread_up_to_its_answer() {
     assert_eq!(view.turns, source.turns[..2], "{view:#?}");
     assert_eq!(view.turns[1].requests, [two]);
     flow.restart().await;
-    assert_eq!(flow.manager.thread_view(&fork.id).unwrap(), view);
+    let restarted = flow.manager.thread_view(&fork.id).unwrap();
+    assert_eq!(
+        ThreadView {
+            seq: view.seq,
+            ..restarted
+        },
+        view
+    );
 
     flow.say_to(&fork.id, "Four.").await;
     eventually("the fork's own turn ends", || ended(&flow, &fork.id, 3)).await;
@@ -685,6 +700,171 @@ async fn a_fork_shows_the_sources_thread_up_to_its_answer() {
     assert!(
         !texts(&after).iter().any(|text| text.contains("three")),
         "{after:#?}"
+    );
+    flow.stop().await;
+}
+
+/// Open speed (goal 10): the first `threadView` after a daemon start, with its workers' rows and
+/// their git read, on a long session file (65 turns, about 6.5 MB). A timing, not a check: run
+/// it in release with `--ignored --nocapture`.
+#[tokio::test]
+#[ignore]
+async fn the_first_thread_read_after_a_start_is_timed() {
+    let mut flow = Flow::start(
+        "cli-thread-open-speed",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.worker().is_none() && turn.input.contains("Start them.") {
+                turn.start_worker("A", "Fix a.").await;
+                turn.start_worker("B", "Fix b.").await;
+                return Reply::text("Started two.");
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Start them.").await;
+    super::eventually_async("two workers", || {
+        let core = flow.core.clone();
+        let id = id.clone();
+        async move { core.tasks(&id).await.is_ok_and(|tasks| tasks.len() == 2) }
+    })
+    .await;
+    flow.settled().await;
+    // The session file grows to a long session's: each turn a question, an answer and 15 calls
+    // with 6 KB of output each.
+    let record = flow.manager.session_dir(&id).record();
+    let file = crate::manager::session_dir::read_lineage(&record)
+        .last()
+        .and_then(|session| session.file.clone())
+        .expect("its session file");
+    let output = "x".repeat(6_000);
+    let mut lines = String::new();
+    for turn in 0..65 {
+        let line = |value: serde_json::Value| format!("{value}\n");
+        lines += &line(
+            serde_json::json!({"type": "user", "uuid": format!("u{turn}"),
+            "message": {"role": "user", "content": format!("Question {turn}")}}),
+        );
+        for call in 0..15 {
+            let tool = format!("toolu_{turn}_{call}");
+            lines += &line(serde_json::json!({"type": "assistant", "message": {
+                "id": format!("msg_{turn}_{call}"), "role": "assistant",
+                "content": [{"type": "tool_use", "id": tool, "name": "Bash", "input": {"command": "ls"}}]}}));
+            lines += &line(
+                serde_json::json!({"type": "user", "uuid": format!("r{turn}_{call}"),
+                "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool, "content": output}]}}),
+            );
+        }
+        lines += &line(serde_json::json!({"type": "assistant", "message": {
+            "id": format!("msg_{turn}_end"), "role": "assistant",
+            "content": [{"type": "text", "text": format!("Answer {turn}")}]}}));
+    }
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap()
+        .write_all(lines.as_bytes())
+        .unwrap();
+    let size = std::fs::metadata(&file).unwrap().len();
+
+    let ms = |since: std::time::Instant| since.elapsed().as_secs_f64() * 1000.0;
+    flow.restart().await;
+    let started = std::time::Instant::now();
+    let view = flow.manager.thread_view_with_workers(&id).await.unwrap();
+    let first = ms(started);
+    let started = std::time::Instant::now();
+    flow.manager.thread_view_with_workers(&id).await.unwrap();
+    let second = ms(started);
+    // Its parts, each cold again after another start.
+    flow.restart().await;
+    let started = std::time::Instant::now();
+    flow.manager.worker_rows_of(&id, false).await.unwrap();
+    let rows = ms(started);
+    let started = std::time::Instant::now();
+    flow.manager.thread_view(&id).unwrap();
+    let thread = ms(started);
+    let started = std::time::Instant::now();
+    flow.manager.worker_rows_of(&id, true).await.unwrap();
+    let rows_again = ms(started);
+    let started = std::time::Instant::now();
+    let bytes = serde_json::to_vec(&view).unwrap().len();
+    let serialize = ms(started);
+    eprintln!(
+        "open speed: file {:.1} MB, {} entries, {} workers; first threadView {first:.1} ms, \
+         second {second:.1} ms; cold parts: worker rows with git {rows:.1} ms (git again {rows_again:.1} ms), \
+         thread {thread:.1} ms; serialize {serialize:.1} ms for {:.2} MB",
+        size as f64 / 1e6,
+        view.entries.len(),
+        view.workers.len(),
+        bytes as f64 / 1e6,
+    );
+    flow.stop().await;
+}
+
+/// D5: every piece of a session's news is numbered, rising, and a read of its thread says the
+/// last number it holds: what was said before the read is in it, what comes after isn't.
+#[tokio::test]
+async fn a_read_says_which_news_it_holds() {
+    let flow = Flow::start(
+        "cli-thread-news-seq",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async move { Reply::text("Looked.") }),
+    )
+    .await;
+    let mut news = flow.manager.subscribe_thread_news();
+    let heard = |news: &mut tokio::sync::broadcast::Receiver<crate::thread_view::ThreadNews>| {
+        std::iter::from_fn(|| news.try_recv().ok())
+            .filter(|piece| piece.conversation_id == flow.conversation && piece.workers.is_none())
+            .map(|piece| piece.seq)
+            .collect::<Vec<_>>()
+    };
+    flow.say("Look around.").await;
+    eventually("the turn ends", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 1 && view.turns[0].end.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let before = heard(&mut news);
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert!(!before.is_empty());
+    assert!(before.iter().all(|seq| *seq > 0), "{before:?}");
+    assert!(
+        before.windows(2).all(|two| two[0] < two[1]),
+        "rising: {before:?}"
+    );
+    assert!(
+        before.iter().all(|seq| *seq <= view.seq),
+        "{before:?} in {}",
+        view.seq
+    );
+    flow.say("Again.").await;
+    eventually("the second turn ends", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns[1].end.is_some()
+    })
+    .await;
+    let after = heard(&mut news);
+    assert!(!after.is_empty());
+    assert!(
+        after.iter().all(|seq| *seq > view.seq),
+        "{after:?} after {}",
+        view.seq
     );
     flow.stop().await;
 }

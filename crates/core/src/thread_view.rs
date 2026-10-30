@@ -54,6 +54,15 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "CliJobs::is_empty")]
     #[ts(as = "Option<CliJobs>", optional)]
     pub jobs: CliJobs,
+    /// The last [`ThreadNews::seq`] it holds: news up to it is in it, news after it isn't,
+    /// whichever reaches the app first.
+    #[serde(default, skip_serializing_if = "unnumbered")]
+    #[ts(as = "Option<u64>", optional)]
+    pub seq: u64,
+}
+
+fn unnumbered(seq: &u64) -> bool {
+    *seq == 0
 }
 
 /// What of a session CLI's background work keeps the turn that started it going (D21): the
@@ -378,6 +387,11 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub jobs: Option<CliJobs>,
+    /// Its number, rising, given as it changed what a read of the thread holds
+    /// ([`ThreadView::seq`]); none (0) for news no read holds the same way (workers' rows).
+    #[serde(default, skip_serializing_if = "unnumbered")]
+    #[ts(as = "Option<u64>", optional)]
+    pub seq: u64,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
@@ -663,6 +677,7 @@ pub(crate) fn view(
         jobs: live
             .map(|live| live.jobs(crate::now_ms()))
             .unwrap_or_default(),
+        seq: 0,
     }
 }
 

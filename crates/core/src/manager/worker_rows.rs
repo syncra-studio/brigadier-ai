@@ -650,11 +650,15 @@ impl SessionManager {
             mcp: None,
             workers: Some(rows),
             jobs: None,
+            seq: 0,
         });
     }
 
     /// Session `id`'s worker rows now, newest first. `git_now`: git is read again whatever
-    /// its last read; else only when that is older than [`GIT_EVERY_MS`].
+    /// its last read. Else (a read of the thread) it is read now only the first time since the
+    /// daemon started, so the rows show whole; after that a read older than [`GIT_EVERY_MS`] is
+    /// read again in the background, the rows sent as news, and the thread never waits for it
+    /// (git takes a few hundred ms per worker).
     pub(crate) async fn worker_rows_of(
         &self,
         id: &ConversationId,
@@ -667,17 +671,18 @@ impl SessionManager {
         let (parent_checkout, parent_branch) = self
             .changes_checkout(id)
             .map_or((None, None), |(path, branch)| (Some(path), branch));
-        let read_git = git_now || {
-            let last = self
-                .worker_rows
-                .git_read_ms
-                .lock()
-                .unwrap()
-                .get(id)
-                .copied();
-            last.is_none_or(|last| now_ms().saturating_sub(last) >= GIT_EVERY_MS)
-        };
-        if read_git {
+        let last = self
+            .worker_rows
+            .git_read_ms
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied();
+        let due = last.is_none_or(|last| now_ms().saturating_sub(last) >= GIT_EVERY_MS);
+        if due && !git_now && last.is_some() {
+            self.workers_changed(id, true);
+        }
+        if git_now || last.is_none() {
             self.worker_rows
                 .git_read_ms
                 .lock()

@@ -188,6 +188,55 @@ test("a delta waiting for the frame when a read of its thread lands shows once",
   }
 });
 
+/** The text of the last item of conversation "meet". */
+function meetText(): string | null {
+  const last = useCliThread.getState().views["meet"]?.entries.at(-1)?.event;
+  return last?.type === "messageDelta" ? last.text : null;
+}
+
+test("a read and the live stream meet with no word lost or shown twice, in whatever order they come", async () => {
+  const user = at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1);
+  const said = (text: string) => at({ type: "messageDelta", itemId: "m", text }, 2);
+  const news = (seq: number, text: string) => ({ conversationId: "meet", entries: [said(text)], seq });
+  useCliThread.setState({ views: { meet: { entries: [user, said("He")], turns: [], seq: 1 } } });
+  // The read holds the engine's news up to 4: "llo", " world" and " again".
+  const read: ThreadView = { entries: [user, said("Hello world again")], turns: [], seq: 4 };
+  let land: (() => void) | null = null;
+  mockIPC((cmd) => (cmd === "ipc_request" ? new Promise((resolve) => (land = () => resolve({ method: "threadView", view: read }))) : null));
+  try {
+    const reading = loadThreadView("meet");
+    await settle();
+    // While it is read, the stream keeps drawing.
+    applyThreadNews(news(2, "llo"));
+    await settle();
+    assert.equal(meetText(), "Hello");
+    applyThreadNews(news(3, " world"));
+    await settle();
+    assert.equal(meetText(), "Hello world");
+    (land as (() => void) | null)?.();
+    await reading;
+    assert.equal(meetText(), "Hello world again", "the read's own words, none twice");
+    // News the read held, reaching the page after it, adds nothing; the next does.
+    applyThreadNews(news(4, " again"));
+    applyThreadNews(news(5, "!"));
+    await settle();
+    assert.equal(meetText(), "Hello world again!");
+    // News heard while a read is under way that the read doesn't hold is added to it.
+    const second = loadThreadView("meet");
+    await settle();
+    applyThreadNews(news(6, "?"));
+    await settle();
+    read.entries = [user, said("Hello world again!")];
+    read.seq = 5;
+    (land as (() => void) | null)?.();
+    await second;
+    assert.equal(meetText(), "Hello world again!?");
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
 /** Whether the block of the turn started at 1000 reads as finished: its turn over, nothing holding it. */
 const finished = (view: ThreadView | undefined) => !!view && view.turns.at(-1)?.end !== null && turnCommands(view, view.turns, [1000]) === 0;
 
