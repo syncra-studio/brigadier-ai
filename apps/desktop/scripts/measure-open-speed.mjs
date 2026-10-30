@@ -126,6 +126,8 @@ const grow = (session) => {
 const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: homes.claude, CODEX_HOME: homes.codex, OPENCODE_CONFIG_DIR: homes.opencode, OPENCODE_TEST_HOME: homes.opencode, XDG_DATA_HOME: join(homes.opencode, 'xdg') };
 let daemon;
 let link;
+// A run that fails part way leaves no daemon behind.
+process.on('exit', () => daemon?.kill('SIGTERM'));
 async function startDaemon() {
   const tokenPath = join(data, 'run/ipc.token');
   const socketPath = join(data, 'run/brigadierd.sock');
@@ -374,6 +376,7 @@ try {
   await browser.close();
   await server.close();
   if (link) await stopDaemon().catch(() => undefined);
+  rmSync(scratch, { recursive: true, force: true });
 }
 
 const sorted = (values) => values.filter(Number.isFinite).toSorted((a, b) => a - b);
