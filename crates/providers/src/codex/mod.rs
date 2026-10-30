@@ -129,6 +129,9 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 /// own).
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
 
+/// Where naked workers' own `CODEX_HOME`s are, in Brigadier's data folder ([`Codex::worker_home`]).
+const WORKER_HOMES: &str = "codex-worker-homes";
+
 /// Codex's own memory, off for every Brigadier session and connection (core-goals D9):
 /// Brigadier's ledger, decisions and transcripts are the memory.
 const MEMORIES: &str = "memories";
@@ -504,6 +507,83 @@ impl Codex {
         self.codex_home().map(|dir| dir.display().to_string())
     }
 
+    /// A naked worker's own `CODEX_HOME` (core-goals D2), when the account's home holds the
+    /// user's global instructions (`AGENTS.md`, `AGENTS.override.md`): Codex has no way to leave
+    /// them out while keeping the repository's (no config key, thread field, feature or variable;
+    /// `project_doc_max_bytes=0` drops the repository's instead, checked to 0.166.0). The home
+    /// links what an extra account's links ([`crate::accounts::shared`]) but the instructions,
+    /// and the account's login: `auth.json`, which Codex rewrites in place, through the link
+    /// (checked on 0.166.0), and `auth.lock`, so a token refresh is still one at a time across
+    /// every session of the account. It keeps its own state, as an extra account does. `None`:
+    /// the worker runs in the account's own home (nothing to keep out, or a login kept in the
+    /// keyring, which a home of its own wouldn't have).
+    fn worker_home(&self) -> Option<PathBuf> {
+        const OWN: [&str; 2] = ["AGENTS.md", "AGENTS.override.md"];
+        let source = self.codex_home()?;
+        if !OWN.iter().any(|name| source.join(name).exists()) {
+            return None;
+        }
+        if !source.join("auth.json").is_file() {
+            tracing::warn!(
+                "a naked Codex worker reads the user's AGENTS.md: its login isn't in auth.json"
+            );
+            return None;
+        }
+        let main = self.history_home()?;
+        let key = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(source.as_os_str().as_encoded_bytes());
+            digest[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let home = self.platform.paths().data_dir.join(WORKER_HOMES).join(key);
+        let made = (|| -> std::io::Result<()> {
+            crate::accounts::create_private_dir(&home)?;
+            let lock = source.join("auth.lock");
+            if std::fs::symlink_metadata(&lock).is_err() {
+                std::fs::File::create(&lock)?;
+            }
+            let shared = crate::accounts::shared(ProviderKind::Codex)
+                .iter()
+                .map(|entry| (main.join(entry.name()), entry.name()))
+                .filter(|(_, name)| !OWN.contains(name));
+            let login = ["auth.json", "auth.lock"].map(|name| (source.join(name), name));
+            for (target, name) in shared.chain(login) {
+                let link = home.join(name);
+                if std::fs::symlink_metadata(&link).is_ok() {
+                    continue;
+                }
+                let Ok(meta) = std::fs::metadata(&target) else {
+                    continue;
+                };
+                crate::accounts::link_to(&target, &link, meta.is_dir())?;
+            }
+            Ok(())
+        })();
+        match made {
+            Ok(()) => Some(home),
+            Err(err) => {
+                tracing::warn!(error = %err, "a naked Codex worker reads the user's AGENTS.md: no home of its own");
+                None
+            }
+        }
+    }
+
+    /// This adapter run from another `CODEX_HOME` of the same account (a naked worker's,
+    /// [`Self::worker_home`]), its login and history still the account's.
+    fn in_home(&self, home: &Path) -> Codex {
+        let mut vars = self.env.vars();
+        vars.retain(|(key, _)| key != "CODEX_HOME");
+        vars.push(("CODEX_HOME".into(), home.as_os_str().to_owned()));
+        Codex {
+            platform: self.platform.clone(),
+            env: Arc::new(self.env.with_vars(vars)),
+            main_home: self.history_home(),
+        }
+    }
+
     /// `$CODEX_HOME`, by default `~/.codex`.
     fn codex_home(&self) -> Option<PathBuf> {
         match self.env.var("CODEX_HOME") {
@@ -744,11 +824,8 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         ToolSet::SideChat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
     // A naked worker (D13, D17) goes without the user's plugins and hooks, as a sealed session
-    // does; its user skills go by file and its servers in its thread's config, below. Codex
-    // 0.164.0 has no way to leave out the user's own `$CODEX_HOME/AGENTS.md` while keeping the
-    // repository's (no config key, thread field, feature or variable; `project_doc_max_bytes=0`
-    // drops the repository's instead): only a home without one would, so a naked Codex worker
-    // still reads it, should the user write one.
+    // does; its user skills go by file and its servers in its thread's config, below. The user's
+    // own `$CODEX_HOME/AGENTS.md` it is kept from by a home of its own ([`Codex::worker_home`]).
     let naked = user_setup_naked(session);
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup && !naked {
@@ -1208,6 +1285,11 @@ impl Provider for Codex {
         ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
+            if user_setup_naked(Some(&spec))
+                && let Some(home) = self.worker_home()
+            {
+                return self.in_home(&home).start(spec, ledger).await;
+            }
             if stop_hook_of(Some(&spec)).is_some() && !self.trust_stop_hook(&spec).await {
                 spec.stop_hook = None;
             }
@@ -1361,6 +1443,33 @@ impl Provider for Codex {
         private_logs: bool,
     ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
+            // A naked worker's threads are removed from the home they ran in.
+            let workers = self.platform.paths().data_dir.join(WORKER_HOMES);
+            let own = self.codex_home();
+            let mut elsewhere: HashMap<PathBuf, Vec<Artifact>> = HashMap::new();
+            let mut artifacts = artifacts;
+            artifacts.retain(|artifact| match artifact {
+                Artifact::Session {
+                    provider,
+                    home: Some(home),
+                    ..
+                } if *provider == ProviderKind::Codex
+                    && Path::new(home).starts_with(&workers)
+                    && own.as_deref() != Some(Path::new(home)) =>
+                {
+                    elsewhere
+                        .entry(PathBuf::from(home))
+                        .or_default()
+                        .push(artifact.clone());
+                    false
+                }
+                _ => true,
+            });
+            for (home, group) in elsewhere {
+                self.in_home(&home)
+                    .remove_with_privacy(group, private_logs)
+                    .await?;
+            }
             let mut threads = Vec::new();
             let mut trusts = Vec::new();
             let mut images = Vec::new();
@@ -4317,6 +4426,52 @@ mod tests {
             edited
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// core-goals D2: a naked worker gets a home of its own only when the account's home holds
+    /// the user's global instructions; it links the account's history, config and login (its
+    /// lock too) but never those instructions.
+    #[cfg(unix)]
+    #[test]
+    fn a_naked_worker_home_leaves_out_the_users_agents_md() {
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
+        let user = dir.join(".codex");
+        std::fs::create_dir_all(user.join("sessions")).unwrap();
+        std::fs::write(user.join("config.toml"), "").unwrap();
+        std::fs::write(user.join("auth.json"), "{}").unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let codex = Codex::new(
+            platform,
+            Arc::new(CliEnv::from_vars([(
+                "HOME".into(),
+                dir.as_os_str().to_owned(),
+            )])),
+        );
+        assert_eq!(codex.worker_home(), None, "nothing to leave out");
+        std::fs::write(user.join("AGENTS.md"), "user rules").unwrap();
+        let home = codex.worker_home().unwrap();
+        assert!(home.starts_with(dir.join("data").join(WORKER_HOMES)));
+        for name in ["sessions", "config.toml", "auth.json", "auth.lock"] {
+            assert_eq!(
+                std::fs::read_link(home.join(name)).unwrap(),
+                user.join(name),
+                "{name}"
+            );
+        }
+        assert!(std::fs::symlink_metadata(home.join("AGENTS.md")).is_err());
+        assert_eq!(
+            codex.worker_home(),
+            Some(home.clone()),
+            "made once, then reused"
+        );
+        let worker = codex.in_home(&home);
+        assert_eq!(worker.codex_home(), Some(home.clone()));
+        assert_eq!(worker.history_home(), Some(user));
+        assert_eq!(worker.worker_home(), None, "its own home has no AGENTS.md");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,
