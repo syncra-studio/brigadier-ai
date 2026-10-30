@@ -914,6 +914,7 @@ impl Parser {
                         escalation: true,
                         input: ask.command.clone(),
                         grant: grant.clone(),
+                        network: false,
                     },
                     PendingKind::Command {
                         grant: grant.is_some(),
@@ -952,6 +953,7 @@ impl Parser {
                         }),
                         input: None,
                         grant: None,
+                        network: false,
                     },
                     PendingKind::FileChange,
                 )
@@ -978,6 +980,7 @@ impl Parser {
                         escalation: true,
                         input: Some(clip(&requested.to_string(), OUTPUT_CLIP)),
                         grant: None,
+                        network: false,
                     },
                     PendingKind::Permissions(requested),
                 )
@@ -1463,6 +1466,8 @@ fn startup_status(
         status,
         tools: Vec::new(),
         transport: None,
+        managed: false,
+        label: None,
     })
 }
 
@@ -1504,6 +1509,11 @@ pub(crate) fn background_terminals(
                 output_file: None,
                 summary: None,
                 last_line: None,
+                command: terminal
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                provider: Some(ProviderKind::Codex),
             };
             changed.push(task.clone());
             task
@@ -1549,6 +1559,8 @@ pub fn listed_mcp_servers(
                 status,
                 tools,
                 transport: server.http_origin.map(|_| "http".to_owned()),
+                managed: false,
+                label: None,
             })
         })
         .collect();
@@ -2625,6 +2637,8 @@ mod tests {
             status,
             tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
             transport: transport.map(str::to_owned),
+            managed: false,
+            label: None,
         }
     }
 

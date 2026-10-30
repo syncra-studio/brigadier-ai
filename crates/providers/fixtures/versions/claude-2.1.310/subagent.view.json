@@ -31,6 +31,7 @@
         "label": "Run echo hi",
         "lastLine": null,
         "outputFile": null,
+        "provider": "claude",
         "startedAtMs": 1792943240467,
         "status": "running",
         "summary": null
@@ -46,6 +47,7 @@
         "label": "Run echo hi",
         "lastLine": null,
         "outputFile": null,
+        "provider": "claude",
         "startedAtMs": 1792943240467,
         "status": "running",
         "summary": null
@@ -61,6 +63,7 @@
         "label": "Run echo hi",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-harness-research-w33-rec-claude-subagent/1a82dda6-5500-4d6d-9a14-25a4a4e1aa8b/tasks/a4e8ddea9b19881aa.output",
+        "provider": "claude",
         "startedAtMs": 1792943240467,
         "status": "running",
         "summary": null
@@ -137,6 +140,7 @@
         "label": "Run echo hi",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-harness-research-w33-rec-claude-subagent/1a82dda6-5500-4d6d-9a14-25a4a4e1aa8b/tasks/a4e8ddea9b19881aa.output",
+        "provider": "claude",
         "startedAtMs": 1792943240467,
         "status": "completed",
         "summary": null
@@ -152,6 +156,7 @@
         "label": "Run echo hi",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-harness-research-w33-rec-claude-subagent/1a82dda6-5500-4d6d-9a14-25a4a4e1aa8b/tasks/a4e8ddea9b19881aa.output",
+        "provider": "claude",
         "startedAtMs": 1792943240467,
         "status": "completed",
         "summary": "The output of `echo hi` is:\n\n```\nhi\n```"
@@ -224,7 +229,21 @@
         "event": {
           "itemId": "aca87f1d-b3f4-47a8-a38d-2785e78e559c",
           "text": "Agent \"Run echo hi\" finished",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": null,
+            "job": "agent",
+            "label": "Run echo hi"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": null,
+          "job": "agent",
+          "label": "Run echo hi"
         }
       },
       {
@@ -285,7 +304,21 @@
         "event": {
           "itemId": "aca87f1d-b3f4-47a8-a38d-2785e78e559c",
           "text": "Agent \"Run echo hi\" finished",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": null,
+            "job": "agent",
+            "label": "Run echo hi"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": null,
+          "job": "agent",
+          "label": "Run echo hi"
         }
       },
       {

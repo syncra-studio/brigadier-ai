@@ -98,7 +98,7 @@ fn clis_ts() -> String {
              cliName: {cli_name},\n    installGuide: {guide},\n    usualWindows: {windows},\n    \
              glyph: {{\n      viewBox: {view_box},\n      path: {path},\n{class}    }},\n    \
              oneSkillPerMessage: {one_skill},\n    reportsCacheWrites: {cache_writes},\n    \
-             commandsAsText: {as_text},\n    subagentTools: {tools},\n  }},\n",
+             subagentTools: {tools},\n  }},\n",
             id = text(adapter.kind.id()),
             label = text(adapter.label),
             vendor = text(adapter.vendor),
@@ -110,7 +110,6 @@ fn clis_ts() -> String {
             path = text(glyph.path),
             one_skill = adapter.one_skill_per_message,
             cache_writes = adapter.reports_cache_writes,
-            as_text = adapter.commands_as_text,
             tools = list(adapter.subagent_tools),
         ));
     }
@@ -140,8 +139,6 @@ export interface CliFacts {
   oneSkillPerMessage: boolean;
   /** Its usage reports cache writes; one that doesn't is judged by its cached share of input. */
   reportsCacheWrites: boolean;
-  /** Its built-in commands run when sent as message text; otherwise Brigadier runs them as actions. */
-  commandsAsText: boolean;
   /** The tool names its native subagents start with. */
   subagentTools: string[];
 }

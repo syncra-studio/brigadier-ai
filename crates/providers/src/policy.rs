@@ -857,6 +857,7 @@ mod tests {
             escalation: false,
             input: None,
             grant: None,
+            network: false,
         }
     }
 
@@ -959,6 +960,7 @@ mod tests {
             kind: ApprovalKind::Tool,
             tool: NETWORK_TOOL.into(),
             grant: Some(host.into()),
+            network: true,
             ..write(Path::new("/"))
         };
         let mut similar = Similar::default();

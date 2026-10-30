@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { ComposerCommand } from "@/components/conversation";
-import type { CliCommand, Conversation, Mention, ProviderKind } from "@/ipc/generated";
+import type { CliAction, CliCommand, Conversation, Mention, ProviderKind } from "@/ipc/generated";
 import { cliFacts } from "@/lib/providerKinds";
 
 export type CliTarget =
@@ -33,7 +33,7 @@ export function hasSkillToken(text: string, label: string): boolean {
 }
 
 /** A recalled message may have several skill chips; a CLI that runs one skill per message keeps its first. */
-export function limitClaudeSkills(text: string, known: Iterable<Mention>): string {
+export function keepFirstSkill(text: string, known: Iterable<Mention>): string {
   const labels = new Set(Array.from(known).flatMap((mention) => mention.type === "skill" ? [skillLabel(mention.rowId)] : []));
   const spans = Array.from(labels).flatMap((label) => skillTokenStarts(text, label).map((at) => ({ at, length: label.length }))).toSorted((a, b) => a.at - b.at);
   for (const { at, length } of spans.slice(1).toReversed()) text = text.slice(0, at) + text.slice(at + length);
@@ -48,7 +48,7 @@ export function canPickSkill(provider: ProviderKind | null, text: string, known:
 export function cliMenuCommands(
   listed: readonly CliCommand[],
   own: readonly ComposerCommand[],
-  cli: { name: string | undefined; icon: ReactNode; runCommand?: (invocation: string) => void },
+  cli: { name: string | undefined; icon: ReactNode; runAction?: (action: CliAction) => void },
 ): ComposerCommand[] {
   const taken = new Set(own.map((command) => command.id.toLowerCase()));
   const order = { action: 0, skill: 1, command: 2, prompt: 3 };
@@ -69,9 +69,9 @@ export function cliMenuCommands(
         icon: cli.icon,
         ...(kind === "skill" && command.source
           ? { chip: { id: `skill:${command.source}`, type: "skill", label: skillLabel(command.source) } }
-          // `runCommand` comes only from a CLI whose commands aren't message text.
-          : cli.runCommand && command.kind === "command"
-            ? { run: () => cli.runCommand!(command.invocation ?? "") }
+          // A command Brigadier runs itself; any other is the message text that runs it.
+          : cli.runAction && command.action
+            ? { run: () => cli.runAction!(command.action!) }
             : { text: command.text }),
       };
     });

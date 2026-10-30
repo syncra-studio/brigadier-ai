@@ -3207,6 +3207,7 @@ fn skill_commands(skills: Vec<Skill>, trusted: bool) -> Vec<CliCommand> {
                 .filter(|text| !text.is_empty()),
             name: skill.name,
             argument_hint: None,
+            action: None,
         })
         .collect()
 }
@@ -3494,6 +3495,7 @@ mod tests {
                 text: "$grill-me".into(),
                 description: Some("Grill".into()),
                 argument_hint: None,
+                action: None,
             }
         );
         assert_eq!(trusted[2].text, "$pdf:pdf");

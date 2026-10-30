@@ -7,6 +7,7 @@ use super::*;
 
 fn message(id: &str, role: Role, text: &str) -> FileEntry {
     FileEntry {
+        wake: None,
         event: ProviderEvent::Message {
             item_id: id.into(),
             role,

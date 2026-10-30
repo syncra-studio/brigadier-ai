@@ -24,6 +24,7 @@
     },
     {
       "task": {
+        "command": "sleep 2",
         "endedAtMs": null,
         "id": "63484",
         "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
@@ -31,6 +32,7 @@
         "label": "sleep 2",
         "lastLine": null,
         "outputFile": null,
+        "provider": "codex",
         "startedAtMs": 1792929290721,
         "status": "running",
         "summary": null

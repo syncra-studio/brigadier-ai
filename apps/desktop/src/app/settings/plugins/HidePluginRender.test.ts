@@ -10,7 +10,7 @@ test("native skills and servers confirm hiding for every agent, preserve failed 
   assert.equal(seen.error, undefined);
   for (const confirmation of [seen.confirmation, seen.skillConfirmation]) {
     assert.match(confirmation, /Brigadier and its sessions for all agents/);
-    assert.match(confirmation, /files stay where Claude Code or Codex keep them/);
+    assert.match(confirmation, /files stay in each agent's own settings/);
   }
   assert.equal(seen.canceledCalls, 0);
   assert.equal(seen.errorVisible, true);

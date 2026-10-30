@@ -10,11 +10,19 @@ import { UsageLimitDivider } from "@/app/conversation/UsageLimitDivider";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState, useAui, useAuiState } from "@/components/conversation";
-import type { UserRequest } from "@/ipc/generated";
+import type { ThreadTurn, UserRequest } from "@/ipc/generated";
 import { resume, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
 import { cliFacts } from "@/lib/providerKinds";
+
+/** The block's turn, as its CLI's thread has it. */
+function useBlockTurn<T>(meta: BlockMeta | undefined, pick: (turn: ThreadTurn | undefined) => T): T {
+  const conversation = useViewConversation();
+  return useCliThread((s) => pick(meta && conversation
+    ? s.views[conversation.id]?.turns.findLast((candidate) => candidate.requests.some((id) => meta.requestIds.includes(id)) || candidate.userMessage === meta.requestId)
+    : undefined));
+}
 
 /** Scope the conversation's current wait to its latest request; historical failures keep their diagnostics. */
 export function useBlockQuotaRecovery(meta: BlockMeta | undefined) {
@@ -24,12 +32,9 @@ export function useBlockQuotaRecovery(meta: BlockMeta | undefined) {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;
   });
-  const nativeLimit = useCliThread((s) => {
-    if (!meta || !conversation) return false;
-    const turn = s.views[conversation.id]?.turns.findLast((candidate) => candidate.requests.some((id) => meta.requestIds.includes(id)) || candidate.userMessage === meta.requestId);
-    return turn?.end === "failed" && !!turn.limit;
-  });
-  const quotaFailure = nativeLimit || (error !== null && describeTurnError(error).limit === true);
+  const nativeLimit = useBlockTurn(meta, (turn) => turn?.end === "failed" && !!turn.limit);
+  const kind = useBlockTurn(meta, (turn) => turn?.errorKind ?? null);
+  const quotaFailure = nativeLimit || (error !== null && describeTurnError(error, undefined, kind).limit === true);
   const wait = latest && meta && (isLive(meta.state) || quotaFailure) ? conversation?.quotaWait ?? null : null;
   const recovered = !!meta && quotaFailure && leadTransitions(meta.orchestratorSteps)
     .some((transition) => transition.startedAtMs >= (meta.endedAtMs ?? meta.startedAtMs));
@@ -70,14 +75,16 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
       : null;
   });
   const read = useBlockError(meta, failed);
+  const kind = useBlockTurn(meta, (turn) => turn?.errorKind ?? null);
+  const turnProvider = useBlockTurn(meta, (turn) => turn?.provider ?? null);
   const latest = useAuiState((s) => s.message.isLast);
   const conversation = useViewConversation();
   const aui = useAui();
   const action = useAction();
   if (read === null || quotaCovered) return null;
   const { error, resumable } = read;
-  const model = meta.texts.at(-1)?.model ?? meta.picked;
-  const { summary, limit } = describeTurnError(error, model ? cliFacts(model.provider).vendor : undefined);
+  const provider = turnProvider ?? (meta.texts.at(-1)?.model ?? meta.picked)?.provider;
+  const { summary, limit } = describeTurnError(error, provider ? cliFacts(provider).vendor : undefined, kind);
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {

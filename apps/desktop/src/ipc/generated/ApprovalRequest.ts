@@ -38,4 +38,8 @@ input: string | null,
  * ([`ApprovalDecision::AllowSimilar`]): what that covers, as shown (a command's first
  * words, such as `git push`, a network host, or the workspace for file changes). See [`crate::policy::Similar`].
  */
-grant: string | null, };
+grant: string | null, 
+/**
+ * It asks to reach the network: a host, a page or a web search.
+ */
+network?: boolean, };

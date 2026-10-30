@@ -559,7 +559,7 @@ function background(tasks: BackgroundTask[], holding: string[] = []): void {
 }
 const task = (id: string, kind: "agent" | "shell", label: string, running: boolean): BackgroundTask => ({
   id, itemId: null, kind, label, status: running ? "running" : "completed", startedAtMs: Date.now() - 500,
-  endedAtMs: running ? null : Date.now(), outputFile: null, summary: null, lastLine: null,
+  endedAtMs: running ? null : Date.now(), outputFile: null, summary: null, lastLine: null, provider: "claude",
 });
 
 const keyframes = (animation: Animation) => (animation.effect as KeyframeEffect).getKeyframes();

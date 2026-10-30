@@ -25,6 +25,7 @@
         "label": "Sleep for 2 seconds in background",
         "lastLine": null,
         "outputFile": null,
+        "provider": "claude",
         "startedAtMs": 1792929168191,
         "status": "running",
         "summary": null
@@ -33,6 +34,7 @@
     },
     {
       "task": {
+        "command": "sleep 2",
         "endedAtMs": null,
         "id": "b8e7eb5a5",
         "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
@@ -40,6 +42,7 @@
         "label": "Sleep for 2 seconds in background",
         "lastLine": null,
         "outputFile": null,
+        "provider": "claude",
         "startedAtMs": 1792929168191,
         "status": "running",
         "summary": null
@@ -48,6 +51,7 @@
     },
     {
       "task": {
+        "command": "sleep 2",
         "endedAtMs": null,
         "id": "b8e7eb5a5",
         "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
@@ -55,6 +59,7 @@
         "label": "Sleep for 2 seconds in background",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-20261025-1046-harness-research-w17-claude-lifecycle/6a562aa9-0d2e-4bac-8c34-0087b0128fe0/tasks/b8e7eb5a5.output",
+        "provider": "claude",
         "startedAtMs": 1792929168191,
         "status": "running",
         "summary": null
@@ -105,6 +110,7 @@
     },
     {
       "task": {
+        "command": "sleep 2",
         "endedAtMs": 1792929170444,
         "id": "b8e7eb5a5",
         "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
@@ -112,6 +118,7 @@
         "label": "Sleep for 2 seconds in background",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-20261025-1046-harness-research-w17-claude-lifecycle/6a562aa9-0d2e-4bac-8c34-0087b0128fe0/tasks/b8e7eb5a5.output",
+        "provider": "claude",
         "startedAtMs": 1792929168191,
         "status": "completed",
         "summary": null
@@ -120,6 +127,7 @@
     },
     {
       "task": {
+        "command": "sleep 2",
         "endedAtMs": 1792929170444,
         "id": "b8e7eb5a5",
         "itemId": "toolu_016Usd7ZQYaKByjVjKtJc8RQ",
@@ -127,6 +135,7 @@
         "label": "Sleep for 2 seconds in background",
         "lastLine": null,
         "outputFile": "/private/tmp/claude-501/-private-tmp-20261025-1046-harness-research-w17-claude-lifecycle/6a562aa9-0d2e-4bac-8c34-0087b0128fe0/tasks/b8e7eb5a5.output",
+        "provider": "claude",
         "startedAtMs": 1792929168191,
         "status": "completed",
         "summary": "Background command \"Sleep for 2 seconds in background\" completed (exit code 0)"
@@ -300,7 +309,21 @@
         "event": {
           "itemId": "e95752b9-f7e8-4f1f-889c-7a376d6b32a9",
           "text": "Background command \"Sleep for 2 seconds in background\" completed (exit code 0)",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": 0,
+            "job": "command",
+            "label": "Sleep for 2 seconds in background"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": 0,
+          "job": "command",
+          "label": "Sleep for 2 seconds in background"
         }
       },
       {
@@ -458,7 +481,21 @@
         "event": {
           "itemId": "e95752b9-f7e8-4f1f-889c-7a376d6b32a9",
           "text": "Background command \"Sleep for 2 seconds in background\" completed (exit code 0)",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": 0,
+            "job": "command",
+            "label": "Sleep for 2 seconds in background"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": 0,
+          "job": "command",
+          "label": "Sleep for 2 seconds in background"
         }
       },
       {

@@ -286,6 +286,8 @@ async fn a_codex_terminal_ends_once(end: TerminalEnd) {
                 let terminal =
                     |status, ended_at_ms| brigadier_providers::ProviderEvent::BackgroundTask {
                         task: brigadier_providers::BackgroundTask {
+                            command: None,
+                            provider: None,
                             id: "4242".into(),
                             item_id: Some("cmd-1".into()),
                             kind: brigadier_providers::BackgroundTaskKind::Terminal,
@@ -983,6 +985,8 @@ async fn persistent_app_lifetime(provider: brigadier_providers::ProviderKind, la
                 };
                 let task = |known| ProviderEvent::BackgroundTask {
                     task: BackgroundTask {
+                        command: None,
+                        provider: None,
                         id: "native-app".into(),
                         item_id: Some("app-call".into()),
                         kind: if provider == ProviderKind::Claude {
@@ -1132,6 +1136,8 @@ async fn persistent_app_lifetime(provider: brigadier_providers::ProviderKind, la
     events
         .send(ProviderEvent::BackgroundTask {
             task: BackgroundTask {
+                command: None,
+                provider: None,
                 id: "native-app".into(),
                 item_id: Some("app-call".into()),
                 kind: if provider == ProviderKind::Claude {

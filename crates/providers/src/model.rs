@@ -361,6 +361,10 @@ pub struct ApprovalRequest {
     /// words, such as `git push`, a network host, or the workspace for file changes). See [`crate::policy::Similar`].
     #[serde(default)]
     pub grant: Option<String>,
+    /// It asks to reach the network: a host, a page or a web search.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub network: bool,
 }
 
 /// One question a CLI asks with its own question tool ([`ProviderEvent::QuestionsAsked`]).
@@ -521,6 +525,14 @@ pub struct BackgroundTask {
     /// The last line it printed, as its output file holds it now (read by Brigadier).
     #[serde(default)]
     pub last_line: Option<String>,
+    /// The command line it runs, when it is a command and the CLI said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// The CLI that runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<ProviderKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -540,6 +552,35 @@ pub enum BackgroundTaskKind {
 pub enum BackgroundTaskStatus {
     Running,
     Completed,
+    Failed,
+    Stopped,
+}
+
+/// A background job's end, as the words that tell it say it: the CLI's notice, or Brigadier's
+/// own message to the CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Wake {
+    pub job: WakeJob,
+    /// The job's name: a command's description or command line, an agent's name.
+    pub label: String,
+    /// The command line it ran, when known.
+    pub command: Option<String>,
+    pub end: WakeEnd,
+    pub exit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WakeJob {
+    Command,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WakeEnd {
+    Finished,
     Failed,
     Stopped,
 }
@@ -881,6 +922,14 @@ pub struct McpServerState {
     pub tools: Vec<String>,
     /// "http" for a server reached over HTTP; absent when the CLI doesn't say.
     pub transport: Option<String>,
+    /// The user manages its sign-in outside the CLI (on the vendor's site): no sign-in prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub managed: bool,
+    /// Its name as the user knows it, when that isn't `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub label: Option<String>,
 }
 
 /// The group in the composer's command menu.
@@ -919,6 +968,17 @@ pub struct CliCommand {
     pub description: Option<String>,
     /// What it takes after its name ("[pr]"), when the CLI says.
     pub argument_hint: Option<String>,
+    /// What Brigadier does itself to run it, rather than sending its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action: Option<CliAction>,
+}
+
+/// A built-in command Brigadier runs itself ([`CliCommand::action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CliAction {
+    Compact,
 }
 
 /// Everything a provider session reports, in one vocabulary for every CLI.
@@ -1094,6 +1154,10 @@ pub enum ProviderEvent {
     TaskNotice {
         item_id: String,
         text: String,
+        /// The job's end it tells, when the CLI's words say one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        wake: Option<Wake>,
     },
     RateLimits {
         quota: QuotaSnapshot,

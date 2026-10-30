@@ -173,6 +173,9 @@ fn builtins(provider: ProviderKind) -> Vec<CliCommand> {
             text: format!("/{name}"),
             description: Some(description.to_string()),
             argument_hint: None,
+            // A CLI that doesn't run commands from message text has Brigadier run its compact.
+            action: (!adapter.commands_as_text && *name == "compact")
+                .then_some(brigadier_providers::CliAction::Compact),
         })
         .collect()
 }
@@ -219,6 +222,7 @@ fn menu(
         .skills
         .iter()
         .map(|skill| CliCommand {
+            action: None,
             kind: Some(CliCommandKind::Skill),
             source: Some(skill.row_id.clone()),
             invocation: Some(skill.invocation.clone()),

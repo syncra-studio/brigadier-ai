@@ -255,7 +255,7 @@ async function driveEnded(): Promise<Record<string, unknown>> {
 const sleep: BackgroundTask = { id: "bdza4j3ng", itemId: "toolu_bash", kind: "shell", label: "Sleep 20 seconds then echo marker", status: "running",
   startedAtMs: now - 8_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/bdza4j3ng.output", summary: null, lastLine: "sleeping" };
 const helper: BackgroundTask = { id: "a0c79", itemId: "toolu_agent", kind: "agent", label: "Reply with hi", status: "running",
-  startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
+  startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null, provider: "claude" };
 const tasksSaid = (...background: BackgroundTask[]) => { background.filter((task) => task.status !== "running").forEach((task) => durableHistory.add(task.id)); applyThreadNews({ conversationId: id, entries: [], opened: false, background }); };
 /** Frames until `done` holds, up to `ms`; how long it took. */
 async function until(done: () => boolean, ms: number): Promise<number> {

@@ -664,6 +664,8 @@ fn worker_job(
 ) -> brigadier_providers::ProviderEvent {
     brigadier_providers::ProviderEvent::BackgroundTask {
         task: brigadier_providers::BackgroundTask {
+            command: None,
+            provider: None,
             id: "bg1".into(),
             item_id: None,
             kind: brigadier_providers::BackgroundTaskKind::Shell,

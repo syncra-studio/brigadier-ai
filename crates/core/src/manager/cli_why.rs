@@ -607,6 +607,7 @@ mod tests {
     #[test]
     fn a_turn_whose_message_is_gone_takes_no_later_turns_message() {
         let user = |id: &str, at_ms: i64| FileEntry {
+            wake: None,
             event: ProviderEvent::Message {
                 item_id: id.into(),
                 role: CliRole::User,

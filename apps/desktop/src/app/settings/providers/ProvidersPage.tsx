@@ -48,7 +48,7 @@ export const PROVIDERS_ROWS = {
     target: "Accounts",
   },
   switchAccounts: { ...OVERVIEW_ROWS.switchAccounts, target: "Accounts" },
-  add: { label: "Add account", description: "Sign in to another Claude Code or Codex account", target: "Accounts" },
+  add: { label: "Add account", description: "Sign in to another account of any agent", target: "Accounts" },
   own: { label: "This computer's login", description: "Also used by your terminal", target: "Accounts" },
   models: {
     label: "Models",

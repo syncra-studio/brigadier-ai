@@ -1151,15 +1151,12 @@ pub(crate) fn activity_of(
     .then_some(activity)
 }
 
-/// The names of the CLI's MCP servers in `servers` that want the user to sign in. A claude.ai
-/// connector is left out: the user manages those on claude.ai, and many stay unsigned on
-/// purpose.
+/// The names of the CLI's MCP servers in `servers` that want the user to sign in. One whose
+/// sign-in the user manages outside the CLI is left out: many stay unsigned on purpose.
 pub(crate) fn sign_ins(servers: &[McpServerState]) -> Vec<String> {
     servers
         .iter()
-        .filter(|server| {
-            server.status == McpStatus::NeedsAuth && !server.name.starts_with("claude.ai ")
-        })
+        .filter(|server| server.status == McpStatus::NeedsAuth && !server.managed)
         .map(|server| server.name.clone())
         .collect()
 }
@@ -1174,6 +1171,8 @@ mod shared_states_tests {
     struct Server {
         name: String,
         status: McpStatus,
+        #[serde(default)]
+        managed: bool,
     }
 
     #[derive(serde::Deserialize)]
@@ -1210,6 +1209,8 @@ mod shared_states_tests {
                     status: server.status,
                     tools: Vec::new(),
                     transport: None,
+                    managed: server.managed,
+                    label: None,
                 })
                 .collect();
             let activity = activity_of(

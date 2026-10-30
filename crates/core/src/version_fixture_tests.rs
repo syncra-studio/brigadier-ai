@@ -198,6 +198,8 @@ fn turn_records(
                             TurnStatus::Failed => TurnEnd::Failed,
                         }),
                         error: None,
+                        error_kind: None,
+                        provider: None,
                         ended_at_ms: Some(recording.header.recorded_at_ms + row.t as i64),
                         requests: vec![],
                         limit: None,
@@ -368,6 +370,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                         .and_then(|id| phases.get(id))
                         .copied();
                     let entry = FileEntry {
+                        wake: None,
                         event: event.clone(),
                         at_ms: Some(*at),
                         updated_at_ms: None,

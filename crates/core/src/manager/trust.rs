@@ -21,11 +21,13 @@
 use std::path::Path;
 
 use brigadier_providers::trust::{self, Written};
-use brigadier_providers::{Artifact, KindFacts as _, ProviderKind};
+use brigadier_providers::{Artifact, ProviderKind};
 
 use super::workers::repo_access_for;
 use super::{SessionManager, blocking};
-use crate::model::{ConversationId, FolderTrustReport, PermissionLevel, Project, ProjectId, Setup};
+use crate::model::{
+    ConversationId, FolderTrustReport, PermissionLevel, Project, ProjectId, Setup, TrustFailure,
+};
 use crate::{Error, Result};
 
 /// The ledger owner of the folder trust a project's answer wrote.
@@ -178,10 +180,12 @@ impl SessionManager {
         holder: &str,
         folder: &str,
         clis: &[ProviderKind],
-    ) -> Vec<String> {
+    ) -> Vec<TrustFailure> {
         let key = self.trust_key(folder).await;
         if key.is_empty() {
-            return vec![format!("{folder}: its folder couldn't be read")];
+            return vec![TrustFailure::of(format!(
+                "{folder}: its folder couldn't be read"
+            ))];
         }
         let folder = key.as_str();
         let mut failures = Vec::new();
@@ -191,7 +195,10 @@ impl SessionManager {
                     continue;
                 }
                 if let Err(err) = self.write_one(holder, cli, &file, folder).await {
-                    failures.push(format!("{}: {err}", cli.vendor()));
+                    failures.push(TrustFailure {
+                        provider: Some(cli),
+                        reason: err.to_string(),
+                    });
                 }
             }
         }
@@ -257,7 +264,7 @@ impl SessionManager {
 
     /// Puts back what the trust of `path` replaced: the project's entry and its tasks'
     /// terminal folders. Returns what failed.
-    async fn release_cli_trust(&self, project: &Project, path: &str) -> Vec<String> {
+    async fn release_cli_trust(&self, project: &Project, path: &str) -> Vec<TrustFailure> {
         let ledger = self.runtime.ledger();
         let key = self.trust_key(path).await;
         let mut holders = vec![(owner(&project.id), Some([path.to_owned(), key]))];
@@ -279,7 +286,14 @@ impl SessionManager {
                 })
                 .collect();
             if !entries.is_empty() {
-                failures.extend(ledger.release(&holder, entries).await.failures);
+                failures.extend(
+                    ledger
+                        .release(&holder, entries)
+                        .await
+                        .failures
+                        .into_iter()
+                        .map(TrustFailure::of),
+                );
             }
         }
         failures

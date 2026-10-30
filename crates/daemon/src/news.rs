@@ -197,6 +197,7 @@ mod tests {
         ThreadNews {
             conversation_id: ConversationId(conversation.into()),
             entries: vec![FileEntry {
+                wake: None,
                 event: ProviderEvent::MessageDelta {
                     item_id: item.into(),
                     text: text.into(),

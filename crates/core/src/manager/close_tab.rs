@@ -159,6 +159,7 @@ impl SessionManager {
     /// The user's yes on a card for closing a tab.
     async fn confirm_close(&self, id: &ConversationId, question: &str) -> Result<()> {
         let request = ApprovalRequest {
+            network: false,
             id: format!("{OWN_APPROVAL}{}", uuid::Uuid::now_v7()),
             kind: ApprovalKind::Tool,
             tool: "close_tab".into(),

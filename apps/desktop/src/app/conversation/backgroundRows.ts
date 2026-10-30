@@ -7,7 +7,7 @@ import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/genera
 /**
  * The context card's Background rows (Q91, S12): one row per thing the session has going in the
  * background, with its state in a word: a preview it keeps running (`brigadier preview`), its
- * CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`) and its workers' CLIs'. A worker's second copy of an app
+ * CLI's own background tasks and its workers' CLIs'. A worker's second copy of an app
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
@@ -21,7 +21,7 @@ export type BackgroundState =
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
   /**
-   * One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`), or of a worker's
+   * One of the CLI's own background tasks, or of a worker's
    * CLI (`worker`: its id and name).
    */
   | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; command?: string | null; state: BackgroundState; worker: { id: string; name: string | null } | null };
@@ -69,11 +69,12 @@ export function runsBrigadier(command: string, sub: string): boolean {
 }
 
 /**
- * Claude labels a Bash task with its description; only its originating call has the command:
- * a `command` item, as Claude's Bash always is (D38), or a tool call's `command` argument.
+ * The command a task runs, as its CLI said it; else its originating call's: a `command` item or
+ * a tool call's `command` argument (a label may be only a description).
  */
 export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
   if (task.kind !== "shell" && task.kind !== "terminal") return null;
+  if (task.command) return task.command;
   const fallback = task.kind === "terminal" ? task.label : null;
   if (task.itemId === null) return fallback;
   const call = entries.find(({ event, parent }) => !parent && (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.event;

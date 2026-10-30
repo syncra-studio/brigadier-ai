@@ -70,7 +70,10 @@ function withCodexWake(view: ThreadView): ThreadView {
   assert.ok(at > 0);
   const atMs = (view.entries[at - 1]?.atMs ?? 0) + 1;
   const said = (event: ProviderEvent): FileEntry => ({ event, atMs, updatedAtMs: null, parent: null, steer: false, images: [], phase: null }) as unknown as FileEntry;
-  const wake = said({ type: "message", itemId: "derived-wake", role: "user", text: `[your background command \`sleep 2\` finished after your turn · exit ${exit}]\n` } as ProviderEvent);
+  const wake = {
+    ...said({ type: "message", itemId: "derived-wake", role: "user", text: `[your background command \`sleep 2\` finished after your turn · exit ${exit}]\n` } as ProviderEvent),
+    wake: { job: "command", label: "sleep 2", command: "sleep 2", end: exit === 0 ? "finished" : "failed", exit },
+  } as FileEntry;
   const reply = said({ type: "message", itemId: "derived-wake-reply", role: "assistant", text: "OK" } as ProviderEvent);
   const entries = [...view.entries.slice(0, at), wake, reply, ...view.entries.slice(at)];
   // The turn it starts carries the request of the turn that started the command.

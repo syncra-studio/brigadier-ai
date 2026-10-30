@@ -130,7 +130,25 @@ impl Project {
 #[serde(rename_all = "camelCase")]
 pub struct FolderTrustReport {
     pub project: Project,
-    pub failures: Vec<String>,
+    pub failures: Vec<TrustFailure>,
+}
+
+/// Something answering "Do you trust this folder?" couldn't write: in one CLI's settings
+/// (`provider`), or with none to name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustFailure {
+    pub provider: Option<ProviderKind>,
+    pub reason: String,
+}
+
+impl TrustFailure {
+    pub(crate) fn of(reason: String) -> Self {
+        Self {
+            provider: None,
+            reason,
+        }
+    }
 }
 
 /// The user's answer for one folder. Trusted: agents work there as the session's permission

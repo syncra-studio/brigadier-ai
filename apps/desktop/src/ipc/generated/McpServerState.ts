@@ -12,4 +12,12 @@ tools: Array<string>,
 /**
  * "http" for a server reached over HTTP; absent when the CLI doesn't say.
  */
-transport: string | null, };
+transport: string | null, 
+/**
+ * The user manages its sign-in outside the CLI (on the vendor's site): no sign-in prompt.
+ */
+managed?: boolean, 
+/**
+ * Its name as the user knows it, when that isn't `name`.
+ */
+label?: string, };

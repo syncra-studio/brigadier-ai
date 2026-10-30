@@ -4372,7 +4372,8 @@ impl SessionManager {
             label: "background command finished".into(),
             task_id: None,
             text: format!(
-                "[your background command `{words}` finished after your turn · {status}]\n{}",
+                "{}{words}` finished after your turn · {status}]\n{}",
+                crate::thread_view::WAKE_MARK,
                 String::from_utf8_lossy(&text)
             ),
         };

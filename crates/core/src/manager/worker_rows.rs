@@ -383,6 +383,8 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
         user_message: cli.user_message.clone(),
         end,
         error: None,
+        error_kind: None,
+        provider: None,
         ended_at_ms,
         requests: Vec::new(),
         limit: None,
@@ -854,16 +856,18 @@ impl SessionManager {
     ) -> Result<crate::thread_view::ThreadView> {
         let task = self.task_by_id(id, task).await?;
         let record = self.session_dir(id).worker(&task).join("record");
-        let files = super::session_dir::read_lineage(&record)
+        let owned: Vec<_> = super::session_dir::read_lineage(&record)
             .into_iter()
             .filter_map(|session| {
                 let file = session.file?;
-                Some(
+                Some((
+                    session.provider,
                     self.session_files
                         .read(session.provider, std::path::Path::new(&file)),
-                )
+                ))
             })
             .collect();
+        let files = owned.iter().map(|(_, entries)| entries.clone()).collect();
         // Its turn that is open reads as running, not cut off.
         let open = self
             .worker_rows
@@ -878,6 +882,8 @@ impl SessionManager {
         });
         let records = thread_view::read_turns(&record);
         let mut view = thread_view::view(files, live.as_ref(), &records);
+        let current = owned.last().map(|(kind, _)| *kind);
+        thread_view::name_providers(&mut view, &owned, current);
         // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
         // hand-off hidden, as a session's.
         view.seams = super::seam::marks(&record, &mut view.entries);
@@ -1044,6 +1050,8 @@ mod tests {
         };
         follow(&mut cli, &call, 2);
         let task = |status| BackgroundTask {
+            command: None,
+            provider: None,
             id: "t1".into(),
             item_id: Some("b1".into()),
             kind: BackgroundTaskKind::Shell,
@@ -1165,6 +1173,8 @@ mod tests {
         };
         follow(&mut cli, &bash("toolu_wait", "brigadier wait"), 2);
         let task = BackgroundTask {
+            command: None,
+            provider: None,
             id: "b8ea764yr".into(),
             item_id: Some("toolu_wait".into()),
             kind: BackgroundTaskKind::Shell,

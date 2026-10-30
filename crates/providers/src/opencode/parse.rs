@@ -349,6 +349,7 @@ fn approval(data: &Value) -> ApprovalRequest {
         input: (metadata.as_object().is_some_and(|m| !m.is_empty()))
             .then(|| clip(&metadata.to_string(), OUTPUT_CLIP)),
         grant: None,
+        network: matches!(action, "webfetch" | "websearch" | "codesearch"),
     }
 }
 

@@ -364,6 +364,8 @@ impl SessionManager {
                             user_message: live.user_message.clone(),
                             end: None,
                             error: None,
+                            error_kind: None,
+                            provider: None,
                             ended_at_ms: None,
                             requests: live.requests.clone(),
                             limit: None,
@@ -380,6 +382,7 @@ impl SessionManager {
                 }
                 Some(ProviderEvent::Error { error }) if live.open => {
                     live.error = Some(error.message.clone());
+                    live.error_kind = Some(error.kind);
                     if let Some(limit) = thread_view::limit_of(error) {
                         live.limit = Some(limit);
                     }
@@ -426,6 +429,8 @@ impl SessionManager {
                     user_message: live.user_message.clone(),
                     end: Some(end),
                     error: live.error.take(),
+                    error_kind: live.error_kind.take(),
+                    provider: None,
                     ended_at_ms: Some(at),
                     requests: live.requests.clone(),
                     limit: live.limit.take(),
@@ -754,8 +759,11 @@ impl SessionManager {
         let sent = envelope_provenance::sent_ids(&record);
         // A fork's thread starts with its source's, up to the answer it forks (#648).
         let forked = thread_view::read_forked(&record);
-        let files = std::iter::once(std::sync::Arc::new(forked.entries))
-            .chain(read_lineage(&record).into_iter().filter_map(|session| {
+        let lineage = read_lineage(&record);
+        let current = lineage.last().map(|session| session.provider);
+        let owned: Vec<_> = lineage
+            .into_iter()
+            .filter_map(|session| {
                 let file = session.file?;
                 let scoped_ids = daemon_ids
                     .iter()
@@ -767,19 +775,26 @@ impl SessionManager {
                 let entries = self
                     .session_files
                     .read(session.provider, std::path::Path::new(&file));
-                Some(std::sync::Arc::new(
-                    entries
-                        .iter()
-                        .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
-                        .map(|entry| said_in(entry, &sent, &session.session_id))
-                        .collect(),
+                Some((
+                    session.provider,
+                    std::sync::Arc::new(
+                        entries
+                            .iter()
+                            .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
+                            .map(|entry| said_in(entry, &sent, &session.session_id))
+                            .collect::<Vec<_>>(),
+                    ),
                 ))
-            }))
+            })
+            .collect();
+        let files = std::iter::once(std::sync::Arc::new(forked.entries))
+            .chain(owned.iter().map(|(_, entries)| entries.clone()))
             .collect();
         let mut records = forked.turns;
         records.extend(thread_view::read_turns(&record));
         let threads = self.cli_threads.lock().unwrap();
         let mut view = thread_view::view(files, threads.get(id), &records);
+        thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
         Ok(view)
     }
@@ -1070,8 +1085,10 @@ fn last_line(path: &std::path::Path) -> Option<String> {
 }
 
 fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
+    let event = event.expect("an event");
     FileEntry {
-        event: event.expect("an event"),
+        wake: thread_view::wake_of(&event),
+        event,
         at_ms: Some(at),
         updated_at_ms: None,
         parent: None,
@@ -1108,6 +1125,8 @@ mod tests {
 
     fn task(id: &str, kind: BackgroundTaskKind, status: BackgroundTaskStatus) -> BackgroundTask {
         BackgroundTask {
+            command: None,
+            provider: None,
             id: id.into(),
             item_id: None,
             kind,
@@ -1207,6 +1226,7 @@ mod tests {
     #[test]
     fn a_background_jobs_notice_line_shows_live() {
         assert!(shown_live(&ProviderEvent::TaskNotice {
+            wake: None,
             item_id: "n1".into(),
             text: r#"Background command "sleep 20" completed (exit code 0)"#.into(),
         }));
@@ -1226,6 +1246,8 @@ mod tests {
             .join("replacement.output");
         std::fs::write(&output, "replacement invocation output").unwrap();
         let task = BackgroundTask {
+            command: None,
+            provider: None,
             id: "reused".into(),
             item_id: Some("replacement-call".into()),
             kind: BackgroundTaskKind::Shell,

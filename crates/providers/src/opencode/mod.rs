@@ -376,6 +376,7 @@ async fn list_commands(server: &Server, folder: &Path) -> Result<Vec<CliCommand>
                     text: format!("/{name}"),
                     description: command["description"].as_str().map(str::to_owned),
                     argument_hint: None,
+                    action: None,
                 })
             })
             .collect();

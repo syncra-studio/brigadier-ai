@@ -95,6 +95,41 @@ pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue t
 pub(crate) const HANDOFF_MARK: &str = "[Brigadier hand-off ";
 pub(crate) const HANDOFF_END: &str = "[End of the hand-off]";
 
+/// How Brigadier's word to a CLI that a command it left running ended after its turn begins
+/// (`conversation.rs`): ``[your background command `<command>` finished after your turn · <how>]``.
+pub(crate) const WAKE_MARK: &str = "[your background command `";
+
+/// The job's end an item tells: the CLI's notice of it, or Brigadier's own word ([`WAKE_MARK`]).
+pub(crate) fn wake_of(event: &ProviderEvent) -> Option<brigadier_providers::Wake> {
+    use brigadier_providers::{Wake, WakeEnd, WakeJob};
+    let text = match event {
+        ProviderEvent::TaskNotice { wake, .. } => return wake.clone(),
+        ProviderEvent::Message {
+            role: Role::User,
+            text,
+            ..
+        } => text,
+        _ => return None,
+    };
+    let (command, rest) = text
+        .strip_prefix(WAKE_MARK)?
+        .split_once("` finished after your turn · ")?;
+    let how = rest.split(']').next()?.trim();
+    let exit = how.strip_prefix("exit ").and_then(|code| code.parse().ok());
+    let end = match (exit, how) {
+        (Some(0), _) | (None, "completed") => WakeEnd::Finished,
+        (Some(_), _) | (None, "failed") => WakeEnd::Failed,
+        _ => WakeEnd::Stopped,
+    };
+    Some(Wake {
+        job: WakeJob::Command,
+        label: command.to_owned(),
+        command: Some(command.to_owned()),
+        end,
+        exit,
+    })
+}
+
 /// A seam of the thread: the divider "Fresh context · hand-off note" (G12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -241,6 +276,15 @@ pub struct ThreadTurn {
     /// How it ended; none while it runs.
     pub end: Option<TurnEnd>,
     pub error: Option<String>,
+    /// What kind of error `error` is, as its CLI's adapter classed it; none for an error of
+    /// Brigadier's own (a quit) or one recorded before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error_kind: Option<ErrorKind>,
+    /// The CLI that ran it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<ProviderKind>,
     /// Brigadier's requests it carried: its user message's, then those steered into it. Their
     /// cards, workers and changes show in the turn.
     pub requests: Vec<String>,
@@ -276,6 +320,11 @@ pub(crate) struct TurnRecord {
     pub end: Option<TurnEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+    /// The CLI that ran it, when its session file isn't the thread's own (a fork's source's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -363,6 +412,7 @@ pub(crate) struct LiveTurn {
     pub continues: bool,
     pub open: bool,
     pub error: Option<String>,
+    pub error_kind: Option<ErrorKind>,
     /// The limit its CLI hit in it.
     pub limit: Option<LimitHit>,
     /// Brigadier's requests it carries.
@@ -578,6 +628,9 @@ pub(crate) fn view(
             entries = add_unheld(entries, &live.entries);
         }
     }
+    for entry in entries.iter_mut().filter(|entry| entry.parent.is_none()) {
+        entry.wake = wake_of(&entry.event);
+    }
     let mut turns = turns(&entries, records, running);
     if running
         && let Some(live) = live
@@ -588,9 +641,11 @@ pub(crate) fn view(
             turn.end = None;
             turn.ended_at_ms = None;
             turn.error = None;
+            turn.error_kind = None;
         }
         if turn.error.is_none() {
             turn.error.clone_from(&live.error);
+            turn.error_kind = live.error_kind;
         }
         if turn.limit.is_none() {
             turn.limit.clone_from(&live.limit);
@@ -691,6 +746,8 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 ended_at_ms: inside.iter().rev().find_map(|entry| entry.at_ms),
                 end: None,
                 error: None,
+                error_kind: None,
+                provider: None,
                 requests: Vec::new(),
                 limit: None,
                 joins: false,
@@ -743,13 +800,15 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                         _ => None,
                     })
             };
-            let error = current_errors().next().map(|error| error.message.clone());
+            let first = current_errors().next();
+            let error = first.map(|error| error.message.clone());
             let limit = current_errors().rev().find_map(limit_of);
             if within.is_none() {
                 before = record;
             }
             turn.requests = requests;
             turn.joins = joins;
+            turn.provider = record.and_then(|record| record.provider);
             turn.limit = record
                 .filter(|_| !running)
                 .and_then(|record| record.limit.clone())
@@ -779,6 +838,16 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             } else {
                 turn.end = Some(TurnEnd::Done);
             }
+            // The error's kind: the CLI's error's, or its record's when the record said it.
+            turn.error_kind = if turn.error.is_some()
+                && turn.error.as_deref() == first.map(|error| error.message.as_str())
+            {
+                first.map(|error| error.kind)
+            } else {
+                record
+                    .filter(|record| record.error == turn.error)
+                    .and_then(|record| record.error_kind)
+            };
             (turn, within.is_some())
         })
         .collect();
@@ -832,6 +901,28 @@ pub(crate) fn add_requests(requests: &mut Vec<String>, more: &[String]) {
 }
 
 /// The id of a user message.
+/// Names each turn's CLI: the one whose session file (`files`) holds its user message, else its
+/// record's (a fork's source's), else `current` (the live stream's turn).
+pub(crate) fn name_providers(
+    view: &mut ThreadView,
+    files: &[(ProviderKind, Arc<Vec<FileEntry>>)],
+    current: Option<ProviderKind>,
+) {
+    let mut by_message: HashMap<&str, ProviderKind> = HashMap::new();
+    for (kind, entries) in files {
+        for id in entries.iter().filter_map(user_message) {
+            by_message.insert(id, *kind);
+        }
+    }
+    for turn in &mut view.turns {
+        turn.provider = by_message
+            .get(turn.user_message.as_str())
+            .copied()
+            .or(turn.provider)
+            .or(current);
+    }
+}
+
 fn user_message(entry: &FileEntry) -> Option<&str> {
     match &entry.event {
         ProviderEvent::Message {
@@ -871,6 +962,8 @@ pub(crate) fn forked_at(view: &ThreadView, request: &str) -> Option<Forked> {
                 user_message: Some(turn.user_message.clone()),
                 end: turn.end,
                 error: turn.error.clone(),
+                error_kind: turn.error_kind,
+                provider: turn.provider,
                 ended_at_ms: turn.ended_at_ms,
                 requests: turn.requests.clone(),
                 limit: turn.limit.clone(),
@@ -931,8 +1024,45 @@ mod tests {
 
     use super::*;
 
+    /// Brigadier's own word that a command ended after its turn says the job's end, as a CLI's
+    /// notice does; a message of the user's says none.
+    #[test]
+    fn brigadiers_word_of_a_commands_end_is_its_wake() {
+        use brigadier_providers::{WakeEnd, WakeJob};
+        let said = |text: &str| {
+            wake_of(&ProviderEvent::Message {
+                item_id: "m".into(),
+                role: Role::User,
+                text: text.into(),
+            })
+            .map(|wake| (wake.job, wake.command, wake.end, wake.exit))
+        };
+        let words =
+            |how: &str| format!("{WAKE_MARK}pnpm test` finished after your turn · {how}]\nFAIL");
+        assert_eq!(
+            said(&words("exit 1")),
+            Some((
+                WakeJob::Command,
+                Some("pnpm test".into()),
+                WakeEnd::Failed,
+                Some(1)
+            ))
+        );
+        assert_eq!(
+            said(&words("completed")),
+            Some((
+                WakeJob::Command,
+                Some("pnpm test".into()),
+                WakeEnd::Finished,
+                None
+            ))
+        );
+        assert_eq!(said("Run pnpm test."), None);
+    }
+
     fn entry(event: ProviderEvent) -> FileEntry {
         FileEntry {
+            wake: None,
             event,
             at_ms: Some(1),
             updated_at_ms: None,
@@ -1050,6 +1180,8 @@ mod tests {
             end: Some(end),
             ended_at_ms: Some(at),
             error: None,
+            error_kind: None,
+            provider: None,
             limit: None,
             requests: Vec::new(),
             context_window: None,
@@ -1168,6 +1300,7 @@ mod tests {
     #[test]
     fn a_turn_the_cli_began_for_a_background_jobs_end_keeps_the_turn_before_it_open() {
         let notice = entry(ProviderEvent::TaskNotice {
+            wake: None,
             item_id: "n1".into(),
             text: r#"Background command "brigadier wait" completed (exit code 0)"#.into(),
         });
@@ -1176,6 +1309,8 @@ mod tests {
             user_message: Some("u1".into()),
             end: Some(TurnEnd::Done),
             error: None,
+            error_kind: None,
+            provider: None,
             ended_at_ms: Some(at),
             requests: Vec::new(),
             limit: None,
@@ -1230,6 +1365,8 @@ mod tests {
             user_message: Some("u1".into()),
             end: Some(TurnEnd::Done),
             error: None,
+            error_kind: None,
+            provider: None,
             ended_at_ms: Some(at),
             requests: vec!["r1".into()],
             limit: None,

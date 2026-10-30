@@ -33,12 +33,12 @@ test("a task state alone does not prove a worker CLI works; its count still show
   assert.equal(row("c3").workers, 0);
 });
 
-const servers = (taskId: string | null, list: { name: string; status: string }[]) =>
+const servers = (taskId: string | null, list: { name: string; status: string; managed?: boolean }[]) =>
   on("c4", { type: "mcpServersUpdated", conversationId: "c4", taskId, provider: "claude", atStart: false, boot: "b",
     servers: list.map((server) => ({ ...server, tools: [], transport: null })) });
 
-test("an MCP server of the session's own CLI that wants a sign-in needs the user; a claude.ai connector or a worker's doesn't", () => {
-  applyActivityEvents([servers(null, [{ name: "claude.ai Gmail", status: "needs-auth" }, { name: "github", status: "connected" }])]);
+test("an MCP server of the session's own CLI that wants a sign-in needs the user; one managed elsewhere or a worker's doesn't", () => {
+  applyActivityEvents([servers(null, [{ name: "Gmail", status: "needs-auth", managed: true }, { name: "github", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
   applyActivityEvents([servers("t1", [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, null, "a worker's server");

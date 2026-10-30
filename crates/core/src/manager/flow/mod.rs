@@ -297,6 +297,7 @@ impl Turn {
         grant: Option<&str>,
     ) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: false,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
@@ -315,6 +316,7 @@ impl Turn {
     /// Asks to change `paths` outside the sandbox, as Codex does, and waits for the answer.
     pub async fn ask_file_approval(&self, paths: &[&Path]) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: false,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::FileChange,
             tool: "fileChange".into(),
@@ -335,6 +337,7 @@ impl Turn {
     /// Asks to reach `host` from a sandbox without network, as Claude does.
     pub async fn ask_network_approval(&self, host: &str) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: true,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Tool,
             tool: brigadier_providers::policy::NETWORK_TOOL.into(),

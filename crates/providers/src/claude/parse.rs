@@ -558,10 +558,14 @@ impl Parser {
             // line before its reply, not the user's message.
             if text.starts_with("<task-notification>") {
                 self.begin_turn(out);
-                if let Some(text) = task_notice(&text) {
+                if let Some(summary) = task_notice(&text) {
+                    let command = tag(&text, "task-id")
+                        .and_then(|id| self.tasks.get(id))
+                        .and_then(|(task, _)| task.command.clone());
                     out.push(Output::Event(ProviderEvent::TaskNotice {
                         item_id: str_of(value, "uuid").unwrap_or_default().to_owned(),
-                        text,
+                        wake: wake(&summary, command),
+                        text: summary,
                     }));
                 }
                 return;
@@ -617,7 +621,12 @@ impl Parser {
                     cwd: None,
                     status,
                     exit_code: exit_code(&output, failed),
-                    output: Some(output),
+                    // The exit code is said above; its `Exit code N` line is no output.
+                    output: Some(match output.split_once('\n') {
+                        Some((first, rest)) if first.starts_with("Exit code ") => rest.to_owned(),
+                        None if output.starts_with("Exit code ") => String::new(),
+                        _ => output,
+                    }),
                     duration_ms: None,
                     kept,
                 },
@@ -781,6 +790,8 @@ impl Parser {
                         })
                         .collect::<String>()
                 );
+                // A claude.ai connector: the user signs in to it on claude.ai.
+                let connector = name.strip_prefix("claude.ai ");
                 Some(McpServerState {
                     name: name.to_owned(),
                     status,
@@ -790,6 +801,8 @@ impl Parser {
                         .map(str::to_owned)
                         .collect(),
                     transport: None,
+                    managed: connector.is_some(),
+                    label: connector.map(str::to_owned),
                 })
             })
             .collect();
@@ -992,9 +1005,10 @@ impl Parser {
         let Some(id) = str_of(value, "task_id") else {
             return;
         };
+        let item_id = str_of(value, "tool_use_id");
         let task = BackgroundTask {
             id: id.to_owned(),
-            item_id: str_of(value, "tool_use_id").map(str::to_owned),
+            item_id: item_id.map(str::to_owned),
             kind: task_kind(value),
             label: str_of(value, "description").unwrap_or_default().to_owned(),
             status: BackgroundTaskStatus::Running,
@@ -1003,6 +1017,12 @@ impl Parser {
             output_file: None,
             summary: None,
             last_line: None,
+            // Its label is the call's description; the command is the call's own input.
+            command: item_id
+                .and_then(|item| self.tools.get(item))
+                .and_then(|tool| str_of(&tool.input, "command"))
+                .map(str::to_owned),
+            provider: Some(ProviderKind::Claude),
         };
         let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true);
         self.tasks.insert(id.to_owned(), (task, backgrounded));
@@ -1027,6 +1047,8 @@ impl Parser {
                 output_file: None,
                 summary: None,
                 last_line: None,
+                command: None,
+                provider: Some(ProviderKind::Claude),
             };
             (task, false)
         });
@@ -1415,6 +1437,10 @@ impl Parser {
                 escalation,
                 input: Some(clip(&input.to_string(), OUTPUT_CLIP)),
                 grant,
+                network: tool == policy::NETWORK_TOOL
+                    || ["web", "fetch", "search", "network"]
+                        .iter()
+                        .any(|word| tool.to_lowercase().contains(word)),
             },
         }));
         out.push(Output::Control(Control::Approval { request_id, input }));
@@ -1811,6 +1837,45 @@ fn task_notice(text: &str) -> Option<String> {
     (!summary.is_empty()).then_some(summary)
 }
 
+/// A notice tag's text (`<task-id>b1</task-id>`).
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let start = text.find(&open)? + open.len();
+    let end = start + text[start..].find(&format!("</{name}>"))?;
+    Some(text[start..end].trim())
+}
+
+/// The job's end a notice's line tells: `Background command "x" completed (exit code 1)`,
+/// `Agent "y" finished`. None for any other line (`Monitor event: …`).
+fn wake(summary: &str, command: Option<String>) -> Option<Wake> {
+    let (job, rest) = summary
+        .strip_prefix("Background command \"")
+        .map(|rest| (WakeJob::Command, rest))
+        .or_else(|| Some((WakeJob::Agent, summary.strip_prefix("Agent \"")?)))?;
+    let (label, how) = rest.rsplit_once("\" ")?;
+    let exit = how
+        .split_once("exit code ")
+        .and_then(|(_, code)| {
+            code.split(|c: char| !(c == '-' || c.is_ascii_digit()))
+                .next()
+        })
+        .and_then(|code| code.parse().ok());
+    let end = match how.split_whitespace().find(|word| *word != "was")? {
+        "completed" | "finished" if exit.is_some_and(|exit| exit != 0) => WakeEnd::Failed,
+        "completed" | "finished" => WakeEnd::Finished,
+        "failed" => WakeEnd::Failed,
+        "stopped" | "killed" => WakeEnd::Stopped,
+        _ => return None,
+    };
+    Some(Wake {
+        job,
+        label: label.to_owned(),
+        command,
+        end,
+        exit,
+    })
+}
+
 /// A slash command as the user typed it (`/fusion Which store?`), from the markup Claude keeps
 /// it as (`<command-name>/brigade:fusion</command-name><command-args>…`). Brigadier's own
 /// skills are typed without their plugin's name.
@@ -1867,6 +1932,7 @@ pub fn commands(answer: &Value, own_servers: &[String]) -> Vec<CliCommand> {
                 text: format!("/{name}"),
                 description: text(command, "description"),
                 argument_hint: text(command, "argumentHint"),
+                action: None,
                 name,
             })
         })
@@ -1904,6 +1970,7 @@ pub fn merge_commands(known: &mut Vec<CliCommand>, names: Vec<String>) {
             name,
             description: None,
             argument_hint: None,
+            action: None,
         });
     }
 }
@@ -2529,6 +2596,8 @@ mod tests {
             status,
             tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
             transport: None,
+            managed: false,
+            label: None,
         };
         assert_eq!(
             first,
@@ -3070,6 +3139,7 @@ mod tests {
                 text: "/compact".into(),
                 description: Some("Clear history but keep a summary".into()),
                 argument_hint: Some("<instructions>".into()),
+                action: None,
             }
         );
         assert_eq!(listed[1].argument_hint, None);
@@ -3153,9 +3223,53 @@ mod tests {
                 &events[..],
                 [
                     Output::Event(ProviderEvent::TurnStarted { .. }),
-                    Output::Event(ProviderEvent::TaskNotice { item_id, text }),
+                    Output::Event(ProviderEvent::TaskNotice { item_id, text, .. }),
                 ] if item_id == "n1" && text == r#"Background command "sleep 20 && echo done" completed (exit code 0)"#
             ),
+            "{events:?}"
+        );
+    }
+
+    /// A notice's line says which job ended and how, in the same words for every CLI; a failed
+    /// command's `Exit code N` is its exit code, not a line of its output.
+    #[test]
+    fn a_jobs_end_and_a_failed_commands_exit_are_said_as_fields() {
+        let said =
+            |line: &str| wake(line, None).map(|wake| (wake.job, wake.label, wake.end, wake.exit));
+        assert_eq!(
+            said(r#"Background command "pnpm test" completed (exit code 2)"#),
+            Some((
+                WakeJob::Command,
+                "pnpm test".into(),
+                WakeEnd::Failed,
+                Some(2)
+            ))
+        );
+        assert_eq!(
+            said(r#"Background command "a "quoted" b" was stopped"#),
+            Some((
+                WakeJob::Command,
+                r#"a "quoted" b"#.into(),
+                WakeEnd::Stopped,
+                None
+            ))
+        );
+        assert_eq!(
+            said(r#"Agent "Review" finished"#),
+            Some((WakeJob::Agent, "Review".into(), WakeEnd::Finished, None))
+        );
+        assert_eq!(said(r#"Monitor event: "tick""#), None);
+
+        let mut parser = Parser::live();
+        let call = json!({"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "false"}}]}});
+        let result = json!({"type": "user", "message": {"role": "user", "content": [
+            {"tool_use_id": "t1", "type": "tool_result", "content": "Exit code 1\nboom", "is_error": true}]}});
+        parser.feed(&call.to_string());
+        let events = parser.feed(&result.to_string());
+        assert!(
+            events.iter().any(|output| matches!(output,
+                Output::Event(ProviderEvent::Command { exit_code: Some(1), output: Some(output), .. }) if output == "boom")),
             "{events:?}"
         );
     }

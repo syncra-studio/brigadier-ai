@@ -291,10 +291,10 @@ function asBrigadier(scenario: "background" | "interrupt", command: string, boar
   const label = "Wait for the workers";
   const entries = view.entries.map((entry) => {
     if (entry === call && entry.event.type === "command") return { ...entry, event: { ...entry.event, command } };
-    if (entry.event.type === "taskNotice") return { ...entry, event: { ...entry.event, text: `Background command "${label}" completed (exit code 0)` } };
+    if (entry.event.type === "taskNotice" && entry.wake) return { ...entry, event: { ...entry.event, text: `Background command "${label}" completed (exit code 0)` }, wake: { ...entry.wake, label } };
     return entry;
   });
-  const task = fixture.events.flatMap((event) => (event.type === "backgroundTask" && event.task.status === "completed" ? [{ ...event.task, label }] : [])).at(-1);
+  const task = fixture.events.flatMap((event) => (event.type === "backgroundTask" && event.task.status === "completed" ? [{ ...event.task, label, command }] : [])).at(-1);
   const changed = { ...view, entries, background: task ? [task] : [] };
   // The board's rows go in the block of the call's request.
   const key = cliBlocks(changed, "recorded-thread").find((block) => toolSteps(block).some((kind) => kind.itemId === itemId))?.key ?? "";

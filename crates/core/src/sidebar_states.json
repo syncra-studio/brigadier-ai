@@ -15,8 +15,8 @@
   { "name": "a question over a failed turn names the question", "turn": { "lastEnd": "failed" }, "questions": ["q1"], "expect": "needsYou", "status": "needsYou", "reason": "question" },
   { "name": "an MCP server of the CLI that wants a sign-in needs you", "servers": [{ "name": "linear", "status": "needs-auth" }], "expect": "needsYou", "status": "needsYou", "reason": "sign-in" },
   {
-    "name": "a claude.ai connector left unsigned does not",
-    "servers": [{ "name": "claude.ai Gmail", "status": "needs-auth" }, { "name": "github", "status": "connected" }],
+    "name": "a server whose sign-in the user manages elsewhere, left unsigned, does not",
+    "servers": [{ "name": "claude.ai Gmail", "status": "needs-auth", "managed": true }, { "name": "github", "status": "connected" }],
     "settled": "ready",
     "expect": "ready",
     "status": "ready"

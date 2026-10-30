@@ -204,7 +204,7 @@ function describe(
     case "cli": {
       const { request } = subject;
       const edits = request.kind === "fileChange" || request.paths.length > 0;
-      const web = request.tool === "SandboxNetworkAccess" || /web|fetch|search|network/i.test(request.tool);
+      const web = !!request.network;
       const [icon, kind] = request.command
         ? [<Dock key="icon" />, "Terminal"]
         : edits
@@ -528,10 +528,10 @@ export function ApprovalSlot({ ids, onReply }: { ids: readonly string[]; onReply
 
 /** The scope supplied by approval routing; generic permission requests have no session grant. */
 function sessionGrant(request: ApprovalRequest): { scope: string; explanation: string } | null {
-  const { grant, kind, tool, escalation } = request;
+  const { grant, kind, network, escalation } = request;
   if (!grant || kind === "permissions") return null;
   const outside = escalation ? " outside the sandbox" : "";
-  if (tool === "SandboxNetworkAccess") {
+  if (network) {
     return {
       scope: grant,
       explanation: `Allow connections to ${grant}${outside} from any worker in this conversation. Not saved across sessions.`,

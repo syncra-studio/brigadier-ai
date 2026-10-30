@@ -47,6 +47,10 @@ pub struct FileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub said: Option<Said>,
+    /// The background job's end it tells: the CLI's notice, or Brigadier's message to the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wake: Option<crate::model::Wake>,
 }
 
 /// Who wrote a user message of a CLI's thread that Brigadier sent it.
@@ -73,6 +77,7 @@ impl FileEntry {
             images: Vec::new(),
             phase: None,
             said: None,
+            wake: None,
         }
     }
 }

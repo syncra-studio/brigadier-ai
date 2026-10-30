@@ -1,7 +1,7 @@
 import { useAui, useAuiState, useThreadList, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { type FC, useContext, useEffect, useMemo, useState } from "react";
 
-import { canPickSkill, cliMenuCommands, conversationProvider, limitClaudeSkills } from "@/app/conversation/cliCommands";
+import { canPickSkill, cliMenuCommands, conversationProvider, keepFirstSkill } from "@/app/conversation/cliCommands";
 import { useCliCommands } from "@/app/conversation/useCliCommands";
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
 import { mentionOf } from "@/app/conversation/Mentions";
@@ -28,7 +28,7 @@ import {
   SettingsSlider,
   Unpin,
 } from "@/components/icons";
-import type { Conversation, PermissionLevel, ProviderKind } from "@/ipc/generated";
+import type { CliAction, Conversation, PermissionLevel, ProviderKind } from "@/ipc/generated";
 import { PERMISSION_LABELS, useCanCompact } from "@/lib/setup";
 import {
   archive,
@@ -98,9 +98,8 @@ export const SlashCommands: FC<{
   const provider = conversation ? conversationProvider(conversation) : (draft?.provider ?? null);
   const text = useAuiState((state) => state.composer.text);
   const facts = provider ? cliFacts(provider) : null;
-  const commandsAsText = facts?.commandsAsText ?? true;
   const oneSkill = `${facts?.vendor ?? "This CLI"} accepts one skill per message.`;
-  const limited = facts?.oneSkillPerMessage && target ? limitClaudeSkills(text, target.mentions.known()) : text;
+  const limited = facts?.oneSkillPerMessage && target ? keepFirstSkill(text, target.mentions.known()) : text;
   const [checkedText, setCheckedText] = useState<{ text: string; limited: string } | null>(null);
   if (checkedText?.text !== text || checkedText.limited !== limited) {
     setCheckedText({ text, limited });
@@ -278,17 +277,14 @@ export const SlashCommands: FC<{
       ...cliMenuCommands(listed, commands, {
         name: provider ? cliFacts(provider).label : undefined,
         icon: provider ? <ProviderGlyph provider={provider} className="size-icon-sm" /> : <Bolt />,
-        ...(commandsAsText ? {} : {
-          runCommand: (invocation: string) => {
-            // Each CLI's `compact` names its own request; the composer only runs that one.
-            if (!listed.some((command) => command.name === "compact" && command.invocation === invocation)) return;
-            if (conversation) run(() => compact(conversation.id));
-            else setSkillHint("Send a message before compacting.");
-          },
-        }),
+        runAction: (action: CliAction) => {
+          if (action !== "compact") return;
+          if (conversation) run(() => compact(conversation.id));
+          else setSkillHint("Send a message before compacting.");
+        },
       }),
     ],
-    [commands, listed, provider, commandsAsText, conversation, run],
+    [commands, listed, provider, conversation, run],
   );
 
   return (

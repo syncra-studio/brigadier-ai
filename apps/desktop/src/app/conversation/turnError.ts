@@ -1,9 +1,9 @@
-import type { Notice, ThreadTurn, UserRequest } from "@/ipc/generated";
+import type { ErrorKind, Notice, ThreadTurn, UserRequest } from "@/ipc/generated";
 
 /**
  * A failed turn in plain words. The thread says what happened in one calm line; the error's own
- * words (an API's JSON, a CLI's exit) stay under Details. The line comes from the raw text, so
- * old turns read the same as new ones.
+ * words (an API's JSON, a CLI's exit) stay under Details. The line comes from the error's kind as
+ * its CLI's adapter classed it; a turn recorded before that (no kind) is read from its raw text.
  */
 
 /** The daemon's words when the CLI's process went away mid-turn (`ENDED_UNEXPECTEDLY`). */
@@ -50,20 +50,39 @@ export function cutOff(error: string, own: readonly RequestRecord[], latest: Req
   return { error: failed?.state.type === "failed" ? failed.state.error : CLI_ENDED, resumable: false };
 }
 
-/** `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error. */
-export function describeTurnError(raw: string, provider = "Claude"): { summary: string; limit?: true } {
+/** The kind an error's raw words read as, for a turn recorded before its CLI's adapter classed it. */
+function kindOf(raw: string): ErrorKind | null {
+  // A rate limit reads "limit exceeded" too, and is no usage limit: it passes in a moment.
+  if (RATE.test(raw)) return "rateLimit";
+  if (LIMIT.test(raw)) return "usageLimit";
+  if (CONTEXT.test(raw)) return "contextWindow";
+  if (AUTH.test(raw)) return "auth";
+  if (ENDED_UNEXPECTEDLY.test(raw)) return "process";
+  if (NETWORK.test(raw)) return "network";
+  if (OVERLOADED.test(raw)) return "overloaded";
+  if (API.test(raw)) return "server";
+  return null;
+}
+
+/**
+ * `cli`: the turn's own CLI by name, else "the agent"; `kind`: as its adapter classed it.
+ * `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error.
+ */
+export function describeTurnError(raw: string, cli = "the agent", kind?: ErrorKind | null): { summary: string; limit?: true } {
   if (raw.trim() === INTERRUPTED_BEFORE_START) return { summary: "Interrupted: Brigadier quit before this started. Continue sends it again." };
   if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
-  // A rate limit reads "limit exceeded" too, and is no usage limit: it passes in a moment.
-  if (RATE.test(raw)) return { summary: `${provider} is limiting how fast it takes requests. Try again in a moment.` };
-  if (LIMIT.test(raw)) return { summary: `${provider}'s usage limit was reached.`, limit: true };
-  if (CONTEXT.test(raw)) return { summary: `The conversation grew too long for ${provider}'s context.` };
-  if (AUTH.test(raw)) return { summary: `${provider} needs you to sign in again.` };
-  if (ENDED_UNEXPECTEDLY.test(raw)) return { summary: `${provider} stopped unexpectedly.` };
-  if (NETWORK.test(raw)) return { summary: `Lost the connection to ${provider}.` };
-  if (OVERLOADED.test(raw)) return { summary: `${provider} is overloaded right now.` };
-  if (API.test(raw)) return { summary: `This turn stopped because of an error on ${provider}'s side.` };
-  return { summary: "This turn stopped because of an error." };
+  const Cli = cli.charAt(0).toUpperCase() + cli.slice(1);
+  switch (kind ?? kindOf(raw)) {
+    case "rateLimit": return { summary: `${Cli} is limiting how fast it takes requests. Try again in a moment.` };
+    case "usageLimit": case "billing": return { summary: `${Cli}'s usage limit was reached.`, limit: true };
+    case "contextWindow": return { summary: `The conversation grew too long for ${cli}'s context.` };
+    case "auth": return { summary: `${Cli} needs you to sign in again.` };
+    case "process": return { summary: `${Cli} stopped unexpectedly.` };
+    case "network": return { summary: `Lost the connection to ${cli}.` };
+    case "overloaded": return { summary: `${Cli} is overloaded right now.` };
+    case "server": case "invalidRequest": case "policy": return { summary: `This turn stopped because of an error on ${cli}'s side.` };
+    default: return { summary: "This turn stopped because of an error." };
+  }
 }
 
 /** The error of the conversation's newest failed turn, as its CLI's turns say it: its turn shows it in the thread. */

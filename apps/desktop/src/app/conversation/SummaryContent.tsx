@@ -109,7 +109,10 @@ function useSources(conversationId: string): string[] {
 /** One of what a session used, as its card lists it. */
 export type UsedSource = { key: string; icon: ReactNode; label: string; title: string; meta?: string | undefined; open?: () => void };
 
-/** An MCP server's name as a line reads it: `claude_ai_Linear` reads "Linear". */
+/**
+ * An MCP server's name as a line reads it ("linear" reads "Linear"). A server known only by its
+ * tool calls' names may carry its vendor's prefix there, which goes.
+ */
 export function serverLabel(name: string): string {
   const words = name.replace(/^claude[._ ]ai[._ ]/i, "").replace(/[_-]+/g, " ").trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
@@ -142,7 +145,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
         const state = statusOf(servers, name);
-        const label = serverLabel(state?.name ?? name);
+        const label = serverLabel(state ? (state.label ?? state.name) : name);
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];

@@ -148,6 +148,7 @@ impl McpGatewayService {
                     .collect::<Vec<_>>()
                     .join(" ");
                 commands.push(CliCommand {
+                    action: None,
                     name: prompt.name,
                     text: format!("/{invocation}"),
                     invocation: Some(invocation),

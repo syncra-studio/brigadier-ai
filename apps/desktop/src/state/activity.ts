@@ -62,11 +62,11 @@ const WORKING: ReadonlySet<TaskState> = new Set([
 
 /**
  * The names of `servers` that want the user to sign in, as the engine's `sign_ins` reads them:
- * a claude.ai connector is left out, the user manages those on claude.ai and many stay unsigned.
+ * one whose sign-in the user manages outside the CLI is left out, many stay unsigned.
  */
 export function signInsOf(servers: readonly McpServerState[]): string[] {
   return servers
-    .filter((server) => server.status === "needs-auth" && !server.name.startsWith("claude.ai "))
+    .filter((server) => server.status === "needs-auth" && !server.managed)
     .map((server) => server.name);
 }
 

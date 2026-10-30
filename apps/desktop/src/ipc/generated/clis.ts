@@ -20,8 +20,6 @@ export interface CliFacts {
   oneSkillPerMessage: boolean;
   /** Its usage reports cache writes; one that doesn't is judged by its cached share of input. */
   reportsCacheWrites: boolean;
-  /** Its built-in commands run when sent as message text; otherwise Brigadier runs them as actions. */
-  commandsAsText: boolean;
   /** The tool names its native subagents start with. */
   subagentTools: string[];
 }
@@ -42,7 +40,6 @@ export const CLIS: readonly CliFacts[] = [
     },
     oneSkillPerMessage: true,
     reportsCacheWrites: true,
-    commandsAsText: true,
     subagentTools: ["Agent", "Task"],
   },
   {
@@ -59,7 +56,6 @@ export const CLIS: readonly CliFacts[] = [
     },
     oneSkillPerMessage: false,
     reportsCacheWrites: false,
-    commandsAsText: false,
     subagentTools: ["spawnAgent", "spawn_agent"],
   },
   {
@@ -76,7 +72,6 @@ export const CLIS: readonly CliFacts[] = [
     },
     oneSkillPerMessage: false,
     reportsCacheWrites: true,
-    commandsAsText: false,
     subagentTools: ["subagent"],
   },
 ];

@@ -140,6 +140,8 @@ async fn worker(turn: &Turn, seen: &Seen) -> Reply {
     if said.contains("Sign-in.") {
         turn.emit(ProviderEvent::McpServers {
             servers: vec![McpServerState {
+                label: None,
+                managed: false,
                 name: "linear".into(),
                 status: McpStatus::NeedsAuth,
                 tools: Vec::new(),

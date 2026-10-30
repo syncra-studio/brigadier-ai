@@ -6,9 +6,12 @@ import { INTERRUPTED } from "@/app/conversation/turnError";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
 import { turnParts } from "@/app/conversation/workParts";
-import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
+import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
+/** A background command's end, as the engine says it on the entry that tells it. */
+const wake = (label: string, end: Wake["end"] = "finished", exit: number | null = 0, command: string | null = null): { wake: Wake } =>
+  ({ wake: { job: "command", label, command, end, exit } });
 const user = (itemId: string, text: string, atMs: number, more: Partial<FileEntry> = {}) =>
   at({ type: "message", itemId, role: "user", text }, atMs, more);
 const tool = (itemId: string, name: string, input: string | null, status: "inProgress" | "completed" | "failed", output: string | null = null): ProviderEvent => ({
@@ -312,7 +315,7 @@ test("a background job's end Claude took up is one plain line in the same work, 
     entries: [
       user("u1", "Start it in the background", 1000),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
-      at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)' }, 21000),
+      at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)' }, 21000, wake("sleep 20 && echo bg-finished")),
       at({ type: "message", itemId: "a2", role: "assistant", text: "It finished: bg-finished." }, 21100),
     ],
     turns: [turn("u1", 1000, 21200, "done")],
@@ -349,7 +352,7 @@ test("a background job's end Claude took up mid-work keeps the work one run, its
         user("u1", "Run sleep 20 in the background, tell me when it's done", 1000),
         at({ type: "command", itemId: "c1", command: "sleep 20; echo bg-done", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 5 }, 1100),
         at({ type: "message", itemId: "a1", role: "assistant", text: "It's running in the background now." }, 1200),
-        at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20; echo bg-done" completed (exit code 0)' }, 21000),
+        at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20; echo bg-done" completed (exit code 0)' }, 21000, wake("sleep 20; echo bg-done")),
         at({ type: "message", itemId: "a2", role: "assistant", text: "It finished and printed bg-done." }, 21100),
       ],
       turns: [turn("u1", 1000, 21200, "done")],
@@ -366,19 +369,15 @@ test("a background job's end Claude took up mid-work keeps the work one run, its
   assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
 });
 
-test("the CLI's words of a background job's end read in a few plain ones (D21)", () => {
-  for (const [said, words] of [
-    ['Background command "pnpm test" completed (exit code 0)', "Background command finished · exit 0"],
-    ['Background command "pnpm test" completed (exit code 2)', "Background command failed · exit 2"],
-    ['Background command "pnpm test" failed with exit code 1', "Background command failed · exit 1"],
-    ['Background command "gh run watch 12 --exit-status" was stopped', "Background command stopped"],
-    ['Background command "sleep 5" was killed', "Background command stopped"],
-    ['Monitor "CI run 12" completed', "Monitor finished"],
-    ["[your background command `gh run watch 12` finished after your turn · exit 0]\nok", "Background command finished · exit 0"],
-    ["[your background command `pnpm test` finished after your turn · exit 1]\nFAIL", "Background command failed · exit 1"],
-    ["[your background command `pnpm test` finished after your turn · completed]\n", "Background command finished"],
-    ["Something new the CLI says", "Something new the CLI says"],
-  ] as const) assert.equal(wakeWords(said), words, said);
+test("a background job's end reads in a few plain words (D21)", () => {
+  assert.equal(wakeWords(wake("pnpm test").wake), "Background command finished · exit 0");
+  assert.equal(wakeWords(wake("pnpm test", "failed", 2).wake), "Background command failed · exit 2");
+  assert.equal(wakeWords(wake("gh run watch 12", "stopped", null).wake), "Background command stopped");
+  assert.equal(wakeWords(wake("pnpm test", "finished", null).wake), "Background command finished");
+  assert.equal(wakeWords({ ...wake("Review").wake, job: "agent", exit: null }), "Agent finished");
+  // A notice that tells no job's end keeps the CLI's own words.
+  const [block] = cliBlocks({ entries: [user("u1", "Go", 1000), at({ type: "taskNotice", itemId: "n1", text: "Something new the CLI says" }, 1100)], turns: [turn("u1", 1000, 1200, "done")] }, "conv");
+  assert.deepEqual(block?.taskNotices.map((notice) => notice.text), ["Something new the CLI says"]);
 });
 
 test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {
@@ -598,7 +597,7 @@ test("a Codex command's end after its turn is one plain line, a turn more of the
     entries: [
       user("u1", "Start it in the background", 1000),
       at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
-      user("u2", woke, 61_000),
+      user("u2", woke, 61_000, wake("sleep 60", "finished", 0, "sleep 60")),
       at({ type: "message", itemId: "a2", role: "assistant", text: "It finished." }, 61_100),
     ],
     turns: [
@@ -634,7 +633,7 @@ test("a Codex command's end after a later message of the user's stays a turn of 
       at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
       user("u2", "And the docs", 5000),
       at({ type: "message", itemId: "a2", role: "assistant", text: "Done." }, 5100),
-      user("u3", woke, 61_000),
+      user("u3", woke, 61_000, wake("sleep 60", "failed", 1, "sleep 60")),
       at({ type: "message", itemId: "a3", role: "assistant", text: "It failed." }, 61_100),
     ],
     turns: [
@@ -754,10 +753,10 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   };
   const blocks = cliBlocks(own, "conv");
   // A background job's notice the CLI starts a turn with in it keeps the hand-off's turn hidden.
-  const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
+  const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350, wake("done")), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
   assert.deepEqual(noticed.map((block) => block.key), ["u1"]);
   // The user's next turn after it reads its own turn, not the one before: running, its request shown.
-  const next = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), user("u5", "Next", 1500)], turns: [...own.turns, turn("tn", 1350, 1400, "done"), { ...turn("u5", 1500, null, null), requests: ["r5"] }] }, "conv");
+  const next = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350, wake("done")), user("u5", "Next", 1500)], turns: [...own.turns, turn("tn", 1350, 1400, "done"), { ...turn("u5", 1500, null, null), requests: ["r5"] }] }, "conv");
   assert.deepEqual(
     next.map((block) => [block.key, block.user?.kind === "message" ? block.user.message.id : null, block.state]),
     [
@@ -1104,7 +1103,7 @@ test("Brigadier's /compact stays hidden once a background command's end goes on 
         at({ type: "message", itemId: "a1", role: "assistant", text: "Watching." }, 2000),
         compactionEnded(false, 3500),
         user("c1", asked, 3001),
-        at({ type: "taskNotice", itemId: "n1", text: "Background command \"gh run watch 12\" completed (exit code 0)" }, 5000),
+        at({ type: "taskNotice", itemId: "n1", text: "Background command \"gh run watch 12\" completed (exit code 0)" }, 5000, wake("gh run watch 12")),
         at({ type: "message", itemId: "a2", role: "assistant", text: "CI passed." }, 5100),
       ],
       // The turns the command's end started go on under the `/compact`'s, with the request of the block that started it.

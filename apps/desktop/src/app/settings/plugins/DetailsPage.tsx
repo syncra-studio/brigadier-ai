@@ -113,7 +113,7 @@ export function DetailsPage({ view, item, actions, adapter }: { view: PluginsVie
         <Button variant="soft-destructive" size="sm" disabled={actions.busy} onClick={actions.onRemove}>Remove {item.name}</Button>
         <span className="text-foreground/50 text-xs">
           {item.removal === "everything" ? "Removes it from Brigadier's library. New sessions pick up changes."
-            : "Hides it from Brigadier and its sessions for all agents. Its files stay in Claude Code or Codex."}
+            : "Hides it from Brigadier and its sessions for all agents. Its files stay in each agent's own settings."}
         </span>
       </div>
     </SettingsPage>

@@ -2,7 +2,6 @@ import { doingOf, stepAtWork } from "@/app/conversation/activity/workerNow";
 import { agentDetail, isSubagentStart, toolName } from "@/app/conversation/activity/words";
 import type { BackgroundTask, StepAtWork, ThreadView, WorkerDoing, WorkerRow } from "@/ipc/generated";
 import { CLIS } from "@/ipc/generated/clis";
-import { PROVIDERS } from "@/lib/providerKinds";
 
 /** Native subagents keep their own strip and transcript, apart from durable workers. */
 export type NativeWorker = WorkerRow & {
@@ -43,8 +42,7 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
   const liveFrom = last && last.end === null ? (last.startedAtMs ?? 0) : Infinity;
   // Numbered after the engine's workers, so none shares a number.
   let next = Math.max(0, ...rows.map((row) => row.number)) + 1;
-  // shortcut: a background agent with no start call is credited to the first CLI; upgrade when the view names its CLI.
-  const add = (callId: string | null, task: BackgroundTask | undefined, title: string, prompt: string, model: string | null, at: number, status: string, ended: number, agent: WorkerRow["agent"] = PROVIDERS[0]!) => {
+  const add = (callId: string | null, task: BackgroundTask | undefined, title: string, prompt: string, model: string | null, at: number, status: string, ended: number, agent: WorkerRow["agent"]) => {
     const working = task ? task.status === "running" : status === "inProgress" && at >= liveFrom;
     const end = task ? task.status === "stopped" ? "stopped" : task.status === "failed" ? "failed" : "done"
       : status === "failed" || status === "declined" ? "failed" : "done";
@@ -71,12 +69,13 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
     if (task) seen.add(task.id);
     const words = (key: string) => typeof input[key] === "string" ? input[key] as string : null;
     const at = entry.atMs ?? task?.startedAtMs ?? 0;
-    const agent = CLIS.find((cli) => cli.subagentTools.includes(toolName(event.name)))?.id;
+    const agent = CLIS.find((cli) => cli.subagentTools.includes(toolName(event.name)))?.id ?? task?.provider;
+    if (!agent) continue;
     add(event.itemId, task, agentDetail(event.name, event.input) ?? task?.label ?? words("name") ?? "Sub-agent",
       words("prompt") ?? event.input ?? "", words("model"), at, event.status, lastChild.get(event.itemId) ?? entry.updatedAtMs ?? at, agent);
   }
   for (const task of tasks) {
-    if (!seen.has(task.id)) add(task.itemId, task, task.label, "", null, task.startedAtMs, "completed", task.endedAtMs ?? task.startedAtMs);
+    if (!seen.has(task.id) && task.provider) add(task.itemId, task, task.label, "", null, task.startedAtMs, "completed", task.endedAtMs ?? task.startedAtMs, task.provider);
   }
   // Ordinary token updates must not rerender every worker surface. Keep the engine's rows
   // directly when there are no native agents; otherwise reuse the unchanged presentation.

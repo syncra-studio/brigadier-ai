@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { cutOff, describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import type { Notice, UserRequest } from "@/ipc/generated";
 
-const summary = (raw: string, provider?: string) => describeTurnError(raw, provider).summary;
+const summary = (raw: string, provider = "Claude") => describeTurnError(raw, provider).summary;
 
 test("a failed turn reads as one plain line, chosen from the raw error", () => {
   assert.equal(summary("Claude's 5-hour usage limit was reached. It resets at 4pm."), "Claude's usage limit was reached.");
@@ -29,6 +29,14 @@ test("a failed turn reads as one plain line, chosen from the raw error", () => {
   assert.equal(summary("Not logged in · Please run /login"), "Claude needs you to sign in again.");
   assert.equal(summary("The reply failed."), "This turn stopped because of an error.");
   assert.equal(summary(""), "This turn stopped because of an error.");
+});
+
+test("a turn's error kind and own CLI decide the line; with neither known, no CLI is named", () => {
+  assert.equal(describeTurnError("boom", "OpenCode", "usageLimit").summary, "OpenCode's usage limit was reached.");
+  assert.equal(describeTurnError("boom", "OpenCode", "usageLimit").limit, true);
+  assert.equal(describeTurnError("You've hit your usage limit", "Codex", "network").summary, "Lost the connection to Codex.");
+  assert.equal(describeTurnError("API Error: Connection error.").summary, "Lost the connection to the agent.");
+  assert.equal(describeTurnError("overloaded").summary, "The agent is overloaded right now.");
 });
 
 test("the line never repeats the raw error", () => {

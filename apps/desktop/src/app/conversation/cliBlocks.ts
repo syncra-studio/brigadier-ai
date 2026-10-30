@@ -25,6 +25,7 @@ import type {
   RunState,
   ThreadTurn,
   ThreadView,
+  Wake,
 } from "@/ipc/generated";
 import { sessionImageRef } from "@/state/cliThread";
 import { shownIdOf } from "@/state/shownIds";
@@ -48,12 +49,6 @@ const CARRY_ON = "Carry on from the hand-off note.";
  */
 const BRIGADIER_SAYS =
   /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early|worker\] The user stopped )/;
-
-/** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
-const CODEX_WAKE = /^\[your background command /;
-
-/** A notice the CLI starts a turn of its own with, not the user's: a background job's end. */
-const CLI_NOTICE = /^(?:<task-notification>|\[your background command )/;
 
 /** Whether a call is the hand-off's upkeep the nudge asks for: the ledger, or the note's file. */
 function upkeep(event: FileEntry["event"]): boolean {
@@ -135,8 +130,9 @@ export function stepDetail(input: string | null): string | null {
 }
 
 /**
- * A result's text: a JSON content array's text blocks (a Codex MCP call's), one per line, else
- * the result as it is (`digest::content_text`).
+ * A result's text: a JSON content array's text blocks, one per line, else the result as it is
+ * (`digest::content_text`). Adapters send an MCP result as its text; only records written before
+ * they did hold the array.
  */
 function contentText(output: string): string {
   const trimmed = output.trimStart();
@@ -282,13 +278,6 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
 /** Claude's own plan file, which its plan mode writes the plan to. */
 const PLAN_FILE = /(?:^|\/)\.claude\/plans\/[^/]+\.md$/;
 
-/**
- * A CLI's subagent completion notice belongs to its strip and History, like its start call.
- */
-function subagentNotice(text: string): boolean {
-  return /^Agent "[\s\S]*" (?:finished|completed|failed|was stopped|stopped|was killed|killed)\b/.test(text.trim());
-}
-
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
   if (!step) return null;
   // The thread's own `brigadier wait` and `start` are no rows (D47): the block's "Waiting for a
@@ -338,23 +327,19 @@ function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
 }
 
 /**
- * Whether a background job's end is that of the thread's own `brigadier wait` (Claude's notice
- * names the task by its description, Brigadier's Codex word by its command): no line, as the
- * wait had no row (D38, D47); the worker rows after it say what happened.
+ * Whether a background job's end is that of the thread's own `brigadier wait` (its notice may
+ * name the task by its description, not its command): no line, as the wait had no row (D38,
+ * D47); the worker rows after it say what happened.
  */
-function waitEnded(text: string, view: ThreadView): boolean {
-  const codex = /^\[your background command `([\s\S]*?)` finished after your turn/.exec(text);
-  if (codex) return brigadierCalls(codex[1] ?? "")[0] === "wait";
-  const name = /^Background command "([\s\S]*)" (?:completed|failed|was stopped|was killed|stopped|killed)\b/.exec(text.trim())?.[1];
-  if (name === undefined) return false;
-  if (brigadierCalls(name)[0] === "wait") return true;
-  const task = view.background?.find((each) => each.label === name && each.itemId !== null);
-  const call = task && view.entries.find((entry) => "itemId" in entry.event && entry.event.itemId === task.itemId)?.event;
-  const command = call?.type === "command" ? call.command : call?.type === "toolCall" ? stepDetail(call.input) : null;
-  return command != null && brigadierCalls(command)[0] === "wait";
+function waitEnded(wake: Wake, view: ThreadView): boolean {
+  const task = view.background?.find((each) => each.label === wake.label);
+  return [wake.command, wake.label, task?.command].some((words) => words != null && brigadierCalls(words)[0] === "wait");
 }
 
-/** Where Claude writes a background command's output, as its call's result says. */
+/**
+ * Where Claude writes a background command's output, as its call's result says: after a reload
+ * the result is all that names it (`BackgroundTask.outputFile` is live only).
+ */
 const OUTPUT_FILE = /Output is being written to: (\S+?\.output)\b/;
 
 /** A path as one file whichever name macOS gives `/tmp` (`/private/tmp`). */
@@ -518,25 +503,10 @@ export function workerNotices(text: string): string[] | null {
   return body.split(/; (?=Worker ")/).map((line) => line.replace(/^Worker "(.*?)" \([^)]*\): /, (_, title: string) => (title ? `Worker "${title}" ` : "A worker ")));
 }
 
-/**
- * The CLI's words of a background job's end in a few plain ones: Claude's `Background command
- * "pnpm test" completed (exit code 0)` and Brigadier's `[your background command `…` finished
- * after your turn · exit 0]` read "Background command finished · exit 0" (D21). Words it doesn't
- * know stand as they are.
- */
-export function wakeWords(text: string): string {
-  const codex = /^\[your background command `[\s\S]*` finished after your turn · ([^\]\n]+)\]/.exec(text);
-  if (codex) {
-    const how = codex[1]!.trim();
-    const exit = /^exit (-?\d+)$/.exec(how)?.[1];
-    if (exit !== undefined) return `Background command ${exit === "0" ? "finished" : "failed"} · exit ${exit}`;
-    return `Background command ${how === "completed" ? "finished" : how}`;
-  }
-  const said = /^(.+?) "[\s\S]*" (completed|failed|was stopped|was killed|stopped|killed)\b(?:[^\n]*?exit code (-?\d+))?/.exec(text.trim());
-  if (!said) return text;
-  const [, what, how, exit] = said;
-  const word = how === "completed" ? (exit !== undefined && exit !== "0" ? "failed" : "finished") : how === "failed" ? "failed" : "stopped";
-  return exit === undefined ? `${what} ${word}` : `${what} ${word} · exit ${exit}`;
+/** A background job's end in a few plain words: "Background command finished · exit 0" (D21). */
+export function wakeWords({ job, end, exit }: Wake): string {
+  const what = job === "agent" ? "Agent" : "Background command";
+  return exit === null ? `${what} ${end}` : `${what} ${end} · exit ${exit}`;
 }
 
 /** Whether an entry starts a turn: the user's own message in the session's thread. */
@@ -719,7 +689,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (asked) {
       const text = asked.text.trimStart();
       const nudge = nudges.has(asked.itemId) || (!theirs && text.startsWith(NUDGE_MARK));
-      if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && CLI_NOTICE.test(text))) maintenance = null;
+      if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && entry.wake)) maintenance = null;
       if (nudge) {
         if (startsTurn(entry)) {
           maintenance = "turn";
@@ -770,8 +740,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
     // its word to carry on, no bubble; the successor's work shows.
     const own = !!asked && (carried.has(asked.itemId) || (!said && brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
-    // Brigadier's word that a Codex command ended after its turn: its one plain line (D21).
-    const woke = !!asked && says && CODEX_WAKE.test(asked.text);
+    // Brigadier's word that a command ended after its turn: its one plain line (D21).
+    const wake = asked && says ? entry.wake : undefined;
+    const woke = !!wake;
     const before = block;
     if (asked && (own || compacting || news || unshown || says)) {
       // Brigadier's word of what workers did that the block before started, or that a command
@@ -803,7 +774,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, id: `${asked.itemId}:${nth}`, text, ...(joins && { inWork: true }) }));
-      if (woke && !waitEnded(asked.text, view)) block?.taskNotices.push({ position, id: asked.itemId, text: wakeWords(asked.text), detail: asked.text, inWork: true });
+      if (wake && !waitEnded(wake, view)) block?.taskNotices.push({ position, id: asked.itemId, text: wakeWords(wake), detail: asked.text, inWork: true });
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
@@ -893,10 +864,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
-      case "taskNotice":
-        if (waitEnded(event.text, view) || subagentNotice(event.text)) return;
-        current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
+      case "taskNotice": {
+        // An agent's end belongs to its strip and History, like its start call.
+        const ended = entry.wake;
+        if (ended && (ended.job === "agent" || waitEnded(ended, view))) return;
+        current.taskNotices.push({ position, id: event.itemId, text: ended ? wakeWords(ended) : event.text, detail: event.text, inWork: true });
         return;
+      }
       // A compaction is one divider: the stream's word that it runs (no file keeps it) is the
       // divider its end then takes over, in place. Said again with nothing between (the file's
       // word and the stream's while the turn is open), it is the same one.

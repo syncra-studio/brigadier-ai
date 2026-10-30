@@ -98,7 +98,7 @@ export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
       title={`Remove ${item.name}?`}
       description={item.removal === "everything"
         ? "Removes it from Brigadier's library. Sessions already running keep it until they end."
-        : "Removes it from Brigadier and its sessions for all agents. Its files stay where Claude Code or Codex keep them."}
+        : "Removes it from Brigadier and its sessions for all agents. Its files stay in each agent's own settings."}
     >
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">
