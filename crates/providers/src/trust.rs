@@ -34,41 +34,59 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::cli::CliEnv;
-use crate::{Error, Result};
+use crate::{Error, ProviderKind, Result};
 
-/// Which CLI's settings an entry is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum TrustCli {
-    Claude,
-    Codex,
+/// How one CLI keeps folder trust in its own settings: its adapter's `trust`.
+pub(crate) struct Trust {
+    /// The file it keeps folder trust in, for the CLIs' environment.
+    pub(crate) file: fn(&CliEnv) -> Option<PathBuf>,
+    /// What the lock an edit of the file holds adds to the file's name (`.lock`).
+    pub(crate) lock: &'static str,
+    /// How the entry for a folder stands in the file's text.
+    pub(crate) state: fn(&str, &str) -> Result<State>,
+    /// The text with the folder trusted, from how its entry stands.
+    pub(crate) trust: fn(&str, &str, &State) -> Result<String>,
+    /// The text with what [`write`] replaced put back; `None` when nothing changes.
+    pub(crate) undo: fn(&str, &str, &TrustBefore) -> Result<Option<String>>,
+    /// Whether the CLI is set up where its file is: one that isn't gets nothing written.
+    pub(crate) set_up: fn(&Path) -> bool,
+    /// The file an extra account's home keeps its own trust in; none when the account's is
+    /// the user's own, linked.
+    pub(crate) account_file: Option<fn(&Path) -> PathBuf>,
 }
 
-impl TrustCli {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude",
-            Self::Codex => "Codex",
-        }
-    }
+/// The CLIs that keep folder trust in their own settings, in [`crate::adapters::ADAPTERS`]
+/// order.
+pub fn clis() -> Vec<ProviderKind> {
+    crate::adapters::ADAPTERS
+        .iter()
+        .filter(|adapter| adapter.trust.is_some())
+        .map(|adapter| adapter.kind)
+        .collect()
+}
 
-    /// The file the CLI keeps folder trust in, for the CLIs' environment `env`.
-    pub fn file(self, env: &CliEnv) -> Option<PathBuf> {
-        let set = |name: &str| {
-            env.var(name)
-                .filter(|dir| !dir.is_empty())
-                .map(PathBuf::from)
-        };
-        match self {
-            Self::Claude => match set("CLAUDE_CONFIG_DIR") {
-                Some(dir) => Some(dir.join(".claude.json")),
-                None => env.home().map(|home| home.join(".claude.json")),
-            },
-            Self::Codex => set("CODEX_HOME")
-                .or_else(|| env.home().map(|home| home.join(".codex")))
-                .map(|dir| dir.join("config.toml")),
-        }
-    }
+/// Whether `cli` is set up where `file` is: one that isn't gets nothing written; the next
+/// start writes it once it is.
+pub fn set_up(cli: ProviderKind, file: &Path) -> bool {
+    trust_of(cli).is_ok_and(|trust| (trust.set_up)(file))
+}
+
+/// The file the extra account of `cli` whose home is `home` keeps its own folder trust in;
+/// none when the account's is the user's own, linked.
+pub fn account_file(cli: ProviderKind, home: &Path) -> Option<PathBuf> {
+    Some((trust_of(cli).ok()?.account_file?)(home))
+}
+
+/// How `cli` keeps folder trust, or the error of a CLI that keeps none Brigadier can write.
+fn trust_of(cli: ProviderKind) -> Result<&'static Trust> {
+    crate::adapters::adapter(cli)
+        .and_then(|adapter| adapter.trust)
+        .ok_or_else(|| Error::Invalid(format!("Brigadier can't write {cli}'s folder trust")))
+}
+
+/// The file `cli` keeps folder trust in, for the CLIs' environment `env`.
+pub fn file(cli: ProviderKind, env: &CliEnv) -> Option<PathBuf> {
+    (trust_of(cli).ok()?.file)(env)
 }
 
 /// What a folder's entry held before Brigadier trusted it.
@@ -98,71 +116,42 @@ pub enum Written {
 }
 
 /// How the entry for `folder` stands now: `None` when it is trusted.
-pub fn plan(cli: TrustCli, file: &Path, folder: &str) -> Result<Option<TrustBefore>> {
+pub fn plan(cli: ProviderKind, file: &Path, folder: &str) -> Result<Option<TrustBefore>> {
+    let trust = trust_of(cli)?;
     let text = read(file)?;
-    match cli {
-        TrustCli::Claude => claude::state(&text, folder),
-        TrustCli::Codex => codex::state(&text, folder),
-    }
-    .map(|state| state.before())
+    (trust.state)(&text, folder).map(|state| state.before())
 }
 
 /// Trusts `folder` in `cli`'s settings at `file`, when its entry still holds `expected`.
-pub fn write(cli: TrustCli, file: &Path, folder: &str, expected: &TrustBefore) -> Result<Written> {
-    edit(cli, file, |text| {
-        let state = match cli {
-            TrustCli::Claude => claude::state(text, folder)?,
-            TrustCli::Codex => codex::state(text, folder)?,
-        };
+pub fn write(
+    cli: ProviderKind,
+    file: &Path,
+    folder: &str,
+    expected: &TrustBefore,
+) -> Result<Written> {
+    let trust = trust_of(cli)?;
+    edit(file, trust.lock, |text| {
+        let state = (trust.state)(text, folder)?;
         match state.before() {
             None => Ok(Edit::Keep(Written::AlreadyTrusted)),
             Some(before) if before != *expected => Ok(Edit::Keep(Written::Changed(before))),
             Some(_) => {
-                let new = match cli {
-                    TrustCli::Claude => claude::trust(text, folder, &state)?,
-                    TrustCli::Codex => codex::trust(text, folder, &state)?,
-                };
+                let new = (trust.trust)(text, folder, &state)?;
                 Ok(Edit::Replace(new, Written::Trusted))
             }
         }
     })
 }
 
-/// What [`trust_codex_hook`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookTrust {
-    Trusted,
-    /// Trusted with that hash already: nothing changed.
-    AlreadyTrusted,
-}
-
-/// Trusts one of Brigadier's own Codex hooks in Codex's `config.toml` at `file` (harness D49):
-/// `[hooks.state."<key>"] trusted_hash = "<hash>"`, the entry Codex itself writes when the
-/// user trusts a hook. Only that one key changes; the user's own hooks, their trust and the
-/// rest of the file stay byte for byte, and a rerun with the same hash changes nothing. An
-/// `enabled` the user set beside it stays theirs.
-pub fn trust_codex_hook(file: &Path, key: &str, hash: &str) -> Result<HookTrust> {
-    edit(TrustCli::Codex, file, |text| {
-        let state = codex::hook_state(text, key, hash)?;
-        if matches!(state, State::Trusted) {
-            return Ok(Edit::Keep(HookTrust::AlreadyTrusted));
-        }
-        let new = codex::trust_hook(text, key, hash, &state)?;
-        Ok(Edit::Replace(new, HookTrust::Trusted))
-    })
-}
-
 /// Puts back what [`write`] replaced, while `folder` is still trusted as Brigadier left it; a
 /// value the user changed since is theirs and stays.
-pub fn undo(cli: TrustCli, file: &Path, folder: &str, before: &TrustBefore) -> Result<()> {
+pub fn undo(cli: ProviderKind, file: &Path, folder: &str, before: &TrustBefore) -> Result<()> {
     if !file.exists() {
         return Ok(());
     }
-    edit(cli, file, |text| {
-        let new = match cli {
-            TrustCli::Claude => claude::undo(text, folder, before)?,
-            TrustCli::Codex => codex::undo(text, folder, before)?,
-        };
+    let trust = trust_of(cli)?;
+    edit(file, trust.lock, |text| {
+        let new = (trust.undo)(text, folder, before)?;
         Ok(match new {
             Some(new) => Edit::Replace(new, ()),
             None => Edit::Keep(()),
@@ -172,7 +161,7 @@ pub fn undo(cli: TrustCli, file: &Path, folder: &str, before: &TrustBefore) -> R
 
 /// Where a folder's trust stands in a file.
 #[derive(Debug)]
-enum State {
+pub(crate) enum State {
     Trusted,
     /// No `projects` table or object at all.
     NoProjects,
@@ -195,7 +184,7 @@ impl State {
     }
 }
 
-enum Edit<T> {
+pub(crate) enum Edit<T> {
     Keep(T),
     Replace(String, T),
 }
@@ -205,19 +194,20 @@ const ATTEMPTS: usize = 5;
 
 /// Reads the file (none: empty), edits its text with `change`, and writes the result in its
 /// place atomically, if it still reads the same. The whole read, edit and rename holds the
-/// file's lock: Claude's own for its file; for Codex's, which has none, one of Brigadier's
-/// beside it (`config.toml.brigadier.lock`), so two Brigadier writes can't lose one another.
-/// Writes of this process wait their turn before it, so they don't use up its wait.
-fn edit<T>(cli: TrustCli, file: &Path, change: impl Fn(&str) -> Result<Edit<T>>) -> Result<T> {
+/// file's lock, `<file><lock>`: the CLI's own when it takes one (Claude's); else one of
+/// Brigadier's beside it (Codex's `config.toml.brigadier.lock`), so two Brigadier writes can't
+/// lose one another. Writes of this process wait their turn before it, so they don't use up
+/// its wait.
+pub(crate) fn edit<T>(
+    file: &Path,
+    lock: &str,
+    change: impl Fn(&str) -> Result<Edit<T>>,
+) -> Result<T> {
     let turn = local_turn(file);
     let _turn = turn
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let suffix = match cli {
-        TrustCli::Claude => ".lock",
-        TrustCli::Codex => ".brigadier.lock",
-    };
-    let mut lock = Lock::take(file, suffix)?;
+    let mut lock = Lock::take(file, lock)?;
     let target = resolve(file)?;
     for _ in 0..ATTEMPTS {
         let text = read(&target)?;
@@ -447,622 +437,6 @@ impl Drop for Lock {
         {
             let _ = fs::remove_dir(&self.dir);
         }
-    }
-}
-
-/// `~/.claude.json`: JSON as Claude writes it (`JSON.stringify(config, null, 2)`), edited by
-/// byte ranges found with a small scanner; `serde_json` only checks that the file parses.
-mod claude {
-    use super::*;
-
-    const KEY: &str = "hasTrustDialogAccepted";
-
-    /// A member of an object: its key and the ranges of the key (with its quotes) and value.
-    struct Member {
-        key: String,
-        key_span: Range<usize>,
-        value: Range<usize>,
-    }
-
-    /// An object's members and the positions of its braces.
-    struct Object {
-        open: usize,
-        close: usize,
-        members: Vec<Member>,
-    }
-
-    impl Object {
-        fn get(&self, key: &str) -> Option<&Member> {
-            self.members.iter().find(|member| member.key == key)
-        }
-    }
-
-    fn invalid(why: &str) -> Error {
-        Error::Invalid(format!(
-            "Claude's settings file can't be edited safely: {why}"
-        ))
-    }
-
-    fn parse(text: &str) -> Result<Option<Object>> {
-        if text.trim().is_empty() {
-            return Ok(None);
-        }
-        let value: serde_json::Value =
-            serde_json::from_str(text).map_err(|err| invalid(&err.to_string()))?;
-        if !value.is_object() {
-            return Err(invalid("it is not a JSON object"));
-        }
-        let open = skip_ws(text, 0);
-        object(text, open).map(Some)
-    }
-
-    pub(super) fn state(text: &str, folder: &str) -> Result<State> {
-        let Some(root) = parse(text)? else {
-            return Ok(State::NoProjects);
-        };
-        let Some(projects) = root.get("projects") else {
-            return Ok(State::NoProjects);
-        };
-        if !text[projects.value.clone()].starts_with('{') {
-            return Err(invalid("\"projects\" is not an object"));
-        }
-        let projects = object(text, projects.value.start)?;
-        let Some(entry) = projects.get(folder) else {
-            return Ok(State::NoEntry);
-        };
-        if !text[entry.value.clone()].starts_with('{') {
-            return Err(invalid("the folder's entry is not an object"));
-        }
-        let entry = object(text, entry.value.start)?;
-        Ok(match entry.get(KEY) {
-            None => State::NoKey,
-            Some(member) if &text[member.value.clone()] == "true" => State::Trusted,
-            Some(member) => State::Other {
-                raw: text[member.value.clone()].to_owned(),
-                span: member.value.clone(),
-            },
-        })
-    }
-
-    pub(super) fn trust(text: &str, folder: &str, state: &State) -> Result<String> {
-        let key = serde_json::to_string(folder).map_err(|err| invalid(&err.to_string()))?;
-        let entry = |depth: usize| {
-            format!(
-                "{{\n{}\"{KEY}\": true\n{}}}",
-                indent(depth + 1),
-                indent(depth)
-            )
-        };
-        Ok(match state {
-            State::Trusted => text.to_owned(),
-            State::NoProjects => match parse(text)? {
-                None => format!(
-                    "{{\n  \"projects\": {{\n    {key}: {}\n  }}\n}}\n",
-                    entry(2)
-                ),
-                Some(root) => {
-                    let value = format!("{{\n{}{key}: {}\n{}}}", indent(2), entry(2), indent(1));
-                    insert(text, &root, 0, "\"projects\"", &value)
-                }
-            },
-            State::NoEntry => {
-                let projects = projects(text)?;
-                insert(text, &projects, 1, &key, &entry(2))
-            }
-            State::NoKey => {
-                let entry = entry_object(text, folder)?;
-                insert(text, &entry, 2, &format!("\"{KEY}\""), "true")
-            }
-            State::Other { span, .. } => splice(text, span.clone(), "true"),
-        })
-    }
-
-    pub(super) fn undo(text: &str, folder: &str, before: &TrustBefore) -> Result<Option<String>> {
-        if !matches!(state(text, folder)?, State::Trusted) {
-            return Ok(None);
-        }
-        let entry = entry_object(text, folder)?;
-        let index = entry
-            .members
-            .iter()
-            .position(|member| member.key == KEY)
-            .ok_or_else(|| invalid("the trust key went missing"))?;
-        Ok(Some(match before {
-            TrustBefore::NoEntry if entry.members.len() == 1 => {
-                let projects = projects(text)?;
-                let at = projects
-                    .members
-                    .iter()
-                    .position(|member| member.key == folder)
-                    .ok_or_else(|| invalid("the folder's entry went missing"))?;
-                remove(text, &projects, at)
-            }
-            TrustBefore::NoEntry | TrustBefore::NoKey => remove(text, &entry, index),
-            TrustBefore::Value { raw } => splice(text, entry.members[index].value.clone(), raw),
-        }))
-    }
-
-    fn projects(text: &str) -> Result<Object> {
-        let root = parse(text)?.ok_or_else(|| invalid("it is empty"))?;
-        let member = root
-            .get("projects")
-            .ok_or_else(|| invalid("\"projects\" went missing"))?;
-        object(text, member.value.start)
-    }
-
-    fn entry_object(text: &str, folder: &str) -> Result<Object> {
-        let projects = projects(text)?;
-        let member = projects
-            .get(folder)
-            .ok_or_else(|| invalid("the folder's entry went missing"))?;
-        object(text, member.value.start)
-    }
-
-    fn indent(depth: usize) -> String {
-        "  ".repeat(depth)
-    }
-
-    fn splice(text: &str, range: Range<usize>, with: &str) -> String {
-        let mut out = String::with_capacity(text.len() + with.len());
-        out.push_str(&text[..range.start]);
-        out.push_str(with);
-        out.push_str(&text[range.end..]);
-        out
-    }
-
-    /// Adds `"key": value` as the last member of `object`, which sits at `depth`.
-    fn insert(text: &str, object: &Object, depth: usize, key: &str, value: &str) -> String {
-        match object.members.last() {
-            Some(last) => splice(
-                text,
-                last.value.end..last.value.end,
-                &format!(",\n{}{key}: {value}", indent(depth + 1)),
-            ),
-            None => splice(
-                text,
-                object.open..object.close + 1,
-                &format!(
-                    "{{\n{}{key}: {value}\n{}}}",
-                    indent(depth + 1),
-                    indent(depth)
-                ),
-            ),
-        }
-    }
-
-    /// Removes member `index` of `object` with its separator.
-    fn remove(text: &str, object: &Object, index: usize) -> String {
-        let members = &object.members;
-        let member = &members[index];
-        let range = if index > 0 {
-            members[index - 1].value.end..member.value.end
-        } else if let Some(next) = members.get(1) {
-            member.key_span.start..next.key_span.start
-        } else {
-            object.open..object.close + 1
-        };
-        let with = if members.len() == 1 { "{}" } else { "" };
-        splice(text, range, with)
-    }
-
-    fn skip_ws(text: &str, mut at: usize) -> usize {
-        let bytes = text.as_bytes();
-        while at < bytes.len() && matches!(bytes[at], b' ' | b'\t' | b'\n' | b'\r') {
-            at += 1;
-        }
-        at
-    }
-
-    /// The end of the string starting at `at` (its opening quote), past the closing quote.
-    fn string_end(text: &str, at: usize) -> Result<usize> {
-        let bytes = text.as_bytes();
-        let mut i = at + 1;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => i += 2,
-                b'"' => return Ok(i + 1),
-                _ => i += 1,
-            }
-        }
-        Err(invalid("a string never ends"))
-    }
-
-    /// The end of the value starting at `at`.
-    fn value_end(text: &str, at: usize) -> Result<usize> {
-        let bytes = text.as_bytes();
-        match bytes.get(at) {
-            Some(b'"') => string_end(text, at),
-            Some(b'{' | b'[') => {
-                let mut depth = 0usize;
-                let mut i = at;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'"' => {
-                            i = string_end(text, i)?;
-                            continue;
-                        }
-                        b'{' | b'[' => depth += 1,
-                        b'}' | b']' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                return Ok(i + 1);
-                            }
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                Err(invalid("an object never ends"))
-            }
-            Some(_) => {
-                let mut i = at;
-                while i < bytes.len()
-                    && !matches!(bytes[i], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
-                {
-                    i += 1;
-                }
-                Ok(i)
-            }
-            None => Err(invalid("a value is missing")),
-        }
-    }
-
-    /// The object whose `{` is at `open`.
-    fn object(text: &str, open: usize) -> Result<Object> {
-        let bytes = text.as_bytes();
-        if bytes.get(open) != Some(&b'{') {
-            return Err(invalid("an object was expected"));
-        }
-        let mut members = Vec::new();
-        let mut at = skip_ws(text, open + 1);
-        if bytes.get(at) == Some(&b'}') {
-            return Ok(Object {
-                open,
-                close: at,
-                members,
-            });
-        }
-        loop {
-            let key_end = string_end(text, at)?;
-            let key: String = serde_json::from_str(&text[at..key_end])
-                .map_err(|err| invalid(&err.to_string()))?;
-            let colon = skip_ws(text, key_end);
-            if bytes.get(colon) != Some(&b':') {
-                return Err(invalid("a key has no value"));
-            }
-            let start = skip_ws(text, colon + 1);
-            let end = value_end(text, start)?;
-            members.push(Member {
-                key,
-                key_span: at..key_end,
-                value: start..end,
-            });
-            let next = skip_ws(text, end);
-            match bytes.get(next) {
-                Some(b',') => at = skip_ws(text, next + 1),
-                Some(b'}') => {
-                    return Ok(Object {
-                        open,
-                        close: next,
-                        members,
-                    });
-                }
-                _ => return Err(invalid("an object is malformed")),
-            }
-        }
-    }
-}
-
-/// `config.toml`: parsed with `toml_edit` for its spans only; the edit is a splice.
-mod codex {
-    use toml_edit::{Document, Item, Table};
-
-    use super::*;
-
-    const KEY: &str = "trust_level";
-    const TRUSTED: &str = "trusted";
-
-    fn invalid(why: &str) -> Error {
-        Error::Invalid(format!("Codex's config.toml can't be edited safely: {why}"))
-    }
-
-    fn parse(text: &str) -> Result<Document<&str>> {
-        Document::parse(text).map_err(|err| invalid(err.message()))
-    }
-
-    /// The folder's table and the `projects` table, when they are standard tables.
-    fn tables<'a>(
-        doc: &'a Document<&str>,
-        folder: &str,
-    ) -> Result<(Option<&'a Table>, Option<&'a Table>)> {
-        let Some(projects) = doc.as_table().get("projects") else {
-            return Ok((None, None));
-        };
-        let projects = match projects {
-            Item::Table(table) if !table.is_dotted() => table,
-            _ => return Err(invalid("[projects] is written inline or with dotted keys")),
-        };
-        match projects.get(folder) {
-            None => Ok((Some(projects), None)),
-            Some(Item::Table(table)) if !table.is_dotted() && !table.is_implicit() => {
-                Ok((Some(projects), Some(table)))
-            }
-            Some(_) => Err(invalid(
-                "the folder's entry is written inline or with dotted keys",
-            )),
-        }
-    }
-
-    pub(super) fn state(text: &str, folder: &str) -> Result<State> {
-        let doc = parse(text)?;
-        let (projects, entry) = tables(&doc, folder)?;
-        let Some(entry) = entry else {
-            return Ok(if projects.is_some() {
-                State::NoEntry
-            } else {
-                State::NoProjects
-            });
-        };
-        Ok(match entry.get(KEY) {
-            None => State::NoKey,
-            Some(item) if item.as_str() == Some(TRUSTED) => State::Trusted,
-            Some(item) => {
-                let span = item
-                    .span()
-                    .ok_or_else(|| invalid("a value has no position"))?;
-                State::Other {
-                    raw: text[span.clone()].to_owned(),
-                    span,
-                }
-            }
-        })
-    }
-
-    /// The table header a folder's entry gets: `[projects."<folder>"]`.
-    fn header(folder: &str) -> String {
-        format!("[projects.{}]", basic_string(folder))
-    }
-
-    /// A TOML basic string.
-    fn basic_string(text: &str) -> String {
-        let mut out = String::from("\"");
-        for c in text.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\t' => out.push_str("\\t"),
-                '\r' => out.push_str("\\r"),
-                c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-        out
-    }
-
-    pub(super) fn trust(text: &str, folder: &str, state: &State) -> Result<String> {
-        let line = format!("{KEY} = \"{TRUSTED}\"");
-        let new = match state {
-            State::Trusted => return Ok(text.to_owned()),
-            State::NoProjects | State::NoEntry => {
-                let mut new = text.to_owned();
-                if !new.is_empty() && !new.ends_with('\n') {
-                    new.push('\n');
-                }
-                if !new.is_empty() {
-                    new.push('\n');
-                }
-                new.push_str(&format!("{}\n{line}\n", header(folder)));
-                new
-            }
-            State::NoKey => {
-                let doc = parse(text)?;
-                let (_, entry) = tables(&doc, folder)?;
-                let span = entry
-                    .and_then(Table::span)
-                    .ok_or_else(|| invalid("the folder's table has no position"))?;
-                // Right after its header line.
-                let at = text[span.end..]
-                    .find('\n')
-                    .map_or(text.len(), |i| span.end + i + 1);
-                let mut new = text[..at].to_owned();
-                if !new.ends_with('\n') {
-                    new.push('\n');
-                }
-                new.push_str(&line);
-                new.push('\n');
-                new.push_str(&text[at..]);
-                new
-            }
-            State::Other { span, .. } => {
-                format!("{}\"{TRUSTED}\"{}", &text[..span.start], &text[span.end..])
-            }
-        };
-        // What was spliced in must read back as exactly that.
-        match self::state(&new, folder)? {
-            State::Trusted => Ok(new),
-            _ => Err(invalid("the edit did not read back as trusted")),
-        }
-    }
-
-    const HOOK_KEY: &str = "trusted_hash";
-
-    /// A hook's state table, `[hooks.state."<key>"]`, when it and the tables above it are
-    /// standard tables (an implicit `hooks` or `hooks.state` counts).
-    fn hook_table<'a>(doc: &'a Document<&str>, key: &str) -> Result<Option<&'a Table>> {
-        let standard = |item: &'a Item, what: &str| match item {
-            Item::Table(table) if !table.is_dotted() => Ok(table),
-            _ => Err(invalid(&format!(
-                "{what} is written inline or with dotted keys"
-            ))),
-        };
-        let Some(hooks) = doc.as_table().get("hooks") else {
-            return Ok(None);
-        };
-        let Some(states) = standard(hooks, "[hooks]")?.get("state") else {
-            return Ok(None);
-        };
-        match standard(states, "[hooks.state]")?.get(key) {
-            None => Ok(None),
-            Some(Item::Table(table)) if !table.is_dotted() && !table.is_implicit() => {
-                Ok(Some(table))
-            }
-            Some(_) => Err(invalid(
-                "the hook's state is written inline or with dotted keys",
-            )),
-        }
-    }
-
-    /// Where the trust of the hook `key` stands: [`State::Trusted`] only with `hash`.
-    pub(super) fn hook_state(text: &str, key: &str, hash: &str) -> Result<State> {
-        let doc = parse(text)?;
-        let Some(table) = hook_table(&doc, key)? else {
-            return Ok(State::NoEntry);
-        };
-        Ok(match table.get(HOOK_KEY) {
-            None => State::NoKey,
-            Some(item) if item.as_str() == Some(hash) => State::Trusted,
-            Some(item) => {
-                let span = item
-                    .span()
-                    .ok_or_else(|| invalid("a value has no position"))?;
-                State::Other {
-                    raw: text[span.clone()].to_owned(),
-                    span,
-                }
-            }
-        })
-    }
-
-    /// `text` with the hook `key` trusted at `hash`: a table of its own at the end, a line
-    /// right after its header, or its old hash replaced in place.
-    pub(super) fn trust_hook(text: &str, key: &str, hash: &str, state: &State) -> Result<String> {
-        let line = format!("{HOOK_KEY} = {}", basic_string(hash));
-        let new = match state {
-            State::Trusted => return Ok(text.to_owned()),
-            State::NoProjects | State::NoEntry => {
-                let mut new = text.to_owned();
-                if !new.is_empty() && !new.ends_with('\n') {
-                    new.push('\n');
-                }
-                if !new.is_empty() {
-                    new.push('\n');
-                }
-                new.push_str(&format!("[hooks.state.{}]\n{line}\n", basic_string(key)));
-                new
-            }
-            State::NoKey => {
-                let doc = parse(text)?;
-                let span = hook_table(&doc, key)?
-                    .and_then(Table::span)
-                    .ok_or_else(|| invalid("the hook's table has no position"))?;
-                let at = text[span.end..]
-                    .find('\n')
-                    .map_or(text.len(), |i| span.end + i + 1);
-                let mut new = text[..at].to_owned();
-                if !new.ends_with('\n') {
-                    new.push('\n');
-                }
-                new.push_str(&line);
-                new.push('\n');
-                new.push_str(&text[at..]);
-                new
-            }
-            State::Other { span, .. } => format!(
-                "{}{}{}",
-                &text[..span.start],
-                basic_string(hash),
-                &text[span.end..]
-            ),
-        };
-        match hook_state(&new, key, hash)? {
-            State::Trusted => Ok(new),
-            _ => Err(invalid("the edit did not read back as trusted")),
-        }
-    }
-
-    pub(super) fn undo(text: &str, folder: &str, before: &TrustBefore) -> Result<Option<String>> {
-        if !matches!(state(text, folder)?, State::Trusted) {
-            return Ok(None);
-        }
-        let doc = parse(text)?;
-        let (_, Some(entry)) = tables(&doc, folder)? else {
-            return Ok(None);
-        };
-        let item = entry
-            .get(KEY)
-            .ok_or_else(|| invalid("the trust key went missing"))?;
-        let value = item
-            .span()
-            .ok_or_else(|| invalid("a value has no position"))?;
-        let line = line_of(text, value.clone());
-        let ours = format!("{KEY} = \"{TRUSTED}\"");
-        let new = match before {
-            TrustBefore::Value { raw } => {
-                format!("{}{raw}{}", &text[..value.start], &text[value.end..])
-            }
-            TrustBefore::NoEntry if entry.len() == 1 => {
-                let header = entry
-                    .span()
-                    .ok_or_else(|| invalid("the folder's table has no position"))?;
-                // The table runs to the next table's header, or the end.
-                let end = next_table_start(doc.as_table(), header.end).unwrap_or(text.len());
-                let mut start = line_of(text, header.clone()).start;
-                // With the blank line Brigadier put before it, when it is the last table.
-                if end == text.len() && text[..start].ends_with("\n\n") {
-                    start -= 1;
-                }
-                if text[line.clone()].trim() != ours {
-                    return Err(invalid("the trust line was changed"));
-                }
-                format!("{}{}", &text[..start], &text[end..])
-            }
-            TrustBefore::NoEntry | TrustBefore::NoKey => {
-                if text[line.clone()].trim() != ours {
-                    return Err(invalid("the trust line was changed"));
-                }
-                format!("{}{}", &text[..line.start], &text[line.end..])
-            }
-        };
-        parse(&new)?;
-        Ok(Some(new))
-    }
-
-    /// The whole line around `range`, with its newline.
-    fn line_of(text: &str, range: Range<usize>) -> Range<usize> {
-        let start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
-        let end = text[range.end..]
-            .find('\n')
-            .map_or(text.len(), |i| range.end + i + 1);
-        start..end
-    }
-
-    /// Where the first table header at or after `after` starts (an implicit table, such as
-    /// `projects` in `[projects."…"]`, has no header of its own).
-    fn next_table_start(root: &Table, after: usize) -> Option<usize> {
-        let mut best: Option<usize> = None;
-        let mut stack = vec![root];
-        while let Some(table) = stack.pop() {
-            for (_, item) in table.iter() {
-                let tables: Vec<&Table> = match item {
-                    Item::Table(table) => vec![table],
-                    Item::ArrayOfTables(array) => array.iter().collect(),
-                    _ => Vec::new(),
-                };
-                for table in tables {
-                    if let Some(span) = table.span()
-                        && !table.is_implicit()
-                        && span.start >= after
-                        && best.is_none_or(|best| span.start < best)
-                    {
-                        best = Some(span.start);
-                    }
-                    stack.push(table);
-                }
-            }
-        }
-        best
     }
 }
 

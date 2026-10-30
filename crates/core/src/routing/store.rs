@@ -470,9 +470,7 @@ fn db(err: impl std::fmt::Display) -> Error {
 }
 
 fn provider_of(text: &str) -> Option<ProviderKind> {
-    ProviderKind::ALL
-        .into_iter()
-        .find(|kind| kind.to_string() == text)
+    brigadier_providers::adapters::kinds().find(|kind| kind.id() == text)
 }
 
 impl RoutingStore {

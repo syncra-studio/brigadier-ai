@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from "react";
 
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import {
   effortFor,
   findModel,
@@ -19,6 +18,7 @@ import type {
 import { loadProviders } from "@/state/actions";
 import { type Availability, modelAvailable, providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
+import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
 
 export const PERMISSION_LEVELS: readonly PermissionLevel[] = ["ask", "acceptEdits", "full"];
 
@@ -61,7 +61,7 @@ function unavailable(overview: ProviderOverview): string | null {
 function groupsOf(providers: readonly ProviderOverview[]): ModelGroup[] {
   return providers.map((overview) => ({
     provider: overview.provider,
-    label: PROVIDER_LABELS[overview.provider],
+    label: cliFacts(overview.provider).label,
     models: overview.models?.models ?? [],
     unavailable: unavailable(overview),
   }));
@@ -186,7 +186,7 @@ function agentDefault(group: ModelGroup): ModelInfo | undefined {
 export function builtInDefault(groups: readonly ModelGroup[]): ModelChoice {
   const ready = groups.find((group) => group.unavailable === null && group.models.length > 0);
   const model = ready && agentDefault(ready);
-  if (!ready || !model) return { provider: "claude", model: null, effort: null };
+  if (!ready || !model) return { provider: PROVIDERS[0]!, model: null, effort: null };
   return { provider: ready.provider, model: model.id, effort: model.defaultEffort };
 }
 
@@ -259,7 +259,7 @@ export function modelName(groups: readonly ModelGroup[], choice: ModelChoice): s
   return (
     findModel(groups, choice)?.displayName ??
     (choice.model && choice.model !== "default" ? choice.model : null) ??
-    `${PROVIDER_LABELS[choice.provider]} default`
+    `${cliFacts(choice.provider).label} default`
   );
 }
 

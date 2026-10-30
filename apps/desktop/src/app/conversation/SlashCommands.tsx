@@ -3,7 +3,6 @@ import { type FC, useContext, useEffect, useMemo, useState } from "react";
 
 import { canPickSkill, cliMenuCommands, conversationProvider, limitClaudeSkills } from "@/app/conversation/cliCommands";
 import { useCliCommands } from "@/app/conversation/useCliCommands";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
 import { mentionOf } from "@/app/conversation/Mentions";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -44,6 +43,7 @@ import { armBackgroundSend } from "@/state/backgroundSend";
 import { useBoard } from "@/state/board";
 import { isTaskTab } from "@/state/tabStates";
 import { setDirectTo } from "@/state/directTo";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** What `/init` asks the orchestrator, as Codex's `/init` asks its agent. */
 const INIT_PROMPT =
@@ -97,11 +97,14 @@ export const SlashCommands: FC<{
   const [listed, refreshListed] = useCliCommands(conversation ? { conversation } : draft);
   const provider = conversation ? conversationProvider(conversation) : (draft?.provider ?? null);
   const text = useAuiState((state) => state.composer.text);
-  const limited = provider === "claude" && target ? limitClaudeSkills(text, target.mentions.known()) : text;
+  const facts = provider ? cliFacts(provider) : null;
+  const commandsAsText = facts?.commandsAsText ?? true;
+  const oneSkill = `${facts?.vendor ?? "This CLI"} accepts one skill per message.`;
+  const limited = facts?.oneSkillPerMessage && target ? limitClaudeSkills(text, target.mentions.known()) : text;
   const [checkedText, setCheckedText] = useState<{ text: string; limited: string } | null>(null);
   if (checkedText?.text !== text || checkedText.limited !== limited) {
     setCheckedText({ text, limited });
-    if (limited !== text) setSkillHint("Claude accepts one skill per message. Kept the first skill.");
+    if (limited !== text) setSkillHint(`${oneSkill} Kept the first skill.`);
   }
   useEffect(() => {
     if (limited === text) return;
@@ -273,16 +276,18 @@ export const SlashCommands: FC<{
     () => [
       ...commands.map((command) => ({ ...command, group: "Brigadier actions" })),
       ...cliMenuCommands(listed, commands, {
-        name: provider ? PROVIDER_LABELS[provider] : undefined,
+        name: provider ? cliFacts(provider).label : undefined,
         icon: provider ? <ProviderGlyph provider={provider} className="size-icon-sm" /> : <Bolt />,
-        runCommand: (invocation) => {
-          if (invocation !== "thread/compact/start") return;
-          if (conversation) run(() => compact(conversation.id));
-          else setSkillHint("Send a message before compacting.");
-        },
+        ...(commandsAsText ? {} : {
+          runCommand: (invocation: string) => {
+            if (invocation !== "thread/compact/start") return;
+            if (conversation) run(() => compact(conversation.id));
+            else setSkillHint("Send a message before compacting.");
+          },
+        }),
       }),
     ],
-    [commands, listed, provider, conversation, run],
+    [commands, listed, provider, commandsAsText, conversation, run],
   );
 
   return (
@@ -290,7 +295,7 @@ export const SlashCommands: FC<{
       <ComposerCommands commands={menu} onOpen={refreshListed} onPick={(command, messageText) => {
         if (!command.chip) return true;
         if (!target || !canPickSkill(provider, messageText, target.mentions.known())) {
-          setSkillHint("Claude accepts one skill per message. Remove the current skill first.");
+          setSkillHint(`${oneSkill} Remove the current skill first.`);
           return false;
         }
         const mention = mentionOf(command.chip);

@@ -17,6 +17,7 @@ aho-corasick = "1.1.5"
 base64.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-registry.workspace = true
+brigadier-kind.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

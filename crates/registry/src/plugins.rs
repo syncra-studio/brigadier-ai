@@ -27,12 +27,12 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::{Agent, Roots};
+use crate::{ProviderKind, Roots};
 
 /// A plugin its agent loads.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Plugin {
-    pub agent: Agent,
+    pub agent: ProviderKind,
     /// What its agent's switch names it: `<plugin>@<marketplace>`, `<name>@skills-dir`.
     pub id: String,
     /// What its agent puts before its skills' names: its manifest's name, else its folder's.
@@ -74,7 +74,7 @@ impl Plugin {
     /// tools are prefixed (`mcp__plugin_<plugin>_<name>__…`), Codex's the server's own.
     pub fn server_name(&self, name: &str) -> String {
         match self.agent {
-            Agent::Claude => format!("plugin_{}_{name}", self.name)
+            ProviderKind::Claude => format!("plugin_{}_{name}", self.name)
                 .chars()
                 .map(|c| {
                     if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -84,17 +84,14 @@ impl Plugin {
                     }
                 })
                 .collect(),
-            Agent::Codex => name.to_owned(),
+            _ => name.to_owned(),
         }
     }
 
     /// The start of its skills' and servers' ids: `claude:plugin:<id>`, with its project's path
     /// before the id when it counts only there.
     pub(crate) fn prefix(&self) -> String {
-        let agent = match self.agent {
-            Agent::Claude => "claude",
-            Agent::Codex => "codex",
-        };
+        let agent = self.agent.id();
         match &self.project {
             Some(project) => format!("{agent}:plugin:{}:{}", project.display(), self.id),
             None => format!("{agent}:plugin:{}", self.id),
@@ -117,7 +114,7 @@ impl Plugin {
         let entries = manifest_paths(&self.root, manifest.get("skills"), self.agent);
         let mut dirs = Vec::new();
         match self.agent {
-            Agent::Claude => {
+            ProviderKind::Claude => {
                 let conventional = self.root.join("skills");
                 let has_folder = conventional.is_dir();
                 if has_folder {
@@ -136,7 +133,7 @@ impl Plugin {
                     dirs.push(self.root.clone());
                 }
             }
-            Agent::Codex => {
+            ProviderKind::Codex => {
                 let roots = if entries.is_empty() {
                     vec![self.root.join("skills")]
                 } else {
@@ -146,6 +143,7 @@ impl Plugin {
                     descendants(&root, 0, &mut dirs);
                 }
             }
+            _ => {}
         }
         let mut seen = Vec::new();
         dirs.retain(|dir| {
@@ -180,8 +178,8 @@ impl Plugin {
     }
 }
 
-pub(crate) fn provider_supplied(agent: Agent, id: &str) -> bool {
-    agent == Agent::Codex
+pub(crate) fn provider_supplied(agent: ProviderKind, id: &str) -> bool {
+    agent == ProviderKind::Codex
         && id.rsplit_once('@').is_some_and(|(_, marketplace)| {
             matches!(
                 marketplace,
@@ -201,10 +199,11 @@ fn servers_of(file: &Path) -> Option<Value> {
 }
 
 /// The manifest of the plugin at `root`, as `agent` looks for it.
-fn manifest_path(root: &Path, agent: Agent) -> Option<PathBuf> {
+fn manifest_path(root: &Path, agent: ProviderKind) -> Option<PathBuf> {
     let own = match agent {
-        Agent::Claude => [".claude-plugin"].as_slice(),
-        Agent::Codex => [".codex-plugin", ".claude-plugin"].as_slice(),
+        ProviderKind::Claude => [".claude-plugin"].as_slice(),
+        ProviderKind::Codex => [".codex-plugin", ".claude-plugin"].as_slice(),
+        _ => [].as_slice(),
     };
     own.iter()
         .map(|folder| root.join(folder).join("plugin.json"))
@@ -213,7 +212,7 @@ fn manifest_path(root: &Path, agent: Agent) -> Option<PathBuf> {
 
 /// A manifest's paths (one, or a list) inside the plugin; any other is ignored, as its agent
 /// does (Codex also wants each to start with `./`).
-fn manifest_paths(root: &Path, value: Option<&Value>, agent: Agent) -> Vec<PathBuf> {
+fn manifest_paths(root: &Path, value: Option<&Value>, agent: ProviderKind) -> Vec<PathBuf> {
     let list: Vec<&str> = match value {
         Some(Value::String(path)) => vec![path],
         Some(Value::Array(paths)) => paths.iter().filter_map(Value::as_str).collect(),
@@ -222,8 +221,9 @@ fn manifest_paths(root: &Path, value: Option<&Value>, agent: Agent) -> Vec<PathB
     list.into_iter()
         .filter_map(|path| {
             let relative = match agent {
-                Agent::Codex => path.strip_prefix("./")?,
-                Agent::Claude => path,
+                ProviderKind::Codex => path.strip_prefix("./")?,
+                ProviderKind::Claude => path,
+                _ => return None,
             };
             let relative = Path::new(relative);
             let inside = relative
@@ -286,7 +286,7 @@ fn split_id(id: &str) -> Option<(&str, &str)> {
 }
 
 /// The plugin's manifest name, else `fallback`.
-fn named(root: &Path, agent: Agent, fallback: &str) -> String {
+fn named(root: &Path, agent: ProviderKind, fallback: &str) -> String {
     manifest_path(root, agent)
         .and_then(|path| read_json(&path))
         .and_then(|manifest| {
@@ -319,7 +319,7 @@ fn claude_switches(files: &[PathBuf]) -> BTreeMap<String, bool> {
 /// Whether Claude has the plugin `id` at `root` on under `switches`.
 fn claude_on(switches: &BTreeMap<String, bool>, id: &str, root: &Path) -> bool {
     switches.get(id).copied().unwrap_or_else(|| {
-        manifest_path(root, Agent::Claude)
+        manifest_path(root, ProviderKind::Claude)
             .and_then(|path| read_json(&path))
             .and_then(|manifest| manifest.get("defaultEnabled").and_then(Value::as_bool))
             .unwrap_or(true)
@@ -376,7 +376,7 @@ fn claude_installs(roots: &Roots) -> Vec<Install> {
                 Some("user" | "managed") => None,
                 _ => continue,
             };
-            let root = if manifest_path(&root, Agent::Claude).is_some() {
+            let root = if manifest_path(&root, ProviderKind::Claude).is_some() {
                 root
             } else {
                 match cache_fallback(roots, id, entry) {
@@ -406,7 +406,7 @@ fn cache_fallback(roots: &Roots, id: &str, entry: &Value) -> Option<PathBuf> {
         .join(plugin);
     let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = sorted_dirs(&cache)
         .into_iter()
-        .filter(|dir| manifest_path(dir, Agent::Claude).is_some())
+        .filter(|dir| manifest_path(dir, ProviderKind::Claude).is_some())
         .filter_map(|dir| Some((std::fs::metadata(&dir).ok()?.modified().ok()?, dir)))
         .collect();
     let commit = entry
@@ -430,13 +430,13 @@ fn cache_fallback(roots: &Roots, id: &str, entry: &Value) -> Option<PathBuf> {
 fn skills_folder_plugins(folder: &Path) -> Vec<(String, PathBuf)> {
     sorted_dirs(folder)
         .into_iter()
-        .filter(|dir| manifest_path(dir, Agent::Claude).is_some())
+        .filter(|dir| manifest_path(dir, ProviderKind::Claude).is_some())
         .map(|dir| {
             let fallback = dir
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            (named(&dir, Agent::Claude, &fallback), dir)
+            (named(&dir, ProviderKind::Claude, &fallback), dir)
         })
         .collect()
 }
@@ -470,8 +470,8 @@ pub(crate) fn claude(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
         }
         let fallback = split_id(&install.id).map_or(install.id.as_str(), |(name, _)| name);
         plugins.push(Plugin {
-            agent: Agent::Claude,
-            name: named(&install.root, Agent::Claude, fallback),
+            agent: ProviderKind::Claude,
+            name: named(&install.root, ProviderKind::Claude, fallback),
             project: (scoped || only_here(&install.id, &install.root))
                 .then(|| project.map(Path::to_owned))
                 .flatten(),
@@ -493,7 +493,7 @@ pub(crate) fn claude(roots: &Roots, project: Option<&Path>) -> Vec<Plugin> {
                 .or_else(|| only_here(&id, &root).then_some(project).flatten())
                 .map(Path::to_owned);
             plugins.push(Plugin {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 id,
                 name,
                 root,
@@ -518,8 +518,8 @@ pub(crate) fn claude_definitions(roots: &Roots, project: Option<&Path>) -> Vec<P
         .map(|install| {
             let fallback = split_id(&install.id).map_or(install.id.as_str(), |(name, _)| name);
             Plugin {
-                agent: Agent::Claude,
-                name: named(&install.root, Agent::Claude, fallback),
+                agent: ProviderKind::Claude,
+                name: named(&install.root, ProviderKind::Claude, fallback),
                 id: install.id,
                 root: install.root,
                 project: install.project.as_ref().and(project).map(Path::to_owned),
@@ -533,7 +533,7 @@ pub(crate) fn claude_definitions(roots: &Roots, project: Option<&Path>) -> Vec<P
     for (folder, project) in folders {
         for (name, root) in skills_folder_plugins(&folder) {
             plugins.push(Plugin {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 id: format!("{name}@skills-dir"),
                 name,
                 root,
@@ -555,8 +555,8 @@ pub(crate) fn claude_off(roots: &Roots) -> Vec<Plugin> {
         }
         let fallback = split_id(&install.id).map_or(install.id.as_str(), |(name, _)| name);
         plugins.push(Plugin {
-            agent: Agent::Claude,
-            name: named(&install.root, Agent::Claude, fallback),
+            agent: ProviderKind::Claude,
+            name: named(&install.root, ProviderKind::Claude, fallback),
             project: None,
             id: install.id,
             root: install.root,
@@ -566,7 +566,7 @@ pub(crate) fn claude_off(roots: &Roots) -> Vec<Plugin> {
         let id = format!("{name}@skills-dir");
         if !claude_on(&switches, &id, &root) {
             plugins.push(Plugin {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 id,
                 name,
                 root,
@@ -664,14 +664,14 @@ pub(crate) fn codex_switched(
         let Some(root) = active_version(&cache.join(marketplace).join(plugin)) else {
             continue;
         };
-        if manifest_path(&root, Agent::Codex).is_none() {
+        if manifest_path(&root, ProviderKind::Codex).is_none() {
             continue;
         }
         plugins.push((
             Plugin {
-                agent: Agent::Codex,
+                agent: ProviderKind::Codex,
                 id: id.clone(),
-                name: named(&root, Agent::Codex, plugin),
+                name: named(&root, ProviderKind::Codex, plugin),
                 root,
                 project: project.map(Path::to_owned),
             },

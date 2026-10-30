@@ -13,15 +13,12 @@ import { ProviderGlyph } from "@/components/icons";
 import { SettingsCard, StateDot, SettingsRow } from "@/components/shared";
 import type { AccountView, MergedModel, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
 import { refreshAccounts, setSwitchAccounts, switchesAccounts } from "@/state/accounts";
 import { providerOn, setProviderOn } from "@/state/providers";
 import { useApp } from "@/state/store";
-
-/** Who makes each agent's CLI, on its page's line. */
-const MAKERS: Record<ProviderKind, string> = { claude: "Claude Code by Anthropic", codex: "Codex CLI" };
+import { cliFacts } from "@/lib/providerKinds";
 
 /** What an agent switched off means, on its page's line. */
 const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work";
@@ -45,12 +42,12 @@ export function AgentSettingsPage({
   const toggle = useAction();
   const refresh = useAction();
   const state = agentState(overview);
-  const label = VENDOR_LABELS[provider];
+  const label = cliFacts(provider).vendor;
   const plan = overview?.status?.plan;
   const [tone, line] = !on
     ? (["off", OFF_NOTE] as const)
     : state === "ready"
-      ? (["ready", `Ready · ${MAKERS[provider]}`] as const)
+      ? (["ready", `Ready · ${cliFacts(provider).maker}`] as const)
       : state === "checking"
         ? (["off", "Checking…"] as const)
         : (["needs", state === "install" ? "Not installed" : "Not signed in"] as const);

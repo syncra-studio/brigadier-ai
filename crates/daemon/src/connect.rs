@@ -39,6 +39,7 @@
 //!   both `install.sh` download their binaries with curl or wget. With neither, nothing runs and
 //!   Connect says so ([`ConnectFailure::NoDownloader`]), for the user to install one or the agent.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::{HashMap, VecDeque};
 #[cfg(windows)]
 use std::ffi::OsStr;
@@ -265,8 +266,7 @@ impl Connects {
 
 fn view_of(state: &HashMap<ProviderKind, Entry>) -> ConnectView {
     ConnectView {
-        agents: ProviderKind::ALL
-            .into_iter()
+        agents: brigadier_providers::adapters::kinds()
             .filter_map(|provider| {
                 state.get(&provider).map(|entry| AgentConnect {
                     provider,
@@ -773,7 +773,8 @@ async fn connect(
             );
         }
         #[cfg(windows)]
-        if provider == ProviderKind::Claude
+        if brigadier_providers::adapters::adapter(provider)
+            .is_some_and(|adapter| adapter.installer_off_path)
             && let Some(binary) = &status.path
         {
             put_on_user_path(ops, provider, Path::new(binary)).await;
@@ -1157,7 +1158,9 @@ async fn sign_in(
 /// visit: …", a terminal link): its first `https` address. Codex's sign-in prints only the
 /// browser's own page, which hands no code back.
 fn code_page(provider: ProviderKind, line: &str) -> Option<String> {
-    if provider != ProviderKind::Claude {
+    if !brigadier_providers::adapters::adapter(provider)
+        .is_some_and(|adapter| adapter.sign_in_code_page)
+    {
         return None;
     }
     let start = line.find("https://")?;

@@ -20,6 +20,7 @@
 //!   another agent automatically" on (S38, D23): the generation ends without a note and the
 //!   successor starts on another agent, with the turn's messages.
 
+use brigadier_providers::KindFacts as _;
 use std::sync::Arc;
 
 use brigadier_providers::{Origin, ProviderKind, TurnInput};
@@ -692,7 +693,7 @@ impl SessionManager {
             .conversation(&conv.id)
             .ok()
             .and_then(|conversation| super::setup_choice(&conversation))
-            .map_or(brigadier_providers::ProviderKind::Claude, |choice| {
+            .map_or_else(brigadier_providers::adapters::default_kind, |choice| {
                 choice.provider
             });
         let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();

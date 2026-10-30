@@ -50,13 +50,8 @@ impl SessionManager {
                 brigadier_providers::accounts::home_var(account.provider).to_owned(),
                 home.to_string_lossy().into_owned(),
             );
-            match account.provider {
-                brigadier_providers::ProviderKind::Claude => {
-                    effective.claude_json =
-                        brigadier_registry::claude_config::config_file(&roots.home, Some(&home));
-                    effective.claude_dir = home;
-                }
-                brigadier_providers::ProviderKind::Codex => effective.codex_home = home,
+            if let Some(adapter) = brigadier_registry::adapter::adapter(account.provider) {
+                adapter.at_home(&mut effective, &home);
             }
         }
         let registered: Vec<_> = self
@@ -78,7 +73,7 @@ impl SessionManager {
             env: roots.vars.clone(),
         };
         let gateway = self.mcp_gateway().clone();
-        let agent = super::super::integrations::agent(account.provider);
+        let agent = account.provider;
         let grants = match role {
             Role::Thread => None,
             Role::Worker { grants } => Some(grants.to_vec()),
@@ -122,8 +117,10 @@ impl SessionManager {
 fn suppress_native_plugin_servers(
     resolved: &mut Resolved,
     native: &Catalog,
-    agent: brigadier_registry::Agent,
+    agent: brigadier_providers::ProviderKind,
 ) {
+    let by_name = brigadier_registry::adapter::adapter(agent)
+        .is_some_and(|adapter| adapter.plugin_servers_by_name());
     for server in native.servers.iter().filter(|server| {
         server
             .plugin
@@ -131,19 +128,16 @@ fn suppress_native_plugin_servers(
             .is_some_and(|plugin| plugin.agent == agent && !plugin.provider_supplied())
     }) {
         let plugin = server.plugin.as_ref().expect("filtered plugin");
-        match agent {
-            brigadier_registry::Agent::Claude => {
-                for alias in server.provenance().aliases {
-                    if !resolved.off.servers.contains(&alias) {
-                        resolved.off.servers.push(alias);
-                    }
+        if by_name {
+            for alias in server.provenance().aliases {
+                if !resolved.off.servers.contains(&alias) {
+                    resolved.off.servers.push(alias);
                 }
             }
-            brigadier_registry::Agent::Codex => {
-                let entry = (plugin.id.clone(), server.name.clone());
-                if !resolved.off.plugin_servers.contains(&entry) {
-                    resolved.off.plugin_servers.push(entry);
-                }
+        } else {
+            let entry = (plugin.id.clone(), server.name.clone());
+            if !resolved.off.plugin_servers.contains(&entry) {
+                resolved.off.plugin_servers.push(entry);
             }
         }
     }
@@ -281,13 +275,9 @@ pub fn apply_resolved(
             tracing::warn!(name = %skill.display, %error, "Skipping skill that couldn't be staged");
         }
     }
-    match provider {
-        brigadier_providers::ProviderKind::Claude => spec.add_dirs.push(overlay),
-        brigadier_providers::ProviderKind::Codex => {
-            brigadier_providers::accounts::link_to(&skills, &overlay.join("skills"), true)
-                .map_err(|error| Error::Invalid(error.to_string()))?;
-            spec.skill_plugins.push(overlay);
-        }
+    if let Some(adapter) = brigadier_providers::adapters::adapter(provider) {
+        (adapter.skills_overlay)(spec, overlay)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
     }
     Ok(())
 }
@@ -296,7 +286,7 @@ pub fn apply_resolved(
 mod overlay_tests {
     use super::*;
     use brigadier_providers::{Access, Origin, ProviderKind, SessionSpec, ToolSet};
-    use brigadier_registry::{Agent, Roots};
+    use brigadier_registry::Roots;
 
     pub(super) fn test_spec(cwd: &Path) -> SessionSpec {
         SessionSpec {
@@ -398,8 +388,8 @@ mod overlay_tests {
             .unwrap();
             let choices = Choices::load(&dir.join("data")).unwrap();
             for (agent, provider) in [
-                (Agent::Claude, ProviderKind::Claude),
-                (Agent::Codex, ProviderKind::Codex),
+                (ProviderKind::Claude, ProviderKind::Claude),
+                (ProviderKind::Codex, ProviderKind::Codex),
             ] {
                 for role in [Role::Thread, Role::Worker { grants: &[] }] {
                     let resolved = resolve::resolve(Context {
@@ -510,8 +500,8 @@ mod overlay_tests {
                     .collect(),
             );
             for (agent, provider) in [
-                (Agent::Codex, ProviderKind::Codex),
-                (Agent::Claude, ProviderKind::Claude),
+                (ProviderKind::Codex, ProviderKind::Codex),
+                (ProviderKind::Claude, ProviderKind::Claude),
             ] {
                 let mut resolved = resolve::resolve(Context {
                     agent,
@@ -577,7 +567,7 @@ mod overlay_tests {
             assert!(!session.join("overlay/.claude/skills/skills").exists());
             match provider {
                 ProviderKind::Claude => assert_eq!(spec.add_dirs.len(), 1),
-                ProviderKind::Codex => assert_eq!(spec.skill_plugins.len(), 1),
+                _ => assert_eq!(spec.skill_plugins.len(), 1),
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -610,10 +600,10 @@ mod overlay_tests {
             "---\nname: collision\n---\nPROJECT",
         );
         let rows = Catalog::read_rows(&roots, std::slice::from_ref(&project));
-        for agent in [Agent::Claude, Agent::Codex] {
+        for agent in [ProviderKind::Claude, ProviderKind::Codex] {
             let provider = match agent {
-                Agent::Claude => ProviderKind::Claude,
-                Agent::Codex => ProviderKind::Codex,
+                ProviderKind::Claude => ProviderKind::Claude,
+                _ => ProviderKind::Codex,
             };
             for alternate in [false, true] {
                 let mut effective = roots.clone();
@@ -641,7 +631,7 @@ mod overlay_tests {
                     ["db"]
                 );
                 assert_eq!(resolved.skills.len(), 1);
-                let invocation = if agent == Agent::Claude && !alternate {
+                let invocation = if agent == ProviderKind::Claude && !alternate {
                     "overlay:collision"
                 } else {
                     "collision"
@@ -659,7 +649,7 @@ mod overlay_tests {
                     "---\nname: collision\n---\nPROJECT"
                 );
                 assert!(!work.join(".mcp.json").exists());
-                if agent == Agent::Claude {
+                if agent == ProviderKind::Claude {
                     assert_eq!(spec.add_dirs, [session.join("overlay")]);
                 } else {
                     assert!(session.join("overlay/skills/collision/SKILL.md").is_file());
@@ -927,7 +917,8 @@ fn hydrate_library_definition(
 mod secret_tests {
     use super::*;
     use brigadier_cli::secrets::{Store, Values};
-    use brigadier_registry::{Agent, Roots};
+    use brigadier_providers::ProviderKind;
+    use brigadier_registry::Roots;
     use std::cell::RefCell;
 
     struct Memory {
@@ -1025,7 +1016,7 @@ mod secret_tests {
         let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
         assert_eq!(rows.len(), 1);
         assert!(fill_library_values(&mut rows, &dir, &Choices::default(), None, &store).is_empty());
-        for agent in [Agent::Claude, Agent::Codex] {
+        for agent in [ProviderKind::Claude, ProviderKind::Codex] {
             let resolved = resolve::resolve(Context {
                 agent,
                 account_home: &roots,
@@ -1049,7 +1040,7 @@ mod secret_tests {
         assert_eq!(warnings[0].server, "api");
         assert!(!warnings[0].message.contains("in-memory-only-token"));
         let resolved = resolve::resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &roots,
             project_root: None,
             cwd: &dir,

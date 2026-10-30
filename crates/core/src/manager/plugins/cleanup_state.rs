@@ -1,6 +1,6 @@
 //! The retired sharing format, read only by the one-time cleanup.
 use super::PluginKind;
-use brigadier_registry::Agent;
+use brigadier_providers::ProviderKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -94,14 +94,14 @@ pub(crate) struct Pending {
     choice: Option<Choice>,
     flags: Vec<Flag>,
     id: Option<String>,
-    before: Vec<(Agent, Placed)>,
-    wants: Vec<(Agent, Placed)>,
+    before: Vec<(ProviderKind, Placed)>,
+    wants: Vec<(ProviderKind, Placed)>,
     #[serde(default)]
     copies_done: bool,
     #[serde(default)]
-    observed: Vec<(Agent, Placed)>,
+    observed: Vec<(ProviderKind, Placed)>,
     #[serde(default)]
-    inflight: Option<Agent>,
+    inflight: Option<ProviderKind>,
     #[serde(default)]
     keep_safety: bool,
 }

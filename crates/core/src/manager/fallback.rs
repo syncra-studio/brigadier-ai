@@ -2,6 +2,7 @@
 //! try eligible accounts/providers under their routing restrictions; otherwise they wait.
 //! Provider observations and reset timers recheck those waits without a new user message.
 
+use brigadier_providers::KindFacts as _;
 use std::time::Duration;
 
 use brigadier_providers::{ErrorKind, LimitHit, LimitKind, ProviderError};

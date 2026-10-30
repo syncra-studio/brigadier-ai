@@ -195,7 +195,7 @@ impl SessionManager {
     /// Whether a thread on `provider` gets its output hook, which trims long `Bash` output:
     /// a Claude thread only (Codex doesn't run it).
     pub(crate) fn thread_hooked(&self, provider: ProviderKind) -> bool {
-        provider == ProviderKind::Claude
+        brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.output_hook)
     }
 
     /// The thread's instructions: the standing instructions, and what the user's settings add

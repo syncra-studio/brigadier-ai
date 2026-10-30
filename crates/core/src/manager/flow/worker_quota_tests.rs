@@ -5,7 +5,8 @@ use super::{Flow, Options, Reply};
 use crate::work::{
     OrchestratorStepKind, ProviderTransitionCause, QuotaRecoveryMode, Task, TaskState,
 };
-use brigadier_cli::protocol::{Agent, CliRequest};
+use brigadier_cli::protocol::CliRequest;
+use brigadier_providers::ProviderKind as Agent;
 use brigadier_providers::{LimitHit, LimitKind, ProviderKind};
 use std::sync::{Arc, Mutex};
 

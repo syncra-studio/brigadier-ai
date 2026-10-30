@@ -1,7 +1,6 @@
 import { type FormEvent, useState } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ArrowUpRight, ExclamationMarkCircle, Spinner } from "@/components/icons";
 import { Button, Input } from "@/components/controls";
 import { openUrl } from "@/ipc/client";
@@ -16,6 +15,7 @@ import {
   useConnectProgress,
 } from "@/state/connect";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
+import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * Connect's line for an agent while it installs or signs in (with Cancel), or why it failed
@@ -29,7 +29,7 @@ export function connectLine(
   progress: ReturnType<typeof useConnectProgress>,
   askError: string | undefined,
 ): { text: string; failed: boolean } | null {
-  const label = PROVIDER_LABELS[provider];
+  const label = cliFacts(provider).label;
   if (askError) return { text: askError, failed: true };
   switch (progress?.type) {
     case "installing":
@@ -86,12 +86,6 @@ export function ConnectStatus({
   );
 }
 
-/** Each vendor's own install guide, for installing the agent by hand. */
-const INSTALL_GUIDES: Record<ProviderKind, string> = {
-  claude: "https://code.claude.com/docs/en/setup",
-  codex: "https://github.com/openai/codex",
-};
-
 /**
  * Whether Connect couldn't install `provider` at all: on macOS or Linux, neither curl nor wget
  * is there to download its installer.
@@ -110,9 +104,9 @@ export function ConnectGuide({ provider, className }: { provider: ProviderKind; 
       <button
         type="button"
         className="text-link inline-flex items-center gap-0.5 hover:underline"
-        onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
+        onClick={() => openUrl(cliFacts(provider).installGuide).catch((cause: unknown) => console.error(cause))}
       >
-        {PROVIDER_LABELS[provider]}'s install guide
+        {cliFacts(provider).label}'s install guide
         <ArrowUpRight aria-hidden className="size-icon-xs" />
       </button>
     </p>
@@ -167,7 +161,7 @@ export function ConnectCode({ provider, className }: { provider: ProviderKind; c
       </p>
       <div className="flex min-w-0 items-center gap-2">
         <Input
-          aria-label={`Code for ${PROVIDER_LABELS[provider]}`}
+          aria-label={`Code for ${cliFacts(provider).label}`}
           placeholder="Paste the code from the page"
           {...PLAIN_FIELD}
           value={code}

@@ -114,7 +114,7 @@ impl SessionManager {
         if let Some(why) = owed {
             self.long_fallback(conv, cli, &why).await;
         }
-        if cli.provider != ProviderKind::Claude {
+        if !brigadier_compacts(cli.provider) {
             return;
         }
         let mut state = conv.state.lock().await;
@@ -151,11 +151,12 @@ impl SessionManager {
     pub(super) async fn long_compact(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) {
         let instructions = self
             .long_mode(conv, cli.provider)
-            .filter(|_| cli.provider == ProviderKind::Claude)
+            .filter(|_| brigadier_compacts(cli.provider))
             .and_then(|mode| mode.compact_instructions());
         self.set_run(&conv.id, RunState::Running, None).await;
-        // Claude keeps it as the user's message `/compact …`: Brigadier's, never a bubble (L12).
-        if cli.provider == ProviderKind::Claude {
+        // A CLI that runs commands from text (Claude) keeps it as the user's message
+        // `/compact …`: Brigadier's, never a bubble (L12).
+        if super::super::cli_commands::commands_as_text(cli.provider) {
             let words = match &instructions {
                 Some(instructions) => format!("/compact {instructions}"),
                 None => "/compact".to_owned(),
@@ -292,4 +293,11 @@ impl SessionManager {
         let busy = conv.state.lock().await.busy;
         self.seam_nudge(conv, Some(cli), used, busy).await;
     }
+}
+
+/// Whether Brigadier asks `provider` to compact at its point, with what the summary must keep
+/// (Claude); otherwise the CLI compacts by itself at the limit it was given.
+fn brigadier_compacts(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider)
+        .is_some_and(|adapter| adapter.brigadier_compacts)
 }

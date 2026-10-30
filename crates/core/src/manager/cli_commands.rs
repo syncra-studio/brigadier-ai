@@ -135,42 +135,39 @@ fn gateway_prompts(
     account: &AccountRef,
     resolved: &plugins::resolve::Resolved,
 ) -> Vec<CliCommand> {
-    if account.provider != ProviderKind::Claude {
+    if !mcp_prompts(account.provider) {
         return Vec::new();
     }
     // The caller already resolved this account's current project, trust and choices.
     // Reusing that snapshot prevents cached prompts from bypassing off/scope decisions.
-    gateway.cached_prompts(&resolved.servers)
+    let mut prompts = gateway.cached_prompts(&resolved.servers);
+    for prompt in &mut prompts {
+        prompt.agent_only = Some(account.provider);
+    }
+    prompts
+}
+
+/// Whether `provider`'s built-in commands and skills run when sent as message text.
+pub(super) fn commands_as_text(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.commands_as_text)
+}
+
+/// Whether `provider`'s `/` menu lists the MCP servers' prompts.
+fn mcp_prompts(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.mcp_prompts)
 }
 
 fn builtins(provider: ProviderKind) -> Vec<CliCommand> {
-    // Codex protocol: thread/compact/start (ThreadCompactStartParams). Review, rollback,
-    // logout, etc. have no composer execution mapping and must not be sent as model text.
-    let names: &[(&str, &str)] = match provider {
-        ProviderKind::Codex => &[("compact", "Compact this conversation")],
-        ProviderKind::Claude => &[
-            ("compact", "Compact this conversation"),
-            ("context", "Show context usage"),
-            ("cost", "Show session usage"),
-            ("help", "Show Claude Code help"),
-        ],
+    let Some(adapter) = brigadier_providers::adapters::adapter(provider) else {
+        return Vec::new();
     };
-    names
+    adapter
+        .builtin_commands
         .iter()
-        .map(|(name, description)| CliCommand {
+        .map(|(name, description, invocation)| CliCommand {
             kind: Some(CliCommandKind::Command),
-            source: Some(
-                match provider {
-                    ProviderKind::Claude => "Claude Code",
-                    ProviderKind::Codex => "Codex",
-                }
-                .into(),
-            ),
-            invocation: Some(if provider == ProviderKind::Codex {
-                "thread/compact/start".into()
-            } else {
-                name.to_string()
-            }),
+            source: Some(adapter.label.into()),
+            invocation: Some(invocation.to_string()),
             agent_only: Some(provider),
             name: name.to_string(),
             text: format!("/{name}"),
@@ -181,7 +178,7 @@ fn builtins(provider: ProviderKind) -> Vec<CliCommand> {
 }
 
 fn live_prompts(provider: ProviderKind, commands: Vec<CliCommand>) -> Vec<CliCommand> {
-    if provider != ProviderKind::Claude {
+    if !mcp_prompts(provider) {
         return Vec::new();
     }
     commands
@@ -207,7 +204,7 @@ fn live_prompts(provider: ProviderKind, commands: Vec<CliCommand>) -> Vec<CliCom
             command.text = format!("/{invocation}");
             command.invocation = Some(invocation);
             command.kind = Some(CliCommandKind::Prompt);
-            command.agent_only = Some(ProviderKind::Claude);
+            command.agent_only = Some(provider);
             Some(command)
         })
         .collect()
@@ -242,7 +239,7 @@ fn menu(
         .collect();
     commands.sort_by(|a, b| a.name.cmp(&b.name));
     commands.extend(builtins(provider));
-    if provider == ProviderKind::Claude {
+    if mcp_prompts(provider) {
         commands.extend(prompts);
     }
     commands
@@ -370,10 +367,14 @@ impl SessionManager {
             None => self.default_chat_choice().provider,
         };
         let provider = account.map_or(provider, |account| account.provider);
-        if provider == ProviderKind::Claude && selected.len() > 1 {
-            return Err(Error::Invalid(
-                "Claude accepts one skill per message; remove the extra skill chips".into(),
-            ));
+        if selected.len() > 1
+            && let Some(adapter) = brigadier_providers::adapters::adapter(provider)
+            && adapter.one_skill_per_message
+        {
+            return Err(Error::Invalid(format!(
+                "{} accepts one skill per message; remove the extra skill chips",
+                adapter.vendor
+            )));
         }
         let resolved = self.conversation_skills(id, account).await?;
         selected.into_iter().map(|row_id| {
@@ -386,8 +387,9 @@ impl SessionManager {
         }).collect()
     }
 
-    /// Claude adds the invocation before every frame at serialization; record the same words
-    /// and shift authored ranges so frame text never becomes the user's text in the thread.
+    /// A CLI that runs skills from message text (Claude) has the invocation added before every
+    /// frame at serialization; record the same words and shift authored ranges so frame text
+    /// never becomes the user's text in the thread.
     pub(super) fn note_skill_sent(
         &self,
         id: &ConversationId,
@@ -395,7 +397,7 @@ impl SessionManager {
         user: &[(usize, usize)],
         provider: ProviderKind,
     ) {
-        if provider == ProviderKind::Claude
+        if commands_as_text(provider)
             && let Some(invocation) = input.parts.iter().find_map(|part| match part {
                 brigadier_providers::InputPart::Skill { invocation, .. } => Some(invocation),
                 _ => None,
@@ -415,12 +417,12 @@ impl SessionManager {
         }
     }
 
-    pub(super) async fn remember_claude_prompts(
+    pub(super) async fn remember_mcp_prompts(
         &self,
         id: &ConversationId,
         cli: &super::conversation::Cli,
     ) {
-        if cli.provider != ProviderKind::Claude {
+        if !mcp_prompts(cli.provider) {
             return;
         }
         let project = match self.core.conversation(id).ok().and_then(|c| c.setup) {
@@ -504,7 +506,7 @@ impl SessionManager {
         let resolved = cli
             .as_ref()
             .map_or_else(|| current.clone(), |cli| cli.plugins.clone());
-        if account.provider == ProviderKind::Claude
+        if mcp_prompts(account.provider)
             && let Some(cli) = &cli
         {
             let commands = cli.session.commands().await;
@@ -624,7 +626,7 @@ mod tests {
             choices: &plugins::choices::Choices,
         ) -> Resolved {
             plugins::resolve::resolve(plugins::resolve::Context {
-                agent: brigadier_registry::Agent::Claude,
+                agent: brigadier_providers::ProviderKind::Claude,
                 account_home: &self.roots,
                 project_root: Some(project),
                 cwd: project,
@@ -738,7 +740,7 @@ mod tests {
 
     #[test]
     fn grouped_catalog_keeps_plain_names_and_exact_skill_identity_for_both_clis() {
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             let commands = menu(provider, &skills(), Vec::new());
             let hello = commands
                 .iter()
@@ -808,7 +810,7 @@ mod tests {
         use crate::model::{ConversationKind, Mention};
         use brigadier_providers::InputPart;
         use std::sync::Arc;
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             let flow = Flow::start(
                 "skill-chip-resolution",
                 Options {

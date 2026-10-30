@@ -128,7 +128,7 @@ fn worker_row() -> WorkerRow {
         id: "a1b2c3d4".into(),
         number: 2,
         title: "Add JSON output".into(),
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         model: Some("codex-model-1".into()),
         effort: Some("high".into()),
         state: WorkerState::Working,
@@ -211,7 +211,7 @@ fn sample(request: &CliRequest) -> CliReply {
             workers_at_once: 3,
             models: vec![],
             agents: vec![brigadier_cli::models::AgentAccounts {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 switch_accounts: true,
             }],
             switch_providers: false,
@@ -219,7 +219,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 brigadier_cli::models::Account {
                     id: "own".into(),
                     name: String::new(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                     current: true,
                     you: false,
                     logged_in: true,
@@ -232,7 +232,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 brigadier_cli::models::Account {
                     id: "acct-b".into(),
                     name: "Work".into(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                     current: false,
                     you: false,
                     logged_in: true,
@@ -300,7 +300,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: "a1b2c3d4".into(),
             title: "Add JSON output".into(),
             state: "working".into(),
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             model: None,
             effort: None,
             branch: None,
@@ -334,7 +334,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: "0000c0de".into(),
             title: "Strip-down".into(),
             state: "needs-you".into(),
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             model: Some("claude-opus-5-5".into()),
             effort: Some("high".into()),
             branch: Some("brigadier/0000c0de/session".into()),
@@ -415,7 +415,7 @@ fn sample(request: &CliRequest) -> CliReply {
             // `--reviewing` answers with whose work and on which CLI (harness D22).
             review: (!start.reviewing.is_empty()).then(|| StartReview {
                 of: start.reviewing.clone(),
-                authors: vec![Agent::Claude],
+                authors: vec![ProviderKind::Claude],
                 other_provider: true,
             }),
         }),
@@ -490,6 +490,13 @@ fn sample(request: &CliRequest) -> CliReply {
         CliRequest::ContinueOn { agent, after_turn } => {
             CliReply::ok(&brigadier_cli::protocol::ContinueOnOutput {
                 agent: *agent,
+                // The daemon names the CLI as its adapter does.
+                label: if agent.id() == "claude" {
+                    "Claude Code"
+                } else {
+                    agent.id()
+                }
+                .into(),
                 model: None,
                 effort: Some("high".into()),
                 when: if *after_turn {
@@ -629,14 +636,14 @@ fn sample(request: &CliRequest) -> CliReply {
                 session: (*line != 5).then(|| WhySession {
                     id: "a1b2c3d4".into(),
                     title: "Count".into(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                 }),
                 turn: (*line != 5).then_some(turn),
                 worker: (*line == 4).then(|| WhyWorker {
                     id: "e5f6a7b8".into(),
                     number: 1,
                     title: "Count the lines".into(),
-                    agent: Agent::Codex,
+                    agent: ProviderKind::Codex,
                     branch: Some("brigadier/count".into()),
                     task: Some("Count the lines in README.".into()),
                     reply: Some("Three.".into()),

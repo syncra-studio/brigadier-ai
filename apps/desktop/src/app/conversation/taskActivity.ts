@@ -1,4 +1,5 @@
 import type { DiffStat, Task } from "@/ipc/generated";
+import { CLIS } from "@/ipc/generated/clis";
 import { formatDuration } from "@/lib/format";
 
 const TERMINAL = new Set<Task["state"]>(["landed", "done", "rejected", "stopped", "failed"]);
@@ -23,7 +24,7 @@ export function taskWaitWords(task: Task): string | null {
   if (!hasTaskActivity(task)) return null;
   if (task.quotaWait) {
     const reason = task.quotaWait.reason;
-    const provider = /claude/i.test(reason) ? "Claude" : /codex/i.test(reason) ? "Codex" : null;
+    const provider = CLIS.find((cli) => reason.toLowerCase().includes(cli.id))?.vendor;
     return `Waiting for ${provider ? `${provider} ` : ""}quota: ${reason}`;
   }
   if (task.state === "takenOver") return "Working in your terminal";

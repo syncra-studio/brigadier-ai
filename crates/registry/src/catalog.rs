@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::{Agent, Catalog, Server, SkillRoot, Source, Transport};
+use crate::{Catalog, ProviderKind, Server, SkillRoot, Source, Transport};
 
 /// Client labels used by Pencil's CLI integrations do not change the server process.
 /// Keep every other argument, including unrecognized --agent values, in its identity.
@@ -32,7 +32,7 @@ pub enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     /// None for import offers from Desktop and Cursor.
-    pub agent: Option<Agent>,
+    pub agent: Option<ProviderKind>,
     pub file: PathBuf,
     pub plugin: Option<String>,
     pub project: Option<PathBuf>,
@@ -46,7 +46,7 @@ impl Provenance {
     /// Provider plugins and account-synced skills remain under their CLI's control,
     /// including old saved choices.
     pub fn provider_supplied(&self) -> bool {
-        (self.agent == Some(Agent::Claude)
+        (self.agent == Some(ProviderKind::Claude)
             && self.plugin.is_none()
             && self.native.starts_with("synced-skill:"))
             || self
@@ -136,12 +136,14 @@ impl Server {
             Source::ClaudeUser
             | Source::ClaudeLocal
             | Source::ClaudeProject
-            | Source::ClaudePlugin => Some(Agent::Claude),
-            Source::CodexUser | Source::CodexProject | Source::CodexPlugin => Some(Agent::Codex),
+            | Source::ClaudePlugin => Some(ProviderKind::Claude),
+            Source::CodexUser | Source::CodexProject | Source::CodexPlugin => {
+                Some(ProviderKind::Codex)
+            }
             _ => None,
         };
         let native = match &self.plugin {
-            Some(plugin) if plugin.agent == Agent::Claude => {
+            Some(plugin) if plugin.agent == ProviderKind::Claude => {
                 format!("plugin:{}:{}", plugin.name, self.name)
             }
             _ => self.name.clone(),
@@ -322,19 +324,21 @@ impl Catalog {
                         continue;
                     }
                     let (agent, project, plugin, native) = match root {
-                        SkillRoot::ClaudeUser => (Agent::Claude, None, None, skill.name.clone()),
+                        SkillRoot::ClaudeUser => {
+                            (ProviderKind::Claude, None, None, skill.name.clone())
+                        }
                         SkillRoot::ClaudeSynced(_) => continue,
                         SkillRoot::AgentsUser | SkillRoot::CodexUser => {
-                            (Agent::Codex, None, None, skill.name.clone())
+                            (ProviderKind::Codex, None, None, skill.name.clone())
                         }
                         SkillRoot::ClaudeProject(project) => (
-                            Agent::Claude,
+                            ProviderKind::Claude,
                             Some(project.clone()),
                             None,
                             skill.name.clone(),
                         ),
                         SkillRoot::AgentsProject(project) => (
-                            Agent::Codex,
+                            ProviderKind::Codex,
                             Some(project.clone()),
                             None,
                             skill.name.clone(),
@@ -530,7 +534,7 @@ pub fn library(data_dir: &Path) -> Catalog {
                 continue;
             }
             let plugin = crate::Plugin {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 id: entry.id(),
                 name: entry.name,
                 root: entry.dir,
@@ -624,7 +628,7 @@ mod regression_tests {
         };
         let mut mirror = original.as_ref().clone();
         mirror.plugin = Some(crate::Plugin {
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             id: "pencil@brigadier".into(),
             name: "pencil".into(),
             root: home.join("cache"),

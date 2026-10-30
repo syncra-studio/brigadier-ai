@@ -458,7 +458,6 @@ export type { TrackedPullRequest } from "./TrackedPullRequest";
 export type { TrackedWork } from "./TrackedWork";
 export type { TrialState } from "./TrialState";
 export type { TrustBefore } from "./TrustBefore";
-export type { TrustCli } from "./TrustCli";
 export type { TurnEnd } from "./TurnEnd";
 export type { TurnRevert } from "./TurnRevert";
 export type { TurnStatus } from "./TurnStatus";

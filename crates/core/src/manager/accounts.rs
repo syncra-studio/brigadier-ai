@@ -32,8 +32,11 @@ impl SessionManager {
                 "the account's folder couldn't be set up".into(),
             ));
         }
-        // The folders the user trusts are trusted on the new account too.
-        if provider == ProviderKind::Claude {
+        // The folders the user trusts are trusted on the new account too, where it keeps its
+        // own trust.
+        if brigadier_providers::trust::account_file(provider, &self.runtime.account_home(&entry.id))
+            .is_some()
+        {
             self.reconcile_trust().await;
         }
         Ok(entry)

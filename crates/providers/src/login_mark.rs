@@ -36,32 +36,17 @@ enum Source {
 impl LoginMark {
     /// Where the agent run with `env` keeps its login; `None` when that can't be watched.
     pub fn of(kind: ProviderKind, env: &CliEnv) -> Option<Self> {
-        let set = |name: &str| env.var(name).filter(|value| !value.is_empty());
-        match kind {
-            ProviderKind::Claude => {
-                let config = match set("CLAUDE_CONFIG_DIR") {
-                    Some(dir) => PathBuf::from(dir),
-                    None => env.home()?.join(".claude"),
-                };
-                let mut sources = Vec::new();
-                if cfg!(target_os = "macos") {
-                    sources.push(Source::Keychain {
-                        service: claude_keychain_service(env, &config)?,
-                        account: claude_keychain_account(env.var("USER")),
-                    });
-                }
-                sources.push(Source::File(config.join(".credentials.json")));
-                Some(Self { sources })
-            }
-            ProviderKind::Codex => {
-                let home = match set("CODEX_HOME") {
-                    Some(dir) => PathBuf::from(dir),
-                    None => env.home()?.join(".codex"),
-                };
-                let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
-                codex_stores_in_file(&config).then(|| Self::file(home.join("auth.json")))
-            }
-        }
+        (crate::adapters::adapter(kind)?.login_mark)(env)
+    }
+
+    /// Watches a Keychain item (macOS; elsewhere none is read), then a file.
+    pub(crate) fn keychain_and_file(keychain: Option<(String, String)>, file: PathBuf) -> Self {
+        let mut sources: Vec<_> = keychain
+            .map(|(service, account)| Source::Keychain { service, account })
+            .into_iter()
+            .collect();
+        sources.push(Source::File(file));
+        Self { sources }
     }
 
     /// Watches one file (a test's stand-in for where an agent keeps its login).

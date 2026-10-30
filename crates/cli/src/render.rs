@@ -323,7 +323,7 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
             worker.id.clone(),
             worker.number.to_string(),
             worker.state.word().into(),
-            worker.agent.word().into(),
+            worker.agent.id().into(),
             model,
             changes(worker.changes),
             git_cell(worker.git.as_ref()),
@@ -381,7 +381,7 @@ pub fn show(output: &ShowOutput) -> String {
     if let Some(number) = output.number {
         rows.push(vec!["number".into(), number.to_string()]);
     }
-    rows.push(vec!["agent".into(), output.agent.word().into()]);
+    rows.push(vec!["agent".into(), output.agent.id().into()]);
     rows.push(vec![
         "model".into(),
         output.model.clone().unwrap_or_else(|| "default".into()),
@@ -520,13 +520,13 @@ pub fn start(output: &StartOutput) -> String {
         format!("{whose} \"{}\" picked {picked}.\n", row.work)
     });
     let review = output.review.as_ref().map_or(String::new(), |review| {
-        let authors: Vec<&str> = review.authors.iter().map(|agent| agent.word()).collect();
+        let authors: Vec<&str> = review.authors.iter().map(|agent| agent.id()).collect();
         let on = if review.other_provider {
-            format!("on {}, another CLI", worker.agent.word())
+            format!("on {}, another CLI", worker.agent.id())
         } else {
             format!(
                 "no other CLI is ready and allowed, so a fresh {} session",
-                worker.agent.word()
+                worker.agent.id()
             )
         };
         format!(
@@ -540,7 +540,7 @@ pub fn start(output: &StartOutput) -> String {
          running in the background: it returns with its events and wakes you.\n",
         worker.id,
         worker.number,
-        worker.agent.word(),
+        worker.agent.id(),
         worker.model.as_deref().unwrap_or("default model"),
         worker
             .effort
@@ -614,10 +614,7 @@ pub fn wait(output: &WaitOutput) -> String {
 
 pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
     use crate::protocol::ContinueWhen;
-    let agent = match output.agent {
-        crate::protocol::Agent::Claude => "Claude Code",
-        crate::protocol::Agent::Codex => "Codex",
-    };
+    let agent = &output.label;
     let on = match (&output.model, &output.effort) {
         (Some(model), Some(effort)) => format!(" ({model}, {effort})"),
         (Some(model), None) => format!(" ({model})"),
@@ -806,7 +803,7 @@ pub fn why(output: &WhyOutput) -> String {
             "session {} \"{}\" ({})",
             session.id,
             session.title,
-            session.agent.word()
+            session.agent.id()
         )
     });
     let turn_line = |turn: &crate::protocol::WhyTurn| {
@@ -828,7 +825,7 @@ pub fn why(output: &WhyOutput) -> String {
                     "Written by worker {} \"{}\" ({})",
                     worker.id,
                     worker.title,
-                    worker.agent.word()
+                    worker.agent.id()
                 ));
                 if let Some(session) = &session {
                     out.push_str(&format!(" of {session}"));
@@ -975,10 +972,8 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             output.workers_at_once
         ),
     ];
-    for agent in [
-        crate::protocol::Agent::Claude,
-        crate::protocol::Agent::Codex,
-    ] {
+    // Every CLI the daemon drives has its account-switch entry, in its order.
+    for agent in output.agents.iter().map(|a| a.agent) {
         let models: Vec<_> = output
             .models
             .iter()
@@ -994,7 +989,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .collect();
         lines.push(format!(
             "{}: {}",
-            agent.word(),
+            agent.id(),
             if models.is_empty() {
                 "not reported".into()
             } else {
@@ -1009,7 +1004,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .map(|a| {
                 format!(
                     "{} {}",
-                    a.agent.word(),
+                    a.agent.id(),
                     if a.switch_accounts {
                         "automatic"
                     } else {
@@ -1058,7 +1053,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .count();
         lines.push(format!(
             "{} / {}{}{}: {} · {} · {}{}",
-            account.agent.word(),
+            account.agent.id(),
             if account.name.is_empty() {
                 &account.id
             } else {
@@ -1085,7 +1080,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
         lines.push(format!(
             "{}: {} / {} / {} — {} ({})",
             g.work,
-            g.agent.word(),
+            g.agent.id(),
             g.model,
             g.effort.as_deref().unwrap_or("default"),
             g.reason,
@@ -1110,7 +1105,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
 mod tests {
     use super::*;
     use crate::models::{Account, ModelsOutput, Usage};
-    use crate::protocol::Agent;
+    use crate::protocol::ProviderKind;
 
     #[test]
     fn why_names_the_turn_its_message_reply_and_ledger() {
@@ -1123,7 +1118,7 @@ mod tests {
             session: Some(WhySession {
                 id: "a1b2c3d4".into(),
                 title: "Parser".into(),
-                agent: crate::protocol::Agent::Claude,
+                agent: crate::protocol::ProviderKind::Claude,
             }),
             turn: Some(WhyTurn {
                 number: 2,
@@ -1176,7 +1171,7 @@ mod tests {
             accounts: vec![Account {
                 id: "own".into(),
                 name: "own".into(),
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 current: true,
                 you: true,
                 logged_in: true,

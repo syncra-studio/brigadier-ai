@@ -7,8 +7,8 @@ use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Vis
 use serde_json::{Map, Value};
 
 use crate::{
-    Agent, AsWritten, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
-    plugins, server_id,
+    AsWritten, OAuthClient, Plugin, Problem, ProviderKind, Roots, Secret, Server, Source,
+    Transport, plugins, server_id,
 };
 
 /// Whether `text` names a variable: `${…}`.
@@ -699,15 +699,16 @@ pub(crate) fn plugin(
         return Vec::new();
     };
     let (source, start) = match plugin.agent {
-        Agent::Claude => (Source::ClaudePlugin, problems.len()),
-        Agent::Codex => (Source::CodexPlugin, problems.len()),
+        ProviderKind::Claude => (Source::ClaudePlugin, problems.len()),
+        ProviderKind::Codex => (Source::CodexPlugin, problems.len()),
+        _ => return Vec::new(),
     };
     let mut servers = match (own, plugin.agent) {
         (None, _) => {
             problems.push(file_problem(&file, source, None, None));
             Vec::new()
         }
-        (Some(Value::Object(own)), Agent::Claude) => json_servers(
+        (Some(Value::Object(own)), ProviderKind::Claude) => json_servers(
             &own,
             &Origin {
                 source,
@@ -721,7 +722,7 @@ pub(crate) fn plugin(
             roots,
             problems,
         ),
-        (Some(own @ Value::Object(_)), Agent::Codex) => {
+        (Some(own @ Value::Object(_)), ProviderKind::Codex) => {
             match serde_json::from_value::<toml::Table>(serde_json::json!({ "mcp_servers": own })) {
                 Ok(config) => {
                     let off = plugins::codex_servers_off(codex, &plugin.id);

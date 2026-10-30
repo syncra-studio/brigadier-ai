@@ -6,6 +6,7 @@
 //! once on the other CLI, on the model the user's rules allow (D25). A model or account change
 //! within one CLI is no move: it still continues the same session (D14).
 
+use brigadier_providers::KindFacts as _;
 use std::sync::Arc;
 
 use brigadier_providers::ProviderKind;
@@ -218,8 +219,5 @@ impl SessionManager {
 
 /// How `brigadier continue-on` names a CLI.
 pub(crate) fn cli_word(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Claude => "claude",
-        ProviderKind::Codex => "codex",
-    }
+    provider.id()
 }

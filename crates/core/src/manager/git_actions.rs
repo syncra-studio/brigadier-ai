@@ -9,6 +9,7 @@
 //! works in the project folder will work. One that will make its own copy shows it read-only;
 //! the window keeps to that, as only it knows how the session will be set up.
 
+use brigadier_providers::KindFacts as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -508,8 +509,7 @@ impl SessionManager {
         {
             return Ok((chosen.clone(), account, None));
         }
-        let ready = ProviderKind::ALL
-            .into_iter()
+        let ready = brigadier_providers::adapters::kinds()
             .filter(|provider| self.provider_ready(*provider));
         for (provider, (model, effort)) in ready.flat_map(|provider| {
             self.writer_models(provider)
@@ -716,10 +716,12 @@ impl SessionManager {
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts:
     /// see [`chore_model`]. When its list has none, the chore isn't done.
     pub(super) fn cheapest(&self, provider: ProviderKind) -> Result<(String, Option<String>)> {
-        let family = match provider {
-            ProviderKind::Claude => "haiku",
-            ProviderKind::Codex => "luna",
+        let Some(adapter) = brigadier_providers::adapters::adapter(provider) else {
+            return Err(Error::Invalid(format!(
+                "{provider} is not a CLI Brigadier drives"
+            )));
         };
+        let family = adapter.chore_family;
         let settings = self.core.settings();
         let available =
             |id: &str| crate::routing::availability::model_available(&settings, provider, id);
@@ -747,7 +749,7 @@ impl SessionManager {
                 provider.label()
             ))
         })?;
-        let effort = (provider == ProviderKind::Codex).then(|| "low".to_owned());
+        let effort = adapter.chore_effort.map(str::to_owned);
         Ok((model, effort))
     }
 }
@@ -965,10 +967,7 @@ mod tests {
     fn chore(provider: ProviderKind, listed: &[ModelInfo], hidden: &[&str]) -> Option<String> {
         let registry = brigadier_router::Registry::bundled();
         let merged = brigadier_router::merge(&registry, &[(provider, listed)], &[], &[]);
-        let family = match provider {
-            ProviderKind::Claude => "haiku",
-            ProviderKind::Codex => "luna",
-        };
+        let family = brigadier_providers::adapters::adapter(provider)?.chore_family;
         chore_model(listed, &merged, family, |id| !hidden.contains(&id))
     }
 

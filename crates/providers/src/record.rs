@@ -301,7 +301,10 @@ impl DeltaStreams {
     /// Redacts a delta line through its stream, or ends the streams `line` closes, returning
     /// lines with their held tails to record before it.
     fn apply(&mut self, line: &mut Value) -> Vec<Value> {
-        if let Some((key, item, pointer)) = delta_location(self.provider, line) {
+        let Some(adapter) = crate::adapters::adapter(self.provider) else {
+            return Vec::new();
+        };
+        if let Some((key, item, pointer)) = (adapter.delta_location)(line) {
             let held = self.streams.entry(key).or_insert_with(|| HeldDelta {
                 item,
                 pointer,
@@ -315,7 +318,7 @@ impl DeltaStreams {
             held.last = line.clone();
             return Vec::new();
         }
-        let Some(ended) = stream_end(self.provider, line) else {
+        let Some(ended) = (adapter.stream_end)(line) else {
             return Vec::new();
         };
         let keys: Vec<String> = self
@@ -338,83 +341,6 @@ impl DeltaStreams {
         }
         rows
     }
-}
-
-/// For a streamed delta line: its stream key, its item and where its text is.
-fn delta_location(provider: ProviderKind, line: &Value) -> Option<(String, String, &'static str)> {
-    match provider {
-        ProviderKind::Codex => {
-            let method = line.get("method")?.as_str()?;
-            let params = line.get("params")?;
-            params.get("delta")?.as_str()?;
-            let item = params.get("itemId")?.as_str()?;
-            if !method.starts_with("item/") {
-                return None;
-            }
-            let part = ["summaryIndex", "contentIndex"]
-                .iter()
-                .filter_map(|key| params.get(key))
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-                .join(":");
-            Some((
-                format!("{method}|{item}|{part}"),
-                item.to_owned(),
-                "/params/delta",
-            ))
-        }
-        ProviderKind::Claude => {
-            if line.get("type")?.as_str()? != "stream_event" {
-                return None;
-            }
-            let event = line.get("event")?;
-            if event.get("type")?.as_str()? != "content_block_delta" {
-                return None;
-            }
-            let pointer = match event.pointer("/delta/type")?.as_str()? {
-                "text_delta" => "/event/delta/text",
-                "thinking_delta" => "/event/delta/thinking",
-                "input_json_delta" => "/event/delta/partial_json",
-                _ => return None,
-            };
-            let item = claude_block(line, event);
-            Some((format!("{item}|{pointer}"), item, pointer))
-        }
-    }
-}
-
-/// The streams a line ends: `Some(item)` for one item's, `None` for all of them.
-fn stream_end(provider: ProviderKind, line: &Value) -> Option<Option<String>> {
-    match provider {
-        ProviderKind::Codex => match line.get("method")?.as_str()? {
-            "item/completed" => Some(Some(line.pointer("/params/item/id")?.as_str()?.to_owned())),
-            "turn/completed" => Some(None),
-            _ => None,
-        },
-        ProviderKind::Claude => match line.get("type")?.as_str()? {
-            "stream_event" => {
-                let event = line.get("event")?;
-                match event.get("type")?.as_str()? {
-                    "content_block_stop" => Some(Some(claude_block(line, event))),
-                    "message_stop" => Some(None),
-                    _ => None,
-                }
-            }
-            "result" => Some(None),
-            _ => None,
-        },
-    }
-}
-
-/// A Claude content block: its index within the (sub-agent's) message.
-fn claude_block(line: &Value, event: &Value) -> String {
-    format!(
-        "{}:{}",
-        line.get("parent_tool_use_id")
-            .and_then(Value::as_str)
-            .unwrap_or("main"),
-        event.get("index").and_then(Value::as_u64).unwrap_or(0)
-    )
 }
 
 /// Empties a Codex `config/read` result: it is the user's whole configuration (projects, MCP

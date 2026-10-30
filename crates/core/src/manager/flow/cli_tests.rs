@@ -3,11 +3,12 @@
 //! calling session's own workers, and a grant that isn't the named session's is refused. Each
 //! answer fits its command's checked-in `--json` schema.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::{
-    Agent, Answer, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission, SESSION_ENV,
+    Answer, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission, SESSION_ENV,
     StartRequest,
 };
 use brigadier_providers::ProviderKind;
@@ -2310,7 +2311,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                     (
                         "agent flag",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            agent: Some(Agent::Claude),
                             ..by("Review")
                         },
                     ),
@@ -2326,14 +2327,14 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                     (
                         "agent's row",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Codex),
+                            agent: Some(Agent::Codex),
                             ..by("Docs")
                         },
                     ),
                     (
                         "work rule",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            agent: Some(Agent::Claude),
                             model: Some("claude-sonnet-5-5".into()),
                             ..by("Docs")
                         },
@@ -2978,7 +2979,10 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         .filter(|artifact| {
             matches!(
                 artifact,
-                brigadier_providers::Artifact::ClaudeSession { .. }
+                brigadier_providers::Artifact::Session {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    ..
+                }
             )
         })
         .count();

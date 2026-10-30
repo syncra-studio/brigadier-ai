@@ -6,6 +6,7 @@ import { hostOf, useUsedSources } from "@/app/conversation/PinnedSummary";
 import { McpServerPanel } from "@/components/conversation";
 import type { FileEntry } from "@/ipc/generated";
 import { Globe, Search } from "@/components/icons";
+import { PROVIDERS } from "@/lib/providerKinds";
 import { mcpServerGroups } from "@/state/mcpServers";
 import { toast } from "@/state/toasts";
 import { useCliThread, useSessionMcp, useWorkerRows } from "@/state/cliThread";
@@ -28,7 +29,7 @@ export function SourcesTab({ conversationId }: { conversationId: string }) {
   const rows = useWorkerRows(conversationId);
   const provider = useApp((s) => {
     const setup = s.conversations[conversationId]?.setup;
-    return setup?.type === "session" ? setup.orchestrator.provider : setup?.type === "chat" ? setup.model.provider : "claude";
+    return setup?.type === "session" ? setup.orchestrator.provider : setup?.type === "chat" ? setup.model.provider : PROVIDERS[0]!;
   });
   const mcp = useMemo(() => mcpServerGroups(lead, provider, rows, (row) => rowName(rows, row.id)), [lead, provider, rows]);
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);

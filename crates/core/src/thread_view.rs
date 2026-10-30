@@ -510,7 +510,8 @@ fn file_stamp(kind: ProviderKind, path: &Path) -> Option<FileStamp> {
     // The session's own file must be there; a subagent's that went or can't be read is left
     // out, not the whole thread.
     let mut stamps = vec![stamp(path.to_owned())?];
-    if kind == ProviderKind::Claude
+    if brigadier_providers::adapters::adapter(kind)
+        .is_some_and(|adapter| adapter.subagent_transcripts)
         && let Ok(children) = std::fs::read_dir(path.with_extension("").join("subagents"))
     {
         let mut children: Vec<PathBuf> = children

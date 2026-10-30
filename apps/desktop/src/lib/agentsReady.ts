@@ -6,12 +6,12 @@
  * `AGENTS_WAIT_MS` once the app has drawn underneath; after that the app's own "checking"
  * states take over.
  */
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import type { ProviderOverview, Settings } from "@/ipc/generated";
 import { setSplashStatus } from "@/lib/splash";
 import { loadProviders } from "@/state/actions";
 import { modelAvailable, providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The longest the startup screen waits for the agent CLIs. */
 const AGENTS_WAIT_MS = 3_000;
@@ -44,7 +44,7 @@ export function agentReady(overview: ProviderOverview, settings: AgentChoices): 
 
 /** "Starting Claude Code…", "Starting Claude Code and Codex…". */
 function waitingFor(pending: readonly ProviderOverview[]): string {
-  const names = pending.map((overview) => PROVIDER_LABELS[overview.provider]);
+  const names = pending.map((overview) => cliFacts(overview.provider).label);
   const last = names.pop();
   return `Starting ${names.length > 0 ? `${names.join(", ")} and ${last}` : last}…`;
 }

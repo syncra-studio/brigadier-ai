@@ -126,7 +126,7 @@ impl SessionManager {
         ) {
             if library_only {
                 return Ok(CatalogSignIn::CliSetupRequired {
-                    agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                    agents: brigadier_providers::adapters::kinds().collect(),
                 });
             }
             self.mcp_logins.enable_account_spread(self.runtime.clone());
@@ -151,7 +151,7 @@ impl SessionManager {
             return Ok(self.cache_plugin_sign_in(
                 row_id,
                 CatalogSignIn::CliSetupRequired {
-                    agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                    agents: brigadier_providers::adapters::kinds().collect(),
                 },
             ));
         }

@@ -134,11 +134,7 @@ impl SessionManager {
         let held: HashSet<String> = owners
             .iter()
             .flat_map(|(_, artifacts, _)| artifacts)
-            .filter_map(|artifact| match artifact {
-                Artifact::ClaudeSession { session_id, .. } => Some(session_id.clone()),
-                Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
-                _ => None,
-            })
+            .filter_map(|artifact| Some(artifact.native_session()?.1.to_owned()))
             .collect();
         // Each repository is read once, for all of them.
         let mut wanted: Vec<Wanted> = Vec::new();
@@ -156,14 +152,14 @@ impl SessionManager {
                 natives
                     .iter()
                     .filter(|(_, session)| {
-                        session.kind == brigadier_providers::ProviderKind::Claude
-                            && session
-                                .cwd
-                                .as_ref()
-                                .is_some_and(|cwd| Path::new(cwd).starts_with(&folder))
+                        session
+                            .cwd
+                            .as_ref()
+                            .is_some_and(|cwd| Path::new(cwd).starts_with(&folder))
                     })
-                    .map(|(native, session)| Artifact::ClaudeSession {
-                        session_id: native.clone(),
+                    .map(|(native, session)| Artifact::Session {
+                        provider: session.kind,
+                        id: native.clone(),
                         home: None,
                         cwd: session.cwd.clone(),
                     }),
@@ -254,40 +250,37 @@ impl SessionManager {
                 {
                     continue;
                 }
-                let artifact = match session.kind {
-                    brigadier_providers::ProviderKind::Claude => Artifact::ClaudeSession {
-                        session_id: native.clone(),
-                        home: None,
-                        cwd: session.cwd.clone(),
-                    },
-                    brigadier_providers::ProviderKind::Codex => Artifact::CodexThread {
-                        thread_id: native.clone(),
-                        home: None,
-                        cwd: session.cwd.clone(),
-                    },
+                let artifact = Artifact::Session {
+                    provider: session.kind,
+                    id: native.clone(),
+                    home: None,
+                    cwd: session.cwd.clone(),
                 };
                 if let Err(err) = ledger.record(&owner, artifact).await {
                     sweep.failures.push(err.to_string());
                 }
             }
-            // Its temp folders, those this data folder made.
-            for temp in &temps {
-                let ours = temp.file_name().is_some_and(|name| {
-                    name.to_string_lossy()
-                        .starts_with(&format!("brigadier-{short}-"))
-                }) && brigadier_sandbox::removal::read_owner_marker(temp).as_deref()
-                    == Some(marker.as_str());
-                if ours
-                    && let Err(err) = ledger
-                        .record(
-                            &owner,
-                            Artifact::ClaudeTempDir {
-                                path: temp.display().to_string(),
-                            },
-                        )
-                        .await
-                {
-                    sweep.failures.push(err.to_string());
+            // Its temp folders, those this data folder made, as the CLI that makes them records
+            // them.
+            if let Some((provider, kind)) = brigadier_providers::adapters::ADAPTERS
+                .iter()
+                .find_map(|adapter| Some((adapter.kind, adapter.temp_dir?)))
+            {
+                for temp in &temps {
+                    let ours = temp.file_name().is_some_and(|name| {
+                        name.to_string_lossy()
+                            .starts_with(&format!("brigadier-{short}-"))
+                    }) && brigadier_sandbox::removal::read_owner_marker(temp).as_deref()
+                        == Some(marker.as_str());
+                    let artifact = Artifact::CliFile {
+                        provider,
+                        kind: kind.to_owned(),
+                        path: temp.display().to_string(),
+                        identities: Vec::new(),
+                    };
+                    if ours && let Err(err) = ledger.record(&owner, artifact).await {
+                        sweep.failures.push(err.to_string());
+                    }
                 }
             }
             let left = ledger.dispose(&owner).await;

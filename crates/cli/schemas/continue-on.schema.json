@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "agent",
+    "label",
     "model",
     "effort",
     "when"
@@ -11,10 +12,12 @@
   "additionalProperties": false,
   "properties": {
     "agent": {
-      "enum": [
-        "claude",
-        "codex"
-      ]
+      "type": "string",
+      "description": "The CLI's id."
+    },
+    "label": {
+      "type": "string",
+      "description": "The CLI's name, as shown."
     },
     "model": {
       "type": [

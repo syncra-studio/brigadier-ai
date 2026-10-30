@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { AgentCard } from "@/app/setup/onboarding/AgentCard";
 import { StepFooter, StepHeader } from "@/app/setup/onboarding/parts";
 import { type AgentState, agentState, checkAgents } from "@/app/setup/onboarding/SetupTerminal";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { useApp } from "@/state/store";
+import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
 
-// TODO(onboarding): more agents (Gemini CLI, OpenCode, Grok in the design) need detection and
-// sign-in in the daemon first; ProviderKind holds only these two.
-const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
 
 /** The note under the cards. */
 const MORE_LATER = "You can connect more accounts anytime in Settings.";
@@ -74,7 +71,7 @@ export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onConti
     ? `Looking for the agents on this ${mac ? "Mac" : "computer"}…`
     : ready.length === 0
       ? "Connect at least one agent to continue."
-      : `${listNames(ready.map((agent) => PROVIDER_LABELS[agent.provider]))} ${ready.length === 1 ? "is" : "are"} ready.${ready.length < agents.length ? " Connect any others you use, or start right away." : ""}`;
+      : `${listNames(ready.map((agent) => cliFacts(agent.provider).label))} ${ready.length === 1 ? "is" : "are"} ready.${ready.length < agents.length ? " Connect any others you use, or start right away." : ""}`;
 
   return (
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">

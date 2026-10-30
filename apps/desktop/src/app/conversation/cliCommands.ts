@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { ComposerCommand } from "@/components/conversation";
 import type { CliCommand, Conversation, Mention, ProviderKind } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 
 export type CliTarget =
   | { conversation: Conversation }
@@ -31,7 +32,7 @@ export function hasSkillToken(text: string, label: string): boolean {
   return skillTokenStarts(text, label).length > 0;
 }
 
-/** A recalled Codex message may have several chips; Claude keeps its first skill. */
+/** A recalled message may have several skill chips; a CLI that runs one skill per message keeps its first. */
 export function limitClaudeSkills(text: string, known: Iterable<Mention>): string {
   const labels = new Set(Array.from(known).flatMap((mention) => mention.type === "skill" ? [skillLabel(mention.rowId)] : []));
   const spans = Array.from(labels).flatMap((label) => skillTokenStarts(text, label).map((at) => ({ at, length: label.length }))).toSorted((a, b) => a.at - b.at);
@@ -40,10 +41,10 @@ export function limitClaudeSkills(text: string, known: Iterable<Mention>): strin
 }
 
 export function canPickSkill(provider: ProviderKind | null, text: string, known: Iterable<Mention>): boolean {
-  return provider !== "claude" || !Array.from(known).some((mention) => mention.type === "skill" && hasSkillToken(text, skillLabel(mention.rowId)));
+  return provider === null || !cliFacts(provider).oneSkillPerMessage || !Array.from(known).some((mention) => mention.type === "skill" && hasSkillToken(text, skillLabel(mention.rowId)));
 }
 
-/** Fixed group order is shared by both CLIs. Skill source is the resolver's row id. */
+/** Fixed group order is shared by every CLI. Skill source is the resolver's row id. */
 export function cliMenuCommands(
   listed: readonly CliCommand[],
   own: readonly ComposerCommand[],
@@ -64,12 +65,13 @@ export function cliMenuCommands(
         ...(kind === "skill" && command.text === "" ? { disabled: true } : {}),
         ...(description ? { description } : {}),
         group: kind === "skill" ? "Skills" : kind === "prompt" ? "MCP prompts" : kind === "action" ? "Brigadier actions" : `${cli.name ?? "CLI"} commands`,
-        ...(command.agentOnly ? { trailing: command.agentOnly === "claude" ? "Claude Code" : "Codex" } : {}),
+        ...(command.agentOnly ? { trailing: cliFacts(command.agentOnly).label } : {}),
         icon: cli.icon,
         ...(kind === "skill" && command.source
           ? { chip: { id: `skill:${command.source}`, type: "skill", label: skillLabel(command.source) } }
-          : cli.name === "Codex" && command.kind === "command"
-            ? { run: () => cli.runCommand?.(command.invocation ?? "") }
+          // `runCommand` comes only from a CLI whose commands aren't message text.
+          : cli.runCommand && command.kind === "command"
+            ? { run: () => cli.runCommand!(command.invocation ?? "") }
             : { text: command.text }),
       };
     });

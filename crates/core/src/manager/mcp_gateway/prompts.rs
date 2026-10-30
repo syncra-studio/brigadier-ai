@@ -1,7 +1,7 @@
 //! Optional draft-menu enrichment. Reads return immediately; HTTP discovery is isolated
 //! from CLI sessions, shares the gateway's refresh authority, and never initiates OAuth.
 use super::McpGatewayService;
-use brigadier_providers::{CliCommand, CliCommandKind, McpServer, ProviderKind};
+use brigadier_providers::{CliCommand, CliCommandKind, McpServer};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -153,7 +153,8 @@ impl McpGatewayService {
                     invocation: Some(invocation),
                     source: Some(server.name.clone()),
                     kind: Some(CliCommandKind::Prompt),
-                    agent_only: Some(ProviderKind::Claude),
+                    // The caller's CLI, whose menu lists MCP prompts.
+                    agent_only: None,
                     description: prompt.description,
                     argument_hint: (!argument_hint.is_empty()).then_some(argument_hint),
                 });

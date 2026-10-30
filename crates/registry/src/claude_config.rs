@@ -27,7 +27,7 @@ const RACES: usize = 20;
 
 /// The config file: `.config.json` in Claude's folder when there is one (an old install, which
 /// Claude Code still prefers), else `.claude.json` in `CLAUDE_CONFIG_DIR` or the home. The same
-/// rule as `brigadier_providers::accounts::main_config_file`.
+/// rule as `brigadier_providers::claude::main_config_file`.
 pub fn config_file(home: &Path, config_dir: Option<&Path>) -> PathBuf {
     let legacy = config_dir
         .map_or_else(|| home.join(".claude"), Path::to_owned)

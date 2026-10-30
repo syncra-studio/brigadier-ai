@@ -3,9 +3,10 @@
 //! run on the same agent, model and effort with the same servers granted. The thread keeps the
 //! account it started on; a worker takes the one the user's account rules pick at each start.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::sync::{Arc, Mutex};
 
-use brigadier_cli::protocol::{Agent, CliRequest, SESSION_ENV, StartRequest};
+use brigadier_cli::protocol::{CliRequest, SESSION_ENV, StartRequest};
 use brigadier_providers::{ProviderKind, SessionSpec};
 
 use super::cli_tests::{brigadier, start};
@@ -276,13 +277,13 @@ async fn a_worker_started_again_keeps_its_routing_pick() {
     assert_eq!(servers, held.plain.as_ref().unwrap().mcps);
     let turns = took(&log, &held.id.0);
     assert!(turns[0].input.contains(&held.spec), "{turns:#?}");
-    match kind {
+    match *kind {
         ProviderKind::Claude => {
             assert_eq!(servers, ["pencil"]);
             // It never ran on an account: it takes the one the account rules pick now.
             assert_eq!(turns[0].account, routed_now(&flow, ProviderKind::Claude));
         }
-        ProviderKind::Codex => {
+        _ => {
             assert_eq!(spec.model.as_deref(), Some("gpt-test"));
             assert_eq!(spec.effort.as_deref(), Some("low"));
         }

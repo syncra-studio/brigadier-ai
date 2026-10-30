@@ -149,7 +149,7 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
         }
     }
     if settings.settings_version < 4 && !settings.legacy_switch_accounts {
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             if !next.manual_accounts.contains(&provider) {
                 next.manual_accounts.push(provider);
             }
@@ -258,7 +258,10 @@ mod tests {
         let saved = |json: &str| -> Settings { serde_json::from_str(json).unwrap() };
         let off = migrate(&saved(r#"{"switchAccounts":false,"settingsVersion":3}"#))
             .expect("version 3 converts");
-        assert_eq!(off.manual_accounts, ProviderKind::ALL.to_vec());
+        assert_eq!(
+            off.manual_accounts,
+            brigadier_providers::adapters::kinds().collect::<Vec<_>>()
+        );
         let on = migrate(&saved(r#"{"switchAccounts":true,"settingsVersion":3}"#))
             .expect("version 3 converts");
         assert!(on.manual_accounts.is_empty());

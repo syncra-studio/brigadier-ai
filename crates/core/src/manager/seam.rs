@@ -13,6 +13,7 @@
 //! happens, so a restart at any point goes on from the file and never sends a message twice
 //! or starts two successors ([`SessionManager::recover_seam`]).
 
+use brigadier_providers::KindFacts as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

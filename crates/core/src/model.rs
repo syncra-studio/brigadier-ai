@@ -1636,13 +1636,39 @@ pub struct ProviderOverview {
     pub checked_at_ms: Option<i64>,
 }
 
-/// What can be updated: Brigadier itself or an agent CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+/// What can be updated: Brigadier itself or an agent CLI. On the wire `"app"` or the CLI's id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TS)]
+#[ts(untagged)]
 pub enum UpdateTarget {
+    #[ts(type = "\"app\"")]
     App,
-    Claude,
-    Codex,
+    Provider(ProviderKind),
+}
+
+impl Serialize for UpdateTarget {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::App => serializer.serialize_str("app"),
+            Self::Provider(kind) => kind.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UpdateTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let id = std::borrow::Cow::<str>::deserialize(deserializer)?;
+        if id == "app" {
+            return Ok(Self::App);
+        }
+        id.parse()
+            .map(Self::Provider)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// What the Update button does.

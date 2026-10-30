@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use brigadier_providers::claude::Claude;
-use brigadier_providers::codex::Codex;
-use brigadier_providers::{Provider, ProviderKind, ProviderStatus, QuotaSnapshot};
+use brigadier_providers::adapters;
+use brigadier_providers::{KindFacts as _, Provider, ProviderKind, ProviderStatus, QuotaSnapshot};
 use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
@@ -48,7 +47,7 @@ impl Runtime {
     /// The adapter `account` runs on. A removed account has none.
     pub fn provider_for(&self, account: &AccountRef) -> Result<Arc<dyn Provider>> {
         match &account.account {
-            None => Ok(self.provider(account.provider)),
+            None => self.registered(account.provider),
             Some(id) if self.is_removing(id) => Err(Error::Invalid(
                 "that account is being removed in Settings → Providers".into(),
             )),
@@ -74,8 +73,7 @@ impl Runtime {
     /// Where each CLI keeps its files: its main home, which holds the history every account
     /// shares, and each home with state of its own (the main home and every extra account's).
     pub fn agent_homes(&self) -> Vec<crate::manager::disk::AgentHome> {
-        ProviderKind::ALL
-            .into_iter()
+        adapters::kinds()
             .filter_map(|kind| {
                 let main = brigadier_providers::accounts::main_home(kind, &self.env)?;
                 let mut homes = vec![main.clone()];
@@ -158,6 +156,15 @@ impl Runtime {
             )));
         }
         let home = self.account_home(&entry.id);
+        let for_account = adapters::adapter(entry.provider)
+            .and_then(|adapter| adapter.home)
+            .map(|facts| facts.for_account)
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "{} takes no extra accounts",
+                    entry.provider.label()
+                ))
+            })?;
         let main = brigadier_providers::accounts::main_home(entry.provider, &self.env)
             .ok_or_else(|| Error::Invalid("no home folder for the CLI's own files".into()))?;
         let (kind, made) = (entry.provider, home.clone());
@@ -167,14 +174,7 @@ impl Runtime {
         .await
         .map_err(|err| Error::Invalid(err.to_string()))?
         .map_err(|err| Error::Invalid(format!("setting up the account's folder: {err}")))?;
-        Ok(match entry.provider {
-            ProviderKind::Claude => {
-                Arc::new(Claude::for_account(self.platform.clone(), &self.env, &home))
-            }
-            ProviderKind::Codex => {
-                Arc::new(Codex::for_account(self.platform.clone(), &self.env, &home))
-            }
-        })
+        Ok(for_account(self.platform.clone(), &self.env, &home))
     }
 
     /// Checks an extra account in the background: its login, then its quota (a read that
@@ -454,7 +454,7 @@ impl Runtime {
     /// (Settings → Accounts then marks another account in use).
     pub(super) async fn update_leads(&self) -> bool {
         let mut moved = false;
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             let lead = self.launch_account(kind, None);
             let changed = self.monitor.set_lead(lead.clone());
             moved |= changed;
@@ -493,7 +493,7 @@ impl Runtime {
         let now = now_ms();
         let settings = self.core.settings();
         let mut accounts = Vec::new();
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             let own = AccountRef::own(kind);
             let lead = self.monitor.lead(kind);
             let order =
@@ -684,7 +684,8 @@ impl Runtime {
             return Ok(());
         }
         let home = self.account_home(&entry.id);
-        if !home.is_dir() {
+        let args = sign_out_args(entry.provider);
+        if !home.is_dir() || args.is_empty() {
             return Ok(());
         }
         let program = self.env.resolve(entry.provider).ok_or_else(|| {
@@ -693,7 +694,7 @@ impl Runtime {
         let env = self.env.for_account(entry.provider, &home);
         let mut command = tokio::process::Command::new(program);
         command
-            .args(sign_out_args(entry.provider))
+            .args(args)
             .env_clear()
             .envs(env.vars())
             .current_dir(&home)
@@ -762,18 +763,12 @@ impl Drop for RemovingAccount {
 /// The CLI's own sign-out (`claude auth logout`, `codex logout`; both in the installed CLIs'
 /// `--help`).
 fn sign_out_args(kind: ProviderKind) -> &'static [&'static str] {
-    match kind {
-        ProviderKind::Claude => &["auth", "logout"],
-        ProviderKind::Codex => &["logout"],
-    }
+    adapters::adapter(kind).map_or(&[], |adapter| adapter.sign_out)
 }
 
 /// The CLI's own sign-in (`claude auth login`, `codex login`).
 pub fn sign_in_args(kind: ProviderKind) -> &'static [&'static str] {
-    match kind {
-        ProviderKind::Claude => &["auth", "login"],
-        ProviderKind::Codex => &["login"],
-    }
+    adapters::adapter(kind).map_or(&[], |adapter| adapter.sign_in)
 }
 
 // Use only the provider identity already observed by the runtime. No credential/profile read.

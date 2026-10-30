@@ -33,6 +33,9 @@ pub struct FoundEntry {
     pub path: PathBuf,
     /// Removed only once empty: a folder other sessions' files may share.
     pub empty_only: bool,
+    /// The session's own record, removed through its CLI's own delete by the session's id
+    /// ([`crate::Artifact::Session`]), which also takes it off the CLI's own lists.
+    pub by_id: bool,
 }
 
 /// Brigadier's own marks in a session's files.
@@ -79,10 +82,9 @@ pub fn find(
     homes: &[PathBuf],
     wanted: &dyn Fn(&Path) -> bool,
 ) -> Vec<FoundSession> {
-    match kind {
-        ProviderKind::Claude => crate::claude::files::leftovers(history, homes, wanted),
-        ProviderKind::Codex => crate::codex::files::leftovers(history, wanted),
-    }
+    crate::adapters::adapter(kind).map_or_else(Vec::new, |adapter| {
+        (adapter.leftovers)(history, homes, wanted)
+    })
 }
 
 /// When `path` (a file, or a folder and everything in it) last changed, links not followed.

@@ -6,8 +6,7 @@ use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::{
-    Agent, Answer, AskItem, Capability, CliRequest, ContextPart, Judgment, Permission,
-    StartRequest, Tool,
+    Answer, AskItem, Capability, CliRequest, ContextPart, Judgment, Permission, StartRequest, Tool,
 };
 
 /// What the command line asks for.
@@ -357,10 +356,11 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             };
             CliRequest::Start(Box::new(StartRequest {
                 title: given("title"),
-                agent: args.flag("agent").map(|agent| match agent {
-                    "codex" => Agent::Codex,
-                    _ => Agent::Claude,
-                }),
+                agent: args
+                    .flag("agent")
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(error)?,
                 model: given("model"),
                 effort: given("effort"),
                 work: given("work"),
@@ -438,10 +438,11 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             CliRequest::Queue { id: id(), judgment }
         }
         "continue-on" => CliRequest::ContinueOn {
-            agent: match args.one("agent") {
-                Some("codex") => Agent::Codex,
-                _ => Agent::Claude,
-            },
+            agent: args
+                .one("agent")
+                .ok_or_else(|| error("missing <agent>".into()))?
+                .parse()
+                .map_err(error)?,
             after_turn: args.switch("after-turn"),
         },
         "ask" => CliRequest::Ask {
@@ -1004,6 +1005,7 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ProviderKind;
 
     fn run(words: &[&str]) -> (CliRequest, bool) {
         match parse(words.iter().copied()).unwrap() {
@@ -1094,7 +1096,8 @@ mod tests {
         assert!(fails(&["read", "a", "--last", "0"]).contains("whole number"));
         assert!(fails(&["read", "a", "--last", "2", "--screen"]).contains("don't go together"));
         assert!(fails(&["sessions", "--mine"]).contains("unknown option --mine"));
-        assert!(fails(&["start", "--agent", "gpt", "do it"]).contains("one of: claude, codex"));
+        // Any well-formed id passes here; the daemon refuses one it doesn't drive.
+        assert!(fails(&["start", "--agent", "Not An Id", "do it"]).contains("not a CLI id"));
         assert!(fails(&["preview", "restart"]).contains("not one of"));
         assert!(fails(&["wait", "--timeout", "soon"]).contains("whole number"));
         assert!(fails(&["read", "a", "--screen=yes"]).contains("takes no value"));
@@ -1123,7 +1126,7 @@ mod tests {
             .0,
             CliRequest::Start(Box::new(StartRequest {
                 title: None,
-                agent: Some(Agent::Codex),
+                agent: Some(ProviderKind::Codex),
                 model: Some("m".into()),
                 effort: None,
                 work: None,
@@ -1229,11 +1232,11 @@ mod tests {
         assert_eq!(
             run(&["continue-on", "codex", "--after-turn"]).0,
             CliRequest::ContinueOn {
-                agent: Agent::Codex,
+                agent: ProviderKind::Codex,
                 after_turn: true,
             }
         );
-        assert!(parse(["continue-on", "gemini"]).is_err());
+        assert!(fails(&["continue-on", "Gemini CLI"]).contains("not a CLI id"));
         // A queued message's judgment (run2-D40): worker names its worker, the rest nothing.
         for (words, judgment) in [
             (&["queue", "9f8e", "join"][..], Judgment::Join),

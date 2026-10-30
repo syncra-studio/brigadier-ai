@@ -12,6 +12,7 @@ import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { TitlebarNav } from "@/components/shared";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
+import { OPENCODE_MISSING } from "@/fixtures/agents";
 import { accounts, overviews, usageView } from "@/fixtures/providersData";
 import type { CatalogView } from "@/ipc/generated";
 import type { Request } from "@/ipc/generated";
@@ -47,7 +48,7 @@ useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   selection: { type: "draft", kind: "chat" },
   accounts: { accounts, warnings: [] },
-  providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
+  providers: { ...state.providers, view: { providers: [...overviews, OPENCODE_MISSING], sessions: [], fixtures: [] } },
   settings: { ...state.settings, browserEnabled: true },
 }));
 const wait = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -161,7 +162,7 @@ async function drive() {
   openSettings("providers");
   await untilTitle("Providers");
   useApp.setState((state) => ({ providers: { ...state.providers, view: {
-    ...state.providers.view!, providers: overviews.map((entry) => entry.provider === "codex" && entry.status
+    ...state.providers.view!, providers: [...overviews, OPENCODE_MISSING].map((entry) => entry.provider === "codex" && entry.status
       ? { ...entry, status: { ...entry.status, loggedIn: false } } : entry),
   } } }));
   openAgentPage("codex", true);

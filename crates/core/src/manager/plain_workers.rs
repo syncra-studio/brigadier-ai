@@ -146,20 +146,6 @@ impl ReviewAuthors {
     }
 }
 
-fn provider_of(agent: cli::Agent) -> ProviderKind {
-    match agent {
-        cli::Agent::Claude => ProviderKind::Claude,
-        cli::Agent::Codex => ProviderKind::Codex,
-    }
-}
-
-fn agent_of(provider: ProviderKind) -> cli::Agent {
-    match provider {
-        ProviderKind::Claude => cli::Agent::Claude,
-        ProviderKind::Codex => cli::Agent::Codex,
-    }
-}
-
 impl SessionManager {
     /// `brigadier start`: a new plain worker of the calling session.
     pub(super) async fn cli_start(
@@ -169,6 +155,14 @@ impl SessionManager {
     ) -> Result<CliReply> {
         if caller.task_id.is_some() {
             return Ok(refused("refused: a worker can't start workers of its own"));
+        }
+        if let Some(agent) = start.agent
+            && brigadier_providers::adapters::adapter(agent).is_none()
+        {
+            return Ok(CliReply::error(
+                ErrorCode::Usage,
+                super::cli::unknown_agent(agent),
+            ));
         }
         let conversation = self.core.conversation(&caller.conversation_id)?;
         // A session's workers work in its repository; a Chat's in the one `--repo` names, or
@@ -241,7 +235,7 @@ impl SessionManager {
                 let mut order: Vec<&Guidance> = rows.iter().collect();
                 if let Some(authors) = &review {
                     order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
-                    order.sort_by_key(|row| authors.providers.contains(&provider_of(row.agent)));
+                    order.sort_by_key(|row| authors.providers.contains(&row.agent));
                 } else if let Some(agent) = start.agent {
                     // D34: `--agent` takes that agent's own row of the order first, its model
                     // and effort, before another agent's.
@@ -251,7 +245,7 @@ impl SessionManager {
                 let first = order.first().map(|row| (*row).clone());
                 let mut fit = None;
                 for row in order {
-                    let provider = provider_of(row.agent);
+                    let provider = row.agent;
                     let model =
                         (row.model != "default").then(|| self.listed_model(provider, &row.model));
                     if self
@@ -297,7 +291,7 @@ impl SessionManager {
         let quota_policy = crate::work::WorkerQuotaPolicy {
             work: work.clone(),
             pin: brigadier_router::Pin {
-                provider: start.agent.map(provider_of),
+                provider: start.agent,
                 model: start.model.clone(),
                 effort: start.effort.clone(),
                 by_user: false,
@@ -313,11 +307,7 @@ impl SessionManager {
             picked.push("agent".to_owned());
             Some(row.agent)
         });
-        let provider = match agent {
-            Some(cli::Agent::Claude) => ProviderKind::Claude,
-            Some(cli::Agent::Codex) => ProviderKind::Codex,
-            None => own.provider,
-        };
+        let provider = agent.unwrap_or(own.provider);
         let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
         let model = match (start.model, &row) {
             (Some(model), _) => Some(model),
@@ -435,7 +425,7 @@ impl SessionManager {
             review: review.map(|authors| cli::StartReview {
                 other_provider: !authors.providers.contains(&provider),
                 of: authors.ids,
-                authors: authors.providers.into_iter().map(agent_of).collect(),
+                authors: authors.providers,
             }),
         }))
     }

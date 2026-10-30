@@ -102,7 +102,7 @@ async fn fusion_offer_waits_for_a_click_and_concurrent_clicks_send_once() {
 #[tokio::test]
 async fn fusion_invocations_use_the_selected_cli_and_keep_the_normal_queue() {
     let flow = Flow::start("fusion-invocations", Options::default(), quiet()).await;
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let chat = flow
             .manager
             .create_conversation(
@@ -125,7 +125,7 @@ async fn fusion_invocations_use_the_selected_cli_and_keep_the_normal_queue() {
             .id;
         let expected = match provider {
             ProviderKind::Claude => "/fusion Which approach?",
-            ProviderKind::Codex => "$fusion Which approach?",
+            _ => "$fusion Which approach?",
         };
         assert_eq!(
             flow.manager

@@ -89,11 +89,20 @@ pub struct FileImage {
 
 /// The thread `kind`'s session file at `path` holds, one entry per item.
 pub fn read(kind: ProviderKind, path: &Path) -> std::io::Result<Vec<FileEntry>> {
-    let entries = match kind {
-        ProviderKind::Claude => crate::claude::session_file::read(path)?,
-        ProviderKind::Codex => crate::codex::rollout::read(path)?,
-    };
+    let entries = (adapter(kind)?.read_session)(path)?;
     Ok(merge(Vec::new(), entries))
+}
+
+/// `kind`'s adapter, or the error of a CLI that isn't registered.
+fn adapter(kind: ProviderKind) -> std::io::Result<&'static crate::adapters::Adapter> {
+    crate::adapters::adapter(kind).ok_or_else(|| unregistered(kind))
+}
+
+fn unregistered(kind: ProviderKind) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("no adapter reads {kind}'s session files"),
+    )
 }
 
 /// How full a session's context is, as its CLI's own file last said (#540).
@@ -109,10 +118,7 @@ pub struct FileContext {
 /// thread, or what a compaction after it left; Codex's newest `token_count`. Read from the
 /// end, so a long session's file isn't read whole. None when the file says none.
 pub fn context(kind: ProviderKind, path: &Path) -> std::io::Result<Option<FileContext>> {
-    match kind {
-        ProviderKind::Claude => newest(path, crate::claude::session_file::context_of),
-        ProviderKind::Codex => newest(path, crate::codex::rollout::context_of),
-    }
+    (adapter(kind)?.session_context)(path)
 }
 
 /// How much more of a file [`newest`] reads back at a time.
@@ -159,54 +165,33 @@ pub(crate) fn newest<T>(
     Ok(None)
 }
 
-/// `kind`'s session file at `path` kept read, to read again for only what was added since:
-/// Claude's file and its subagents' are read on from where the last read stopped. Codex's
-/// rollout is read whole each time.
-pub struct Reading(Kept);
-
-enum Kept {
-    Claude(Box<crate::claude::session_file::Reading>),
-    Codex(std::path::PathBuf),
-}
+/// `kind`'s session file at `path` kept read, to read again for only what was added since,
+/// as its adapter can (`follow_session`): Claude's file and its subagents' are read on from
+/// where the last read stopped; Codex's rollout is read whole each time.
+pub struct Reading(crate::adapters::Follow);
 
 impl Reading {
     pub fn new(kind: ProviderKind, path: &Path) -> Self {
-        Self(match kind {
-            ProviderKind::Claude => {
-                Kept::Claude(Box::new(crate::claude::session_file::Reading::new(path)))
-            }
-            ProviderKind::Codex => Kept::Codex(path.to_owned()),
+        Self(match crate::adapters::adapter(kind) {
+            Some(adapter) => (adapter.follow_session)(path),
+            None => Box::new(move || Err(unregistered(kind))),
         })
     }
 
     /// The thread the file holds now, as [`read`] gives it.
     pub fn read(&mut self) -> std::io::Result<Vec<FileEntry>> {
-        let entries = match &mut self.0 {
-            Kept::Claude(reading) => reading.read()?,
-            Kept::Codex(path) => crate::codex::rollout::read(path)?,
-        };
-        Ok(merge(Vec::new(), entries))
+        Ok(merge(Vec::new(), (self.0)()?))
     }
 }
 
-/// Where `kind`'s session file recorded at `path` is now. Codex moves a thread's rollout from
-/// `<home>/sessions/<y>/<m>/<d>/` to `<home>/archived_sessions/` when it is archived (Brigadier
-/// archives a thread it closes, so the user's own Codex apps don't list it), and back when
-/// it is resumed. A Claude file that earlier builds recorded under the project folder of a
-/// verbatim Windows path (`----C--…`, which Claude never writes) is read where Claude wrote it.
+/// Where `kind`'s session file recorded at `path` is now: there, else where its adapter says
+/// the CLI moved it (`moved_session_file`), when that exists.
 pub fn locate(kind: ProviderKind, path: &Path) -> std::path::PathBuf {
     if path.exists() {
         return path.to_owned();
     }
-    let moved = match kind {
-        ProviderKind::Codex => path
-            .ancestors()
-            .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
-            .and_then(Path::parent)
-            .zip(path.file_name())
-            .map(|(home, name)| home.join("archived_sessions").join(name)),
-        ProviderKind::Claude => crate::claude::files::without_verbatim_project(path),
-    };
+    let moved =
+        crate::adapters::adapter(kind).and_then(|adapter| (adapter.moved_session_file)(path));
     moved
         .filter(|moved| moved.exists())
         .unwrap_or_else(|| path.to_owned())

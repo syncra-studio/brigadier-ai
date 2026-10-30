@@ -97,9 +97,7 @@ impl SessionManager {
         provider: ProviderKind,
     ) -> Option<LongSessions> {
         let mode = self.seam_config().long?;
-        (conv.kind == ConversationKind::Session
-            && matches!(provider, ProviderKind::Claude | ProviderKind::Codex))
-        .then_some(mode)
+        (conv.kind == ConversationKind::Session && compaction(provider).is_some()).then_some(mode)
     }
 
     /// How the CLI of `conv` on `provider` compacts in place, for its session spec.
@@ -110,24 +108,13 @@ impl SessionManager {
     ) -> Option<NativeCompaction> {
         self.long_mode(conv, provider)?;
         let config = self.seam_config();
-        Some(match provider {
-            ProviderKind::Claude => NativeCompaction {
-                backstop_window: Some(backstop_window(config.tokens)),
-                ..NativeCompaction::default()
-            },
-            _ => NativeCompaction {
-                codex_limit: config.tokens_set.then_some(config.tokens),
-                ..NativeCompaction::default()
-            },
-        })
+        Some(compaction(provider)?(config.tokens, config.tokens_set))
     }
 }
 
-/// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point
-/// `point` (run2-D5): Claude compacts by itself ≈20k below its window, so this one has it
-/// compact ≈30k past the point. Claude takes windows of 100k to 1M.
-fn backstop_window(point: i64) -> i64 {
-    (point + 50_000).clamp(100_000, 1_000_000)
+/// How `provider` compacts in place for a long session ([`brigadier_providers::adapters`]).
+fn compaction(provider: ProviderKind) -> Option<fn(i64, bool) -> NativeCompaction> {
+    brigadier_providers::adapters::adapter(provider)?.compaction
 }
 
 /// What Claude's summary must keep when Brigadier asks it to compact (run2-D7, D71): the

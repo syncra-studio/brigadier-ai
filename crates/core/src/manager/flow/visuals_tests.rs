@@ -64,7 +64,7 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
     .await;
     let reply = "```brigadier-table\n{\"title\":\"Time\",\"columns\":[\"Route\"],\"rows\":[[\"Train\"]],\"source\":\"Illustrative\"}\n```\n\n```brigadier-chart\n{\"kind\":\"bar\",\"title\":\"Time\",\"description\":\"Minutes\",\"data\":[{\"label\":\"Train\",\"value\":35}]}\n```\n\n```brigadier-html\n<p>Recovered visual</p><script>document.querySelector('p').textContent='Ready';</script>\n```";
     let mut chats = Vec::new();
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let chat = flow
             .manager
             .create_conversation(ConversationKind::Chat, None, None, None)
@@ -79,7 +79,7 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
                 json!({"type":"assistant","uuid":"a1","timestamp":"2026-10-26T10:00:00Z",
                 "message":{"id":"m1","role":"assistant","content":[{"type":"text","text":reply}]}})
             }
-            ProviderKind::Codex => json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z",
+            _ => json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z",
                 "payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"Text","text":reply}]}}}),
         };
         std::fs::write(&file, format!("{line}\n")).unwrap();

@@ -7,6 +7,7 @@ use crate::sessions::fusion_question;
 use crate::tools::OfferFusion;
 use crate::work::OrchestratorStepKind;
 use crate::{Error, Result};
+use brigadier_providers::KindFacts as _;
 
 fn fusion_chat(conversation: &Conversation) -> Result<()> {
     if conversation.kind != ConversationKind::Chat

@@ -11,31 +11,36 @@ use ts_rs::TS;
 
 use crate::redact::Redactor;
 
-/// A CLI Brigadier can drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ProviderKind {
-    Claude,
-    Codex,
+pub use brigadier_kind::ProviderKind;
+
+/// What every adapter's static facts answer about its kind ([`crate::adapters`]): the
+/// unregistered kind of an old record gets its id back and nothing to run.
+pub trait KindFacts {
+    /// The product name shown to the user.
+    fn label(self) -> &'static str;
+    /// Its short vendor word, in error lines ("Claude: …").
+    fn vendor(self) -> &'static str;
+    /// A skill invoked in this CLI's own message syntax.
+    fn skill_invocation(self, skill: &str, question: &str) -> String;
+    /// The binary name looked up on the login shell's PATH.
+    fn binary(self) -> &'static str;
+    /// The vendor's own installer, as typed into a terminal (PowerShell on Windows).
+    fn install_command(self, windows: bool) -> &'static str;
+    /// Signs the user in to the CLI, as typed into a terminal.
+    fn login_command(self) -> &'static str;
 }
 
-impl ProviderKind {
-    pub const ALL: [ProviderKind; 2] = [ProviderKind::Claude, ProviderKind::Codex];
-
-    /// The product name shown to the user.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Codex => "Codex",
-        }
+impl KindFacts for ProviderKind {
+    fn label(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.label)
     }
 
-    /// A skill invoked in this CLI's own message syntax.
-    pub fn skill_invocation(self, skill: &str, question: &str) -> String {
-        let prefix = match self {
-            Self::Claude => "/",
-            Self::Codex => "$",
-        };
+    fn vendor(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.vendor)
+    }
+
+    fn skill_invocation(self, skill: &str, question: &str) -> String {
+        let prefix = crate::adapters::adapter(self).map_or("/", |adapter| adapter.skill_prefix);
         let question = question.trim();
         if question.is_empty() {
             format!("{prefix}{skill}")
@@ -44,39 +49,16 @@ impl ProviderKind {
         }
     }
 
-    /// The binary name looked up on the login shell's PATH.
-    pub fn binary(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
+    fn binary(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.binary)
     }
 
-    /// The vendor's own installer, as typed into a terminal (PowerShell on Windows).
-    pub fn install_command(self, windows: bool) -> &'static str {
-        match (self, windows) {
-            (Self::Claude, false) => "curl -fsSL https://claude.ai/install.sh | bash",
-            (Self::Claude, true) => "irm https://claude.ai/install.ps1 | iex",
-            (Self::Codex, false) => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-            (Self::Codex, true) => "irm https://chatgpt.com/codex/install.ps1 | iex",
-        }
+    fn install_command(self, windows: bool) -> &'static str {
+        crate::adapters::adapter(self).map_or("", |adapter| adapter.install[usize::from(windows)])
     }
 
-    /// Signs the user in to the CLI, as typed into a terminal.
-    pub fn login_command(self) -> &'static str {
-        match self {
-            Self::Claude => "claude auth login",
-            Self::Codex => "codex login",
-        }
-    }
-}
-
-impl std::fmt::Display for ProviderKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        })
+    fn login_command(self) -> &'static str {
+        crate::adapters::adapter(self).map_or("", |adapter| adapter.login)
     }
 }
 
@@ -1622,9 +1604,11 @@ pub struct AllowedModels {
 }
 
 /// Something a session created that must be removed when it is disposed of. Recorded in the
-/// session's cleanup ledger the moment it is known.
+/// session's cleanup ledger the moment it is known. Records of earlier versions still load
+/// ([`LegacyArtifact`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
+    remote = "Self",
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
@@ -1644,10 +1628,13 @@ pub enum Artifact {
         /// Start time, to tell it apart from a later process that reused the pid.
         started_at_ms: Option<f64>,
     },
-    /// A Claude Code session: its transcript and per-session state under the config directory.
-    ClaudeSession {
-        session_id: String,
-        /// The config directory of the account it ran on; absent: the user's own.
+    /// A CLI's session (a Claude Code session, a Codex thread): its transcript and per-session
+    /// state, removed by its adapter.
+    Session {
+        provider: ProviderKind,
+        /// The CLI's own id of it.
+        id: String,
+        /// The CLI home of the account it ran on; absent: the user's own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         home: Option<String>,
@@ -1657,41 +1644,16 @@ pub enum Artifact {
         #[ts(optional)]
         cwd: Option<String>,
     },
-    /// A Claude Code project directory (`projects/<encoded cwd>`) that did not exist before.
-    ClaudeProjectDir { path: String },
-    /// An empty repository memory folder absent before a linked-worktree CLI started and
-    /// observed to have been created during its life. Identities prevent deleting replacements.
-    ClaudeMemoryDir {
+    /// A file or folder a CLI's session made: what it is (`kind`) and the identities that keep
+    /// a replacement from being removed are its adapter's to read, and only its adapter's
+    /// `remove` disposes of it.
+    CliFile {
+        provider: ProviderKind,
+        kind: String,
         path: String,
-        identity: (u64, u64),
-        /// The enclosing project directory, only when it too was absent before the start.
-        project_identity: Option<(u64, u64)>,
+        #[serde(default)]
+        identities: Vec<(u64, u64)>,
     },
-    /// A plan file Claude Code wrote in plan mode (`<config>/plans/<name>.md`, its
-    /// `ExitPlanMode` names it) that was not there when the session started: removed with the
-    /// session, only while it is still that file (harness D7).
-    ClaudePlanFile { path: String, identity: (u64, u64) },
-    /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`,
-    /// or `.claude` itself when that did not exist). Removed only while it holds no files.
-    ClaudeStagingDir { path: String },
-    /// A Codex thread: its rollout file and state records, removed through `thread/delete`.
-    CodexThread {
-        thread_id: String,
-        /// The `CODEX_HOME` of the account it ran on; absent: the user's own.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        home: Option<String>,
-        /// The folder it ran in (absent in records older than this field).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        cwd: Option<String>,
-    },
-    /// The folder where Codex saves a thread's generated images
-    /// (`$CODEX_HOME/generated_images/<thread id>`), which deleting the thread leaves behind.
-    CodexGeneratedImages { path: String },
-    /// A project trust entry Codex persisted in the user's `config.toml` when a thread started
-    /// there. Removed through Codex's config API, only while it is still just `trusted`.
-    CodexProjectTrust { path: String },
     /// A file or folder Free up space proved to be Brigadier's leftover and the user approved
     /// removing: exactly that entry (bound under `root` with the identity it had when it was
     /// shown), never anything found again by name. Removed only while it is still that entry.
@@ -1746,19 +1708,282 @@ pub enum Artifact {
         path: String,
         identity: Option<(u64, u64)>,
     },
-    /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's
-    /// temp files and its sandboxed commands' TMPDIR.
-    ClaudeTempDir { path: String },
     /// Folder trust Brigadier wrote in a CLI's settings `file` for `folder` (the user trusted
     /// it in Brigadier), recorded before the write with what it replaced: removed by putting
     /// that back, only while the folder is still trusted as Brigadier left it
     /// ([`crate::trust::undo`]).
     CliTrust {
-        cli: crate::trust::TrustCli,
+        cli: ProviderKind,
         file: String,
         folder: String,
         before: crate::trust::TrustBefore,
     },
+}
+
+impl Artifact {
+    /// The CLI whose adapter's `remove` disposes of it.
+    pub fn provider(&self) -> Option<ProviderKind> {
+        match self {
+            Self::Session { provider, .. } | Self::CliFile { provider, .. } => Some(*provider),
+            _ => None,
+        }
+    }
+
+    /// The CLI session it is: its CLI and the CLI's own id of it.
+    pub fn native_session(&self) -> Option<(ProviderKind, &str)> {
+        match self {
+            Self::Session { provider, id, .. } => Some((*provider, id)),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for Artifact {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Artifact::serialize(self, serializer)
+    }
+}
+
+/// Reads a record of today, or one of an earlier version's CLI-named shapes
+/// ([`LegacyArtifact`]) as today's.
+impl<'de> Deserialize<'de> for Artifact {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Ok(legacy) = LegacyArtifact::deserialize(&value) {
+            return Ok(legacy.into());
+        }
+        Artifact::deserialize(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The CLI-named artifacts earlier versions recorded, read as [`Artifact::Session`] and
+/// [`Artifact::CliFile`]. Never written.
+#[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum LegacyArtifact {
+    ClaudeSession {
+        session_id: String,
+        #[serde(default)]
+        home: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    ClaudeProjectDir {
+        path: String,
+    },
+    ClaudeMemoryDir {
+        path: String,
+        identity: (u64, u64),
+        project_identity: Option<(u64, u64)>,
+    },
+    ClaudePlanFile {
+        path: String,
+        identity: (u64, u64),
+    },
+    ClaudeStagingDir {
+        path: String,
+    },
+    CodexThread {
+        thread_id: String,
+        #[serde(default)]
+        home: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    CodexGeneratedImages {
+        path: String,
+    },
+    CodexProjectTrust {
+        path: String,
+    },
+    ClaudeTempDir {
+        path: String,
+    },
+}
+
+impl From<LegacyArtifact> for Artifact {
+    fn from(legacy: LegacyArtifact) -> Self {
+        use LegacyArtifact as L;
+        let file = |provider, kind: &str, path, identities| Self::CliFile {
+            provider,
+            kind: kind.to_owned(),
+            path,
+            identities,
+        };
+        let (claude, codex) = (ProviderKind::Claude, ProviderKind::Codex);
+        match legacy {
+            L::ClaudeSession {
+                session_id,
+                home,
+                cwd,
+            } => Self::Session {
+                provider: claude,
+                id: session_id,
+                home,
+                cwd,
+            },
+            L::CodexThread {
+                thread_id,
+                home,
+                cwd,
+            } => Self::Session {
+                provider: codex,
+                id: thread_id,
+                home,
+                cwd,
+            },
+            L::ClaudeProjectDir { path } => file(claude, "projectDir", path, Vec::new()),
+            L::ClaudeMemoryDir {
+                path,
+                identity,
+                project_identity,
+            } => file(
+                claude,
+                "memoryDir",
+                path,
+                std::iter::once(identity).chain(project_identity).collect(),
+            ),
+            L::ClaudePlanFile { path, identity } => file(claude, "planFile", path, vec![identity]),
+            L::ClaudeStagingDir { path } => file(claude, "stagingDir", path, Vec::new()),
+            L::ClaudeTempDir { path } => file(claude, "tempDir", path, Vec::new()),
+            L::CodexGeneratedImages { path } => file(codex, "generatedImages", path, Vec::new()),
+            L::CodexProjectTrust { path } => file(codex, "projectTrust", path, Vec::new()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+    use crate::claude::files::kinds;
+
+    fn read(json: &str) -> Artifact {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn file(provider: ProviderKind, kind: &str, identities: Vec<(u64, u64)>) -> Artifact {
+        Artifact::CliFile {
+            provider,
+            kind: kind.into(),
+            path: "/p".into(),
+            identities,
+        }
+    }
+
+    /// Every CLI-named record an earlier version wrote loads as today's form, which only its
+    /// adapter reads.
+    #[test]
+    fn legacy_records_load_as_sessions_and_cli_files() {
+        let (claude, codex) = (ProviderKind::Claude, ProviderKind::Codex);
+        let cases = [
+            (
+                r#"{"type":"claudeSession","sessionId":"s1","home":"/h","cwd":"/c"}"#,
+                Artifact::Session {
+                    provider: claude,
+                    id: "s1".into(),
+                    home: Some("/h".into()),
+                    cwd: Some("/c".into()),
+                },
+            ),
+            (
+                r#"{"type":"codexThread","threadId":"t1"}"#,
+                Artifact::Session {
+                    provider: codex,
+                    id: "t1".into(),
+                    home: None,
+                    cwd: None,
+                },
+            ),
+            (
+                r#"{"type":"claudeProjectDir","path":"/p"}"#,
+                file(claude, kinds::PROJECT_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"claudeMemoryDir","path":"/p","identity":[1,2],"projectIdentity":[3,4]}"#,
+                file(claude, kinds::MEMORY_DIR, vec![(1, 2), (3, 4)]),
+            ),
+            (
+                r#"{"type":"claudeMemoryDir","path":"/p","identity":[1,2],"projectIdentity":null}"#,
+                file(claude, kinds::MEMORY_DIR, vec![(1, 2)]),
+            ),
+            (
+                r#"{"type":"claudePlanFile","path":"/p","identity":[5,6]}"#,
+                file(claude, kinds::PLAN_FILE, vec![(5, 6)]),
+            ),
+            (
+                r#"{"type":"claudeStagingDir","path":"/p"}"#,
+                file(claude, kinds::STAGING_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"claudeTempDir","path":"/p"}"#,
+                file(claude, kinds::TEMP_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"codexGeneratedImages","path":"/p"}"#,
+                file(codex, crate::codex::GENERATED_IMAGES, vec![]),
+            ),
+            (
+                r#"{"type":"codexProjectTrust","path":"/p"}"#,
+                file(codex, crate::codex::PROJECT_TRUST, vec![]),
+            ),
+            (
+                r#"{"type":"cliTrust","cli":"codex","file":"/f","folder":"/d","before":{"type":"noEntry"}}"#,
+                Artifact::CliTrust {
+                    cli: codex,
+                    file: "/f".into(),
+                    folder: "/d".into(),
+                    before: crate::trust::TrustBefore::NoEntry,
+                },
+            ),
+        ];
+        for (json, expected) in cases {
+            let artifact = read(json);
+            assert_eq!(artifact, expected, "{json}");
+            // Written back in today's form, it reads the same.
+            assert_eq!(read(&serde_json::to_string(&artifact).unwrap()), expected);
+        }
+        assert_eq!(
+            read(r#"{"type":"claudeSession","sessionId":"s1"}"#).native_session(),
+            Some((claude, "s1"))
+        );
+        assert!(
+            serde_json::from_str::<Artifact>(r#"{"type":"claudePlanFile","path":"/p"}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn todays_records_round_trip() {
+        let session = Artifact::Session {
+            provider: ProviderKind::new("later"),
+            id: "x".into(),
+            home: None,
+            cwd: Some("/c".into()),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"session","provider":"later","id":"x","cwd":"/c"}"#
+        );
+        assert_eq!(read(&json), session);
+        assert_eq!(session.provider(), Some(ProviderKind::new("later")));
+        let made = file(ProviderKind::Claude, kinds::PLAN_FILE, vec![(1, 2)]);
+        assert_eq!(read(&serde_json::to_string(&made).unwrap()), made);
+        let process = Artifact::Process {
+            pid: 7,
+            started_at_ms: Some(1.5),
+        };
+        assert_eq!(read(&serde_json::to_string(&process).unwrap()), process);
+        assert_eq!(process.provider(), None);
+        // `identities` may be absent.
+        assert_eq!(
+            read(r#"{"type":"cliFile","provider":"codex","kind":"projectTrust","path":"/p"}"#),
+            file(ProviderKind::Codex, "projectTrust", vec![])
+        );
+    }
 }
 
 #[cfg(test)]

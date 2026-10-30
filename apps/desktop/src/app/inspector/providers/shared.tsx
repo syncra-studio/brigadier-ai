@@ -1,14 +1,9 @@
 import { type ReactNode, useState } from "react";
 
-import type { ProviderKind, QuotaSnapshot, RawState } from "@/ipc/generated";
+import type { QuotaSnapshot, RawState } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { usageTone } from "@/lib/quota";
 import { cn } from "@/lib/utils";
-
-export const PROVIDER_LABELS: Record<ProviderKind, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-};
 
 export const STATE_VARIANTS: Record<RawState, "secondary" | "success" | "warning" | "destructive" | "outline"> = {
   starting: "warning",

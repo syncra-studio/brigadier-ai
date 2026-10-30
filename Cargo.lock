@@ -654,6 +654,7 @@ name = "brigadier-cli"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "brigadier-kind",
  "brigadier-sandbox",
  "interprocess",
  "jiff",
@@ -847,12 +848,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "brigadier-kind"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "brigadier-providers"
 version = "0.1.0"
 dependencies = [
  "age",
  "aho-corasick",
  "base64 0.23.1",
+ "brigadier-kind",
  "brigadier-registry",
  "brigadier-sandbox",
  "dirs 7.0.0",
@@ -880,6 +891,7 @@ dependencies = [
 name = "brigadier-registry"
 version = "0.1.0"
 dependencies = [
+ "brigadier-kind",
  "notify",
  "notify-debouncer-full",
  "serde",

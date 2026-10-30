@@ -350,10 +350,7 @@ impl McpGatewayService {
                     entry.fallback.store(true, Ordering::Release);
                     CatalogSignIn::CliFallback {
                         steps: Vec::new(),
-                        agents: vec![
-                            brigadier_providers::ProviderKind::Claude,
-                            brigadier_providers::ProviderKind::Codex,
-                        ],
+                        agents: brigadier_providers::adapters::kinds().collect(),
                     }
                 }
                 Err(message) => {
@@ -473,7 +470,7 @@ impl McpGatewayService {
             CatalogSignIn::SignedIn
         } else if entry.fallback.load(Ordering::Acquire) {
             CatalogSignIn::CliFallback {
-                agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                agents: brigadier_providers::adapters::kinds().collect(),
                 steps: Vec::new(),
             }
         } else {

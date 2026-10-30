@@ -13,6 +13,7 @@ import type {
 } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { modelName } from "@/lib/setup";
+import { cliFacts } from "@/lib/providerKinds";
 
 export { isExpensive } from "@/lib/setup";
 
@@ -20,12 +21,6 @@ export { isExpensive } from "@/lib/setup";
  * Models and limits in words: the names the Usage page, worker cards and the Providers page
  * share, and the sentences they build (limits, reset times).
  */
-
-/** Vendors as sentences name them ("Claude opus hit its 5-hour limit"). */
-export const VENDOR_LABELS: Record<ProviderKind, string> = {
-  claude: "Claude",
-  codex: "Codex",
-};
 
 export { PROVIDERS } from "@/lib/providerKinds";
 
@@ -76,9 +71,9 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
 export function placeName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
   switch (target.type) {
     case "vendor":
-      return `Any ${VENDOR_LABELS[target.provider]} model`;
+      return `Any ${cliFacts(target.provider).vendor} model`;
     case "family":
-      return `Newest ${VENDOR_LABELS[target.provider]} ${target.family}`;
+      return `Newest ${cliFacts(target.provider).vendor} ${target.family}`;
     case "model":
       return choiceName(groups, { provider: target.provider, model: target.id, effort: null });
   }
@@ -102,7 +97,7 @@ export const HEAT_TONES: Record<Heat, { text: string; fill: string; stroke: stri
 
 /** "Claude Opus 5.5": a model with its vendor, from the live lists (the raw id when unknown). */
 export function choiceName(groups: readonly ModelGroup[], choice: ModelChoice): string {
-  return `${VENDOR_LABELS[choice.provider]} ${modelName(groups, choice)}`;
+  return `${cliFacts(choice.provider).vendor} ${modelName(groups, choice)}`;
 }
 
 /** A window's usual names, for ids the quota snapshot in hand doesn't list. */

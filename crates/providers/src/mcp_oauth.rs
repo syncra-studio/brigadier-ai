@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{ProviderKind, accounts, cli::CliEnv, login_mark};
+use crate::{ProviderKind, accounts, cli::CliEnv};
 
 type Entries = BTreeMap<String, Value>;
 
@@ -122,16 +122,18 @@ impl Keyring for SystemKeyring {
 }
 
 #[derive(Clone, Copy)]
-enum Format {
+pub(crate) enum Format {
     Claude,
     CodexFile,
     CodexEncrypted,
 }
 
-struct Store {
-    home: PathBuf,
-    format: Format,
-    keychain: Option<(String, String)>,
+/// Where an account keeps its MCP sign-ins: a folder, the format of what is in it, and the
+/// Keychain item (service, account) that comes first when there is one.
+pub(crate) struct Store {
+    pub(crate) home: PathBuf,
+    pub(crate) format: Format,
+    pub(crate) keychain: Option<(String, String)>,
 }
 
 impl Store {
@@ -647,70 +649,13 @@ fn forget_with(
     Ok(())
 }
 
+/// The stores of `kind`'s MCP sign-ins for the account at `home` run with `env`; none for a
+/// CLI that isn't registered.
 fn stores(kind: ProviderKind, env: &CliEnv, home: &Path) -> Vec<Store> {
-    match kind {
-        ProviderKind::Claude => {
-            let directory = env
-                .var("CLAUDE_SECURESTORAGE_CONFIG_DIR")
-                .map(|value| {
-                    if value.is_empty() {
-                        env.home()
-                            .unwrap_or_else(|| home.to_owned())
-                            .join(".claude")
-                    } else {
-                        PathBuf::from(value)
-                    }
-                })
-                .unwrap_or_else(|| home.to_owned());
-            let keychain = cfg!(target_os = "macos")
-                .then(|| {
-                    login_mark::claude_keychain_service(env, home).map(|service| {
-                        (
-                            service,
-                            login_mark::claude_keychain_account(env.var("USER")),
-                        )
-                    })
-                })
-                .flatten();
-            vec![Store {
-                home: directory,
-                format: Format::Claude,
-                keychain,
-            }]
-        }
-        ProviderKind::Codex => {
-            let mut out = vec![Store {
-                home: home.to_owned(),
-                format: Format::CodexFile,
-                keychain: None,
-            }];
-            // The encrypted namespace has its own key and store lock. Never copy the key,
-            // codex_auth.age, or the rest of secrets/. Missing keys are created atomically;
-            // existing keys are never replaced.
-            let config = codex_config(home);
-            let encrypted = config.as_ref().is_some_and(|config| {
-                config
-                    .get("auth_keyring_backend")
-                    .and_then(toml_edit::Item::as_str)
-                    == Some("secrets")
-                    && config
-                        .get("mcp_oauth_credentials_store")
-                        .and_then(toml_edit::Item::as_str)
-                        != Some("file")
-            });
-            if encrypted || home.join("secrets/mcp_oauth.age").is_file() {
-                out.push(Store {
-                    home: home.to_owned(),
-                    format: Format::CodexEncrypted,
-                    keychain: None,
-                });
-            }
-            out
-        }
-    }
+    crate::adapters::adapter(kind).map_or_else(Vec::new, |adapter| (adapter.mcp_stores)(env, home))
 }
 
-fn codex_config(home: &Path) -> Option<toml_edit::DocumentMut> {
+pub(crate) fn codex_config(home: &Path) -> Option<toml_edit::DocumentMut> {
     fs::read_to_string(home.join("config.toml"))
         .ok()
         .and_then(|text| text.parse().ok())

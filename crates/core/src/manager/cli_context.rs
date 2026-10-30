@@ -890,7 +890,8 @@ mod tests {
         choices::Choices,
         resolve::{self, Context},
     };
-    use brigadier_registry::{Agent, Catalog, Roots};
+    use brigadier_providers::ProviderKind as Agent;
+    use brigadier_registry::{Catalog, Roots};
 
     use super::*;
 

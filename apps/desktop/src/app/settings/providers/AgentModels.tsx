@@ -5,10 +5,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ChevronRight } from "@/components/icons";
 import { SettingsCard, settingsRows } from "@/components/shared";
 import type { MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { modelAvailable } from "@/state/providers";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The Models section: a row each, a switch each; older models folded away. */
 export function AgentModels({
@@ -21,7 +21,7 @@ export function AgentModels({
   merged: readonly MergedModel[] | null;
 }) {
   const models = overview?.models?.models ?? [];
-  const label = VENDOR_LABELS[provider];
+  const label = cliFacts(provider).vendor;
   const state = agentState(overview);
   const current = models.filter((model) => !model.legacy);
   const older = models.filter((model) => model.legacy);

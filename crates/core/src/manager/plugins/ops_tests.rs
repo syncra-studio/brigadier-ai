@@ -1,5 +1,6 @@
 use super::super::cleanup_context::{Ctx, Secrets};
 use super::*;
+use brigadier_providers::ProviderKind as Agent;
 use brigadier_registry::Roots;
 use brigadier_registry::adapter::{AgentAdapter, Step};
 use brigadier_registry::library::Library;

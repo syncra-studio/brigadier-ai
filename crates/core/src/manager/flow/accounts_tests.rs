@@ -168,7 +168,7 @@ async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
     let exhausted = Arc::new(tokio::sync::Notify::new());
     let answer = logging(&log, |turn| match turn.provider {
         ProviderKind::Claude => Reply::limited(),
-        ProviderKind::Codex => Reply::text("Done on Codex."),
+        _ => Reply::text("Done on Codex."),
     });
     let script: Script = {
         let (started, limited, fourth, exhausted) = (
@@ -373,7 +373,7 @@ async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
             match (turn.provider, turn.account.as_deref()) {
                 (ProviderKind::Claude, Some("acct-b")) => Reply::limited(),
                 (ProviderKind::Claude, _) => Reply::text("Done."),
-                (ProviderKind::Codex, _) => Reply::text("Done on Codex."),
+                _ => Reply::text("Done on Codex."),
             }
         }),
     )
@@ -1044,7 +1044,7 @@ async fn a_limit_waits_on_its_own_agent() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -1133,7 +1133,7 @@ async fn say_to(flow: &Flow, chat: &ConversationId, text: &str) {
 /// at the new account. Unrelated accounts may hold files with the same native id.
 #[tokio::test]
 async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         for switched in [false, true] {
             for delete in [false, true] {
                 let log = Log::default();
@@ -1172,11 +1172,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 let native: Vec<_> = artifacts
                     .iter()
                     .filter(|artifact| {
-                        matches!(
-                            artifact,
-                            brigadier_providers::Artifact::ClaudeSession { .. }
-                                | brigadier_providers::Artifact::CodexThread { .. }
-                        )
+                        matches!(artifact, brigadier_providers::Artifact::Session { .. })
                     })
                     .cloned()
                     .collect();
@@ -1199,8 +1195,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 }
                 for artifact in &native {
                     let home = match artifact {
-                        brigadier_providers::Artifact::ClaudeSession { home, .. }
-                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        brigadier_providers::Artifact::Session { home, .. } => home,
                         _ => unreachable!(),
                     };
                     assert!(
@@ -1238,8 +1233,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 assert!(ledger.artifacts(&lineage).is_empty(), "Delete removes them");
                 for artifact in &native {
                     let home = match artifact {
-                        brigadier_providers::Artifact::ClaudeSession { home, .. }
-                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        brigadier_providers::Artifact::Session { home, .. } => home,
                         _ => unreachable!(),
                     };
                     let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1274,7 +1268,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
 /// adapters before attempting cleanup, rather than send the extra artifact to the own CLI.
 #[tokio::test]
 async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let mut flow = Flow::start(
             "accounts-cleanup-restart",
@@ -1304,13 +1298,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
             .ledger()
             .artifacts(&owner)
             .into_iter()
-            .filter(|artifact| {
-                matches!(
-                    artifact,
-                    brigadier_providers::Artifact::ClaudeSession { .. }
-                        | brigadier_providers::Artifact::CodexThread { .. }
-                )
-            })
+            .filter(|artifact| matches!(artifact, brigadier_providers::Artifact::Session { .. }))
             .collect();
         assert_eq!(native.len(), 2, "both runs recorded: {native:?}");
         flow.behavior
@@ -1339,12 +1327,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
         let removals = flow.behavior.removals.lock().unwrap().clone();
         for artifact in native {
             let (id, home) = match &artifact {
-                brigadier_providers::Artifact::ClaudeSession {
-                    session_id, home, ..
-                } => (session_id, home),
-                brigadier_providers::Artifact::CodexThread {
-                    thread_id, home, ..
-                } => (thread_id, home),
+                brigadier_providers::Artifact::Session { id, home, .. } => (id, home),
                 other => panic!("unexpected artifact: {other:?}"),
             };
             let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1371,7 +1354,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
 
 #[tokio::test]
 async fn an_extra_login_makes_a_signed_out_provider_ready_and_starts_its_chat() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let flow = Flow::start(
             "accounts-signed-out-own",
@@ -1450,7 +1433,7 @@ async fn a_status_from_a_sign_in_shows_at_once() {
 
 #[tokio::test]
 async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_messages() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let release = Arc::new(tokio::sync::Notify::new());
         let script: Script = {
@@ -1786,7 +1769,10 @@ fn native_artifacts(flow: &Flow, chat: &ConversationId) -> Vec<brigadier_provide
         .filter(|artifact| {
             matches!(
                 artifact,
-                brigadier_providers::Artifact::ClaudeSession { .. }
+                brigadier_providers::Artifact::Session {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    ..
+                }
             )
         })
         .collect()
@@ -1861,8 +1847,9 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
     assert_eq!(after.native_id, turns[0].native_id, "Restore resumes it");
     assert_eq!(
         native_artifacts(&flow, &chat),
-        vec![brigadier_providers::Artifact::ClaudeSession {
-            session_id: after.native_id.clone(),
+        vec![brigadier_providers::Artifact::Session {
+            provider: brigadier_providers::ProviderKind::Claude,
+            id: after.native_id.clone(),
             home: None,
             cwd: None,
         }]
@@ -2309,7 +2296,7 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2503,7 +2490,7 @@ async fn the_users_rules_bind_the_agent_fallback() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2548,7 +2535,7 @@ async fn the_agent_fallback_takes_the_next_fallback_row_the_rules_allow() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2592,7 +2579,7 @@ async fn with_no_fallback_row_the_rules_allow_a_session_waits_for_the_reset() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2638,7 +2625,7 @@ async fn turning_the_switch_on_moves_a_waiting_session_to_another_agent() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2689,7 +2676,7 @@ async fn a_message_moved_to_another_agent_is_shown_already() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2723,7 +2710,7 @@ async fn a_waiting_message_moved_to_another_agent_is_shown_already() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;

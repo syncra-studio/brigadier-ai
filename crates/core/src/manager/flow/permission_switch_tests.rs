@@ -3,11 +3,12 @@
 //! (the thread's, the Chat's and an inheriting worker's requests); lowered to Ask, the next turn
 //! asks again.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_cli::protocol::{Agent, CliRequest, Permission, StartRequest};
+use brigadier_cli::protocol::{CliRequest, Permission, StartRequest};
 use brigadier_providers::model::{Access, Origin, ToolSet};
 use brigadier_providers::{ApprovalDecision, Decider, ProviderKind};
 

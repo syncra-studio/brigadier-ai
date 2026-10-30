@@ -1,5 +1,6 @@
 //! Accepts IPC connections and serves requests and the live event feed.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +27,6 @@ use brigadier_ipc::protocol::{
     Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token};
-use brigadier_providers::ProviderKind;
 use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
 use tokio::sync::broadcast::error::RecvError;
@@ -117,8 +117,7 @@ impl Daemon {
         pages: Arc<Pages>,
         site_icons: Arc<SiteIcons>,
     ) -> Self {
-        let agent_folders = ProviderKind::ALL
-            .into_iter()
+        let agent_folders = brigadier_providers::adapters::kinds()
             .filter_map(|provider| runtime.cli_env().installer_folder(provider))
             .collect();
         let terminals = Arc::new(

@@ -1,6 +1,6 @@
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Button } from "@/components/controls";
 import type { Fixture } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** One replay fixture: what it holds, and Replay. */
 export function FixtureRow({
@@ -14,7 +14,7 @@ export function FixtureRow({
 }) {
   return (
     <li className="flex items-center gap-2 text-xs">
-      <span className="w-20 shrink-0">{PROVIDER_LABELS[fixture.provider]}</span>
+      <span className="w-20 shrink-0">{cliFacts(fixture.provider).label}</span>
       <span className="min-w-0 flex-1 truncate" title={fixture.id}>
         {fixture.title}
         <span className="text-muted-foreground">

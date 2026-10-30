@@ -279,11 +279,10 @@ pub const COMMANDS: &[Command] = &[
                 "A short name for it: two to four plain words, like \"Login redirect\"; from the \
                  prompt by default.",
             ),
-            choice(
+            flag(
                 "agent",
                 "AGENT",
-                &["claude", "codex"],
-                "Which CLI runs it; this session's by default.",
+                "Which CLI runs it, by its id; this session's by default.",
             ),
             flag(
                 "model",
@@ -468,10 +467,10 @@ pub const COMMANDS: &[Command] = &[
         args: &[
             Arg::Positional {
                 name: "agent",
-                help: "The CLI to continue on.",
+                help: "The CLI to continue on, by its id.",
                 required: true,
                 rest: false,
-                choices: &["claude", "codex"],
+                choices: &[],
             },
             switch("after-turn", "Move once the running turn ends."),
         ],

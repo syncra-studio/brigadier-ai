@@ -1,7 +1,6 @@
 import { Fragment, type MouseEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/setup/onboarding/SetupTerminal";
 import { ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
 import { Badge, Button, Input, ErrorLine } from "@/components/controls";
@@ -15,7 +14,6 @@ import { ChevronDown, ChevronRight, DotsHorizontal, Eye, EyeOff, Plus } from "@/
 import { UsageBar } from "@/components/shared";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown, formatTime } from "@/lib/format";
 import { ordered, usageTone, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
@@ -30,6 +28,7 @@ import {
   signInAccount,
 } from "@/state/accounts";
 import { closeSetupTerminal } from "@/state/onboarding";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** How long after its sign-in ends an account may take to read as signed in. */
 const SIGN_IN_SLACK_MS = 2000;
@@ -104,7 +103,7 @@ export function ProviderAccounts({
   revealed: Revealed;
   opened: OpenRows;
 }) {
-  const label = VENDOR_LABELS[provider];
+  const label = cliFacts(provider).vendor;
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
   // Off the page: a new account added only after that goes again with its sign-in.
@@ -319,7 +318,7 @@ function AccountRow({
   );
   const line: ReactNode[] = [];
   if (!status) line.push("Checking…");
-  else if (!status.path) line.push(`${PROVIDER_LABELS[provider]} isn't installed`);
+  else if (!status.path) line.push(`${cliFacts(provider).label} isn't installed`);
   else {
     if (email)
       line.push(

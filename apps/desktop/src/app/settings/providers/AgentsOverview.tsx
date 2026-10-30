@@ -14,12 +14,13 @@ import {
 import { Plus, ProviderGlyph } from "@/components/icons";
 import { SettingsCard, SettingsRow } from "@/components/shared";
 import type { AccountView, ProviderKind, ProviderOverview } from "@/ipc/generated";
-import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
+import { PROVIDERS } from "@/lib/routing";
 import { accountsOf } from "@/state/accounts";
 import { connectAgent, connecting, useConnect } from "@/state/connect";
 import { providerOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The overview's copy, for Settings search; the page renders this. */
 export const OVERVIEW_ROWS = {
@@ -35,9 +36,6 @@ export const OVERVIEW_ROWS = {
   },
   notSetUp: "Agents Brigadier can run that aren't installed yet",
 } as const;
-
-/** The CLI each agent runs, as its rows name it. */
-export const CLI_NAMES: Record<ProviderKind, string> = { claude: "Claude Code CLI", codex: "Codex CLI" };
 
 /**
  * Settings › Providers' first page: the fallback switch, the agents Brigadier runs (how each
@@ -115,9 +113,9 @@ export function AgentsOverview({
               <div className="flex items-center gap-3.5 px-4 py-3">
                 <ProviderGlyph provider={provider} tile="md" idle />
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className={ROW_TITLE}>{VENDOR_LABELS[provider]}</span>
+                  <span className={ROW_TITLE}>{cliFacts(provider).vendor}</span>
                   <span className={ROW_LINE}>
-                    {CLI_NAMES[provider]} · not installed
+                    {cliFacts(provider).cliName} · not installed
                   </span>
                 </div>
                 <Button size="sm" disabled={settingUp(provider)} onClick={() => void connectAgent(provider)}>
@@ -147,7 +145,7 @@ export function AgentsOverview({
                     onSelect={() => void connectAgent(provider)}
                   >
                     <ProviderGlyph provider={provider} tile="md" idle />
-                    <span className="flex-1">{VENDOR_LABELS[provider]}</span>
+                    <span className="flex-1">{cliFacts(provider).vendor}</span>
                     {added && <span className="text-muted-foreground text-xs">Added</span>}
                   </DropdownMenuItem>
                 );

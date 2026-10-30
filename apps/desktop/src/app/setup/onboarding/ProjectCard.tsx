@@ -1,9 +1,9 @@
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ProviderGlyph } from "@/components/icons";
 import { CheckboxMark } from "@/components/controls";
 import type { ProjectCandidate } from "@/ipc/generated";
 import { formatAgo, shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { cliFacts } from "@/lib/providerKinds";
 
 export function ProjectCard({
   candidate,
@@ -46,9 +46,9 @@ export function ProjectCard({
         <span className="text-muted-foreground/70 w-full truncate font-mono text-xs">{shortPath(candidate.path)}</span>
         <span className="text-muted-foreground/70 flex min-w-0 items-center gap-1.5 pt-2.5 text-xs">
           {candidate.providers.map((provider) => (
-            <span key={provider} title={PROVIDER_LABELS[provider]} className="flex shrink-0">
+            <span key={provider} title={cliFacts(provider).label} className="flex shrink-0">
               <ProviderGlyph provider={provider} className="size-icon-sm" />
-              <span className="sr-only">{PROVIDER_LABELS[provider]}</span>
+              <span className="sr-only">{cliFacts(provider).label}</span>
             </span>
           ))}
           <span className="truncate">{added ? "Already added" : activity}</span>

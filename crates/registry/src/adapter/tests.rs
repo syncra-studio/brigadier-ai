@@ -1,16 +1,17 @@
 use super::*;
-use crate::{Agent, Roots, Source};
+use crate::{ProviderKind, Roots, Source};
 #[test]
 fn every_agent_has_one_adapter_and_owns_its_sources() {
-    let agents: Vec<Agent> = adapters().iter().map(|adapter| adapter.agent()).collect();
-    assert_eq!(agents, [Agent::Claude, Agent::Codex]);
+    let agents: Vec<ProviderKind> = adapters().iter().map(|adapter| adapter.agent()).collect();
+    assert_eq!(agents, [ProviderKind::Claude, ProviderKind::Codex]);
     for agent in agents {
-        assert_eq!(adapter(agent).agent(), agent);
+        assert_eq!(adapter(agent).unwrap().agent(), agent);
     }
-    assert_eq!(owner(Source::ClaudeLocal), Some(Agent::Claude));
-    assert_eq!(owner(Source::CodexPlugin), Some(Agent::Codex));
+    assert_eq!(owner(Source::ClaudeLocal), Some(ProviderKind::Claude));
+    assert_eq!(owner(Source::CodexPlugin), Some(ProviderKind::Codex));
     assert_eq!(owner(Source::Desktop), None);
     assert_eq!(owner(Source::CursorProject), None);
+    assert!(adapter(ProviderKind::new("later")).is_none());
 }
 
 #[test]
@@ -30,19 +31,19 @@ fn a_moved_home_is_pointed_at_and_the_default_one_is_left_alone() {
     }
     let moved = vars(&[("CLAUDE_CONFIG_DIR", "/c"), ("CODEX_HOME", "/x")]);
     assert_eq!(
-        adapter(Agent::Claude).home_env(&moved),
+        adapter(ProviderKind::Claude).unwrap().home_env(&moved),
         [("CLAUDE_CONFIG_DIR".to_owned(), "/c".to_owned())]
     );
     assert_eq!(
-        adapter(Agent::Codex).home_env(&moved),
+        adapter(ProviderKind::Codex).unwrap().home_env(&moved),
         [("CODEX_HOME".to_owned(), "/x".to_owned())]
     );
 }
 
 #[test]
 fn each_cli_signs_in_on_its_own_list_and_prints_the_page() {
-    let claude = adapter(Agent::Claude);
-    let codex = adapter(Agent::Codex);
+    let claude = adapter(ProviderKind::Claude).unwrap();
+    let codex = adapter(ProviderKind::Codex).unwrap();
     assert_eq!(
         claude.login("plugin:x:s", None).args,
         ["mcp", "login", "plugin:x:s", "--no-browser"]

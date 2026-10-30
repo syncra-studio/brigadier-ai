@@ -1,8 +1,9 @@
 //! A quota pause belongs to one worker. Its durable wait retains the task and workspace;
 //! neither a lead handoff nor another worker's account change cancels it.
+use brigadier_providers::KindFacts as _;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use brigadier_providers::{LimitHit, LimitKind, Origin, ProviderKind, TurnInput};
+use brigadier_providers::{LimitHit, LimitKind, Origin, TurnInput};
 use serde::{Deserialize, Serialize};
 
 use super::TaskLive;
@@ -157,10 +158,7 @@ impl SessionManager {
                     .unwrap_or_default()
                     .into_iter()
                     .map(|row| ModelChoice {
-                        provider: match row.agent {
-                            brigadier_cli::protocol::Agent::Claude => ProviderKind::Claude,
-                            brigadier_cli::protocol::Agent::Codex => ProviderKind::Codex,
-                        },
+                        provider: row.agent,
                         model: (!row.model.eq_ignore_ascii_case("default"))
                             .then(|| row.model.clone()),
                         effort: row.effort,

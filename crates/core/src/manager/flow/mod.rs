@@ -738,7 +738,7 @@ impl FakeCli {
             }
             // Each vendor's frontier model, as the registry rates them: the roles that write,
             // check or merge code run on a vendor's best.
-            ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
+            _ => &[("gpt-6-astra", "GPT-6-Astra")],
         };
         let own = self
             .account
@@ -760,7 +760,7 @@ impl FakeCli {
             // Claude's takes images, so operate work has a model.
             input_modalities: match self.kind {
                 ProviderKind::Claude => vec!["text".into(), "image".into()],
-                ProviderKind::Codex => vec!["text".into()],
+                _ => vec!["text".into()],
             },
             fast: None,
             legacy: false,
@@ -886,17 +886,11 @@ impl Provider for FakeCli {
                     .account
                     .as_ref()
                     .map(|_| self.home.display().to_string());
-                let artifact = match self.kind {
-                    ProviderKind::Claude => Artifact::ClaudeSession {
-                        session_id: native_id.clone(),
-                        home,
-                        cwd: None,
-                    },
-                    ProviderKind::Codex => Artifact::CodexThread {
-                        thread_id: native_id.clone(),
-                        home,
-                        cwd: None,
-                    },
+                let artifact = Artifact::Session {
+                    provider: self.kind,
+                    id: native_id.clone(),
+                    home,
+                    cwd: None,
                 };
                 ledger.record(artifact).await?;
                 for path in fake_files(&self.home, &native_id) {
@@ -1002,7 +996,11 @@ impl Provider for FakeCli {
         let found = artifacts
             .iter()
             .filter_map(|artifact| match artifact {
-                Artifact::ClaudeSession { session_id, .. } => made.get(session_id),
+                Artifact::Session {
+                    provider: ProviderKind::Claude,
+                    id,
+                    ..
+                } => made.get(id),
                 _ => None,
             })
             .flatten()
@@ -1033,14 +1031,8 @@ impl Provider for FakeCli {
                 ));
             }
             for artifact in artifacts {
-                let (id, home) = match artifact {
-                    Artifact::ClaudeSession {
-                        session_id, home, ..
-                    } => (session_id, home),
-                    Artifact::CodexThread {
-                        thread_id, home, ..
-                    } => (thread_id, home),
-                    _ => continue,
+                let Artifact::Session { id, home, .. } = artifact else {
+                    continue;
                 };
                 let expected = self
                     .account
@@ -1663,7 +1655,7 @@ async fn boot(
         core.clone(),
         platform,
         spawner.clone(),
-        [
+        vec![
             fake(ProviderKind::Claude, None),
             fake(ProviderKind::Codex, None),
         ],
@@ -1689,9 +1681,9 @@ async fn boot(
     // The router picks only among models it has seen.
     let mut checked = runtime.provider_checks();
     tokio::time::timeout(*PATIENCE, async {
-        while ProviderKind::ALL.iter().any(|kind| {
+        while brigadier_providers::adapters::kinds().any(|kind| {
             runtime
-                .overview(*kind)
+                .overview(kind)
                 .is_none_or(|overview| overview.models.is_none())
         }) {
             checked.changed().await.unwrap();
@@ -2005,7 +1997,7 @@ impl Flow {
                         model: Some(
                             match options.thread {
                                 ProviderKind::Claude => "claude-opus-5-5",
-                                ProviderKind::Codex => "gpt-6-astra",
+                                _ => "gpt-6-astra",
                             }
                             .into(),
                         ),
@@ -2135,7 +2127,7 @@ impl Flow {
                         model: Some(
                             match thread {
                                 ProviderKind::Claude => "claude-opus-5-5",
-                                ProviderKind::Codex => "gpt-6-astra",
+                                _ => "gpt-6-astra",
                             }
                             .into(),
                         ),
@@ -2213,7 +2205,7 @@ impl Flow {
         settings.manual_accounts = if switch {
             Vec::new()
         } else {
-            ProviderKind::ALL.to_vec()
+            brigadier_providers::adapters::kinds().collect::<Vec<_>>()
         };
         self.core.update_settings(settings).await.unwrap();
         self.manager.runtime.sync_accounts().await;

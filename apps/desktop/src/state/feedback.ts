@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { openUrl, request, systemName } from "@/ipc/client";
 import type { FeedbackWriteUp } from "@/ipc/generated";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@/lib/feedbackSend";
 import type { FeedbackDetails, FeedbackKind } from "@/lib/feedbackUrl";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /**
  * Send feedback (the sidebar's foot, Help › Send Feedback…, the thread's feedback card): the
@@ -372,7 +372,7 @@ export async function lookUpSystem(): Promise<void> {
 export function feedbackDetails(): FeedbackDetails {
   const { info, providers } = useApp.getState();
   const agents = (providers.view?.providers ?? []).flatMap(({ provider, status }) =>
-    status?.version ? [`${PROVIDER_LABELS[provider]} ${status.version}`] : [],
+    status?.version ? [`${cliFacts(provider).label} ${status.version}`] : [],
   );
   return { version: info?.version ?? null, system, agents };
 }

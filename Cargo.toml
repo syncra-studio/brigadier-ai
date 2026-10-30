@@ -14,6 +14,7 @@ members = [
   "crates/daemon",
   "crates/browser-data",
   "crates/cli",
+  "crates/kind",
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
@@ -33,6 +34,7 @@ brigadier-core = { path = "crates/core" }
 brigadier-store = { path = "crates/store" }
 brigadier-ipc = { path = "crates/ipc" }
 brigadier-providers = { path = "crates/providers" }
+brigadier-kind = { path = "crates/kind" }
 brigadier-sandbox = { path = "crates/sandbox" }
 brigadier-git = { path = "crates/git" }
 brigadier-router = { path = "crates/router" }

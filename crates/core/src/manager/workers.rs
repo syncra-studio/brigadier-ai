@@ -24,7 +24,7 @@ use brigadier_git::{Oid, PatchOutcome, WorktreeSpec};
 use brigadier_providers::policy;
 use brigadier_providers::{
     ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider, InputFile, InputPart,
-    Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    Origin, ProviderEvent, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -896,9 +896,10 @@ impl SessionManager {
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
-        // A resumed Codex thread's token totals include the turns counted before.
+        // A resumed session's token totals may include the turns counted before.
         let resumed = matches!(origin, Origin::Resume { .. });
-        let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
+        let continues =
+            super::conversation::cumulative_usage(task.route.choice.provider) && resumed;
         let WorkerSession {
             plugins,
             plugin_lease,
@@ -2407,18 +2408,22 @@ impl SessionManager {
         }
         self.set_task_state(&conversation_id, &task_id, TaskState::Paused)
             .await?;
-        if live
+        let finishing = live
             .state
             .lock()
             .await
             .cli
             .as_ref()
-            .is_some_and(|c| c.provider == ProviderKind::Codex)
-        {
+            .and_then(|c| brigadier_providers::adapters::adapter(c.provider))
+            .filter(|adapter| adapter.pause_finishes_command);
+        if let Some(adapter) = finishing {
             self.notice(
                 &conversation_id,
                 brigadier_providers::NoticeLevel::Info,
-                "Codex finishes the command it is running before it pauses.",
+                &format!(
+                    "{} finishes the command it is running before it pauses.",
+                    adapter.label
+                ),
             )
             .await;
         }

@@ -104,11 +104,8 @@ impl Uninstall {
             .filter(|artifact| {
                 matches!(
                     artifact,
-                    Artifact::ClaudeSession { .. }
-                        | Artifact::ClaudeProjectDir { .. }
-                        | Artifact::CodexThread { .. }
-                        | Artifact::CodexGeneratedImages { .. }
-                        | Artifact::CodexProjectTrust { .. }
+                    Artifact::Session { .. }
+                        | Artifact::CliFile { .. }
                         | Artifact::CliTrust { .. }
                         | Artifact::Adopted { .. }
                 )
@@ -157,15 +154,22 @@ impl Uninstall {
             );
         }
         if cli_files > 0 {
-            items.push(UninstallItem {
-                label: format!(
-                    "{} Brigadier recorded",
-                    counted(
-                        cli_files,
-                        "Claude or Codex session file, thread or trust entry",
-                        "Claude and Codex session files, threads and trust entries",
-                    )
+            let vendors: Vec<&str> = brigadier_providers::adapters::ADAPTERS
+                .iter()
+                .map(|adapter| adapter.vendor)
+                .collect();
+            let (one, many) = (
+                format!(
+                    "{} session file, thread or trust entry",
+                    words(&vendors, "or")
                 ),
+                format!(
+                    "{} session files, threads and trust entries",
+                    words(&vendors, "and")
+                ),
+            );
+            items.push(UninstallItem {
+                label: format!("{} Brigadier recorded", counted(cli_files, &one, &many)),
                 path: None,
                 bytes: 0,
                 to_trash: false,
@@ -689,4 +693,13 @@ fn tell_failures(identifier: &str, failures: &[String]) {
         return;
     }
     eprint!("{text}");
+}
+
+/// `words` joined as a list is read ("Claude, Codex or OpenCode").
+fn words(words: &[&str], last: &str) -> String {
+    match words.split_last() {
+        Some((tail, [])) => (*tail).to_owned(),
+        Some((tail, head)) => format!("{} {last} {tail}", head.join(", ")),
+        None => String::new(),
+    }
 }

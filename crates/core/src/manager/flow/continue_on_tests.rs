@@ -5,9 +5,10 @@
 //! after a restart. Refused, in plain words, while its turn runs without --after-turn, for a
 //! worker, for a CLI turned off and when the rules allow no model there.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::sync::{Arc, Mutex};
 
-use brigadier_cli::protocol::{Agent, CliRequest, GRANT_ENV, SESSION_ENV};
+use brigadier_cli::protocol::{CliRequest, GRANT_ENV, SESSION_ENV};
 use brigadier_providers::ProviderKind;
 use serde_json::Value;
 

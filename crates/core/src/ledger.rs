@@ -17,9 +17,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use brigadier_providers::claude::Claude;
-use brigadier_providers::codex::Codex;
-use brigadier_providers::{Artifact, Provider, ProviderKind, cleanup};
+use brigadier_providers::{Artifact, KindFacts as _, Provider, ProviderKind, cleanup};
 use brigadier_sandbox::Platform;
 use brigadier_store::NewEvent;
 
@@ -138,13 +136,16 @@ pub struct NativeSession {
 
 impl State {
     fn note_native(&mut self, artifact: &Artifact) {
-        let (id, kind, cwd) = match artifact {
-            Artifact::ClaudeSession {
-                session_id, cwd, ..
-            } => (session_id, ProviderKind::Claude, cwd),
-            Artifact::CodexThread { thread_id, cwd, .. } => (thread_id, ProviderKind::Codex, cwd),
-            _ => return,
+        let Artifact::Session {
+            provider: kind,
+            id,
+            cwd,
+            ..
+        } = artifact
+        else {
+            return;
         };
+        let kind = *kind;
         let known = self
             .native
             .entry(id.clone())
@@ -212,8 +213,8 @@ pub type RefRemover = Arc<
 pub struct CleanupLedger {
     core: Arc<Core>,
     platform: Arc<dyn Platform>,
-    claude: Arc<Claude>,
-    codex: Arc<Codex>,
+    /// Each registered CLI's adapter for the user's own login.
+    providers: Vec<Arc<dyn Provider>>,
     state: Mutex<State>,
     /// A tab chat's records go, or one is added, one at a time: none slips in between.
     tab_chats: tokio::sync::Mutex<()>,
@@ -222,7 +223,7 @@ pub struct CleanupLedger {
     git: Mutex<Option<GitRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
-    test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
+    test_providers: Mutex<Option<Vec<Arc<dyn Provider>>>>,
     /// Holds the next append of an event of this kind: signals the first `Notify` when it is
     /// reached, then waits for the second.
     #[cfg(test)]
@@ -243,8 +244,7 @@ impl CleanupLedger {
     pub(crate) async fn load(
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
-        claude: Arc<Claude>,
-        codex: Arc<Codex>,
+        providers: Vec<Arc<dyn Provider>>,
     ) -> Result<Self> {
         let mut state = State::default();
         let mut events = read_stream(&core, streams::CLEANUP.into()).await?;
@@ -301,8 +301,7 @@ impl CleanupLedger {
         Ok(Self {
             core,
             platform,
-            claude,
-            codex,
+            providers,
             state: Mutex::new(state),
             tab_chats: tokio::sync::Mutex::new(()),
             worktrees: Mutex::new(None),
@@ -340,12 +339,13 @@ impl CleanupLedger {
 
     /// Keeps flow tests' cleanup on their scripted CLIs, including the own login.
     #[cfg(test)]
-    pub(crate) fn set_test_providers(&self, providers: [Arc<dyn Provider>; 2]) {
+    pub(crate) fn set_test_providers(&self, providers: Vec<Arc<dyn Provider>>) {
         *self.test_providers.lock().unwrap() = Some(providers);
     }
 
-    /// The adapter that removes `kind`'s files of a session that ran in `home`.
-    fn remover(&self, kind: ProviderKind, home: Option<&str>) -> Arc<dyn Provider> {
+    /// The adapter that removes `kind`'s files of a session that ran in `home`; none for a CLI
+    /// no longer registered.
+    fn remover(&self, kind: ProviderKind, home: Option<&str>) -> Option<Arc<dyn Provider>> {
         let resolver = self
             .accounts
             .lock()
@@ -354,20 +354,19 @@ impl CleanupLedger {
         if let (Some(home), Some(resolver)) = (home, resolver)
             && let Some(provider) = resolver(home).filter(|provider| provider.kind() == kind)
         {
-            return provider;
+            return Some(provider);
         }
         #[cfg(test)]
         if let Some(providers) = &*self.test_providers.lock().unwrap() {
             return providers
                 .iter()
                 .find(|provider| provider.kind() == kind)
-                .unwrap()
-                .clone();
+                .cloned();
         }
-        match kind {
-            ProviderKind::Claude => self.claude.clone(),
-            ProviderKind::Codex => self.codex.clone(),
-        }
+        self.providers
+            .iter()
+            .find(|provider| provider.kind() == kind)
+            .cloned()
     }
 
     /// Wires in the git engine for removing worktrees.
@@ -429,16 +428,17 @@ impl CleanupLedger {
     /// so that removing them now, or the launch sweep's retry after a crash, removes exactly
     /// those entries. Then disposes of `owner`.
     pub async fn adopt(&self, owner: &str, artifacts: Vec<Artifact>) -> Result<Leftovers> {
-        // Codex threads go by id through Codex's own `thread/delete`, which also takes them off
-        // the Codex app's lists; the caller checked their files are still the ones shown.
+        // CLI sessions go by id through their CLI's own delete (Codex's `thread/delete`), which
+        // also takes them off the CLI's own lists; the caller checked their files are still the
+        // ones shown.
         if artifacts.iter().any(|artifact| {
             !matches!(
                 artifact,
-                Artifact::Adopted { .. } | Artifact::CodexThread { .. }
+                Artifact::Adopted { .. } | Artifact::Session { .. }
             )
         }) {
             return Err(Error::Invalid(
-                "only adopted entries and Codex threads can be taken on this way".into(),
+                "only adopted entries and CLI sessions can be taken on this way".into(),
             ));
         }
         for artifact in artifacts {
@@ -616,9 +616,7 @@ impl CleanupLedger {
                 .iter()
                 .filter_map(|event| match crate::sessions::decode(event) {
                     Ok(DomainEvent::CleanupRecorded {
-                        artifact:
-                            Artifact::ClaudeSession { session_id: id, .. }
-                            | Artifact::CodexThread { thread_id: id, .. },
+                        artifact: Artifact::Session { id, .. },
                         ..
                     }) => Some(id),
                     _ => None,
@@ -646,57 +644,71 @@ impl CleanupLedger {
         }
     }
 
-    /// After a restart, when nothing of Brigadier's runs: archives the Codex threads it still
-    /// holds, so the user's own Codex apps don't list them among their threads. A session
-    /// closed normally archived its thread already; a thread is unarchived when resumed.
-    pub async fn archive_codex_threads(&self) {
+    /// After a restart, when nothing of Brigadier's runs: archives the CLI sessions it still
+    /// holds in their CLIs' own records ([`Provider::archive_sessions`]: Codex threads), so the
+    /// user's own apps of the CLI don't list them. A session closed normally archived its own
+    /// already; one is unarchived when resumed.
+    pub async fn archive_sessions(&self) {
         #[cfg(test)]
         if self.test_providers.lock().unwrap().is_some() {
             return;
         }
-        let (private, threads): (Vec<_>, Vec<_>) = self
-            .state()
-            .artifacts
-            .iter()
-            .flat_map(|(owner, artifacts)| {
-                artifacts.iter().filter_map(move |artifact| match artifact {
-                    Artifact::CodexThread { thread_id, .. } => {
-                        Some((owner.starts_with(TAB_CHAT_OWNER), thread_id.clone()))
-                    }
-                    _ => None,
+        for provider in &self.providers {
+            let kind = provider.kind();
+            let (private, sessions): (Vec<_>, Vec<_>) = self
+                .state()
+                .artifacts
+                .iter()
+                .flat_map(|(owner, artifacts)| {
+                    artifacts
+                        .iter()
+                        .filter_map(move |artifact| match artifact.native_session() {
+                            Some((held, id)) if held == kind => {
+                                Some((owner.starts_with(TAB_CHAT_OWNER), id.to_owned()))
+                            }
+                            _ => None,
+                        })
                 })
-            })
-            .partition(|(private, _)| *private);
-        let private: Vec<String> = private.into_iter().map(|(_, id)| id).collect();
-        let threads: Vec<String> = threads.into_iter().map(|(_, id)| id).collect();
-        if threads.is_empty() && private.is_empty() {
-            return;
-        }
-        // A conversation resumed meanwhile has a CLI process again: its thread stays open. A
-        // thread's files are held under its lineage, its process under the thread's owner.
-        let open = |thread_id: &str| {
-            let state = self.state();
-            state.artifacts.iter().any(|(owner, artifacts)| {
-                artifacts.iter().any(|artifact| {
-                    matches!(artifact, Artifact::CodexThread { thread_id: held, .. } if held == thread_id)
-                }) && std::iter::once(owner.clone())
-                    .chain(lineage_holders(owner))
-                    .any(|owner| state.artifacts.get(&owner).is_some_and(|held| held.iter().any(is_process)))
-            })
-        };
-        if !threads.is_empty()
-            && let Err(err) = self.codex.archive_threads(threads, false, &open).await
-        {
-            tracing::debug!(error = %err, "could not archive codex threads");
-        }
-        if !private.is_empty()
-            && self
-                .codex
-                .archive_threads(private, true, open)
-                .await
-                .is_err()
-        {
-            tracing::debug!(conversation = "tab chat", "could not archive codex threads");
+                .partition(|(private, _)| *private);
+            let private: Vec<String> = private.into_iter().map(|(_, id)| id).collect();
+            let sessions: Vec<String> = sessions.into_iter().map(|(_, id)| id).collect();
+            if sessions.is_empty() && private.is_empty() {
+                continue;
+            }
+            // A conversation resumed meanwhile has a CLI process again: its session stays open.
+            // A session's files are held under its lineage, its process under the session's
+            // owner.
+            let open = move |id: &str| {
+                let state = self.state();
+                state.artifacts.iter().any(|(owner, artifacts)| {
+                    artifacts
+                        .iter()
+                        .any(|artifact| artifact.native_session() == Some((kind, id)))
+                        && std::iter::once(owner.clone())
+                            .chain(lineage_holders(owner))
+                            .any(|owner| {
+                                state
+                                    .artifacts
+                                    .get(&owner)
+                                    .is_some_and(|held| held.iter().any(is_process))
+                            })
+                })
+            };
+            if !sessions.is_empty()
+                && let Err(err) = provider
+                    .archive_sessions(sessions, false, Box::new(open))
+                    .await
+            {
+                tracing::debug!(error = %err, cli = %kind, "could not archive CLI sessions");
+            }
+            if !private.is_empty()
+                && provider
+                    .archive_sessions(private, true, Box::new(open))
+                    .await
+                    .is_err()
+            {
+                tracing::debug!(conversation = "tab chat", cli = %kind, "could not archive CLI sessions");
+            }
         }
     }
 
@@ -836,21 +848,25 @@ impl CleanupLedger {
     }
 
     /// The worktrees, each with its branch, that the CLIs made for the subagents of these
-    /// sessions ([`Artifact::ClaudeSession`]s; the rest is passed over).
+    /// sessions ([`Artifact::Session`]s; the rest is passed over).
     pub async fn worktrees_made_for(
         &self,
         sessions: Vec<Artifact>,
     ) -> Vec<(std::path::PathBuf, String)> {
-        let mut by_home: BTreeMap<Option<String>, Vec<Artifact>> = BTreeMap::new();
+        let mut by_home: BTreeMap<(ProviderKind, Option<String>), Vec<Artifact>> = BTreeMap::new();
         for artifact in sessions {
-            if let Artifact::ClaudeSession { home, .. } = &artifact {
-                by_home.entry(home.clone()).or_default().push(artifact);
+            if let Artifact::Session { provider, home, .. } = &artifact {
+                by_home
+                    .entry((*provider, home.clone()))
+                    .or_default()
+                    .push(artifact);
             }
         }
         let mut made = Vec::new();
-        for (home, sessions) in by_home {
-            let remover = self.remover(ProviderKind::Claude, home.as_deref());
-            made.extend(remover.made_worktrees(sessions).await);
+        for ((kind, home), sessions) in by_home {
+            if let Some(remover) = self.remover(kind, home.as_deref()) {
+                made.extend(remover.made_worktrees(sessions).await);
+            }
         }
         made.sort();
         made.dedup();
@@ -987,20 +1003,8 @@ impl CleanupLedger {
                         Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
-                Artifact::ClaudeSession { home, .. } => {
-                    add(ProviderKind::Claude, home.clone(), artifact)
-                }
-                Artifact::ClaudeProjectDir { .. }
-                | Artifact::ClaudeMemoryDir { .. }
-                | Artifact::ClaudeStagingDir { .. }
-                | Artifact::ClaudePlanFile { .. }
-                | Artifact::ClaudeTempDir { .. } => add(ProviderKind::Claude, None, artifact),
-                Artifact::CodexThread { home, .. } => {
-                    add(ProviderKind::Codex, home.clone(), artifact)
-                }
-                Artifact::CodexGeneratedImages { .. } | Artifact::CodexProjectTrust { .. } => {
-                    add(ProviderKind::Codex, None, artifact)
-                }
+                Artifact::Session { provider, home, .. } => add(*provider, home.clone(), artifact),
+                Artifact::CliFile { provider, .. } => add(*provider, None, artifact),
                 Artifact::Adopted {
                     root,
                     path,
@@ -1096,7 +1100,7 @@ impl CleanupLedger {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers
                             .failures
-                            .push(format!("{} folder trust: {err}", cli.label())),
+                            .push(format!("{} folder trust: {err}", cli.vendor())),
                         Err(err) => leftovers.failures.push(err.to_string()),
                     }
                 }
@@ -1148,7 +1152,14 @@ impl CleanupLedger {
             }
         }
         for (kind, home, artifacts) in cli_files {
-            let provider = self.remover(kind, home.as_deref());
+            // An old record of a CLI no longer registered stays, for when it is again.
+            let Some(provider) = self.remover(kind, home.as_deref()) else {
+                leftovers.failures.push(format!(
+                    "{} files: this CLI is no longer set up",
+                    kind.label()
+                ));
+                continue;
+            };
             match provider
                 .remove_with_privacy(artifacts.clone(), owner.starts_with(TAB_CHAT_OWNER))
                 .await
@@ -1677,15 +1688,14 @@ fn lineage_owner_for(owner: &str, artifact: &Artifact) -> Option<String> {
 
 /// A CLI session's transcript or what goes with it.
 fn session_file(artifact: &Artifact) -> bool {
-    matches!(
-        artifact,
-        Artifact::ClaudeSession { .. }
-            | Artifact::ClaudeProjectDir { .. }
-            | Artifact::ClaudeMemoryDir { .. }
-            | Artifact::ClaudePlanFile { .. }
-            | Artifact::CodexThread { .. }
-            | Artifact::CodexGeneratedImages { .. }
-    )
+    match artifact {
+        Artifact::Session { .. } => true,
+        Artifact::CliFile { provider, kind, .. } => {
+            brigadier_providers::adapters::adapter(*provider)
+                .is_some_and(|adapter| adapter.session_files.contains(&kind.as_str()))
+        }
+        _ => false,
+    }
 }
 
 struct OwnerLedger {
@@ -1838,8 +1848,10 @@ mod tests {
                 CleanupLedger::load(
                     self.core.clone(),
                     self.platform.clone(),
-                    Arc::new(Claude::new(self.platform.clone(), env.clone())),
-                    Arc::new(Codex::new(self.platform.clone(), env)),
+                    brigadier_providers::adapters::ADAPTERS
+                        .iter()
+                        .map(|adapter| (adapter.new)(self.platform.clone(), env.clone()))
+                        .collect(),
                 )
                 .await
                 .unwrap(),

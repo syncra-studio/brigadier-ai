@@ -82,7 +82,7 @@ pub enum CliRequest {
     /// Moves the calling session to another CLI, with a fresh context and a hand-off note
     /// (S38c); while a turn runs, only with `after_turn`, once it ends.
     ContinueOn {
-        agent: Agent,
+        agent: ProviderKind,
         #[serde(default)]
         after_turn: bool,
     },
@@ -277,7 +277,7 @@ pub struct StartRequest {
     /// Absent: from the prompt.
     pub title: Option<String>,
     /// Absent: the calling session's agent.
-    pub agent: Option<Agent>,
+    pub agent: Option<ProviderKind>,
     /// Absent: the CLI's own default.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -530,7 +530,7 @@ pub struct WorkerRow {
     /// Its number in its session (`task-N`).
     pub number: u32,
     pub title: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
     /// Absent: the CLI's own default.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -677,21 +677,8 @@ pub struct ContextSize {
     pub window_tokens: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Agent {
-    Claude,
-    Codex,
-}
-
-impl Agent {
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
-    }
-}
+/// The CLI a session or worker runs on: its id is its word (`claude`, `codex`).
+pub use brigadier_kind::ProviderKind;
 
 /// A worker's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -773,7 +760,7 @@ pub struct ShowOutput {
     pub title: String,
     /// A [`SessionState`] or [`WorkerState`] word.
     pub state: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub branch: Option<String>,
@@ -924,7 +911,7 @@ pub struct StartReview {
     /// The workers' ids, or the session's, whose work it reviews.
     pub of: Vec<String>,
     /// The CLIs that work ran on.
-    pub authors: Vec<Agent>,
+    pub authors: Vec<ProviderKind>,
     /// It runs on another CLI than the authors'; false: none other was ready and allowed, so
     /// a fresh session of theirs reviews.
     pub other_provider: bool,
@@ -1035,7 +1022,9 @@ impl EventKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinueOnOutput {
-    pub agent: Agent,
+    pub agent: ProviderKind,
+    /// Its name, as shown ("Claude Code").
+    pub label: String,
     /// Absent: the CLI's own default.
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -1418,7 +1407,7 @@ pub enum WhyBy {
 pub struct WhySession {
     pub id: String,
     pub title: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1459,7 +1448,7 @@ pub struct WhyWorker {
     pub id: String,
     pub number: u32,
     pub title: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
     pub branch: Option<String>,
     /// The first message it was given, whole.
     pub task: Option<String>,

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::*;
+use crate::codex::trust::{HookTrust, trust_codex_hook};
 
 /// A scratch folder of the test's own, removed when dropped.
 struct Scratch(PathBuf);
@@ -34,7 +35,7 @@ const FOLDER: &str = "/Users/me/code/app";
 
 /// Trusts `FOLDER`, checks the result reads as trusted, undoes it, and returns the text in
 /// between.
-fn round_trip(cli: TrustCli, file: &Path, before: TrustBefore) -> String {
+fn round_trip(cli: ProviderKind, file: &Path, before: TrustBefore) -> String {
     assert_eq!(plan(cli, file, FOLDER).unwrap(), Some(before.clone()));
     assert_eq!(write(cli, file, FOLDER, &before).unwrap(), Written::Trusted);
     assert_eq!(plan(cli, file, FOLDER).unwrap(), None);
@@ -65,7 +66,7 @@ const CLAUDE: &str = r#"{
 fn claude_new_entry_round_trips_byte_for_byte() {
     let scratch = Scratch::new();
     let file = scratch.file(".claude.json", Some(CLAUDE));
-    let trusted = round_trip(TrustCli::Claude, &file, TrustBefore::NoEntry);
+    let trusted = round_trip(ProviderKind::Claude, &file, TrustBefore::NoEntry);
     assert_eq!(fs::read_to_string(&file).unwrap(), CLAUDE);
     let value: serde_json::Value = serde_json::from_str(&trusted).unwrap();
     assert_eq!(value["projects"][FOLDER]["hasTrustDialogAccepted"], true);
@@ -85,7 +86,7 @@ fn claude_existing_entry_without_the_key_and_with_false_round_trip() {
         "{{\n  \"projects\": {{\n    \"{FOLDER}\": {{\n      \"allowedTools\": [\"Bash\"]\n    }}\n  }}\n}}"
     );
     let file = scratch.file("a.json", Some(&no_key));
-    round_trip(TrustCli::Claude, &file, TrustBefore::NoKey);
+    round_trip(ProviderKind::Claude, &file, TrustBefore::NoKey);
     assert_eq!(fs::read_to_string(&file).unwrap(), no_key);
 
     let refused = no_key.replace(
@@ -96,7 +97,7 @@ fn claude_existing_entry_without_the_key_and_with_false_round_trip() {
     let before = TrustBefore::Value {
         raw: "false".into(),
     };
-    round_trip(TrustCli::Claude, &file, before);
+    round_trip(ProviderKind::Claude, &file, before);
     assert_eq!(fs::read_to_string(&file).unwrap(), refused);
 }
 
@@ -104,12 +105,12 @@ fn claude_existing_entry_without_the_key_and_with_false_round_trip() {
 fn claude_without_a_file_or_projects_gets_one() {
     let scratch = Scratch::new();
     let file = scratch.file("none.json", None);
-    let trusted = round_trip(TrustCli::Claude, &file, TrustBefore::NoEntry);
+    let trusted = round_trip(ProviderKind::Claude, &file, TrustBefore::NoEntry);
     let value: serde_json::Value = serde_json::from_str(&trusted).unwrap();
     assert_eq!(value["projects"][FOLDER]["hasTrustDialogAccepted"], true);
 
     let file = scratch.file("bare.json", Some("{\n  \"theme\": \"dark\"\n}"));
-    let trusted = round_trip(TrustCli::Claude, &file, TrustBefore::NoEntry);
+    let trusted = round_trip(ProviderKind::Claude, &file, TrustBefore::NoEntry);
     assert!(trusted.starts_with("{\n  \"theme\": \"dark\",\n  \"projects\": {"));
     let after: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
@@ -122,13 +123,13 @@ fn trust_the_user_set_is_never_recorded_or_removed() {
     let file = scratch.file(".claude.json", Some(CLAUDE));
     // Already trusted: nothing to write, nothing to record.
     assert_eq!(
-        plan(TrustCli::Claude, &file, "/Users/me/other").unwrap(),
+        plan(ProviderKind::Claude, &file, "/Users/me/other").unwrap(),
         None
     );
     // Trusted by Brigadier, then the user changed it: undo leaves their value.
-    round_trip(TrustCli::Claude, &file, TrustBefore::NoEntry);
+    round_trip(ProviderKind::Claude, &file, TrustBefore::NoEntry);
     assert_eq!(
-        write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap(),
+        write(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap(),
         Written::Trusted
     );
     let changed = fs::read_to_string(&file).unwrap().replacen(
@@ -137,7 +138,7 @@ fn trust_the_user_set_is_never_recorded_or_removed() {
         1,
     );
     fs::write(&file, &changed).unwrap();
-    undo(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap();
+    undo(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), changed);
 }
 
@@ -146,12 +147,12 @@ fn a_write_whose_entry_changed_since_its_plan_does_nothing() {
     let scratch = Scratch::new();
     let file = scratch.file(".claude.json", Some(CLAUDE));
     assert_eq!(
-        write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoKey).unwrap(),
+        write(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoKey).unwrap(),
         Written::Changed(TrustBefore::NoEntry)
     );
     assert_eq!(
         write(
-            TrustCli::Claude,
+            ProviderKind::Claude,
             &file,
             "/Users/me/other",
             &TrustBefore::NoEntry
@@ -172,14 +173,14 @@ fn folders_are_matched_by_their_decoded_key() {
         raw: "false".into(),
     };
     assert_eq!(
-        plan(TrustCli::Claude, &file, folder).unwrap(),
+        plan(ProviderKind::Claude, &file, folder).unwrap(),
         Some(before.clone())
     );
     assert_eq!(
-        write(TrustCli::Claude, &file, folder, &before).unwrap(),
+        write(ProviderKind::Claude, &file, folder, &before).unwrap(),
         Written::Trusted
     );
-    undo(TrustCli::Claude, &file, folder, &before).unwrap();
+    undo(ProviderKind::Claude, &file, folder, &before).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), text);
 }
 
@@ -187,11 +188,11 @@ fn folders_are_matched_by_their_decoded_key() {
 fn a_file_that_does_not_parse_is_left_alone() {
     let scratch = Scratch::new();
     let file = scratch.file(".claude.json", Some("{\"projects\": {"));
-    assert!(plan(TrustCli::Claude, &file, FOLDER).is_err());
-    assert!(write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).is_err());
+    assert!(plan(ProviderKind::Claude, &file, FOLDER).is_err());
+    assert!(write(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoEntry).is_err());
     assert_eq!(fs::read_to_string(&file).unwrap(), "{\"projects\": {");
     let file = scratch.file("config.toml", Some("[projects\n"));
-    assert!(write(TrustCli::Codex, &file, FOLDER, &TrustBefore::NoEntry).is_err());
+    assert!(write(ProviderKind::Codex, &file, FOLDER, &TrustBefore::NoEntry).is_err());
     assert_eq!(fs::read_to_string(&file).unwrap(), "[projects\n");
 }
 
@@ -206,7 +207,7 @@ fn a_symlinked_config_is_written_where_it_points_with_its_mode() {
     let link = scratch.0.join(".claude.json");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert_eq!(
-        write(TrustCli::Claude, &link, FOLDER, &TrustBefore::NoEntry).unwrap(),
+        write(ProviderKind::Claude, &link, FOLDER, &TrustBefore::NoEntry).unwrap(),
         Written::Trusted
     );
     assert!(
@@ -219,7 +220,7 @@ fn a_symlinked_config_is_written_where_it_points_with_its_mode() {
         fs::metadata(&real).unwrap().permissions().mode() & 0o777,
         0o640
     );
-    assert_eq!(plan(TrustCli::Claude, &real, FOLDER).unwrap(), None);
+    assert_eq!(plan(ProviderKind::Claude, &real, FOLDER).unwrap(), None);
     // No temporary file or lock is left.
     let mut left: Vec<String> = fs::read_dir(&scratch.0)
         .unwrap()
@@ -237,14 +238,14 @@ fn claude_writes_wait_for_its_lock_and_take_over_a_stale_one() {
     let lock = scratch.0.join(".claude.json.lock");
     fs::create_dir(&lock).unwrap();
     // Held (fresh): the write gives up and changes nothing.
-    assert!(write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).is_err());
+    assert!(write(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoEntry).is_err());
     assert_eq!(fs::read_to_string(&file).unwrap(), CLAUDE);
     assert!(lock.is_dir());
     // Stale (its holder died): taken over.
     let old = SystemTime::now() - Duration::from_secs(30);
     set_folder_modified(&lock, old).unwrap();
     assert_eq!(
-        write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap(),
+        write(ProviderKind::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap(),
         Written::Trusted
     );
     assert!(!lock.exists());
@@ -276,8 +277,8 @@ fn overlapping_codex_writes_keep_every_entry() {
             let (file, folder, start) = (file.clone(), folder.clone(), start.clone());
             std::thread::spawn(move || {
                 start.wait();
-                let before = plan(TrustCli::Codex, &file, &folder).unwrap().unwrap();
-                write(TrustCli::Codex, &file, &folder, &before).unwrap()
+                let before = plan(ProviderKind::Codex, &file, &folder).unwrap().unwrap();
+                write(ProviderKind::Codex, &file, &folder, &before).unwrap()
             })
         })
         .collect();
@@ -286,7 +287,7 @@ fn overlapping_codex_writes_keep_every_entry() {
     }
     for folder in &folders {
         assert_eq!(
-            plan(TrustCli::Codex, &file, folder).unwrap(),
+            plan(ProviderKind::Codex, &file, folder).unwrap(),
             None,
             "{folder} was lost"
         );
@@ -298,7 +299,7 @@ fn overlapping_codex_writes_keep_every_entry() {
 fn codex_new_entry_round_trips_byte_for_byte() {
     let scratch = Scratch::new();
     let file = scratch.file("config.toml", Some(CODEX));
-    let trusted = round_trip(TrustCli::Codex, &file, TrustBefore::NoEntry);
+    let trusted = round_trip(ProviderKind::Codex, &file, TrustBefore::NoEntry);
     assert_eq!(fs::read_to_string(&file).unwrap(), CODEX);
     assert_eq!(
         trusted,
@@ -306,7 +307,7 @@ fn codex_new_entry_round_trips_byte_for_byte() {
     );
     // Removed while another table follows it (Codex added one after).
     fs::write(&file, format!("{trusted}\n[notice]\nhide = true\n")).unwrap();
-    undo(TrustCli::Codex, &file, FOLDER, &TrustBefore::NoEntry).unwrap();
+    undo(ProviderKind::Codex, &file, FOLDER, &TrustBefore::NoEntry).unwrap();
     assert_eq!(
         fs::read_to_string(&file).unwrap(),
         format!("{CODEX}\n[notice]\nhide = true\n")
@@ -318,7 +319,7 @@ fn codex_entries_without_the_key_or_untrusted_round_trip() {
     let scratch = Scratch::new();
     let no_key = format!("{CODEX}\n[projects.\"{FOLDER}\"]\nnote = 1\n");
     let file = scratch.file("a.toml", Some(&no_key));
-    let trusted = round_trip(TrustCli::Codex, &file, TrustBefore::NoKey);
+    let trusted = round_trip(ProviderKind::Codex, &file, TrustBefore::NoKey);
     assert!(trusted.ends_with(&format!(
         "[projects.\"{FOLDER}\"]\ntrust_level = \"trusted\"\nnote = 1\n"
     )));
@@ -327,7 +328,7 @@ fn codex_entries_without_the_key_or_untrusted_round_trip() {
     let untrusted = format!("{CODEX}\n[projects.\"{FOLDER}\"]\ntrust_level = \"untrusted\" # no\n");
     let file = scratch.file("b.toml", Some(&untrusted));
     round_trip(
-        TrustCli::Codex,
+        ProviderKind::Codex,
         &file,
         TrustBefore::Value {
             raw: "\"untrusted\"".into(),
@@ -340,7 +341,7 @@ fn codex_entries_without_the_key_or_untrusted_round_trip() {
 fn codex_without_a_file_gets_one_and_loses_it_again() {
     let scratch = Scratch::new();
     let file = scratch.file("config.toml", None);
-    round_trip(TrustCli::Codex, &file, TrustBefore::NoEntry);
+    round_trip(ProviderKind::Codex, &file, TrustBefore::NoEntry);
     assert_eq!(fs::read_to_string(&file).unwrap(), "");
 }
 
@@ -353,14 +354,14 @@ fn codex_layouts_a_splice_cant_edit_are_refused() {
         format!("[projects]\n\"{FOLDER}\" = {{ trust_level = \"untrusted\" }}\n"),
     ] {
         let file = scratch.file("config.toml", Some(&text));
-        assert!(plan(TrustCli::Codex, &file, FOLDER).is_err(), "{text}");
-        assert!(write(TrustCli::Codex, &file, FOLDER, &TrustBefore::NoEntry).is_err());
+        assert!(plan(ProviderKind::Codex, &file, FOLDER).is_err(), "{text}");
+        assert!(write(ProviderKind::Codex, &file, FOLDER, &TrustBefore::NoEntry).is_err());
         assert_eq!(fs::read_to_string(&file).unwrap(), text);
     }
     // Other folders written inline don't stop a new table.
     let text = "[projects]\n\"/elsewhere\" = { trust_level = \"trusted\" }\n";
     let file = scratch.file("config.toml", Some(text));
-    round_trip(TrustCli::Codex, &file, TrustBefore::NoEntry);
+    round_trip(ProviderKind::Codex, &file, TrustBefore::NoEntry);
     assert_eq!(fs::read_to_string(&file).unwrap(), text);
 }
 
@@ -375,11 +376,11 @@ fn the_files_follow_the_clis_environment() {
     };
     let home = env(&[("HOME", "/h")]);
     assert_eq!(
-        TrustCli::Claude.file(&home),
+        file(ProviderKind::Claude, &home),
         Some(PathBuf::from("/h/.claude.json"))
     );
     assert_eq!(
-        TrustCli::Codex.file(&home),
+        file(ProviderKind::Codex, &home),
         Some(PathBuf::from("/h/.codex/config.toml"))
     );
     let set = env(&[
@@ -388,11 +389,11 @@ fn the_files_follow_the_clis_environment() {
         ("CODEX_HOME", "/x"),
     ]);
     assert_eq!(
-        TrustCli::Claude.file(&set),
+        file(ProviderKind::Claude, &set),
         Some(PathBuf::from("/c/.claude.json"))
     );
     assert_eq!(
-        TrustCli::Codex.file(&set),
+        file(ProviderKind::Codex, &set),
         Some(PathBuf::from("/x/config.toml"))
     );
 }

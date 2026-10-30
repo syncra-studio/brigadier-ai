@@ -14,7 +14,7 @@ use brigadier_git::why::{BlameCommit, Origin, TurnOrigin};
 use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, Role as CliRole};
 
-use super::cli::{agent, short};
+use super::cli::short;
 use super::cli_ledger::{Entry, Ledger, stamped_at};
 use super::records::{READ_MAX, transcript, transcript_stamp};
 use super::{SessionManager, blocking, git_error};
@@ -307,7 +307,7 @@ impl SessionManager {
             id: short(&task.id.0),
             number: task.number,
             title: task.title.clone(),
-            agent: agent(task.route.choice.provider),
+            agent: task.route.choice.provider,
             branch: task.workspace.as_ref().and_then(|w| w.branch.clone()),
             task: said.message,
             reply: said.reply,
@@ -324,12 +324,12 @@ fn why_session(session: &Conversation) -> WhySession {
     let provider = match &session.setup {
         Some(Setup::Session { orchestrator, .. }) => orchestrator.provider,
         Some(Setup::Chat { model, .. }) => model.provider,
-        None => brigadier_providers::ProviderKind::Claude,
+        None => brigadier_providers::adapters::default_kind(),
     };
     WhySession {
         id: short(&session.id.0),
         title: session.title.clone(),
-        agent: agent(provider),
+        agent: provider,
     }
 }
 

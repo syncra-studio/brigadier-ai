@@ -1,5 +1,6 @@
 use super::super::cleanup_context::Secrets;
 use super::*;
+use brigadier_providers::ProviderKind as Agent;
 use brigadier_registry::Roots;
 use brigadier_registry::library::Library;
 use serde_json::json;
@@ -474,7 +475,7 @@ fn cleanup_marketplace_removal_runs_after_library_preservation_and_is_checkpoint
         assert_eq!(call.args, ["plugin", "marketplace", "remove", "brigadier"]);
         match agent {
             Agent::Claude => assert_eq!(dir, home.roots.claude_dir),
-            Agent::Codex => {
+            _ => {
                 assert_eq!(dir, home.roots.codex_home);
                 assert!(
                     std::fs::read_to_string(dir.join("config.toml"))
@@ -618,7 +619,7 @@ fn cleanup_handles_divergent_account_homes_and_their_worktree_records() {
             dir,
             match agent {
                 Agent::Claude => &claude,
-                Agent::Codex => &codex,
+                _ => &codex,
             }
         );
         calls.set(calls.get() + 1);
@@ -788,7 +789,7 @@ fn cleanup_legacy_server_restore_is_idempotent_and_keeps_saved_values() {
                 .all(|step| matches!(step, Step::ProjectFile { .. }))
         );
         brigadier_registry::adapter::apply(
-            adapter(agent),
+            adapter(agent).unwrap(),
             &home.roots,
             &Catalog::read(&home.roots, None),
             steps,
@@ -863,7 +864,7 @@ fn cleanup_on_explicit_real_copy() {
     let binary = |agent| {
         Some(PathBuf::from(match agent {
             Agent::Claude => "/Users/stephen/.local/bin/claude",
-            Agent::Codex => "/Users/stephen/.local/bin/codex",
+            _ => "/Users/stephen/.local/bin/codex",
         }))
     };
     let env: Vec<_> = roots.vars.clone().into_iter().collect();
@@ -892,10 +893,10 @@ fn cleanup_on_explicit_real_copy() {
                 effective.claude_dir = home.into();
                 effective.claude_json = claude_config::config_file(&roots.home, Some(home));
             }
-            Agent::Codex => effective.codex_home = home.into(),
+            _ => effective.codex_home = home.into(),
         }
         brigadier_registry::adapter::apply(
-            adapter(agent),
+            adapter(agent).unwrap(),
             &effective,
             &Catalog::read(&effective, None),
             steps,

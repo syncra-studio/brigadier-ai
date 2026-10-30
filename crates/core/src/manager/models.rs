@@ -3,7 +3,6 @@ use super::SessionManager;
 use crate::{Error, Result, now_ms};
 use crate::{GuidanceRow, ModelRule, ModelRules};
 use brigadier_cli::models::{Account, AgentAccounts, Guidance, Model, ModelsOutput, Rule, Usage};
-use brigadier_cli::protocol::Agent;
 use brigadier_providers::{AllowedModels, ProviderKind};
 use std::path::PathBuf;
 
@@ -13,19 +12,6 @@ pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
 /// The Work whose rows a session moves to another agent with (S38, D25, D34).
 pub(crate) const FALLBACK_WORK: &str = "Fallback";
 
-fn agent(provider: ProviderKind) -> Agent {
-    match provider {
-        ProviderKind::Claude => Agent::Claude,
-        ProviderKind::Codex => Agent::Codex,
-    }
-}
-/// An agent as the rules file names it.
-fn word(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Claude => "claude",
-        ProviderKind::Codex => "codex",
-    }
-}
 fn rank(effort: &str) -> Option<usize> {
     [
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -52,11 +38,9 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
             if cells.len() != 5 {
                 return None;
             }
-            let agent = match cells[1] {
-                "claude" => ProviderKind::Claude,
-                "codex" => ProviderKind::Codex,
-                _ => return None,
-            };
+            // An agent as the rules file names it: a CLI Brigadier drives.
+            let agent = ProviderKind::parse(cells[1])
+                .filter(|kind| brigadier_providers::adapters::adapter(*kind).is_some())?;
             Some(GuidanceRow {
                 work: cells[0].into(),
                 agent,
@@ -70,7 +54,7 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
 fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
     let shown = |row: GuidanceRow, source: &str| Guidance {
         work: row.work,
-        agent: agent(row.agent),
+        agent: row.agent,
         model: row.model,
         effort: row.effort,
         reason: row.reason,
@@ -125,16 +109,19 @@ fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
             names: names(),
             work,
         },
-        "allow claude" => ModelRule::Allow {
-            agent: Some(ProviderKind::Claude),
-            names: names(),
-            work,
-        },
-        "allow codex" => ModelRule::Allow {
-            agent: Some(ProviderKind::Codex),
-            names: names(),
-            work,
-        },
+        // `allow <agent>`: an agent Brigadier drives.
+        other
+            if let Some(agent) = other
+                .strip_prefix("allow ")
+                .and_then(ProviderKind::parse)
+                .filter(|agent| brigadier_providers::adapters::adapter(*agent).is_some()) =>
+        {
+            ModelRule::Allow {
+                agent: Some(agent),
+                names: names(),
+                work,
+            }
+        }
         "effort-ceiling" => {
             rank(value).ok_or_else(|| Error::Invalid(format!("invalid model rule: {rule}")))?;
             ModelRule::EffortCeiling {
@@ -214,7 +201,7 @@ fn rule_text(rule: &ModelRule) -> String {
         ModelRule::Forbid { names, .. } => format!("forbid{scope}: {}", names.join(", ")),
         ModelRule::Allow { agent, names, .. } => format!(
             "allow{}{scope}: {}",
-            agent.map_or(String::new(), |p| format!(" {}", word(p))),
+            agent.map_or(String::new(), |p| format!(" {}", p.id())),
             names.join(", ")
         ),
         ModelRule::EffortCeiling { effort, .. } => format!("effort-ceiling{scope}: {effort}"),
@@ -288,7 +275,7 @@ fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
         format!(
             "| {} | {} | {} | {} | {} |",
             r.work.trim(),
-            word(r.agent),
+            r.agent.id(),
             r.model.trim(),
             r.effort.as_deref().unwrap_or("").trim(),
             r.reason.trim()
@@ -414,10 +401,7 @@ impl SessionManager {
         let settings = self.core.settings();
         let mut candidates = Vec::new();
         for (position, row) in rows.into_iter().enumerate() {
-            let provider = match row.agent {
-                Agent::Claude => ProviderKind::Claude,
-                Agent::Codex => ProviderKind::Codex,
-            };
+            let provider = row.agent;
             // A default model can silently become a frontier model: there is no implicit
             // default fallback for this chore, even when a light model is unavailable.
             if row.model.trim().is_empty()
@@ -523,10 +507,7 @@ impl SessionManager {
             .unwrap_or_default()
             .into_iter()
             .map(|row| {
-                let provider = match row.agent {
-                    Agent::Claude => ProviderKind::Claude,
-                    Agent::Codex => ProviderKind::Codex,
-                };
+                let provider = row.agent;
                 crate::model::ModelChoice {
                     provider,
                     model: (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
@@ -642,12 +623,12 @@ impl SessionManager {
         let policy = Policy::parse(&user)?;
         let shipped = GUIDANCE;
         let mut models = Vec::new();
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             if let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) {
                 let age_s = Some((now - catalog.fetched_at_ms).max(0) / 1000);
                 for model in catalog.models {
                     models.push(Model {
-                        agent: agent(provider),
+                        agent: provider,
                         model: model.id,
                         available: true,
                         efforts: model.efforts,
@@ -710,7 +691,7 @@ impl SessionManager {
                     why,
                     id: a.account.account.clone().unwrap_or_else(|| "own".into()),
                     name: a.name,
-                    agent: agent(a.account.provider),
+                    agent: a.account.provider,
                     current: a.in_use,
                     you: current.as_ref().is_some_and(|cli| cli.account == a.account),
                     logged_in: a.status.is_some_and(|s| s.logged_in),
@@ -721,10 +702,9 @@ impl SessionManager {
             })
             .collect();
         let settings = self.core.settings();
-        let agents = ProviderKind::ALL
-            .into_iter()
+        let agents = brigadier_providers::adapters::kinds()
             .map(|provider| AgentAccounts {
-                agent: agent(provider),
+                agent: provider,
                 switch_accounts: settings.switches_accounts(provider),
             })
             .collect();
@@ -890,7 +870,7 @@ mod tests {
     fn shipped_default_has_no_rules() {
         let policy = Policy::parse(DEFAULT_RULES).unwrap();
         assert!(policy.entries.is_empty());
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             assert!(!policy.restricts_models(provider));
             assert!(
                 policy

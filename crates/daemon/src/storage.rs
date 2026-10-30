@@ -395,25 +395,25 @@ fn debug_overrides() -> (
     #[cfg(debug_assertions)]
     {
         use brigadier_core::manager::disk::AgentHome;
-        use brigadier_providers::ProviderKind;
         let homes = sweep_home().map(|home| {
-            [
-                (ProviderKind::Claude, ".claude"),
-                (ProviderKind::Codex, ".codex"),
-            ]
-            .into_iter()
-            // Codex threads are deleted through the Codex CLI, which works in `CODEX_HOME`: its
-            // stand-in is looked in only when the CLI works there too.
-            .filter(|(kind, dir)| {
-                *kind != ProviderKind::Codex
-                    || std::env::var_os("CODEX_HOME").is_some_and(|codex| home.join(dir) == codex)
-            })
-            .map(|(kind, dir)| AgentHome {
-                kind,
-                history: home.join(dir),
-                homes: vec![home.join(dir)],
-            })
-            .collect()
+            brigadier_providers::adapters::ADAPTERS
+                .iter()
+                .filter_map(|adapter| Some((adapter, adapter.home?)))
+                // A CLI whose sessions are deleted through the CLI itself (Codex's threads)
+                // works in its own home (`CODEX_HOME`): its stand-in is looked in only when the
+                // CLI works there too.
+                .filter(|(adapter, facts)| {
+                    !adapter.removes_by_id
+                        || std::env::var_os(facts.var)
+                            .is_some_and(|dir| home.join(facts.default_dir) == dir)
+                })
+                .map(|(adapter, facts)| (adapter.kind, facts.default_dir))
+                .map(|(kind, dir)| AgentHome {
+                    kind,
+                    history: home.join(dir),
+                    homes: vec![home.join(dir)],
+                })
+                .collect()
         });
         let idle = std::env::var("BRIGADIER_BUILD_IDLE_SECS")
             .ok()

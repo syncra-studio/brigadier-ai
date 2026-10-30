@@ -161,6 +161,7 @@ pub(crate) fn leftovers(history: &Path, wanted: &dyn Fn(&Path) -> bool) -> Vec<F
                 root: root.clone(),
                 path: rollout.clone(),
                 empty_only: false,
+                by_id: true,
             }];
             let images = history.join("generated_images");
             if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -170,6 +171,7 @@ pub(crate) fn leftovers(history: &Path, wanted: &dyn Fn(&Path) -> bool) -> Vec<F
                     root: images.clone(),
                     path: images.join(&id),
                     empty_only: false,
+                    by_id: false,
                 });
             }
             let last_change = entries

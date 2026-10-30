@@ -28,7 +28,10 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     let mut text = STANDING_INSTRUCTIONS.trim_end().to_owned();
     text.push_str(&git_writing_section(settings));
     text.push_str(&browser_section(settings.browser_enabled));
-    if provider == ProviderKind::Codex && settings.omit_ai_coauthors {
+    if settings.omit_ai_coauthors
+        && brigadier_providers::adapters::adapter(provider)
+            .is_some_and(|adapter| adapter.coauthors_in_instructions)
+    {
         text.push_str("\n\n");
         text.push_str(NO_AI_COAUTHORS);
     }

@@ -11,10 +11,10 @@ import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState, useAui, useAuiState } from "@/components/conversation";
 import type { UserRequest } from "@/ipc/generated";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { resume, send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** Scope the conversation's current wait to its latest request; historical failures keep their diagnostics. */
 export function useBlockQuotaRecovery(meta: BlockMeta | undefined) {
@@ -77,7 +77,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   if (read === null || quotaCovered) return null;
   const { error, resumable } = read;
   const model = meta.texts.at(-1)?.model ?? meta.picked;
-  const { summary, limit } = describeTurnError(error, model ? VENDOR_LABELS[model.provider] : undefined);
+  const { summary, limit } = describeTurnError(error, model ? cliFacts(model.provider).vendor : undefined);
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {

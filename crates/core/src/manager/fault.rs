@@ -21,6 +21,7 @@
 //! Nothing else is made up: the turn's own end is the CLI's, and everything after the error is
 //! the real fallback path.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -109,24 +110,18 @@ impl Faults {
     }
 }
 
-/// `BRIGADIER_FAULT=<claude|codex>-limit[:tool-calls=N][:window=ID][:reset=MINUTES]`, for
+/// `BRIGADIER_FAULT=<cli id>-limit[:tool-calls=N][:window=ID][:reset=MINUTES]`, for
 /// scripted runs: arms a limit for the first worker the daemon starts on that provider.
 fn env_fault() -> Option<(ProviderKind, String, u32, u32)> {
     let spec = std::env::var("BRIGADIER_FAULT").ok()?;
     let mut parts = spec.split(':');
-    let provider = match parts.next()? {
-        "claude-limit" => ProviderKind::Claude,
-        "codex-limit" => ProviderKind::Codex,
-        _ => return None,
-    };
-    let (mut window, mut reset, mut calls) = (
-        match provider {
-            ProviderKind::Claude => "five_hour".to_owned(),
-            ProviderKind::Codex => "primary".to_owned(),
-        },
-        60,
-        3,
-    );
+    let adapter = parts
+        .next()?
+        .strip_suffix("-limit")
+        .and_then(ProviderKind::parse)
+        .and_then(brigadier_providers::adapters::adapter)?;
+    let provider = adapter.kind;
+    let (mut window, mut reset, mut calls) = ((*adapter.usual_windows.first()?).to_owned(), 60, 3);
     for part in parts {
         match part.split_once('=')? {
             ("tool-calls", value) => calls = value.parse().ok()?,

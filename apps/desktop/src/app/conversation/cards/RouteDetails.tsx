@@ -1,5 +1,4 @@
 import { Section } from "@/components/shared";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { RankingView } from "@/app/conversation/cards/RankingView";
 import type { ModelGroup } from "@/components/shared";
 import { Badge } from "@/components/controls";
@@ -16,6 +15,7 @@ import {
   TIER_LABELS,
 } from "@/lib/routing";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /**
  * Why a worker runs on its model, in its details: the explanation behind the choice and every
@@ -171,7 +171,7 @@ export function RouteSections({
       <Section title="Why this model">
         {!inThread && (
           <p className="text-sm">
-            {PROVIDER_LABELS[route.choice.provider]} · {model}
+            {cliFacts(route.choice.provider).label} · {model}
           </p>
         )}
         <p className="text-muted-foreground text-xs">{routeReason(route, now, task.quotaWait?.resetsAtMs ?? null)}</p>

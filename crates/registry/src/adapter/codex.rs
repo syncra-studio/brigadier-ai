@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::{AgentAdapter, ApplyError, CliCall, Listed, Place, Step, TomlEdit, Unsupported};
 use crate::item::ServerSpec;
-use crate::{Agent, Catalog, Roots, Source};
+use crate::{Catalog, ProviderKind, Roots, Source};
 
 const PROGRAM: &str = "codex";
 
@@ -34,8 +34,8 @@ impl AgentAdapter for Codex {
         catalog.codex_trusted.iter().any(|path| path == project)
     }
 
-    fn agent(&self) -> Agent {
-        Agent::Codex
+    fn agent(&self) -> ProviderKind {
+        ProviderKind::Codex
     }
 
     fn label(&self) -> &'static str {
@@ -62,6 +62,30 @@ impl AgentAdapter for Codex {
                 roots.codex_home.display().to_string(),
             )]
         }
+    }
+
+    fn home<'a>(&self, roots: &'a Roots) -> &'a Path {
+        &roots.codex_home
+    }
+
+    fn plugin_servers_by_name(&self) -> bool {
+        false
+    }
+
+    fn disables_skills_in_config(&self) -> bool {
+        true
+    }
+
+    fn overlay_namespace(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn renames_colliding_servers(&self) -> bool {
+        true
+    }
+
+    fn at_home(&self, roots: &mut Roots, home: &Path) {
+        roots.codex_home = home.to_owned();
     }
 
     fn add_server(

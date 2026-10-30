@@ -298,8 +298,7 @@ async fn a_thread_and_its_worker_pull_their_context() {
 
 #[tokio::test]
 async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
-    use brigadier_providers::ProviderKind;
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();
@@ -421,8 +420,7 @@ async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
 
 #[tokio::test]
 async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versions() {
-    use brigadier_providers::ProviderKind;
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();

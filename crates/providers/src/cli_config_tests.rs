@@ -101,6 +101,7 @@ for line in sys.stdin:
         match kind {
             ProviderKind::Claude => Box::new(claude::Claude::new(platform, env)),
             ProviderKind::Codex => Box::new(codex::Codex::new(platform, env)),
+            other => unreachable!("{other} isn't driven here"),
         }
     }
 
@@ -279,6 +280,7 @@ async fn chat_config(kind: ProviderKind) {
                         );
                     }
                 }
+                other => unreachable!("{other} isn't driven here"),
             }
         }
     }

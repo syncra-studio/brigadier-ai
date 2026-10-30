@@ -18,6 +18,7 @@
 //! A Codex thread goes by its id through Codex's own `thread/delete` (its rollout checked
 //! first to still be the file shown), so it also leaves the Codex app's lists (Recents).
 
+use brigadier_providers::KindFacts as _;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -63,9 +64,10 @@ struct Entry {
     /// Goes only once empty (a project folder other sessions may share).
     empty_only: bool,
     bytes: u64,
-    /// A Codex thread's rollout: the thread goes through Codex's own `thread/delete`, which
-    /// also takes it off the Codex app's lists, while the file is still the one shown.
-    thread: Option<String>,
+    /// A CLI session's own record, with its CLI: the session goes through its CLI's own delete
+    /// (Codex's `thread/delete`), which also takes it off the CLI's own lists, while the file
+    /// is still the one shown.
+    thread: Option<(ProviderKind, String)>,
 }
 
 /// One listed session: what it served, checked again before its files go.
@@ -169,11 +171,7 @@ fn held_sessions(records: &Records) -> HashSet<String> {
         .owners
         .iter()
         .flat_map(|(_, artifacts, _)| artifacts)
-        .filter_map(|artifact| match artifact {
-            Artifact::ClaudeSession { session_id, .. } => Some(session_id.clone()),
-            Artifact::CodexThread { thread_id, .. } => Some(thread_id.clone()),
-            _ => None,
-        })
+        .filter_map(|artifact| Some(artifact.native_session()?.1.to_owned()))
         .collect()
 }
 
@@ -290,15 +288,11 @@ impl Scanner<'_> {
                         } else {
                             removal::allocated_size(&entry.path)
                         };
-                        let rollout = home.kind == ProviderKind::Codex
-                            && entry.root.file_name().is_some_and(|part| {
-                                part == "sessions" || part == "archived_sessions"
-                            });
                         Some(Entry {
                             bound,
                             empty_only: entry.empty_only,
                             bytes,
-                            thread: rollout.then(|| found.id.clone()),
+                            thread: entry.by_id.then(|| (found.kind, found.id.clone())),
                         })
                     })
                     .collect();
@@ -423,7 +417,7 @@ impl SessionManager {
         let mut artifacts = Vec::new();
         let mut changed = Vec::new();
         for entry in &adoption.entries {
-            let Some(thread_id) = &entry.thread else {
+            let Some((provider, thread_id)) = &entry.thread else {
                 artifacts.push(Artifact::Adopted {
                     root: entry.bound.root().display().to_string(),
                     path: entry.bound.path().display().to_string(),
@@ -435,8 +429,9 @@ impl SessionManager {
             };
             // The thread goes by its id: only while its file is still the one shown.
             match removal::recheck(&entry.bound) {
-                Ok(()) => artifacts.push(Artifact::CodexThread {
-                    thread_id: thread_id.clone(),
+                Ok(()) => artifacts.push(Artifact::Session {
+                    provider: *provider,
+                    id: thread_id.clone(),
                     home: None,
                     cwd: adoption
                         .sessions

@@ -21,7 +21,7 @@ import { createRoot } from "react-dom/client";
 
 import { AgentsStep } from "@/app/setup/onboarding/AgentsStep";
 import { Dialog, DialogContent, TooltipProvider } from "@/components/overlays";
-import { OVERVIEWS, status } from "@/fixtures/agents";
+import { OPENCODE_MISSING, OVERVIEWS, status } from "@/fixtures/agents";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { AgentConnect, ProviderKind, ProviderOverview, ProviderStatus, Request } from "@/ipc/generated";
 import { applyConnectEvents } from "@/state/connect";
@@ -54,6 +54,7 @@ function show() {
         providers: [
           { ...claude, status: claudeStatus },
           { ...codex, status: codexStatus },
+          OPENCODE_MISSING,
         ],
         sessions: [],
         fixtures: [],
@@ -164,7 +165,7 @@ function Fixture() {
     void (async () => {
       const seen: Record<string, unknown> = {};
       try {
-        await until(() => cards().length === 2, "two cards");
+        await until(() => cards().length === 3, "three cards");
         seen.first = { cards: [card(0), card(1)], ...step() };
 
         if (params.get("codex") === "signedOut") {

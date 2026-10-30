@@ -1,6 +1,7 @@
 //! Exact items from the CLI's durable records, before the display reader merges tool calls
 //! and results. IDs namespace native IDs by CLI session; records without IDs use content and
 //! occurrence, never a position in the merged lineage. Compaction markers are not items.
+use brigadier_providers::KindFacts as _;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -83,8 +84,10 @@ pub(super) fn read(session: &RecordSession) -> Vec<Item> {
                         at_ms,
                         at: Option<i64>| {
             let key = format!(
-                "{:?}\0{}\0{native}\0{kind}",
-                generation.provider, generation.session_id
+                "{}\0{}\0{native}\0{kind}",
+                // Ids kept name the CLI by its vendor word ("Claude"), as they always did.
+                generation.provider.vendor(),
+                generation.session_id
             );
             let id = format!("i-{}", &blake3::hash(key.as_bytes()).to_hex()[..32]);
             let item = Item {
@@ -467,7 +470,9 @@ fn scoped(scope: Option<&str>, id: &str) -> String {
 /// too: a newly attached transcript must become searchable even if the parent did not grow.
 pub(super) fn sources(provider: ProviderKind, path: &Path) -> Vec<(Option<String>, PathBuf)> {
     let mut sources = vec![(None, path.to_owned())];
-    if provider != ProviderKind::Claude {
+    if !brigadier_providers::adapters::adapter(provider)
+        .is_some_and(|adapter| adapter.subagent_transcripts)
+    {
         return sources;
     }
     let Ok(dir) = std::fs::read_dir(path.with_extension("").join("subagents")) else {

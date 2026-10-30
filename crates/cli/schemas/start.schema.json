@@ -77,10 +77,7 @@
         "authors": {
           "type": "array",
           "items": {
-            "enum": [
-              "claude",
-              "codex"
-            ]
+            "type": "string"
           }
         },
         "otherProvider": {
@@ -142,10 +139,7 @@
           "type": "string"
         },
         "agent": {
-          "enum": [
-            "claude",
-            "codex"
-          ]
+          "type": "string"
         },
         "model": {
           "type": [

@@ -1318,7 +1318,7 @@ async fn library_only_refusing_server_requires_native_setup_without_running_nati
         flow.manager.start_plugin_sign_in(&row.id).await.unwrap(),
     ] {
         assert!(
-            matches!(state, CatalogSignIn::CliSetupRequired { agents } if agents == brigadier_providers::ProviderKind::ALL)
+            matches!(state, CatalogSignIn::CliSetupRequired { agents } if *agents == brigadier_providers::adapters::kinds().collect::<Vec<_>>())
         );
     }
     flow.stop().await;

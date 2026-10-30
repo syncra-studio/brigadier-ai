@@ -1621,11 +1621,18 @@ impl SessionManager {
             }
             for artifact in artifacts {
                 match artifact {
-                    Artifact::ClaudeSession { session_id, .. } => natives.push(session_id),
-                    Artifact::CodexThread { thread_id, .. } => natives.push(thread_id),
-                    Artifact::ClaudeTempDir { path }
-                    | Artifact::Worktree { path, .. }
-                    | Artifact::ScratchDir { path } => {
+                    Artifact::Session { id, .. } => natives.push(id),
+                    Artifact::CliFile {
+                        provider,
+                        kind,
+                        path,
+                        ..
+                    } if brigadier_providers::adapters::adapter(provider)
+                        .is_some_and(|adapter| adapter.temp_dir == Some(kind.as_str())) =>
+                    {
+                        needles.insert(path);
+                    }
+                    Artifact::Worktree { path, .. } | Artifact::ScratchDir { path } => {
                         needles.insert(path);
                     }
                     Artifact::GitBranches { namespace, .. } if with_branches => {

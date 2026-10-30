@@ -100,7 +100,7 @@ impl CliHomes {
         flow.manager
             .runtime
             .ledger()
-            .set_test_providers([claude, codex]);
+            .set_test_providers(vec![claude, codex]);
     }
 
     /// Writes what Claude Code and Codex keep of a session that ran in `cwd`, and records it
@@ -187,16 +187,21 @@ impl CliHomes {
         let ledger = flow.manager.runtime.ledger();
         let cwd_text = Some(cwd.display().to_string());
         for artifact in [
-            Artifact::ClaudeProjectDir {
+            Artifact::CliFile {
+                provider: brigadier_providers::ProviderKind::Claude,
+                kind: "projectDir".into(),
                 path: project.display().to_string(),
+                identities: Vec::new(),
             },
-            Artifact::ClaudeSession {
-                session_id: id.clone(),
+            Artifact::Session {
+                provider: brigadier_providers::ProviderKind::Claude,
+                id: id.clone(),
                 home: None,
                 cwd: cwd_text.clone(),
             },
-            Artifact::CodexThread {
-                thread_id: thread.clone(),
+            Artifact::Session {
+                provider: brigadier_providers::ProviderKind::Codex,
+                id: thread.clone(),
                 home: None,
                 cwd: cwd_text,
             },
@@ -206,8 +211,11 @@ impl CliHomes {
         ledger
             .record(
                 temp_owner,
-                Artifact::ClaudeTempDir {
+                Artifact::CliFile {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    kind: "tempDir".into(),
                     path: self.temp.display().to_string(),
+                    identities: Vec::new(),
                 },
             )
             .await
@@ -649,8 +657,16 @@ fn natives_of(flow: &Flow, id: &ConversationId, tasks: &[Task]) -> Vec<String> {
         .filter(|(owner, _, _)| ids.iter().any(|id| owner.contains(id)))
         .flat_map(|(_, artifacts, _)| artifacts)
         .filter_map(|artifact| match artifact {
-            Artifact::ClaudeSession { session_id, .. } => Some(session_id),
-            Artifact::CodexThread { thread_id, .. } => Some(thread_id),
+            Artifact::Session {
+                id: session_id,
+                provider: brigadier_providers::ProviderKind::Claude,
+                ..
+            } => Some(session_id),
+            Artifact::Session {
+                id: thread_id,
+                provider: brigadier_providers::ProviderKind::Codex,
+                ..
+            } => Some(thread_id),
             _ => None,
         })
         .collect()
@@ -806,7 +822,11 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
         .artifacts(&crate::ledger::lineage_owner(&old.0))
         .into_iter()
         .find_map(|artifact| match artifact {
-            Artifact::ClaudeSession { session_id, .. } => Some(session_id),
+            Artifact::Session {
+                id: session_id,
+                provider: brigadier_providers::ProviderKind::Claude,
+                ..
+            } => Some(session_id),
             _ => None,
         })
         .unwrap();

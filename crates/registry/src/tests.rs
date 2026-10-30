@@ -570,7 +570,7 @@ fn native_servers_depend_on_the_session() {
         catalog.server_native(catalog.find(name).unwrap(), &session)
     };
     let claude_in_project = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &project,
         project: Some(&project),
         in_checkout: true,
@@ -580,7 +580,7 @@ fn native_servers_depend_on_the_session() {
         ..claude_in_project
     };
     let codex_in_worktree = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         ..claude_in_worktree
     };
     assert!(native("cu", claude_in_worktree));
@@ -666,7 +666,7 @@ fn claudes_per_project_off_flags_switch_its_servers_off_there_only() {
     let catalog = Catalog::read(&roots, Some(&project));
     assert_eq!(catalog.claude_off_error, None);
     let session = |cwd| Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd,
         project: Some(&project),
         in_checkout: true,
@@ -698,7 +698,7 @@ fn claudes_per_project_off_flags_switch_its_servers_off_there_only() {
     // off; the flags count in that project only.
     let elsewhere = Catalog::read(&roots, Some(&other));
     let in_other = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &other,
         project: Some(&other),
         in_checkout: true,
@@ -770,7 +770,7 @@ fn an_overridden_entry_is_not_native() {
         catalog.server_native(catalog.server(id).unwrap(), &session)
     };
     let codex = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         cwd: &project,
         project: Some(&project),
         in_checkout: true,
@@ -788,7 +788,7 @@ fn an_overridden_entry_is_not_native() {
     assert!(native("codex:user:db", scratch));
     // Claude's local scope wins over its user scope where it applies.
     let claude = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         ..codex
     };
     assert!(native(&format!("claude:local:{p}:db"), claude));
@@ -796,7 +796,7 @@ fn an_overridden_entry_is_not_native() {
     assert!(native(
         "claude:user:db",
         Session {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             ..scratch
         }
     ));
@@ -951,13 +951,13 @@ fn skills_dedupe_by_real_folder_and_keep_same_names_apart() {
 
     let worktree = home.join("worktrees/t");
     let claude = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &worktree,
         project: Some(&project),
         in_checkout: true,
     };
     let codex = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         ..claude
     };
     let read_only_codex = Session {
@@ -1047,13 +1047,13 @@ fn copied_skills_merge_and_synced_skills_are_claudes() {
     let docx = catalog.skill("claude:synced:org_a:docx").unwrap();
     assert_eq!(docx.entries.len(), 2);
     let claude = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &home,
         project: None,
         in_checkout: false,
     };
     let codex = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         ..claude
     };
     assert!(catalog.skill_native(docx, &claude));
@@ -1084,7 +1084,7 @@ fn skills_for_display_hide_synced_only_entries_but_keep_local_copies() {
     assert!(catalog.skill_native(
         builtin,
         &Session {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             cwd: &home,
             project: None,
             in_checkout: false,
@@ -1287,7 +1287,7 @@ fn claude_plugins_enabled_disabled_and_project_scoped() {
     );
     let roots = roots(&home, &[]);
     let anywhere = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &home,
         project: None,
         in_checkout: false,
@@ -1320,7 +1320,7 @@ fn claude_plugins_enabled_disabled_and_project_scoped() {
     );
     // Codex finds none of them by itself: Brigadier gives them to its workers.
     let codex = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         ..in_project
     };
     assert!(native_skills(&catalog, &codex).is_empty());
@@ -1412,7 +1412,7 @@ fn claude_plugin_layout_and_servers() {
     let remote = catalog.server("claude:plugin:full@market:remote").unwrap();
     assert!(remote.signs_in);
     let claude = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         cwd: &home,
         project: None,
         in_checkout: false,
@@ -1421,7 +1421,7 @@ fn claude_plugin_layout_and_servers() {
     assert!(!catalog.server_native(
         tool,
         &Session {
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             ..claude
         }
     ));
@@ -1473,7 +1473,7 @@ fn codex_plugins_enabled_disabled_and_versions() {
     let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
     let catalog = Catalog::read(&roots, None);
     let codex = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         cwd: &home,
         project: None,
         in_checkout: false,
@@ -1483,7 +1483,7 @@ fn codex_plugins_enabled_disabled_and_versions() {
         ["documents:inner", "documents:write", "listed:first"]
     );
     let claude = Session {
-        agent: Agent::Claude,
+        agent: ProviderKind::Claude,
         ..codex
     };
     assert!(native_skills(&catalog, &claude).is_empty());
@@ -1547,7 +1547,7 @@ fn a_trusted_projects_codex_file_switches_plugins_and_servers_there_only() {
     let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
     fn session(project: &Path) -> Session<'_> {
         Session {
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             cwd: project,
             project: Some(project),
             in_checkout: true,
@@ -1599,7 +1599,7 @@ fn a_codex_project_entry_that_only_switches_a_server_keeps_the_users_command() {
     let pencil = pencil.unwrap_or_else(|| panic!("{:?}", ids(&here)));
     assert_eq!(stdio(pencil).0, "pencil");
     let session = Session {
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         cwd: &project,
         project: Some(&project),
         in_checkout: true,
@@ -1717,7 +1717,10 @@ enabled = true
     let catalog = Catalog::read(&roots, None);
     let rows = Catalog::rows(&[catalog]);
     let node = rows.iter().find(|row| row.name == "node_repl").unwrap();
-    assert_eq!(node.definitions[0].provenance.agent, Some(Agent::Codex));
+    assert_eq!(
+        node.definitions[0].provenance.agent,
+        Some(ProviderKind::Codex)
+    );
     assert_eq!(node.definitions[0].provenance.native, "node_repl");
     assert_eq!(
         node.definitions[0].provenance.file,

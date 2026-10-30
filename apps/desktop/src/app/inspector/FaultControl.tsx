@@ -5,15 +5,10 @@ import { Picker } from "@/app/inspector/providers/Picker";
 import { Button, Input, ToggleGroup, ToggleGroupItem } from "@/components/controls";
 import { request } from "@/ipc/client";
 import type { FaultTarget, ProviderKind } from "@/ipc/generated";
-import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
+import { PROVIDERS } from "@/lib/routing";
 import { useBoard } from "@/state/board";
 import { selectedConversation, useApp } from "@/state/store";
-
-/** Windows to offer before a provider's own are known. */
-const USUAL_WINDOWS: Record<ProviderKind, string[]> = {
-  claude: ["five_hour", "seven_day"],
-  codex: ["primary", "secondary"],
-};
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The fault menus keep their own width in the form's grid. */
 const PICK = "max-w-full justify-self-start";
@@ -33,8 +28,8 @@ export function FaultControl() {
   const [conversationId, setConversationId] = useState(
     () => selectedConversation(useApp.getState())?.id ?? "",
   );
-  const [provider, setProvider] = useState<ProviderKind>("claude");
-  const [windowId, setWindowId] = useState("five_hour");
+  const [provider, setProvider] = useState<ProviderKind>(PROVIDERS[0]!);
+  const [windowId, setWindowId] = useState(() => cliFacts(PROVIDERS[0]!).usualWindows[0] ?? "");
   const [minutes, setMinutes] = useState("30");
   const [after, setAfter] = useState("3");
   const inject = useAction();
@@ -51,7 +46,8 @@ export function FaultControl() {
   const known = [
     ...(overview?.usage?.windows.map((state) => state.window.id) ?? []),
     ...(overview?.quota?.windows.map((entry) => entry.id) ?? []),
-    ...USUAL_WINDOWS[provider],
+    // Windows to offer before a provider's own are known.
+    ...cliFacts(provider).usualWindows,
   ];
   const windowOptions = [...new Set(known)].map((value) => ({ value, label: value }));
 
@@ -87,7 +83,7 @@ export function FaultControl() {
         afterToolCalls: toolCalls,
       });
       setSent(
-        `${VENDOR_LABELS[provider]}'s ${windowId} limit armed${toolCalls > 0 ? ` for after ${toolCalls} tool calls` : ""}, resetting in ${resetIn} min.`,
+        `${cliFacts(provider).vendor}'s ${windowId} limit armed${toolCalls > 0 ? ` for after ${toolCalls} tool calls` : ""}, resetting in ${resetIn} min.`,
       );
     });
   };
@@ -148,13 +144,13 @@ export function FaultControl() {
           value={provider}
           onValueChange={(value) => {
             if (!value) return;
-            setProvider(value as ProviderKind);
-            setWindowId(USUAL_WINDOWS[value as ProviderKind][0] ?? "");
+            setProvider(value);
+            setWindowId(cliFacts(value).usualWindows[0] ?? "");
           }}
         >
           {PROVIDERS.map((entry) => (
             <ToggleGroupItem key={entry} value={entry} className="text-xs">
-              {VENDOR_LABELS[entry]}
+              {cliFacts(entry).vendor}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>

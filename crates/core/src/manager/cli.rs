@@ -13,10 +13,11 @@
 use std::collections::HashMap;
 
 use brigadier_cli::protocol::{
-    self as cli, Agent, Changes, CliCall, CliReply, CliRequest, ErrorCode, Item, ItemKind, Kind,
+    self as cli, Changes, CliCall, CliReply, CliRequest, ErrorCode, Item, ItemKind, Kind,
     ReadOutput, ReadView, SessionRow, SessionState, SessionsOutput, ShowOutput, WorkerRow,
     WorkerState, WorkersOutput,
 };
+use brigadier_providers::KindFacts as _;
 use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind};
 
@@ -53,16 +54,20 @@ pub(super) enum Target {
     Worker(Box<Task>),
 }
 
+/// Why an agent named on the command line can't run: no CLI of that id is set up in Brigadier.
+pub(super) fn unknown_agent(agent: ProviderKind) -> String {
+    let known: Vec<&str> = brigadier_providers::adapters::kinds()
+        .map(ProviderKind::id)
+        .collect();
+    format!(
+        "no agent named \"{agent}\"; Brigadier drives {}",
+        known.join(", ")
+    )
+}
+
 /// The shown id: the last 8 characters.
 pub(super) fn short(id: &str) -> String {
     id[id.len().saturating_sub(8)..].to_owned()
-}
-
-pub(super) fn agent(provider: ProviderKind) -> Agent {
-    match provider {
-        ProviderKind::Claude => Agent::Claude,
-        ProviderKind::Codex => Agent::Codex,
-    }
 }
 
 fn changes(stat: &DiffStat) -> Changes {
@@ -128,7 +133,7 @@ pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> Worke
         id: short(&task.id.0),
         number: task.number,
         title: task.title.clone(),
-        agent: agent(task.route.choice.provider),
+        agent: task.route.choice.provider,
         model: task.route.choice.model.clone(),
         effort: task.route.choice.effort.clone(),
         state: worker_state(task.state),
@@ -448,7 +453,7 @@ impl SessionManager {
     async fn cli_continue_on(
         &self,
         caller: &CliCaller,
-        agent: cli::Agent,
+        agent: ProviderKind,
         after_turn: bool,
     ) -> CliReply {
         if caller.task_id.is_some()
@@ -463,16 +468,17 @@ impl SessionManager {
                  moved by its session",
             );
         }
-        let to = match agent {
-            cli::Agent::Claude => ProviderKind::Claude,
-            cli::Agent::Codex => ProviderKind::Codex,
-        };
+        let to = agent;
+        if brigadier_providers::adapters::adapter(to).is_none() {
+            return CliReply::error(ErrorCode::Usage, unknown_agent(to));
+        }
         match self
             .continue_on(&caller.conversation_id, to, None, after_turn)
             .await
         {
             Ok((when, choice)) => CliReply::ok(&cli::ContinueOnOutput {
                 agent,
+                label: agent.label().to_owned(),
                 model: choice.model,
                 effort: choice.effort,
                 when: match when {
@@ -732,7 +738,9 @@ impl SessionManager {
                     id: short(&conversation.id.0),
                     title: conversation.title.clone(),
                     state: session_state(&conversation, activity).word().into(),
-                    agent: agent(choice.as_ref().map_or(ProviderKind::Claude, |c| c.provider)),
+                    agent: choice
+                        .as_ref()
+                        .map_or_else(brigadier_providers::adapters::default_kind, |c| c.provider),
                     model: choice.as_ref().and_then(|choice| choice.model.clone()),
                     effort: choice.as_ref().and_then(|choice| choice.effort.clone()),
                     branch,

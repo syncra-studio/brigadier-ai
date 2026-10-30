@@ -32,10 +32,7 @@
         "additionalProperties": false,
         "properties": {
           "agent": {
-            "enum": [
-              "claude",
-              "codex"
-            ]
+            "type": "string"
           },
           "model": {
             "type": "string"
@@ -69,10 +66,7 @@
         "additionalProperties": false,
         "properties": {
           "agent": {
-            "enum": [
-              "claude",
-              "codex"
-            ]
+            "type": "string"
           },
           "switchAccounts": {
             "type": "boolean"
@@ -106,10 +100,7 @@
             "type": "string"
           },
           "agent": {
-            "enum": [
-              "claude",
-              "codex"
-            ]
+            "type": "string"
           },
           "current": {
             "type": "boolean"
@@ -218,10 +209,7 @@
             "type": "string"
           },
           "agent": {
-            "enum": [
-              "claude",
-              "codex"
-            ]
+            "type": "string"
           },
           "model": {
             "type": "string"

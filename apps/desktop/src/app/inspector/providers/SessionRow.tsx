@@ -1,8 +1,9 @@
-import { PROVIDER_LABELS, STATE_VARIANTS } from "@/app/inspector/providers/shared";
+import { STATE_VARIANTS } from "@/app/inspector/providers/shared";
 import { Badge } from "@/components/controls";
 import type { RawSession } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { selectRawSession } from "@/state/actions";
+import { cliFacts } from "@/lib/providerKinds";
 
 function sessionTitle(session: RawSession): string {
   switch (session.source.type) {
@@ -23,7 +24,7 @@ export function SessionRow({ session }: { session: RawSession }) {
         onClick={() => selectRawSession(session.id)}
         className="hover:bg-accent h-row-sm rounded-control flex w-full items-center gap-2 px-2 text-start text-xs"
       >
-        <span className="w-20 shrink-0">{PROVIDER_LABELS[session.provider]}</span>
+        <span className="w-20 shrink-0">{cliFacts(session.provider).label}</span>
         <Badge variant={STATE_VARIANTS[session.state]}>{session.state}</Badge>
         {session.source.type !== "live" && (
           <Badge variant="outline">{session.source.type}</Badge>

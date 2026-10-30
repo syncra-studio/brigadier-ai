@@ -207,7 +207,9 @@ impl SessionManager {
     /// child's use is recorded once, as [`StepKind::Guardian`] rows marked with the child's
     /// id, whichever turn's end sees it grow.
     pub(crate) async fn meter_child_threads(&self, cli: &Cli, owner: TokenOwner<'_>) {
-        if cli.provider != ProviderKind::Codex {
+        if !brigadier_providers::adapters::adapter(cli.provider)
+            .is_some_and(|adapter| adapter.child_sessions)
+        {
             return;
         }
         // Scripted CLIs have no rollouts; the user's own are never read in tests.

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::{AgentAdapter, CliCall, Listed, Place, Step, Unsupported, plain_text, server_json};
 use crate::item::ServerSpec;
-use crate::{Agent, Catalog, Roots, Source};
+use crate::{Catalog, ProviderKind, Roots, Source};
 
 const PROGRAM: &str = "claude";
 
@@ -23,8 +23,8 @@ impl AgentAdapter for Claude {
         true
     }
 
-    fn agent(&self) -> Agent {
-        Agent::Claude
+    fn agent(&self) -> ProviderKind {
+        ProviderKind::Claude
     }
 
     fn label(&self) -> &'static str {
@@ -52,6 +52,31 @@ impl AgentAdapter for Claude {
                 roots.claude_dir.display().to_string(),
             )]
         }
+    }
+
+    fn home<'a>(&self, roots: &'a Roots) -> &'a Path {
+        &roots.claude_dir
+    }
+
+    fn plugin_servers_by_name(&self) -> bool {
+        true
+    }
+
+    fn disables_skills_in_config(&self) -> bool {
+        false
+    }
+
+    fn overlay_namespace(&self) -> Option<&'static str> {
+        Some("overlay")
+    }
+
+    fn renames_colliding_servers(&self) -> bool {
+        false
+    }
+
+    fn at_home(&self, roots: &mut Roots, home: &Path) {
+        roots.claude_dir = home.to_owned();
+        roots.claude_json = crate::claude_config::config_file(&roots.home, Some(home));
     }
 
     fn add_server(

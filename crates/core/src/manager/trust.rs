@@ -20,8 +20,8 @@
 
 use std::path::Path;
 
-use brigadier_providers::trust::{self, TrustCli, Written};
-use brigadier_providers::{Artifact, ProviderKind};
+use brigadier_providers::trust::{self, Written};
+use brigadier_providers::{Artifact, KindFacts as _, ProviderKind};
 
 use super::workers::repo_access_for;
 use super::{SessionManager, blocking};
@@ -70,7 +70,7 @@ impl SessionManager {
         };
         let project = self.core.set_folder_trust(&id, &path, trusted).await?;
         let failures = if trusted {
-            self.write_cli_trust(&owner(&id), &path, &[TrustCli::Claude, TrustCli::Codex])
+            self.write_cli_trust(&owner(&id), &path, &trust::clis())
                 .await
         } else {
             let failures = self.release_cli_trust(&project, &path).await;
@@ -116,11 +116,7 @@ impl SessionManager {
         for project in &projects {
             for folder in project.trust.iter().filter(|folder| folder.trusted) {
                 let failures = self
-                    .write_cli_trust(
-                        &owner(&project.id),
-                        &folder.path,
-                        &[TrustCli::Claude, TrustCli::Codex],
-                    )
+                    .write_cli_trust(&owner(&project.id), &folder.path, &trust::clis())
                     .await;
                 if !failures.is_empty() {
                     tracing::warn!(project = %project.id, folder = folder.path, ?failures, "folder trust not written");
@@ -138,26 +134,24 @@ impl SessionManager {
     /// The files `cli` keeps folder trust in, for the CLIs' environment: the user's own, and
     /// each extra Claude account's (an extra Codex account's `config.toml` is the user's own,
     /// linked).
-    fn trust_files(&self, cli: TrustCli) -> Vec<std::path::PathBuf> {
+    fn trust_files(&self, cli: ProviderKind) -> Vec<std::path::PathBuf> {
         #[cfg(test)]
         let own = self.trust_home.get().and_then(|home| {
             let env = brigadier_providers::cli::CliEnv::from_vars([(
                 std::ffi::OsString::from("HOME"),
                 home.clone().into_os_string(),
             )]);
-            cli.file(&env)
+            trust::file(cli, &env)
         });
         #[cfg(not(test))]
-        let own = cli.file(self.runtime.cli_env());
+        let own = trust::file(cli, self.runtime.cli_env());
         let mut files: Vec<_> = own.into_iter().collect();
-        if cli == TrustCli::Claude {
-            files.extend(
-                self.runtime
-                    .account_homes(ProviderKind::Claude)
-                    .into_iter()
-                    .map(|home| home.join(".claude.json")),
-            );
-        }
+        files.extend(
+            self.runtime
+                .account_homes(cli)
+                .into_iter()
+                .filter_map(|home| trust::account_file(cli, &home)),
+        );
         files
     }
 
@@ -179,7 +173,12 @@ impl SessionManager {
 
     /// Writes the trust of `folder`'s entry ([`Self::trust_key`]) in each of `clis`' settings,
     /// recorded under `holder` first. Returns what failed, by CLI.
-    async fn write_cli_trust(&self, holder: &str, folder: &str, clis: &[TrustCli]) -> Vec<String> {
+    async fn write_cli_trust(
+        &self,
+        holder: &str,
+        folder: &str,
+        clis: &[ProviderKind],
+    ) -> Vec<String> {
         let key = self.trust_key(folder).await;
         if key.is_empty() {
             return vec![format!("{folder}: its folder couldn't be read")];
@@ -188,11 +187,11 @@ impl SessionManager {
         let mut failures = Vec::new();
         for &cli in clis {
             for file in self.trust_files(cli) {
-                if !set_up(cli, &file) {
+                if !trust::set_up(cli, &file) {
                     continue;
                 }
                 if let Err(err) = self.write_one(holder, cli, &file, folder).await {
-                    failures.push(format!("{}: {err}", cli.label()));
+                    failures.push(format!("{}: {err}", cli.vendor()));
                 }
             }
         }
@@ -202,7 +201,7 @@ impl SessionManager {
     async fn write_one(
         &self,
         holder: &str,
-        cli: TrustCli,
+        cli: ProviderKind,
         file: &Path,
         folder: &str,
     ) -> Result<()> {
@@ -359,13 +358,4 @@ impl SessionManager {
 
 fn provider_error(err: brigadier_providers::Error) -> Error {
     Error::Provider(err.to_string())
-}
-
-/// Whether the CLI is set up here: Claude has its settings file, Codex its folder. A CLI
-/// that isn't gets nothing written; the next start writes it once it is.
-fn set_up(cli: TrustCli, file: &Path) -> bool {
-    match cli {
-        TrustCli::Claude => file.exists(),
-        TrustCli::Codex => file.parent().is_some_and(Path::is_dir),
-    }
 }

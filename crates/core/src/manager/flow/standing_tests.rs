@@ -78,7 +78,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         // "no AI co-authors" (Claude's settings hold it to that instead).
         let template = match provider {
             ProviderKind::Claude => STANDING_INSTRUCTIONS.trim_end().to_owned(),
-            ProviderKind::Codex => {
+            _ => {
                 format!("{}\n\n{NO_AI_COAUTHORS}", STANDING_INSTRUCTIONS.trim_end())
             }
         };

@@ -1,4 +1,3 @@
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import type { UsageEntry } from "@/app/shell/BarStatus";
 import { Button } from "@/components/controls";
 import { ProviderGlyph } from "@/components/icons";
@@ -6,6 +5,7 @@ import { Share, StateDot } from "@/components/shared";
 import { formatCountdown } from "@/lib/format";
 import { used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
+import { cliFacts } from "@/lib/providerKinds";
 
 /**
  * One provider: its mark and name, then its account in use's tightest limit ("Weekly · resets in
@@ -26,7 +26,7 @@ export function ProviderUsage({
   onOpen: () => void;
   onSignIn: () => void;
 }) {
-  const name = PROVIDER_LABELS[entry.provider];
+  const name = cliFacts(entry.provider).label;
   const mark = (
     <ProviderGlyph
       provider={entry.provider}

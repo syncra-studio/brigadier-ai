@@ -22,7 +22,7 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
       { name: "Claude Code", line: "Not installed", action: "Install" },
     ],
     subtitle: "Codex is ready. Connect any others you use, or start right away.",
-    count: "1 of 2 connected",
+    count: "1 of 3 connected",
     continue: true,
   });
   assert.deepEqual(seen.installing, { name: "Claude Code", line: "Installing Claude Code…", action: "Waiting…" });
@@ -41,8 +41,9 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
       { name: "Codex", line: "Pro plan", action: "Connected" },
       { name: "Claude Code", line: "Max plan", action: "Connected" },
     ],
-    subtitle: "Claude Code and Codex are ready.",
-    count: "2 of 2 connected",
+    // OpenCode, not on this computer, is the third card.
+    subtitle: "Claude Code and Codex are ready. Connect any others you use, or start right away.",
+    count: "2 of 3 connected",
     continue: true,
   });
   assert.deepEqual(seen.asked, ["connectAgent claude", "cancelConnect claude", "connectAgent claude", "connectAgent claude"]);
@@ -103,7 +104,7 @@ test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async 
       { name: "Claude Code", line: "Not installed", action: "Install" },
     ],
     subtitle: "Connect at least one agent to continue.",
-    count: "0 of 2 connected",
+    count: "0 of 3 connected",
     continue: false,
   });
   // Enter on Sign in is Continue's, held back: nothing signs in, nothing goes on.

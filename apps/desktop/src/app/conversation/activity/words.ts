@@ -1,6 +1,7 @@
 import { namedTasks, workerName } from "@/app/conversation/rowWords";
 import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/generated";
+import { CLIS } from "@/ipc/generated/clis";
 
 /**
  * The one vocabulary of the thread's work (THREAD-UX-PLAN.md §3.2): what a step of the lead or
@@ -70,8 +71,8 @@ export function isPlumbing(name: string): boolean {
   return PLUMBING.has(toolName(name)) || name === "agents/wait";
 }
 
-/** A subagent's start: Claude's `Agent` (once `Task`), Codex's `spawnAgent`. */
-const AGENTS = new Set(["Agent", "Task", "spawnAgent", "spawn_agent"]);
+/** A subagent's start: each CLI's own tool for it. */
+const AGENTS = new Set(CLIS.flatMap((cli) => cli.subagentTools));
 
 /** A subagent's lifecycle is shown in its composer strip and History, outside the main work. */
 export function isSubagentStart(name: string): boolean {

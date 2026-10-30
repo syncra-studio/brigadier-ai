@@ -3,15 +3,14 @@ import { useState, type ReactNode } from "react";
 import { SettingsSwitch } from "@/app/settings/parts";
 import { ChevronDown, ChevronRight, Folder, Folders, ProviderGlyph, ServerArt, ServerBrand, SkillArt } from "@/components/icons";
 import { SettingsCard } from "@/components/shared";
-import type { ProviderKind } from "@/ipc/generated";
+import { PROVIDERS } from "@/lib/providerKinds";
 import { cn } from "@/lib/utils";
 import { brandOf } from "./brand";
 import type { Line, Tone } from "./model";
 import type { PluginItemView, PluginKind } from "./types";
 
 /** The agents with a mark of their own; any other shows its name's first letter. */
-const GLYPHS: readonly string[] = ["claude", "codex"] satisfies ProviderKind[];
-const glyphed = (agent: string): agent is ProviderKind => GLYPHS.includes(agent);
+const glyphed = (agent: string) => PROVIDERS.includes(agent);
 
 const TONE: Record<Tone, string> = { muted: "text-foreground/65", warning: "text-warning", error: "text-destructive" };
 

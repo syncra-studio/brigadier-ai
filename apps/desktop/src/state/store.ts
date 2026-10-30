@@ -22,6 +22,7 @@ import type {
   Settings,
 } from "@/ipc/generated";
 import { cachedSummaryShown } from "@/lib/pinnedSummary";
+import { PROVIDERS } from "@/lib/providerKinds";
 import { confirmPending } from "@/state/shownIds";
 
 /** A page of Settings. */
@@ -434,9 +435,8 @@ function applyProviderEvent(
       const others = view.providers.filter(
         (overview) => overview.provider !== event.overview.provider,
       );
-      const order = ["claude", "codex"];
       const overviews = [...others, event.overview].toSorted(
-        (a, b) => order.indexOf(a.provider) - order.indexOf(b.provider),
+        (a, b) => PROVIDERS.indexOf(a.provider) - PROVIDERS.indexOf(b.provider),
       );
       return { ...providers, view: { ...view, providers: overviews } };
     }

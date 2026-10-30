@@ -11,7 +11,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_providers::ProviderKind;
-use brigadier_registry::Agent;
 use brigadier_registry::adapter::{AgentAdapter, CliCall, Listed, adapters, plain_text};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -69,19 +68,12 @@ pub enum AgentSignInState {
     },
 }
 
-pub(crate) fn provider(agent: Agent) -> ProviderKind {
-    match agent {
-        Agent::Claude => ProviderKind::Claude,
-        Agent::Codex => ProviderKind::Codex,
-    }
-}
-
 /// How the CLIs are run: the environment they get (the login shell's, with each adapter's
 /// home), and where each one's binary is.
 #[derive(Clone)]
 pub(crate) struct Clis {
     pub env: Vec<(String, String)>,
-    pub binary: Arc<dyn Fn(Agent) -> Option<PathBuf> + Send + Sync>,
+    pub binary: Arc<dyn Fn(ProviderKind) -> Option<PathBuf> + Send + Sync>,
 }
 
 impl Clis {
@@ -123,7 +115,7 @@ impl Run {
     }
 }
 
-type ListKey = (Agent, Option<PathBuf>);
+type ListKey = (ProviderKind, Option<PathBuf>);
 
 #[derive(Default)]
 pub(crate) struct McpLogins {
@@ -137,7 +129,7 @@ pub(crate) struct McpLogins {
     lists: Mutex<HashMap<ListKey, (Instant, Vec<Listed>)>>,
     /// When each CLI said it signed in to a server, by the name it lists: a list read from
     /// before then doesn't undo it. Taken with `lists` held.
-    signed_in: Mutex<HashMap<(Agent, String), Instant>>,
+    signed_in: Mutex<HashMap<(ProviderKind, String), Instant>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -194,7 +186,7 @@ impl McpLogins {
                 if me.upgrade().is_none() {
                     break;
                 }
-                for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+                for kind in brigadier_providers::adapters::kinds() {
                     let _ = spread(kind);
                 }
             }
@@ -307,7 +299,7 @@ impl McpLogins {
         cancel: &AtomicBool,
         adapter: &dyn AgentAdapter,
     ) {
-        let agent = provider(adapter.agent());
+        let agent = adapter.agent();
         let entry = if (clis.binary)(adapter.agent()).is_none() {
             Err(format!("{} is not installed", adapter.label()))
         } else {
@@ -343,7 +335,7 @@ impl McpLogins {
         let rank = |agent: ProviderKind| {
             adapters()
                 .iter()
-                .position(|adapter| provider(adapter.agent()) == agent)
+                .position(|adapter| adapter.agent() == agent)
         };
         self.update(id, |run| {
             let agents = &mut run.progress.agents;
@@ -432,7 +424,7 @@ impl McpLogins {
 
     /// `agent`'s CLI said it signed in to the server it lists as `name`: every list of it
     /// says so from now on.
-    fn signed(&self, agent: Agent, name: &str) {
+    fn signed(&self, agent: ProviderKind, name: &str) {
         let mut lists = lock(&self.lists);
         lock(&self.signed_in).insert((agent, name.to_owned()), Instant::now());
         for (_, listed) in lists

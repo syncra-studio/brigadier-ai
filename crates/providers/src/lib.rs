@@ -14,6 +14,7 @@
 //! crash sweep after the daemon died.
 
 pub mod accounts;
+pub mod adapters;
 #[cfg(all(test, unix))]
 mod chat_shell_live_tests;
 pub mod claude;
@@ -122,6 +123,19 @@ pub trait Provider: Send + Sync {
     /// as the CLI recorded them): a session's Delete takes them with it.
     fn made_worktrees(&self, _artifacts: Vec<Artifact>) -> BoxFuture<'_, Vec<(PathBuf, String)>> {
         Box::pin(async { Vec::new() })
+    }
+
+    /// After a restart, when nothing of Brigadier's runs: archives these sessions it still
+    /// holds in the CLI's own records, so the user's own apps of the CLI don't list them,
+    /// except those `open` says a session has opened meanwhile. Nothing for a CLI that lists
+    /// no sessions of its own. `private_logs`: a tab chat's, logged without identifying them.
+    fn archive_sessions<'a>(
+        &'a self,
+        _ids: Vec<String>,
+        _private_logs: bool,
+        _open: Box<dyn Fn(&str) -> bool + Send + Sync + 'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// A tab's cleanup must also suppress identifying diagnostics from control processes.

@@ -195,17 +195,21 @@ impl Registry {
 
 /// The CLI a registry entry names, if Brigadier drives it.
 pub(crate) fn provider_of(cli: &str) -> Option<ProviderKind> {
-    ProviderKind::ALL
-        .into_iter()
-        .find(|provider| cli.eq_ignore_ascii_case(provider.binary()))
+    brigadier_providers::adapters::ADAPTERS
+        .iter()
+        .find(|adapter| cli.eq_ignore_ascii_case(adapter.binary))
+        .map(|adapter| adapter.kind)
 }
 
-/// The capabilities a CLI's adapter implements; a registry can't enable others.
-pub(crate) fn adapter_capabilities(provider: ProviderKind) -> &'static [Capability] {
-    match provider {
-        ProviderKind::Claude => &[Capability::WebSearch],
-        ProviderKind::Codex => &[Capability::WebSearch, Capability::ImageGeneration],
-    }
+/// Whether a CLI's adapter implements a capability; a registry can't enable others.
+pub(crate) fn adapter_implements(provider: ProviderKind, capability: Capability) -> bool {
+    let name = serde_json::to_value(capability).ok();
+    brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| {
+        adapter
+            .tools
+            .iter()
+            .any(|tool| name.as_ref().and_then(|name| name.as_str()) == Some(*tool))
+    })
 }
 
 fn malformed(what: &str) -> RegistryError {
@@ -416,10 +420,9 @@ fn bound_model(
         note("takes only categories this app doesn't know; never routed to".to_owned());
     }
 
-    let implemented = adapter_capabilities(provider);
     let mut tools: Vec<Capability> = Vec::new();
     for tool in &model.modalities.tools {
-        if !implemented.contains(tool) {
+        if !adapter_implements(provider, *tool) {
             note(format!(
                 "capability {tool:?} not implemented by its CLI; dropped"
             ));

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Agent, Plugin, Roots, Session};
+use crate::{Plugin, ProviderKind, Roots, Session};
 
 /// A skill folder, wherever it is found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,12 +93,12 @@ impl SkillRoot {
     /// Whether `session`'s agent finds the skills in this root by itself.
     pub fn native(&self, session: &Session<'_>) -> bool {
         match (self, session.agent) {
-            (Self::ClaudeUser | Self::ClaudeSynced(_), Agent::Claude)
-            | (Self::AgentsUser | Self::CodexUser, Agent::Codex) => true,
-            (Self::ClaudeProject(project), Agent::Claude) => {
+            (Self::ClaudeUser | Self::ClaudeSynced(_), ProviderKind::Claude)
+            | (Self::AgentsUser | Self::CodexUser, ProviderKind::Codex) => true,
+            (Self::ClaudeProject(project), ProviderKind::Claude) => {
                 Some(project.as_path()) == session.project
             }
-            (Self::AgentsProject(project), Agent::Codex) => {
+            (Self::AgentsProject(project), ProviderKind::Codex) => {
                 Some(project.as_path()) == session.project && session.in_checkout
             }
             (Self::Plugin(plugin), agent) => {
@@ -383,7 +383,7 @@ mod regression_tests {
         std::fs::write(skill.join("SKILL.md"), "No frontmatter").unwrap();
         let mut found = Vec::new();
         let plugin = Plugin {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             id: "tools@market".into(),
             name: "tools".into(),
             root: dir.clone(),

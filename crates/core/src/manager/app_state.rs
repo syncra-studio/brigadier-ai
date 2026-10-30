@@ -4,6 +4,7 @@
 //! over an app call; the daemon knows the rest (terminals, composer, usage) itself, so a closed
 //! window still leaves those.
 
+use brigadier_providers::KindFacts as _;
 use std::fmt::Write as _;
 use std::time::Duration;
 

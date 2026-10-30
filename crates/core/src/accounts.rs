@@ -62,7 +62,7 @@ pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
             account.default = edit.default;
         }
     }
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let mut seen = false;
         for account in accounts
             .iter_mut()
@@ -71,8 +71,7 @@ pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
             account.default = !std::mem::replace(&mut seen, true);
         }
     }
-    let picked: Vec<ProviderKind> = ProviderKind::ALL
-        .into_iter()
+    let picked: Vec<ProviderKind> = brigadier_providers::adapters::kinds()
         .filter(|provider| {
             let id = |settings: &Settings| {
                 settings

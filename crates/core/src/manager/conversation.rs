@@ -16,6 +16,7 @@
 //!   message (unless the queue is paused). So results reach the orchestrator before the
 //!   user's next queued message, and never mixed into another request's turn unlabelled.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -2177,8 +2178,8 @@ impl SessionManager {
                 )));
             }
             self.set_run(&id, RunState::Running, None).await;
-            // The user's own `/compact`, as Claude keeps it.
-            if cli.provider == ProviderKind::Claude {
+            // The user's own `/compact`, as a CLI that runs commands from text keeps it.
+            if super::cli_commands::commands_as_text(cli.provider) {
                 let input = TurnInput::text("/compact");
                 self.note_sent(
                     &id,
@@ -3220,7 +3221,7 @@ impl SessionManager {
             plugins: resolved,
             plugin_lease,
             provider: choice.provider,
-            meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex)
+            meter: TokenMeter::new(resumed && cumulative_usage(choice.provider))
                 .on_account(account.account.clone())
                 .starting(cause)
                 .with_tools(tools_key),
@@ -3250,10 +3251,10 @@ impl SessionManager {
                 .ledger()
                 .artifacts(&owner)
                 .into_iter()
-                .filter(|artifact| match artifact {
-                    Artifact::ClaudeSession { session_id, .. } => session_id == native_id,
-                    Artifact::CodexThread { thread_id, .. } => thread_id == native_id,
-                    _ => false,
+                .filter(|artifact| {
+                    artifact
+                        .native_session()
+                        .is_some_and(|(_, id)| id == native_id)
                 })
                 .collect();
             if made.is_empty() {
@@ -4013,7 +4014,7 @@ impl SessionManager {
                         deadline = None;
                         self.store_deltas(&conv, std::mem::take(&mut deltas), &mut said).await;
                         if matches!(event, ProviderEvent::TurnCompleted { .. }) {
-                            self.remember_claude_prompts(&conv.id, &cli).await;
+                            self.remember_mcp_prompts(&conv.id, &cli).await;
                             said.clear();
                         }
                         // A CLI that starts (again) tells its MCP servers anew.
@@ -4069,7 +4070,7 @@ impl SessionManager {
         }
         self.store_deltas(&conv, deltas, &mut said).await;
         self.record_held_looked(&conv).await;
-        self.remember_claude_prompts(&conv.id, &cli).await;
+        self.remember_mcp_prompts(&conv.id, &cli).await;
         self.cli_command_probes.end(&conv.id, cli.plugin_lease.id());
         cli.plugin_lease.release();
         self.grants.revoke(&cli.grants);
@@ -5670,7 +5671,7 @@ impl SessionManager {
             .settings()
             .default_chat_model
             .unwrap_or(ModelChoice {
-                provider: ProviderKind::Claude,
+                provider: brigadier_providers::adapters::default_kind(),
                 model: None,
                 effort: None,
                 fast: None,
@@ -6019,10 +6020,16 @@ impl NativeIds {
     /// A reset is read the same for every provider.
     fn reset(&mut self) {
         self.noted += 1;
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        for provider in brigadier_providers::adapters::kinds() {
             self.known.insert(provider, None);
         }
     }
+}
+
+/// Whether `provider`'s usage reports are totals over the session's whole life, so a resumed
+/// session's first report only sets the baseline.
+pub(super) fn cumulative_usage(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.cumulative_usage)
 }
 
 /// Takes every envelope of one request from the inbox, in arrival order: the request of the
