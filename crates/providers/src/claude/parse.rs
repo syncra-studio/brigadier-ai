@@ -869,6 +869,14 @@ impl Parser {
                 error.will_retry = true;
                 out.push(Output::Event(ProviderEvent::Error { error }));
             }
+            // It took a message and asks its model: the turn starts now, as Codex's does, not
+            // at the message's echo, which comes only with the first streamed token.
+            Some("status")
+                if str_of(value, "status") == Some("requesting")
+                    && str_of(value, "parent_tool_use_id").is_none() =>
+            {
+                self.begin_turn(out);
+            }
             Some("status") if str_of(value, "status") == Some("compacting") => {
                 if self.refuses_compaction && !self.compact_asked {
                     self.refusing = true;
@@ -3598,6 +3606,26 @@ mod tests {
                 Some(path.to_owned())
             )]
         );
+    }
+
+    /// A turn starts as Claude asks its model (Claude Code 2.1.314 says `requesting` ~0.1 s after
+    /// it takes a message), not at the message's echo, which comes with the first token; the
+    /// echo is then that turn's message.
+    #[test]
+    fn a_turn_starts_when_claude_asks_its_model() {
+        let mut parser = Parser::live();
+        let requesting = json!({ "type": "system", "subtype": "status", "status": "requesting" });
+        assert!(matches!(
+            parser.feed(&requesting.to_string()).as_slice(),
+            [Output::Event(ProviderEvent::TurnStarted { .. })]
+        ));
+        assert!(parser.feed(&requesting.to_string()).is_empty(), "one turn");
+        let echo = json!({ "type": "user", "isReplay": true, "uuid": "u1",
+                           "message": { "role": "user", "content": "Run ls" } });
+        assert!(matches!(
+            parser.feed(&echo.to_string()).as_slice(),
+            [Output::Event(ProviderEvent::Message { role: Role::User, text, .. })] if text == "Run ls"
+        ));
     }
 
     /// A turn can end while Claude's own background job still runs: Claude says how many run,
