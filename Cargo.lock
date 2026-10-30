@@ -870,6 +870,7 @@ dependencies = [
  "junction",
  "nix 0.31.3",
  "prettyplease 0.3.0",
+ "reqwest",
  "rusqlite",
  "schemars 0.8.22",
  "security-framework",

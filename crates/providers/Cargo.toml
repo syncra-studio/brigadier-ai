@@ -19,6 +19,8 @@ brigadier-sandbox.workspace = true
 brigadier-registry.workspace = true
 brigadier-kind.workspace = true
 dirs.workspace = true
+# OpenCode's server API and event stream, on loopback.
+reqwest = { version = "0.13.5", features = ["json"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

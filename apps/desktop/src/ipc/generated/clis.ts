@@ -62,4 +62,21 @@ export const CLIS: readonly CliFacts[] = [
     commandsAsText: false,
     subagentTools: ["spawnAgent", "spawn_agent"],
   },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    vendor: "OpenCode",
+    maker: "OpenCode by Anomaly",
+    cliName: "OpenCode CLI",
+    installGuide: "https://opencode.ai/docs",
+    usualWindows: [],
+    glyph: {
+      viewBox: "96 96 320 320",
+      path: "M384 416H128V96H384V416ZM320 160H192V352H320V160Z",
+    },
+    oneSkillPerMessage: false,
+    reportsCacheWrites: true,
+    commandsAsText: false,
+    subagentTools: ["subagent"],
+  },
 ];

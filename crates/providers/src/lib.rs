@@ -8,6 +8,7 @@
 //!   Brigadier never touches its OAuth tokens.
 //! - [`codex`]: `codex app-server` over stdio JSON-RPC, with bindings generated from the
 //!   installed version's schema.
+//! - [`opencode`]: `opencode serve` per session, over its HTTP API and event stream.
 //!
 //! Whatever a session creates on disk or in the process table is reported to a [`Ledger`] the
 //! moment it is known, so it can be removed exactly when the session is disposed of, or by the
@@ -32,6 +33,7 @@ pub mod login_mark;
 mod looked;
 pub mod mcp_oauth;
 pub mod model;
+pub mod opencode;
 pub mod policy;
 pub mod process;
 pub mod record;

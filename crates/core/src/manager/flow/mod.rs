@@ -1655,10 +1655,9 @@ async fn boot(
         core.clone(),
         platform,
         spawner.clone(),
-        vec![
-            fake(ProviderKind::Claude, None),
-            fake(ProviderKind::Codex, None),
-        ],
+        brigadier_providers::adapters::kinds()
+            .map(|kind| fake(kind, None))
+            .collect(),
         accounts,
     )
     .await

@@ -280,7 +280,8 @@ export const SlashCommands: FC<{
         icon: provider ? <ProviderGlyph provider={provider} className="size-icon-sm" /> : <Bolt />,
         ...(commandsAsText ? {} : {
           runCommand: (invocation: string) => {
-            if (invocation !== "thread/compact/start") return;
+            // Each CLI's `compact` names its own request; the composer only runs that one.
+            if (!listed.some((command) => command.name === "compact" && command.invocation === invocation)) return;
             if (conversation) run(() => compact(conversation.id));
             else setSkillHint("Send a message before compacting.");
           },

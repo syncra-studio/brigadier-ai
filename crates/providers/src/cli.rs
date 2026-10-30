@@ -282,6 +282,8 @@ pub fn parse_version(output: &str) -> Option<String> {
         .lines()
         .next()?
         .split_whitespace()
+        // `v2.0.19` too.
+        .map(|word| word.strip_prefix('v').unwrap_or(word))
         .find(|word| word.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .map(str::to_owned)
 }

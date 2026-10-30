@@ -79,6 +79,8 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
                 json!({"type":"assistant","uuid":"a1","timestamp":"2026-10-26T10:00:00Z",
                 "message":{"id":"m1","role":"assistant","content":[{"type":"text","text":reply}]}})
             }
+            ProviderKind::OpenCode => json!({"id":"a1","type":"assistant","time":{"created":1},
+                "content":[{"type":"text","text":reply}]}),
             _ => json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z",
                 "payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"Text","text":reply}]}}}),
         };

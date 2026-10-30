@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, ErrorCode, PROTOCOL, Tool};
-use brigadier_providers::ProviderKind;
 use serde_json::json;
 
 use super::chat_thread_tests::{answered, new_chat};
@@ -123,10 +122,12 @@ async fn fusion_invocations_use_the_selected_cli_and_keep_the_normal_queue() {
             .await
             .unwrap()
             .id;
-        let expected = match provider {
-            ProviderKind::Claude => "/fusion Which approach?",
-            _ => "$fusion Which approach?",
-        };
+        let expected = format!(
+            "{}fusion Which approach?",
+            brigadier_providers::adapters::adapter(provider)
+                .unwrap()
+                .skill_prefix
+        );
         assert_eq!(
             flow.manager
                 .fusion_message(&chat, "Which approach?".into())

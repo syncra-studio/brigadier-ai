@@ -184,7 +184,11 @@ impl Default for UpdateLimits {
 }
 
 /// Every registered CLI, in the order the app lists them.
-pub static ADAPTERS: &[&Adapter] = &[&crate::claude::ADAPTER, &crate::codex::ADAPTER];
+pub static ADAPTERS: &[&Adapter] = &[
+    &crate::claude::ADAPTER,
+    &crate::codex::ADAPTER,
+    &crate::opencode::ADAPTER,
+];
 
 /// `kind`'s adapter, when it is registered.
 pub fn adapter(kind: ProviderKind) -> Option<&'static Adapter> {
