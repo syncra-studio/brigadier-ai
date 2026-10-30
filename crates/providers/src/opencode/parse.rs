@@ -453,7 +453,7 @@ const READ_ONLY: &[&str] = &[
 /// The permission rules a session runs under, after its agent's own (OpenCode's later rule
 /// wins), so each level means what it means on the other CLIs (see the module docs).
 /// `folders`: the session's extra folders, which it reads and works in without asking.
-pub(crate) fn permissions(access: Access, folders: &[String]) -> Value {
+pub(crate) fn permissions(access: Access, tools: ToolSet, folders: &[String]) -> Value {
     let rule = |action: &str, resource: &str, effect: &str| json!({ "action": action, "resource": resource, "effect": effect });
     // Commands that only read run unasked below Full access, as Claude's read-only commands and
     // Codex's safe ones do; one that redirects or writes `--output` still asks. OpenCode matches
@@ -489,6 +489,12 @@ pub(crate) fn permissions(access: Access, folders: &[String]) -> Value {
             rule("read", "*.env.example", "allow"),
         ],
     };
+    // A side chat's and a tab chat's shell runs `brigadier` and nothing else, as Claude's
+    // `Bash(brigadier:*)` under `dontAsk` there: no redirect.
+    if access == Access::ReadOnly && matches!(tools, ToolSet::SideChat | ToolSet::TabChat) {
+        rules.push(rule("shell", "brigadier *", "allow"));
+        rules.push(rule("shell", "*>*", "deny"));
+    }
     // Its own question tool waits on a form Brigadier doesn't show: the model asks in words.
     rules.push(rule("question", "*", "deny"));
     for folder in folders {
@@ -1261,7 +1267,8 @@ mod tests {
     #[test]
     fn each_level_is_opencodes_own_permission_rules() {
         let folders = ["/extra".to_owned()];
-        let at = |access| permissions(access, &folders);
+        let at = |access| permissions(access, ToolSet::Default, &folders);
+        let effect_of = effect;
         let effect = |access, action: &str, resource: &str| effect(&at(access), action, resource);
         let ask = Some("ask".to_owned());
         let allow = Some("allow".to_owned());
@@ -1321,6 +1328,21 @@ mod tests {
         );
         assert_eq!(effect(Access::ReadOnly, "read", ".env"), deny);
         assert_eq!(effect(Access::ReadOnly, "read", "a.rs"), allow);
+        assert_eq!(
+            effect(Access::ReadOnly, "shell", "brigadier app state"),
+            deny
+        );
+        // A side chat's and a tab chat's: `brigadier` too, nothing else, no redirect.
+        for tools in [ToolSet::SideChat, ToolSet::TabChat] {
+            let rules = permissions(Access::ReadOnly, tools, &folders);
+            for command in ["brigadier app state", "brigadier report save --title P"] {
+                assert_eq!(effect_of(&rules, "shell", command), allow);
+            }
+            for command in ["ls", "rm a", "brigadier app state > out", "python3 -c 1"] {
+                assert_eq!(effect_of(&rules, "shell", command), deny, "{command}");
+            }
+            assert_eq!(effect_of(&rules, "edit", "a.rs"), deny);
+        }
         // Every level: the extra folders are the session's; OpenCode's form question never.
         for access in [
             Access::Ask,

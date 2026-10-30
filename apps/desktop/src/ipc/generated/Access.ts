@@ -5,13 +5,16 @@
  * Brigadier adds no sandbox and answers nothing on the user's behalf; the CLI's own
  * permission prompts reach the user as cards.
  *
- * | Level | Claude Code | Codex |
- * |---|---|---|
- * | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write` |
- * | Accept edits | `--permission-mode acceptEdits` | approval `on-request`, sandbox `workspace-write` |
- * | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` |
+ * | Level | Claude Code | Codex | OpenCode |
+ * |---|---|---|---|
+ * | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write` | edits and commands ask, read-only commands run |
+ * | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier:*)` | approval `on-request`, sandbox `workspace-write` | edits, read-only commands and `brigadier` run, other commands ask |
+ * | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` | everything allowed |
+ *
+ * Codex differs where it has no such setting (0.166.0): at Ask it asks before read-only
+ * commands too, and at Accept edits any command runs unasked inside its workspace sandbox.
  *
  * [`Access::ReadOnly`] is for Brigadier's own one-shot readers (a commit message, a Brain
- * pass), never a user's level.
+ * pass) and side and tab chats, never a user's level: a chat's shell runs `brigadier` only.
  */
 export type Access = { "type": "ask" } | { "type": "acceptEdits" } | { "type": "full" } | { "type": "readOnly" };

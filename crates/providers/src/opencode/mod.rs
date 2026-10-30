@@ -10,7 +10,8 @@
 //!   Accept edits: those and `brigadier …` run too, any other command asks. Full access: nothing
 //!   asks.
 //! - Read-only (Brigadier's own readers): edits, commands, sub-agents and anything outside the
-//!   folder are declined, never asked about.
+//!   folder are declined, never asked about. A side chat's and a tab chat's shell runs
+//!   `brigadier …` and nothing else, as on the other CLIs.
 //!
 //! Every request OpenCode asks reaches the user as a card ([`ProviderEvent::ApprovalRequested`]).
 //!
@@ -862,7 +863,7 @@ async fn open_session(
         .map(|dir| crate::policy::real_path(dir).unwrap_or_else(|| dir.clone()))
         .map(|dir| dir.display().to_string())
         .collect();
-    let permissions = parse::permissions(spec.access, &folders);
+    let permissions = parse::permissions(spec.access, spec.tools, &folders);
     // No model named: OpenCode's own default (D18), at the effort asked for, if any.
     let model = match (&spec.model, &spec.effort) {
         (Some(model), effort) => Some(model_ref(model, effort.as_deref())?),

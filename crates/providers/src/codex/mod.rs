@@ -4,10 +4,13 @@
 //! server requests that reach the user ([`REVIEWER`]). The session's level passes straight
 //! through as Codex's own approval policy and sandbox ([`approval_policy`], [`sandbox_policy`]):
 //!
-//! - Ask: `untrusted` in the `workspace-write` sandbox: Codex asks before every command it
-//!   doesn't know to be safe.
-//! - Accept edits: `on-request` in the `workspace-write` sandbox: commands run inside the
-//!   sandbox without asking; Codex asks to leave it.
+//! - Ask: `untrusted` in the `workspace-write` sandbox: Codex asks before every edit and every
+//!   command, `ls` too (checked live on 0.166.0).
+//! - Accept edits: `on-request` in the `workspace-write` sandbox: edits and commands run inside
+//!   the sandbox without asking; Codex asks to leave it. Codex has no setting that edits freely
+//!   but asks before commands (0.166.0, checked live: `untrusted` asks before edits, `ls` and
+//!   `brigadier` too; `granular` runs as `on-request`; exec-policy rules load only from `.rules`
+//!   files), so this is the closest: a command runs unasked, held to the workspace.
 //! - Full access: `never` with `danger-full-access`: Codex never asks.
 //! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A side chat's
 //!   and a tab chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]). A Chat runs
