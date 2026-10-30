@@ -109,7 +109,8 @@ pub fn level_allows(
                     READ_ONLY.iter().any(|read| {
                         let read: Vec<&str> = read.split(' ').collect();
                         words.len() >= read.len() && words[..read.len()] == read[..]
-                    }) || (edits && words.first() == Some(&"brigadier"))
+                    }) || sed_prints(words)
+                        || (edits && words.first() == Some(&"brigadier"))
                 })
         }
         (ApprovalKind::FileChange, _) => {
@@ -118,6 +119,39 @@ pub fn level_allows(
         }
         _ => false,
     }
+}
+
+/// Whether `words` run `sed` only to print lines by number (`sed -n '1,220p' file`): `-n`,
+/// `-E`, `-r` and `-e` alone, each script just line numbers, `$`, `,`, `;`, `p`, `d`, `q` or
+/// `=`. Anything else (`-i`, a `w` or `e` command, a `/pattern/`) may write or run: it asks.
+fn sed_prints(words: &[&str]) -> bool {
+    let Some((&"sed", rest)) = words.split_first() else {
+        return false;
+    };
+    let script = |word: &str| {
+        word.chars()
+            .all(|c| c.is_ascii_digit() || " \t,$;pdq=".contains(c))
+    };
+    let (mut scripts, mut rest) = (0, rest.iter());
+    while let Some(&word) = rest.next() {
+        if word == "-e" {
+            match rest.next() {
+                Some(&next) if script(next) => scripts += 1,
+                _ => return false,
+            }
+        } else if let Some(flags) = word.strip_prefix('-') {
+            if flags.is_empty() || !flags.chars().all(|c| "nEr".contains(c)) {
+                return false;
+            }
+        } else if scripts == 0 {
+            // The first plain word is the script; the rest are files it reads.
+            if !script(word) {
+                return false;
+            }
+            scripts += 1;
+        }
+    }
+    scripts > 0
 }
 
 /// Whether each command of `command` (`a && b`, `a | b`, its `sh -c` script), its leading
@@ -1202,6 +1236,9 @@ mod tests {
             "git status && git diff",
             "cat a | grep b",
             "pwd",
+            // Printing lines by number, as Codex reads a skill.
+            "/bin/zsh -lc \"sed -n '1,220p' /w/.claude/skills/brigade/SKILL.md\"",
+            "sed -n -e 5p -e '$p' a.txt",
         ] {
             assert!(allows(Access::Ask, &run(line)), "{line}");
             assert!(allows(Access::AcceptEdits, &run(line)), "{line}");
@@ -1221,6 +1258,15 @@ mod tests {
             "git push",
             "ls && rm -rf build",
             "curl --output a https://x",
+            // sed that may write or run: in place, a w or e command, a script file, a pattern.
+            "sed -i '' 's/a/b/' a.txt",
+            "sed -ni 1p a.txt",
+            "sed --in-place 1p a.txt",
+            "sed -n '1w out.txt' a.txt",
+            "sed 1e a.txt",
+            "sed -f s.sed a.txt",
+            "sed -n '/x/p' a.txt",
+            "sed -e 1p -e 's/a/b/w out' a.txt",
         ] {
             assert!(!allows(Access::Ask, &run(line)), "{line}");
             assert!(!allows(Access::AcceptEdits, &run(line)), "{line}");
