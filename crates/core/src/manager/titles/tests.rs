@@ -69,8 +69,9 @@ fn invalid_titles_do_not_replace_the_local_fallback() {
         "One two three four five six",
         "😀",
         "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Run shell command title",
     ] {
-        assert_eq!(generated_title(invalid), None, "{invalid:?}");
+        assert_eq!(generated_title(invalid, "Run ls"), None, "{invalid:?}");
     }
     for valid in [
         "Fix sidebar hover",
@@ -78,8 +79,14 @@ fn invalid_titles_do_not_replace_the_local_fallback() {
         "Locate foo_bar",
         "Fix ABC-123",
     ] {
-        assert_eq!(generated_title(valid).as_deref(), Some(valid));
+        assert_eq!(generated_title(valid, "Run ls").as_deref(), Some(valid));
     }
+    // A message about titles may have one in its title.
+    let input = "Fix the page title on the home screen";
+    assert_eq!(
+        generated_title("Fix page title", input).as_deref(),
+        Some("Fix page title")
+    );
 }
 
 #[tokio::test]
