@@ -207,6 +207,39 @@ impl OpenCode {
     }
 }
 
+/// Whether OpenCode can run a model, and the provider signed in to: a saved credential, or its
+/// key in the environment. With none, any model it lists (its free ones, a local one) needs no
+/// credential, as OpenCode lists only the models it can run.
+fn signed_in(integrations: &Value, models: &[Value], env: &CliEnv) -> (bool, Option<String>) {
+    let connected = integrations["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|it| {
+            it["connections"].as_array().is_some_and(|c| !c.is_empty())
+                || it["methods"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|method| {
+                        method["type"] == "env"
+                            && method["names"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .any(|name| {
+                                    name.as_str()
+                                        .and_then(|name| env.var(name))
+                                        .is_some_and(|value| !value.is_empty())
+                                })
+                    })
+        });
+    match connected {
+        Some(it) => (true, it["name"].as_str().map(str::to_owned)),
+        None => (models.iter().any(|model| model["enabled"] != false), None),
+    }
+}
+
 /// The models OpenCode lists, once it has loaded them: a fresh server answers its first asks
 /// with none.
 async fn list_models(server: &Server) -> Result<Vec<Value>> {
@@ -477,38 +510,21 @@ impl Provider for OpenCode {
                 status.guidance = Some(NOT_INSTALLED.into());
                 return status;
             }
-            let (version, integrations) = tokio::join!(
+            let (version, ready) = tokio::join!(
                 self.version(),
                 self.control(async |server: &Server| {
-                    server.call(Method::GET, "/api/integration", None).await
+                    let listed = server.call(Method::GET, "/api/integration", None).await?;
+                    if let ready @ (true, _) = signed_in(&listed, &[], &self.env) {
+                        return Ok(ready);
+                    }
+                    Ok(signed_in(&listed, &list_models(server).await?, &self.env))
                 })
             );
             status.version = version;
-            match integrations {
-                Ok(listed) => {
-                    // Signed in to some provider: a saved credential, or its key in the
-                    // environment.
-                    let connected = listed["data"].as_array().into_iter().flatten().find(|it| {
-                        it["connections"].as_array().is_some_and(|c| !c.is_empty())
-                            || it["methods"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .any(|method| {
-                                    method["type"] == "env"
-                                        && method["names"].as_array().into_iter().flatten().any(
-                                            |name| {
-                                                name.as_str()
-                                                    .and_then(|name| self.env.var(name))
-                                                    .is_some_and(|value| !value.is_empty())
-                                            },
-                                        )
-                                })
-                    });
-                    status.logged_in = connected.is_some();
-                    status.auth_method = connected
-                        .and_then(|it| it["name"].as_str())
-                        .map(str::to_owned);
+            match ready {
+                Ok((logged_in, auth_method)) => {
+                    status.logged_in = logged_in;
+                    status.auth_method = auth_method;
                 }
                 Err(err) => status.guidance = Some(format!("Could not ask OpenCode: {err}")),
             }
@@ -1477,6 +1493,25 @@ mod tests {
         let mut reader = spec();
         reader.tools = ToolSet::Review;
         assert!(sealed(&reader));
+    }
+
+    /// With no provider signed in, a model OpenCode lists needing no credential (its free
+    /// ones, as `opencode serve` 2.2.3 lists them) still makes it ready.
+    #[test]
+    fn a_credential_free_model_makes_it_ready() {
+        let env = CliEnv::from_vars([("OPENCODE_API_KEY".into(), "".into())]);
+        let none = json!({"data": [{"id": "opencode", "name": "OpenCode Console", "connections": [],
+            "methods": [{"type": "key"}, {"type": "env", "names": ["OPENCODE_API_KEY"]}]}]});
+        let free = json!({"id": "big-pickle", "providerID": "opencode", "settings": {"apiKey": "public"}, "enabled": true});
+        assert_eq!(signed_in(&none, &[], &env), (false, None));
+        assert_eq!(signed_in(&none, &[free], &env), (true, None));
+        let off = json!({"id": "big-pickle", "providerID": "opencode", "enabled": false});
+        assert_eq!(signed_in(&none, &[off], &env), (false, None));
+        let keyed = CliEnv::from_vars([("OPENCODE_API_KEY".into(), "k".into())]);
+        assert_eq!(
+            signed_in(&none, &[], &keyed),
+            (true, Some("OpenCode Console".into()))
+        );
     }
 
     #[test]
