@@ -2940,7 +2940,8 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
     assert!(row.gone, "{row:#?}");
     assert_eq!(row.last_end, Some(crate::thread_view::TurnEnd::Done));
     // Closed after a turn that ended done, it reads done after a restart too, with none of
-    // its CLI's events held.
+    // its CLI's events held, and its last word stays its turn's recorded end: its panel's
+    // "Worked for" doesn't run on to the moment it's opened.
     flow.manager.forget_worker_reads();
     let rows = flow
         .manager
@@ -2952,6 +2953,13 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         Some(crate::thread_view::TurnEnd::Done),
         "{rows:#?}"
     );
+    let ended = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .worker(&flow.board().await.tasks[&row.id]);
+    let ended = crate::thread_view::last_turn(&ended.join("record")).and_then(|t| t.ended_at_ms);
+    assert!(ended.is_some(), "its turn's end is recorded");
+    assert_eq!(rows[0].last_event_at_ms, ended, "{rows:#?}");
     super::eventually_async("its thread to read after close", || {
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();

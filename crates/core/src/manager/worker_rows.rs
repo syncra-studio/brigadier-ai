@@ -744,7 +744,14 @@ impl SessionManager {
                     .as_ref()
                     .and_then(|plain| plain.base.clone())
                     .or_else(|| parent_branch.clone());
-                row(task, cli.get(&task.id), git.get(&task.id), waits, mcp, base)
+                let mut row = row(task, cli.get(&task.id), git.get(&task.id), waits, mcp, base);
+                // None of its CLI's events heard since a restart: its last turn's recorded end.
+                if row.last_event_at_ms.is_none() {
+                    let record = self.session_dir(id).worker(task).join("record");
+                    row.last_event_at_ms =
+                        thread_view::last_turn(&record).and_then(|turn| turn.ended_at_ms);
+                }
+                row
             })
             .collect())
     }
