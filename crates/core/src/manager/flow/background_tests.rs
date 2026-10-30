@@ -1231,3 +1231,92 @@ async fn persistent_app_late_claude_metadata_releases_only_proven_app_work() {
 async fn persistent_app_late_codex_metadata_releases_only_proven_app_work() {
     persistent_app_lifetime(brigadier_providers::ProviderKind::Codex, true).await;
 }
+
+/// The user's Stop of a Codex turn while a command of it runs as a background terminal (one the
+/// model went on from): the Stop closes the CLI, which ends the command, so no background task
+/// of it is left running and nothing holds the session.
+#[tokio::test]
+async fn a_stopped_codex_commands_terminal_ends_with_its_turn() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+    };
+    const COMMAND: &str = "/bin/zsh -lc 'python3 -c \"import time; time.sleep(30)\"'";
+    let flow = Flow::start(
+        "codex-stopped-terminal",
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if !turn.input.contains("Run the sleep.") {
+                return Reply::text("Done.");
+            }
+            let command = |status, exit_code| ProviderEvent::Command {
+                item_id: "call_py".into(),
+                command: COMMAND.into(),
+                cwd: None,
+                status,
+                exit_code,
+                output: None,
+                duration_ms: None,
+                kept: None,
+            };
+            turn.emit(command(ItemStatus::InProgress, None)).await;
+            turn.emit(ProviderEvent::BackgroundTask {
+                task: BackgroundTask {
+                    id: "70245".into(),
+                    item_id: Some("call_py".into()),
+                    kind: BackgroundTaskKind::Terminal,
+                    label: "python3 -c \"import time; time.sleep(30)\"".into(),
+                    status: BackgroundTaskStatus::Running,
+                    started_at_ms: 1,
+                    ended_at_ms: None,
+                    output_file: None,
+                    summary: None,
+                    last_line: None,
+                    command: Some("python3 -c \"import time; time.sleep(30)\"".into()),
+                    provider: Some(brigadier_providers::ProviderKind::Codex),
+                },
+            })
+            .await;
+            assert!(turn.stopped().await, "the user stops it");
+            // Codex fails the interrupted command's item; its process is still listed.
+            turn.emit(command(ItemStatus::Failed, Some(-1))).await;
+            Reply::text("")
+        }),
+    )
+    .await;
+    flow.say("Run the sleep.").await;
+    let id = flow.conversation.clone();
+    super::eventually("the terminal to be listed", || {
+        flow.manager
+            .thread_view(&id)
+            .unwrap()
+            .background
+            .iter()
+            .any(|task| task.id == "70245")
+    })
+    .await;
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    flow.settled().await;
+    // Past the close of its CLI, which the Stop ends the command with.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(
+        view.background
+            .iter()
+            .all(|task| task.status != BackgroundTaskStatus::Running),
+        "{:#?}",
+        view.background
+    );
+    assert!(view.jobs.is_empty(), "{:?}", view.jobs);
+    let working = flow
+        .manager
+        .activity()
+        .await
+        .into_iter()
+        .find(|entry| entry.conversation_id == id)
+        .is_some_and(|entry| entry.commands_working);
+    assert!(!working, "the sidebar rests");
+    flow.stop().await;
+}

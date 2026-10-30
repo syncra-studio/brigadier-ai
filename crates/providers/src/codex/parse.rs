@@ -1477,12 +1477,66 @@ fn startup_status(
     })
 }
 
+/// The thread's shell commands as its events say them, which tell a background terminal from a
+/// command its turn runs: Codex's `/ps` lists every command's process while it runs, the one
+/// the turn waits on included (checked on 0.166.0).
+#[derive(Debug, Default)]
+pub(crate) struct CommandItems {
+    /// Commands the running turn waits on, or a turn the user stopped waited on (the Stop ends
+    /// them: Codex says no end of their own).
+    running: HashSet<String>,
+    /// Commands that ended since the last turn began: Codex may still list their process.
+    ended: HashSet<String>,
+}
+
+impl CommandItems {
+    pub(crate) fn note(&mut self, event: &ProviderEvent) {
+        match event {
+            ProviderEvent::Command {
+                item_id,
+                status: ItemStatus::InProgress,
+                ..
+            } => {
+                self.running.insert(item_id.clone());
+            }
+            ProviderEvent::Command { item_id, .. } => {
+                self.running.remove(item_id);
+                self.ended.insert(item_id.clone());
+            }
+            ProviderEvent::TurnStarted { .. } => self.ended.clear(),
+            // The model goes on while they run: Codex stopped waiting for them (a command
+            // yields after a while, or at once when the model asks), so they are in the
+            // background.
+            ProviderEvent::MessageDelta { .. }
+            | ProviderEvent::ReasoningDelta { .. }
+            | ProviderEvent::Reasoning { .. }
+            | ProviderEvent::Message {
+                role: Role::Assistant,
+                ..
+            } => self.running.clear(),
+            // A command still running when its turn completes goes on in the background.
+            ProviderEvent::TurnCompleted { status, .. } if *status != TurnStatus::Interrupted => {
+                self.running.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the command of item `item` is no background terminal: its turn runs it, or it
+    /// ended.
+    fn foreground(&self, item: &str) -> bool {
+        self.running.contains(item) || self.ended.contains(item)
+    }
+}
+
 /// The thread's background terminals as `thread/backgroundTerminals/list` gives them, against
 /// those `known` from the last listing: each new one as running, each one gone as ended at
-/// `now`. `known` becomes this listing's.
+/// `now`. `known` becomes this listing's. A command's process `commands` says isn't in the
+/// background is none.
 pub(crate) fn background_terminals(
     listed: &Value,
     known: &mut HashMap<String, BackgroundTask>,
+    commands: &CommandItems,
     now: i64,
 ) -> Vec<BackgroundTask> {
     let mut changed = Vec::new();
@@ -1496,6 +1550,14 @@ pub(crate) fn background_terminals(
         let Some(id) = terminal.get("processId").and_then(Value::as_str) else {
             continue;
         };
+        if !known.contains_key(id)
+            && terminal
+                .get("itemId")
+                .and_then(Value::as_str)
+                .is_some_and(|item| commands.foreground(item))
+        {
+            continue;
+        }
         let task = known.remove(id).unwrap_or_else(|| {
             let task = BackgroundTask {
                 id: id.to_owned(),
@@ -1770,6 +1832,7 @@ mod tests {
     #[test]
     fn background_terminals_start_and_end_as_listed() {
         let mut known = HashMap::new();
+        let none = CommandItems::default();
         let listed = |ids: &[&str]| {
             json!({ "data": ids.iter().map(|id| json!({ "processId": id, "itemId": format!("call_{id}"),
                 "command": format!("sleep 30 # {id}"), "cwd": "/w", "osPid": 4242 })).collect::<Vec<_>>() })
@@ -1783,7 +1846,7 @@ mod tests {
                 said.sort_by(|a, b| a.0.cmp(&b.0));
                 said
             };
-        let first = background_terminals(&listed(&["7"]), &mut known, 1_000);
+        let first = background_terminals(&listed(&["7"]), &mut known, &none, 1_000);
         assert_eq!(
             (
                 first[0].kind,
@@ -1802,23 +1865,128 @@ mod tests {
             said(background_terminals(
                 &listed(&["7", "9"]),
                 &mut known,
+                &none,
                 2_000
             )),
             [("9".to_owned(), BackgroundTaskStatus::Running, None)]
         );
         assert_eq!(
-            said(background_terminals(&listed(&["9"]), &mut known, 3_000)),
+            said(background_terminals(
+                &listed(&["9"]),
+                &mut known,
+                &none,
+                3_000
+            )),
             [("7".to_owned(), BackgroundTaskStatus::Completed, Some(3_000))]
         );
         assert_eq!(
             said(background_terminals(
                 &json!({ "data": [] }),
                 &mut known,
+                &none,
                 4_000
             )),
             [("9".to_owned(), BackgroundTaskStatus::Completed, Some(4_000))]
         );
         assert!(known.is_empty());
+    }
+
+    /// Codex's `/ps` lists the command its turn waits on (checked on 0.166.0): it is no
+    /// background terminal while its turn waits on it, nor once it ended, nor when the user
+    /// stopped that turn (Codex says no end of the command; the Stop ends it). One the model
+    /// went on from, or still running when its turn completes, is.
+    #[test]
+    fn a_turns_own_command_is_no_background_terminal() {
+        let python = "python3 -c \"import time; time.sleep(30)\"";
+        let listed = |item: &str| {
+            json!({ "data": [{ "command": python, "cwd": "/w", "itemId": item,
+                "osPid": null, "processId": "77432", "cpuPercent": null, "rssKb": null }],
+                "nextCursor": null })
+        };
+        let command = |item: &str, status| ProviderEvent::Command {
+            item_id: item.into(),
+            command: format!("/bin/zsh -lc '{python}'"),
+            cwd: Some("/w".into()),
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        let turn = |status| ProviderEvent::TurnCompleted {
+            turn_id: Some("u".into()),
+            status,
+            duration_ms: None,
+            usage: None,
+        };
+        let started = ProviderEvent::TurnStarted {
+            turn_id: Some("u".into()),
+        };
+
+        // Stopped while it ran: listed before and after the turn's end, never a terminal.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-a", ItemStatus::InProgress)] {
+            commands.note(event);
+        }
+        assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 1).is_empty());
+        commands.note(&turn(TurnStatus::Interrupted));
+        assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 2).is_empty());
+        assert!(known.is_empty());
+
+        // Ended in its turn, still listed as the turn ends: no terminal either.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-b", ItemStatus::InProgress)] {
+            commands.note(event);
+        }
+        assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 1).is_empty());
+        for event in [
+            &command("exec-b", ItemStatus::Completed),
+            &turn(TurnStatus::Completed),
+        ] {
+            commands.note(event);
+        }
+        assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 2).is_empty());
+        assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 3).is_empty());
+
+        // Still running when its turn completes: a background terminal from then on, and its
+        // leaving the list ends it.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-c", ItemStatus::InProgress)] {
+            commands.note(event);
+        }
+        assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 1).is_empty());
+        commands.note(&turn(TurnStatus::Completed));
+        let tasks = background_terminals(&listed("exec-c"), &mut known, &commands, 2);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| (task.id.as_str(), task.status))
+                .collect::<Vec<_>>(),
+            [("77432", BackgroundTaskStatus::Running)]
+        );
+        // The next turn's start doesn't take it back.
+        commands.note(&started);
+        assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 3).is_empty());
+        let tasks = background_terminals(&json!({ "data": [] }), &mut known, &commands, 4);
+        assert_eq!(tasks[0].status, BackgroundTaskStatus::Completed);
+
+        // The model went on while it ran (its yield): a background terminal in its turn too.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [
+            &started,
+            &command("exec-d", ItemStatus::InProgress),
+            &ProviderEvent::MessageDelta {
+                item_id: "msg".into(),
+                text: "OK".into(),
+                phase: None,
+            },
+        ] {
+            commands.note(event);
+        }
+        assert_eq!(
+            background_terminals(&listed("exec-d"), &mut known, &commands, 1).len(),
+            1
+        );
     }
 
     #[test]

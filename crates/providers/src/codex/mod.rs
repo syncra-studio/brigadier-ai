@@ -1340,6 +1340,7 @@ impl Provider for Codex {
             let shared = Arc::new(Shared {
                 approvals: Mutex::new(HashMap::new()),
                 turn_id: Mutex::new(None),
+                commands: Mutex::default(),
                 compact_asked: AtomicBool::new(false),
                 events: Events::new(events_tx, spec.redactor.clone()),
                 thread: Mutex::new(None),
@@ -1590,6 +1591,7 @@ impl Provider for Codex {
             asked: HashSet::new(),
             terminal_lists: HashSet::new(),
             terminals: HashMap::new(),
+            commands: parse::CommandItems::default(),
             openings: HashSet::new(),
         })
     }
@@ -2559,6 +2561,7 @@ struct CodexReplayer {
     asked: HashSet<String>,
     terminal_lists: HashSet<String>,
     terminals: HashMap<String, BackgroundTask>,
+    commands: parse::CommandItems,
     openings: HashSet<String>,
 }
 
@@ -2627,7 +2630,7 @@ impl Replayer for CodexReplayer {
                 return Vec::new();
             };
             // The Replayer API takes no clock; replay task times are offsets from zero.
-            return parse::background_terminals(listed, &mut self.terminals, 0)
+            return parse::background_terminals(listed, &mut self.terminals, &self.commands, 0)
                 .into_iter()
                 .map(|task| ProviderEvent::BackgroundTask { task })
                 .collect();
@@ -2642,6 +2645,7 @@ impl Replayer for CodexReplayer {
             })
             .collect();
         for event in &events {
+            self.commands.note(event);
             if let ProviderEvent::ApprovalRequested { request } = event {
                 self.asked.insert(request.id.clone());
             }
@@ -2753,6 +2757,8 @@ struct Shared {
     /// Unanswered approvals: approval id → JSON-RPC request id and answer shape.
     approvals: Mutex<HashMap<String, (Value, PendingKind)>>,
     turn_id: Mutex<Option<String>>,
+    /// Its shell commands, which tell its background terminals from the commands its turns run.
+    commands: Mutex<parse::CommandItems>,
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
@@ -3315,6 +3321,11 @@ async fn read_loop(
         let outputs = parser.feed(&line);
         // Before its events go: whoever hears a turn start can interrupt it.
         *lock(&shared.turn_id) = parser.turn_id().map(str::to_owned);
+        for output in &outputs {
+            if let Output::Event(event) = output {
+                lock(&shared.commands).note(event);
+            }
+        }
         for output in outputs {
             match output {
                 Output::Event(event) => {
@@ -3441,7 +3452,9 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
                 return;
             }
         };
-        for task in parse::background_terminals(&listed, &mut known, now_ms()) {
+        let tasks =
+            parse::background_terminals(&listed, &mut known, &lock(&shared.commands), now_ms());
+        for task in tasks {
             shared
                 .events
                 .send(ProviderEvent::BackgroundTask { task })
@@ -4845,6 +4858,7 @@ for line in sys.stdin:
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
+            commands: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),
@@ -4960,6 +4974,7 @@ for line in sys.stdin:
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
+            commands: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),
