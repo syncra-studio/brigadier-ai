@@ -193,7 +193,7 @@ async fn chat_config(kind: ProviderKind) {
         (
             Access::AcceptEdits,
             "acceptEdits",
-            "on-request",
+            "untrusted",
             "workspaceWrite",
         ),
         (

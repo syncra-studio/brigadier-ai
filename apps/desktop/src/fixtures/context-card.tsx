@@ -87,10 +87,13 @@ function Fixture() {
       } },
       { ready: () => seen.clicked === true, act: () => {
         seen.keptAfterClick = floating();
+        // The window itself changes size (the summary floats or pins on that, not on a side panel).
+        void fixtureInput({ type: "viewport", width: 1400, height: 900 });
         setWide(true);
       } },
       { ready: () => layout() !== "float", act: () => {
         seen.keptAfterWiden = beside();
+        void fixtureInput({ type: "viewport", width: 1300, height: 900 });
         setWide(false);
       } },
       { ready: () => layout() === "float", act: () => {
