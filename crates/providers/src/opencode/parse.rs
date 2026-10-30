@@ -19,6 +19,11 @@ pub(crate) struct Parser {
     turn_started_ms: Option<i64>,
     /// Each tool call so far: its tool name and input.
     calls: HashMap<String, (String, Value)>,
+    /// When each running tool call was called, for its duration.
+    called_at: HashMap<String, i64>,
+    /// The user messages admitted into the session's inbox (`session.inbox.enqueued`) and not
+    /// yet delivered, by id: their text, said once OpenCode delivers them.
+    inbox: HashMap<String, String>,
     /// Unanswered permission requests by id → the session that asks (this one, or one of its
     /// sub-agents, which ask under their own) and the tool call they are for.
     pub(crate) asked: HashMap<String, (String, String)>,
@@ -85,6 +90,24 @@ impl Parser {
             "session.execution.interrupted" => {
                 vec![self.turn_end(TurnStatus::Interrupted, created)]
             }
+            // The user's message joins the session when it is delivered: after its turn started,
+            // or, a steer, at the running turn's next step. Its id is its message's.
+            "session.inbox.enqueued" => {
+                if data.pointer("/item/type") == Some(&json!("user")) {
+                    let said = data.pointer("/item/payload/text").and_then(Value::as_str);
+                    self.inbox
+                        .insert(text("inboxID"), said.unwrap_or_default().to_owned());
+                }
+                Vec::new()
+            }
+            "session.inbox.delivered" => match self.inbox.remove(&text("inboxID")) {
+                Some(said) => vec![ProviderEvent::Message {
+                    item_id: text("inboxID"),
+                    role: Role::User,
+                    text: said,
+                }],
+                None => Vec::new(),
+            },
             "session.execution.failed" => vec![
                 ProviderEvent::Error {
                     error: classify(&data["error"], false),
@@ -119,9 +142,19 @@ impl Parser {
             }
             "session.tool.called" => {
                 let id = text("id");
+                if let Some(at) = created {
+                    self.called_at.insert(id.clone(), at);
+                }
                 let call = self.calls.entry(id.clone()).or_default();
                 call.1 = data["input"].clone();
-                vec![tool_event(&id, call, ItemStatus::InProgress, None, data)]
+                vec![tool_event(
+                    &id,
+                    call,
+                    ItemStatus::InProgress,
+                    None,
+                    None,
+                    data,
+                )]
             }
             "session.tool.progress" => vec![ProviderEvent::Progress {
                 item_id: text("id"),
@@ -142,7 +175,12 @@ impl Parser {
                     Some(content_text(&data["content"]))
                 };
                 let call = self.calls.remove(&id).unwrap_or_default();
-                vec![tool_event(&id, &call, status, output, data)]
+                let took = self
+                    .called_at
+                    .remove(&id)
+                    .zip(created)
+                    .map(|(from, to)| to - from);
+                vec![tool_event(&id, &call, status, output, took, data)]
             }
             "session.step.ended" => {
                 let tokens = &data["tokens"];
@@ -240,12 +278,13 @@ fn content_text(content: &Value) -> String {
 }
 
 /// A tool call as the row it shows as: a command for `shell`, a file change for `edit` and
-/// `write`, any other tool as itself.
+/// `write`, any other tool as itself. `duration_ms`: how long it ran, once it ended.
 fn tool_event(
     id: &str,
     (name, input): &(String, Value),
     status: ItemStatus,
     output: Option<String>,
+    duration_ms: Option<i64>,
     data: &Value,
 ) -> ProviderEvent {
     match name.as_str() {
@@ -262,7 +301,7 @@ fn tool_event(
                 .and_then(Value::as_i64)
                 .and_then(|code| i32::try_from(code).ok()),
             output,
-            duration_ms: None,
+            duration_ms,
             kept: None,
         },
         "edit" | "write" => {
@@ -383,15 +422,55 @@ pub(crate) fn classify(error: &Value, will_retry: bool) -> ProviderError {
     }
 }
 
+/// Commands, with any arguments, that only read (`ls *` also matches a bare `ls`).
+const READ_ONLY: &[&str] = &[
+    "ls",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "diff",
+    "stat",
+    "du",
+    "df",
+    "which",
+    "echo",
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+];
+
 /// The permission rules a session runs under, after its agent's own (OpenCode's later rule
 /// wins), so each level means what it means on the other CLIs (see the module docs).
 /// `folders`: the session's extra folders, which it reads and works in without asking.
 pub(crate) fn permissions(access: Access, folders: &[String]) -> Value {
     let rule = |action: &str, resource: &str, effect: &str| json!({ "action": action, "resource": resource, "effect": effect });
+    // Commands that only read run unasked below Full access, as Claude's read-only commands and
+    // Codex's safe ones do; one that redirects or writes `--output` still asks. OpenCode matches
+    // each command of a line (`a && b`, `$(b)`) on its own.
+    let commands = |mut rules: Vec<Value>| {
+        rules.push(rule("shell", "*", "ask"));
+        rules.extend(
+            READ_ONLY
+                .iter()
+                .map(|command| rule("shell", &format!("{command} *"), "allow")),
+        );
+        rules.push(rule("shell", "*>*", "ask"));
+        rules.push(rule("shell", "*--output*", "ask"));
+        rules
+    };
     let mut rules = match access {
         Access::Full => vec![rule("*", "*", "allow")],
-        Access::AcceptEdits => vec![rule("shell", "*", "ask")],
-        Access::Ask => vec![rule("edit", "*", "ask"), rule("shell", "*", "ask")],
+        // Brigadier's own commands too, as Claude's `Bash(brigadier:*)` at this level.
+        Access::AcceptEdits => {
+            let mut rules = commands(Vec::new());
+            rules.push(rule("shell", "brigadier *", "allow"));
+            rules
+        }
+        Access::Ask => commands(vec![rule("edit", "*", "ask")]),
         // Whatever the agent would ask about is declined: a reader never asks.
         Access::ReadOnly => vec![
             rule("edit", "*", "deny"),
@@ -478,11 +557,17 @@ pub(crate) fn read_transcript(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                                 part["name"].as_str().unwrap_or_default().to_owned(),
                                 state["input"].clone(),
                             );
+                            let time = |key: &str| part["time"][key].as_i64();
+                            let took = time("completed")
+                                .filter(|_| status != ItemStatus::InProgress)
+                                .zip(time("created"))
+                                .map(|(to, from)| to - from);
                             tool_event(
                                 part["id"].as_str().unwrap_or_default(),
                                 &call,
                                 status,
                                 output,
+                                took,
                                 state,
                             )
                         }
@@ -665,6 +750,116 @@ mod tests {
         );
         assert_eq!(events.len(), 10);
         assert!(!parser.running());
+    }
+
+    /// As `opencode serve` 2.0.19 said them: the user's message is admitted, its turn starts,
+    /// then it is delivered; a steer is delivered at the running turn's next step; a stopped
+    /// command ends failed. The user's messages come as the other CLIs say theirs, after the
+    /// turn's start, and the stopped command says how long it ran.
+    #[test]
+    fn the_users_messages_come_after_their_turns_start_and_a_stopped_command_has_its_time() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let at = |created: i64, kind: &str, data: Value| {
+            json!({"id": "evt", "created": created, "type": kind, "data": data}).to_string()
+        };
+        let events = feed(
+            &mut parser,
+            &[
+                at(
+                    1_000,
+                    "session.inbox.enqueued",
+                    json!({"inboxID": "msg_u1", "sessionID": S, "item": {"type": "user", "payload": {"text": "Sleep 30s.", "files": []}, "delivery": "steer"}}),
+                ),
+                at(1_001, "session.execution.started", json!({"sessionID": S})),
+                at(
+                    1_010,
+                    "session.inbox.delivered",
+                    json!({"sessionID": S, "inboxID": "msg_u1"}),
+                ),
+                at(
+                    2_000,
+                    "session.tool.input.started",
+                    json!({"sessionID": S, "id": "call_1", "name": "shell"}),
+                ),
+                at(
+                    2_020,
+                    "session.tool.called",
+                    json!({"sessionID": S, "id": "call_1", "input": {"command": "sleep 30"}}),
+                ),
+                at(
+                    3_000,
+                    "session.inbox.enqueued",
+                    json!({"inboxID": "msg_u2", "sessionID": S, "item": {"type": "user", "payload": {"text": "Also say hi.", "files": []}, "delivery": "steer"}}),
+                ),
+                // A sub-agent's own messages are not this session's.
+                at(
+                    3_001,
+                    "session.inbox.enqueued",
+                    json!({"inboxID": "msg_x", "sessionID": "ses_sub", "item": {"type": "user", "payload": {"text": "sub"}}}),
+                ),
+                at(
+                    3_002,
+                    "session.inbox.delivered",
+                    json!({"sessionID": "ses_sub", "inboxID": "msg_x"}),
+                ),
+                at(
+                    4_000,
+                    "session.inbox.delivered",
+                    json!({"sessionID": S, "inboxID": "msg_u2"}),
+                ),
+                at(
+                    23_020,
+                    "session.tool.failed",
+                    json!({"sessionID": S, "id": "call_1", "error": {"type": "aborted", "message": "Tool execution interrupted"}}),
+                ),
+                at(
+                    23_050,
+                    "session.execution.interrupted",
+                    json!({"sessionID": S, "reason": "user"}),
+                ),
+            ],
+        );
+        assert_eq!(events[0], ProviderEvent::TurnStarted { turn_id: None });
+        assert_eq!(
+            events[1],
+            ProviderEvent::Message {
+                item_id: "msg_u1".into(),
+                role: Role::User,
+                text: "Sleep 30s.".into()
+            }
+        );
+        assert!(matches!(
+            &events[2],
+            ProviderEvent::Command {
+                status: ItemStatus::InProgress,
+                duration_ms: None,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&events[3], ProviderEvent::Message { item_id, role: Role::User, .. } if item_id == "msg_u2")
+        );
+        assert!(
+            matches!(
+                &events[4],
+                ProviderEvent::Command {
+                    status: ItemStatus::Failed,
+                    duration_ms: Some(21_000),
+                    ..
+                }
+            ),
+            "{:?}",
+            events[4]
+        );
+        assert!(matches!(
+            events[5],
+            ProviderEvent::TurnCompleted {
+                status: TurnStatus::Interrupted,
+                duration_ms: Some(22_049),
+                ..
+            }
+        ));
+        assert_eq!(events.len(), 6, "{events:?}");
     }
 
     #[test]
@@ -910,7 +1105,7 @@ mod tests {
             json!({"id": "msg_u1", "time": {"created": 1_000}, "text": "Run echo two, then reply DONE.", "type": "user"}),
             json!({"id": "msg_a1", "time": {"created": 1_100}, "type": "assistant", "content": [
                 {"type": "reasoning", "text": "Run it.", "time": {"created": 1_150}},
-                {"type": "tool", "id": "call_1", "name": "shell", "state": {"status": "completed", "input": {"command": "echo two"}, "content": [{"type": "text", "text": "two\n"}], "metadata": {"exit": 0}}},
+                {"type": "tool", "id": "call_1", "name": "shell", "state": {"status": "completed", "input": {"command": "echo two"}, "content": [{"type": "text", "text": "two\n"}], "metadata": {"exit": 0}}, "time": {"created": 1_160, "ran": 1_170, "completed": 1_190}},
             ], "tokens": {"input": 134, "output": 55, "reasoning": 0, "cache": {"read": 12_416, "write": 0}}}),
             json!({"id": "msg_u2", "time": {"created": 1_200}, "text": "Also end with BANANA.", "type": "user"}),
             json!({"id": "msg_a2", "time": {"created": 1_300}, "type": "assistant", "content": [
@@ -919,6 +1114,14 @@ mod tests {
             ], "tokens": {"input": 66, "output": 63, "cache": {"read": 12_544, "write": 0}}}),
             json!({"id": "msg_i", "time": {"created": 1_900}, "type": "idle", "outcome": "succeeded"}),
             json!({"id": "msg_m", "time": {"created": 1_950}, "type": "model-switched", "model": {"id": "x", "providerID": "y"}}),
+            // The next turn, as 2.0.19 keeps it: an instructions notice may come before its
+            // user message; a stopped command ran until the stop.
+            json!({"id": "msg_s", "time": {"created": 2_000}, "type": "system", "text": "The Code Mode tool catalog has changed."}),
+            json!({"id": "msg_u3", "time": {"created": 2_001}, "text": "Sleep 30s.", "type": "user"}),
+            json!({"id": "msg_a3", "time": {"created": 2_010}, "type": "assistant", "content": [
+                {"type": "tool", "id": "call_2", "name": "shell", "executed": false, "state": {"status": "error", "error": {"type": "aborted", "message": "Tool execution interrupted"}, "input": {"command": "sleep 30"}, "metadata": {"shellID": "sh_1"}}, "time": {"created": 2_020, "ran": 2_030, "completed": 23_020}},
+            ]}),
+            json!({"id": "msg_i2", "time": {"created": 23_050}, "type": "idle", "outcome": "interrupted"}),
         ];
         let path = std::env::temp_dir().join(format!(
             "opencode-transcript-{}.jsonl",
@@ -943,6 +1146,9 @@ mod tests {
                 Some("msg_u2"),
                 Some("msg_a2:r0"),
                 Some("msg_a2:t0"),
+                None,
+                Some("msg_u3"),
+                Some("call_2"),
                 None
             ]
         );
@@ -951,8 +1157,32 @@ mod tests {
             "the second message joined the turn"
         );
         assert!(
-            matches!(&entries[2].event, ProviderEvent::Command { command, status: ItemStatus::Completed, exit_code: Some(0), output: Some(out), .. } if command == "echo two" && out == "two\n")
+            !entries[7].steer,
+            "the turn after the idle line is a new one"
         );
+        assert!(
+            matches!(&entries[2].event, ProviderEvent::Command { command, status: ItemStatus::Completed, exit_code: Some(0), output: Some(out), duration_ms: Some(30), .. } if command == "echo two" && out == "two\n")
+        );
+        assert!(
+            matches!(
+                &entries[8].event,
+                ProviderEvent::Command {
+                    status: ItemStatus::Failed,
+                    duration_ms: Some(21_000),
+                    ..
+                }
+            ),
+            "the stopped command says how long it ran: {:?}",
+            entries[8].event
+        );
+        assert!(matches!(
+            entries[9].event,
+            ProviderEvent::TurnCompleted {
+                status: TurnStatus::Interrupted,
+                duration_ms: Some(21_049),
+                ..
+            }
+        ));
         assert_eq!(entries[1].at_ms, Some(1_150));
         assert!(
             matches!(&entries[5].event, ProviderEvent::Message { role: Role::Assistant, text, .. } if text == "DONE\n\nBANANA")
@@ -991,16 +1221,18 @@ mod tests {
             {"action": "read", "resource": "*.env", "effect": "ask"},
             {"action": "question", "resource": "*", "effect": "allow"},
         ]);
-        let glob = |pattern: &str, value: &str| {
-            pattern == "*"
-                || pattern == value
-                || pattern
-                    .strip_suffix('*')
-                    .is_some_and(|prefix| value.starts_with(prefix))
-                || pattern
-                    .strip_prefix('*')
-                    .is_some_and(|suffix| value.ends_with(suffix))
-        };
+        // OpenCode's wildcard: `*` matches anything, and `ls *` a bare `ls` too (checked live).
+        fn glob(pattern: &str, value: &str) -> bool {
+            match pattern.split_once('*') {
+                None => pattern == value,
+                Some((head, rest)) => {
+                    pattern.strip_suffix(" *") == Some(value)
+                        || value
+                            .strip_prefix(head)
+                            .is_some_and(|tail| (0..=tail.len()).any(|at| glob(rest, &tail[at..])))
+                }
+            }
+        }
         defaults
             .as_array()
             .unwrap()
@@ -1024,12 +1256,42 @@ mod tests {
         let deny = Some("deny".to_owned());
         // Ask: asks before an edit or a command; reads go ahead.
         assert_eq!(effect(Access::Ask, "edit", "a.rs"), ask);
-        assert_eq!(effect(Access::Ask, "shell", "ls"), ask);
+        assert_eq!(effect(Access::Ask, "shell", "rm a"), ask);
         assert_eq!(effect(Access::Ask, "read", "a.rs"), allow);
         assert_eq!(effect(Access::Ask, "external_directory", "/etc/*"), ask);
-        // Accept edits: edits go ahead, commands ask.
+        assert_eq!(effect(Access::Ask, "shell", "ls -la"), allow);
+        assert_eq!(effect(Access::Ask, "shell", "brigadier start x"), ask);
+        // Accept edits: edits, commands that only read and Brigadier's own go ahead; any other
+        // command asks, and so does one that redirects or writes `--output`.
         assert_eq!(effect(Access::AcceptEdits, "edit", "a.rs"), allow);
-        assert_eq!(effect(Access::AcceptEdits, "shell", "ls"), ask);
+        for command in [
+            "ls",
+            "ls -la",
+            "git status",
+            "cat a.rs",
+            "brigadier wait 2>&1",
+        ] {
+            assert_eq!(
+                effect(Access::AcceptEdits, "shell", command),
+                allow,
+                "{command}"
+            );
+        }
+        for command in [
+            "rm a",
+            "touch t",
+            "lsof",
+            "git commit -m x",
+            "cat a > b",
+            "echo x >> ~/.zshrc",
+            "git log --output=x",
+        ] {
+            assert_eq!(
+                effect(Access::AcceptEdits, "shell", command),
+                ask,
+                "{command}"
+            );
+        }
         // Full access: nothing asks, outside the folder neither.
         for (action, resource) in [
             ("edit", "a"),

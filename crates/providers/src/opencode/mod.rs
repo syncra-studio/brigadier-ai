@@ -6,7 +6,9 @@
 //! ([`parse::permissions`]), after its agent's defaults (everything allowed but folders outside
 //! the session and `.env` files, which ask):
 //!
-//! - Ask: edits and commands ask. Accept edits: commands ask. Full access: nothing asks.
+//! - Ask: edits and commands ask, but commands that only read (`ls`, `cat`, `git status`, …).
+//!   Accept edits: those and `brigadier …` run too, any other command asks. Full access: nothing
+//!   asks.
 //! - Read-only (Brigadier's own readers): edits, commands, sub-agents and anything outside the
 //!   folder are declined, never asked about.
 //!
@@ -1757,6 +1759,17 @@ sys.stdin.read()
                     .any(|entry| item_id(&entry.event) == Some(row.as_str())),
                 "{row} not read back"
             );
+        }
+        // The stream said each user message, the steer's too, by its id in the transcript.
+        for entry in &read {
+            if let ProviderEvent::Message {
+                role: Role::User,
+                item_id: id,
+                ..
+            } = &entry.event
+            {
+                assert!(live.contains(id), "{id} wasn't said live");
+            }
         }
         assert_eq!(
             user_rows(&read)[..3],
