@@ -29,6 +29,7 @@ import type { Conversation, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
   openConversation,
+  prewarmConversations,
   renameConversation,
   select,
   setProjectExpanded,
@@ -55,7 +56,7 @@ type Sections = {
 function useSections(): Sections {
   const projects = useApp((s) => s.projects);
   const conversations = useApp((s) => s.conversations);
-  return useMemo(() => {
+  const sections = useMemo(() => {
     // Archived conversations live in Settings → Archived only.
     // Side chats are temporary, shown only beside their conversation.
     const all = Object.values(conversations).filter(
@@ -84,6 +85,9 @@ function useSections(): Sections {
     );
     return { pinned, chats, projects: sortedProjects, sessions };
   }, [projects, conversations]);
+  // What the list shows is what is opened next: read ahead so it opens at once.
+  useEffect(() => prewarmConversations(conversations), [conversations]);
+  return sections;
 }
 
 /**

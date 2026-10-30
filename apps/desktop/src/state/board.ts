@@ -138,8 +138,13 @@ const mainBoard: BoardStore = createStore<BoardState>()(() => ({
 /** Side chats' boards, each shown beside the open conversation in its side panel. */
 const sideBoards = new Set<BoardStore>();
 
-/** Boards kept of conversations shown before: the newest ones the user left. */
-const KEPT_BOARDS = 8;
+/**
+ * Boards kept of conversations shown before or read ahead (`prewarmConversations`: the running
+ * ones and the ten newest), the newest kept.
+ * shortcut: more running conversations than this leaves the oldest read ahead unkept, read again
+ * as the list changes; key the cap to the read-ahead list if that is ever seen.
+ */
+const KEPT_BOARDS = 24;
 
 /**
  * The loaded boards of conversations no view shows now, oldest first, kept current by their

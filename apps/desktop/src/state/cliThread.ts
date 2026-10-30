@@ -153,9 +153,10 @@ type Heard = { heard: FileEntry[]; lists: Lists };
 
 /**
  * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks,
- * MCP servers and the session's workers when they changed), and whether a turn ended meanwhile.
+ * MCP servers and the session's workers when they changed), whether a turn started or ended
+ * meanwhile, and the read itself, which a second ask for the thread joins.
  */
-const reads = new Map<string, Heard & { again: boolean }>();
+const reads = new Map<string, Heard & { again: boolean; done: Promise<void> }>();
 
 /**
  * What the stream said from a turn's start or end on, held for the read of the thread that
@@ -170,20 +171,23 @@ function setView(conversationId: string, view: ThreadView): void {
 }
 
 /**
- * Reads a conversation's thread. What the stream said while it was read is added once it lands:
+ * Reads a conversation's thread, or joins the read under way: asked twice, it is read once.
+ * What the stream said while it was read is added once it lands:
  * whole items again (they only replace themselves), not deltas, which the view may hold already
  * (their item's own end brings its whole text). News still waiting for the frame when it lands
- * was said while it was read, too. A turn that ended meanwhile reads it once more.
+ * was said while it was read, too. A turn that started or ended meanwhile reads it once more.
  */
-export async function loadThreadView(conversationId: string): Promise<void> {
+export function loadThreadView(conversationId: string): Promise<void> {
   const going = reads.get(conversationId);
-  if (going) {
-    going.again = true;
-    return;
-  }
-  const read = { ...(owed.get(conversationId) ?? { heard: [], lists: {} }), again: false };
+  if (going) return going.done;
+  const read = { ...(owed.get(conversationId) ?? { heard: [], lists: {} }), again: false, done: Promise.resolve() };
   owed.delete(conversationId);
   reads.set(conversationId, read);
+  read.done = readThread(conversationId, read);
+  return read.done;
+}
+
+async function readThread(conversationId: string, read: Heard & { again: boolean }): Promise<void> {
   try {
     const { view } = await request({ method: "threadView", conversationId });
     // What waits for the frame goes to the read now, while it is still under way.
@@ -258,7 +262,11 @@ function flushNews(): void {
     };
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
-  for (const id of turned) void loadThreadView(id);
+  for (const id of turned) {
+    const going = reads.get(id);
+    if (going) going.again = true;
+    else void loadThreadView(id);
+  }
 }
 
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
@@ -290,6 +298,8 @@ export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   const now = Date.now();
   for (const id of Object.keys(views)) if (!shown.includes(id)) dropped.set(id, now);
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
+  // A read asked for before the reconnect may predate what was missed: it reads once more.
+  for (const read of reads.values()) read.again = true;
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
 }
 

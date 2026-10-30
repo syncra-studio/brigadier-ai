@@ -88,8 +88,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(switchBack.restoredOffset !== null && Math.abs(switchBack.restoredOffset - switchBack.offset) <= 1, `row at ${switchBack.restoredOffset}, was ${switchBack.offset}`);
   const shown = switchBack.early.filter((offset) => offset !== null);
   assert.ok(shown.every((offset) => offset === shown.at(-1)), `moved while loading: ${switchBack.early.join(", ")}`);
-  // While its history loads the column stays empty, saying so only to a screen reader.
-  assert.deepEqual([switchBack.loading, switchBack.placeholders], [true, 0]);
+  // While its history loads the conversation shown before stays: never an empty, loading column.
+  assert.deepEqual([switchBack.loading, switchBack.placeholders], [false, 0]);
   // An old turn scrolled to, once mounted, is found again in its place.
   assert.ok(seen.revealedBack.restoredOffset !== null && Math.abs(seen.revealedBack.restoredOffset - seen.revealedBack.offset) <= 1, `old turn at ${seen.revealedBack.restoredOffset}, was ${seen.revealedBack.offset}`);
 

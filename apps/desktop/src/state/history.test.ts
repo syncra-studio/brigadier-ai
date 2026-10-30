@@ -45,6 +45,7 @@ beforeEach(() => {
   useApp.setState((state) => ({ selection: home, conversations: {}, projects: {}, threads: {}, providers: { ...state.providers, view: null } }));
   mockIPC((_command, payload) => {
     const req = (payload as { request: { method: string; id: string } }).request;
+    if (req.method === "threadView") return { method: req.method, view: { entries: [], turns: [] } };
     assert.equal(req.method, "getConversation");
     const view = {
       conversation: conversation(req.id), context: null, messages: { messages: [message(req.id)], hasMore: false },

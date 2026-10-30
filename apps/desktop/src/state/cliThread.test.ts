@@ -104,6 +104,29 @@ test("a thread is read once, follows the stream, and is read again when its turn
   }
 });
 
+test("a thread asked for twice while it is read is read once, and both asks resolve when it lands", async () => {
+  const view: ThreadView = { entries: [at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1)], turns: [] };
+  let asked = 0;
+  let land: (() => void) | null = null;
+  mockIPC((cmd) => {
+    if (cmd !== "ipc_request") return null;
+    asked += 1;
+    return new Promise((resolve) => (land = () => resolve({ method: "threadView", view })));
+  });
+  try {
+    const first = loadThreadView("twice");
+    const second = loadThreadView("twice");
+    await settle();
+    (land as (() => void) | null)?.();
+    await Promise.all([first, second]);
+    assert.equal(asked, 1);
+    assert.deepEqual(useCliThread.getState().views["twice"], view);
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
 test("in a page, what streamed between two frames is drawn once, at the frame", async () => {
   const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
   const frames: (() => void)[] = [];

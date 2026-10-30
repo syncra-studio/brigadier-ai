@@ -50,6 +50,7 @@ beforeEach(() => {
   });
   mockIPC((_command, payload) => {
     const req = (payload as { request: RequestOf<"getConversation"> }).request;
+    if ((req as { method: string }).method === "threadView") return { method: "threadView", view: { entries: [], turns: [] } };
     if (req.method !== "getConversation") throw new Error(`not mocked: ${(req as { method: string }).method}`);
     const answer = { method: req.method, view: view(req.id) };
     if (!slow) return answer;
@@ -72,7 +73,7 @@ function runChanged(id: string, state: RunState): EventEnvelope {
   } as unknown as EventEnvelope;
 }
 
-test("a working session shown again shows it working at once, while its view is read again (issue 484)", async () => {
+test("a working session shown again shows it working at once, as it is held, with nothing read again (issue 484)", async () => {
   select({ type: "conversation", id: "a" });
   await settle();
   assert.deepEqual([shown(), run()], ["a", "running"]);
@@ -89,8 +90,8 @@ test("a working session shown again shows it working at once, while its view is 
   assert.equal(useBoard.getState().board, null);
   select({ type: "conversation", id: "a" });
   assert.deepEqual([shown(), run()], ["a", "running"]);
-  for (const answer of held) answer();
-  await settle();
+  // Held, it is kept current by its events: switching to it asks the daemon nothing.
+  assert.equal(held.length, 0);
   assert.equal(run(), "running");
 });
 

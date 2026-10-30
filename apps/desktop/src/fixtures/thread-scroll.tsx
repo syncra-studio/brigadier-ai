@@ -26,7 +26,7 @@ import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select, send } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
-import { applyEvents, emptyThread, useApp } from "@/state/store";
+import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 250;
 /** How far the window shrinks in the resize checks. */
@@ -497,11 +497,12 @@ const steps = {
     const offset = round(anchor.getBoundingClientRect().top - viewTop());
     const left = distance();
     await open("other");
-    // Gone from memory: it loads again, its long replies' full text after it.
-    useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
-    // While its history loads the column is empty: a screen reader's "Loading conversation", no
-    // placeholder lines. Read at every change the page makes, from before the switch: on a slow
-    // machine the switch's own render can outlast the load, so a timer could miss it.
+    // Gone from memory (as a resync drops it): it loads again, its long replies' full text after it.
+    useApp.setState((state) => ({ threads: Object.fromEntries(Object.entries(state.threads).filter(([key]) => key !== "long")) }));
+    // While its history loads the conversation shown before stays: never an empty column, a
+    // "Loading conversation" or placeholder lines. Read at every change the page makes, from
+    // before the switch: on a slow machine the switch's own render can outlast the load, so a
+    // timer could miss it.
     let loading = false;
     let placeholders = 0;
     const read = () => {
