@@ -42,7 +42,9 @@ function WorkerDetails({ task, model }: { task: Task; model: string }) {
 /** One worker: its glyph, name, model and state in the header, from its row; its thread below. */
 function WorkerDetail({ conversationId, row, headerActions }: { conversationId: string; row: WorkerRow; headerActions?: ReactNode }) {
   const { setPanel } = useContext(AgentsPanelContext);
-  const name = useWorkerName(row.id);
+  const workerName = useWorkerName(row.id);
+  // A subagent is named by its task, as its strip row says it: no worker's name, no number.
+  const name = isNativeWorker(row) ? row.title : workerName;
   const [details, setDetails] = useState(false);
   // Its details page is the task's it was started for, while the board holds it.
   const task = useBoard((s) => s.board?.tasks[row.id]);

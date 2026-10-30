@@ -58,3 +58,25 @@ test("a subagent's strip row is plain: a neutral mark, its task and time, no wor
     await server.close();
   }
 });
+
+test("a subagent's panel is headed by its task, as its strip row says it, even when an earlier one had the same", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { WorkersTab } = await server.ssrLoadModule("/src/app/side-panel/Agents.tsx");
+    const { AgentsPanelContext } = await server.ssrLoadModule("/src/app/conversation/WorkerChip.tsx");
+    const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
+    const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const subagent = (call: string, number: number) => ({
+      ...row({ id: `native:c:${call}`, number, title: "Run sleep then ls src" }),
+      native: { conversationId: "c", callId: call, backgroundId: null, prompt: "" },
+    });
+    Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: [subagent("call1", 1), subagent("call2", 2)] } });
+    const html = ReactDOMServer.renderToStaticMarkup(
+      React.createElement(TooltipProvider, null, React.createElement(AgentsPanelContext.Provider, { value: { panel: "native:c:call2", setPanel: () => {} } },
+        React.createElement(WorkersTab as React.FC<{ conversationId: string }>, { conversationId: "c" }))),
+    );
+    assert.match(html, /<h2[^>]*>Run sleep then ls src<\/h2>/);
+  } finally {
+    await server.close();
+  }
+});
