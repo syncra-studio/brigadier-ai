@@ -1589,7 +1589,7 @@ sys.stdin.read()
     /// Live: a real session on a free model runs a command (asked, allowed), takes a steer
     /// mid-turn and refuses one with no turn running, is stopped, reads back from its
     /// transcript as the live rows, resumes on a fresh server with the same rows, and is removed
-    /// with its files (its project's shell folder stays). `opencode/flint-40b-free`:
+    /// with its files (its project's shell folder stays). `opencode/big-pickle`:
     /// `cargo test -p brigadier-providers opencode -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "runs the installed opencode against its free model"]
@@ -1669,7 +1669,7 @@ sys.stdin.read()
         let mut first = spec();
         first.cwd = dir.clone();
         first.env = Vec::new();
-        first.model = Some("opencode/flint-40b-free".into());
+        first.model = Some("opencode/big-pickle".into());
         first.naked_worker = true;
         first.append_system_prompt = Some("Be brief. Use your shell tool when asked.".into());
         let Started {
