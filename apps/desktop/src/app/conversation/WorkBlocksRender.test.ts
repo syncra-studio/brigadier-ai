@@ -54,9 +54,9 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   // A live label's words show at once and sweep: no fade-in, which would start them invisible and
   // replace the sweep.
   assert.deepEqual([seen.running.groupAnimations, seen.ended.groupAnimations], [["shimmer"], ["shimmer"]]);
-  // A line between steps streams as prose under the header, never shimmering, each piece shown
-  // the frame it arrives (never paced like the answer); the group above sums up.
-  assert.equal(seen.commentaryAtOnce, "I’ll fix the rounding next. Then run the tests again.");
+  // A line between steps streams as prose under the header, never shimmering, paced like the
+  // answer (D43): a frame after more came it shows part of it, then all; the group above sums up.
+  assert.ok("I’ll fix the rounding next. Then run the tests again.".startsWith(seen.commentaryAtOnce ?? "-"), seen.commentaryAtOnce ?? "");
   assert.deepEqual(
     [seen.commentary.commentary, seen.commentary.commentaryShimmers, seen.commentary.groupRow, seen.commentary.status, seen.commentary.header?.startsWith("Working for")],
     ["I’ll fix the rounding next. Then run the tests again.", false, "Read files, ran commands", null, true],

@@ -338,7 +338,7 @@ async function driveTurn(): Promise<object> {
   out.justEnded = seen();
   await settle();
   out.ended = seen();
-  // A line between steps streams as prose, each finished line shown as it arrives: never paced.
+  // A line between steps streams as prose, paced like the answer.
   const line = "I’ll fix the rounding next.\n";
   change(() => ({ streaming: { messageId: "line", text: line, requestId: "r1", phase: "commentary", startedAtMs: Date.now() } }));
   await settle();
@@ -347,7 +347,8 @@ async function driveTurn(): Promise<object> {
   await frame();
   await frame();
   out.commentaryAtOnce = text(one("[data-commentary]", turn() ?? document));
-  await settle();
+  // The pace shows what is left within about two seconds.
+  await settle(3000);
   out.commentary = seen();
   // The final answer starts: the work folds at once, the time stops there. The fold is timed from
   // the first frame that shows the answer starting, by the frames' own clock: a slow machine

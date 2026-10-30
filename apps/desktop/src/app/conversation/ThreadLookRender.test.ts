@@ -20,6 +20,6 @@ test("the thread's look matches the reference's: column, tones, weight, link, co
   assert.deepEqual([seen.chevronRest, seen.chevronOpen], ["0", "1"]);
   // A group opens over 300ms, fast out.
   assert.deepEqual(seen.groupOpen, { duration: "0.3s", easing: "cubic-bezier(0.19, 1, 0.22, 1)" });
-  // What arrives in a streaming reply fades in over 700ms like its words: list items, rules, images.
-  for (const unit of ["li", "hr", "img"] as const) assert.deepEqual(seen.fades[unit], { classed: true, duration: "0.7s" }, unit);
+  // What arrives in a streaming reply fades in over 150ms like its words: list items, rules, images.
+  for (const unit of ["li", "hr", "img"] as const) assert.deepEqual(seen.fades[unit], { classed: true, duration: "0.15s" }, unit);
 });

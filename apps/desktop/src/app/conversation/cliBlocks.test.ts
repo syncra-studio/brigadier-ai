@@ -153,7 +153,8 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
   // The running turn works on, its time open, its reasoning still coming and its line between steps streaming.
   assert.deepEqual([running.endedAtMs, running.worked], [null, [{ fromMs: 9000, toMs: null }]]);
   assert.deepEqual(running.thinking.map((segment) => [segment.text, segment.complete, segment.updatedAtMs]), [["Weighing it", false, 9150]]);
-  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan\n", model: null, update: false, commentary: true, atMs: 9200 }]);
+  // It shows from its first word, not a line at a time.
+  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan\nand th", model: null, update: false, live: true, commentary: true, atMs: 9200 }]);
 });
 
 test("a turn the stream started, not read again yet, works", () => {

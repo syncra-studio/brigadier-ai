@@ -62,6 +62,8 @@ export type BlockText = {
   commentary?: boolean;
   /** When it was written (a reply still streaming: when it started). */
   atMs?: number;
+  /** It still streams. */
+  live?: boolean;
 };
 
 /**

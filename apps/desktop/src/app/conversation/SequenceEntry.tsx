@@ -45,7 +45,7 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
           data-peer-message={entry.anchors?.join(" ")}
           className="text-foreground leading-relaxed wrap-break-word"
         >
-          <ReplyText index={entry.index} streaming={streaming} commentary={commentary} />
+          <ReplyText index={entry.index} streaming={streaming} />
         </div>
       );
     case "card":

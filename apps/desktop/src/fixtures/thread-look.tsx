@@ -6,7 +6,7 @@
  * - The column 736px wide; prose at weight 430; a web link's blue; a code block's 16px corners.
  * - A row: its object at 40% white; its chevron hidden at rest and shown while open; a group
  *   opening and closing over 300ms.
- * - A streaming reply: a list item, a rule and an image that arrive fade in over 700ms like words.
+ * - A streaming reply: a list item, a rule and an image that arrive fade in over 150ms like words.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -104,13 +104,16 @@ async function measure() {
   out.object = style(at("row").querySelector(".text-row-object"))?.color ?? null;
   // The reply grows: what arrives fades in.
   reply.grow();
-  for (const end = performance.now() + 4000; performance.now() < end && !at("reply").querySelector("img"); ) await frame();
-  await frame();
-  const fades = (selector: string) => {
-    const element = at("reply").querySelector(selector);
-    return { classed: !!element?.classList.contains("aui-fade-block"), duration: style(element)?.animationDuration ?? null };
-  };
-  out.fades = { li: fades("li"), hr: fades("hr"), img: fades("img") };
+  // Each unit as it first shows: the reply is paced, and a unit's fade is over 150ms later.
+  const fades: Record<string, { classed: boolean; duration: string | null }> = {};
+  for (const end = performance.now() + 4000; performance.now() < end && Object.keys(fades).length < 3; ) {
+    for (const selector of ["li", "hr", "img"]) {
+      const element = at("reply").querySelector(selector);
+      if (element && !fades[selector]) fades[selector] = { classed: element.classList.contains("aui-fade-block"), duration: style(element)?.animationDuration ?? null };
+    }
+    await frame();
+  }
+  out.fades = fades;
   await wait(1200);
   const prose = at("reply").querySelector(".aui-md");
   out.prose = style(prose)?.fontWeight ?? null;

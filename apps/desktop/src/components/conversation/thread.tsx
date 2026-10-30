@@ -868,13 +868,22 @@ const MessageTime: FC<{ children: ReactNode }> = ({ children }) => {
   return <LinkTimeContext.Provider value={sentAt}>{children}</LinkTimeContext.Provider>;
 };
 
-export const MessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} plainLeads />
-    </Suspense>
-  </MessageTime>
-);
+/**
+ * Whether the text in it still streams: its newest words are paced and fade in. One component
+ * either way, so a reply's end changes how it shows, never what is mounted.
+ */
+export const TextStreams = createContext(false);
+
+export const MessageText: FC<TextMessagePartProps> = (props) => {
+  const streaming = useContext(TextStreams);
+  return (
+    <MessageTime>
+      <Suspense fallback={<ReplyLoading />}>
+        <MarkdownText {...props} streaming={streaming || undefined} plainLeads />
+      </Suspense>
+    </MessageTime>
+  );
+};
 
 /**
  * Markdown outside a thread message, such as a worker's replies in its panel. `plainLeads`: an
@@ -893,24 +902,6 @@ export const MarkdownBlock: FC<{
       <MarkdownText streaming={streaming} paced={paced} breaks={breaks} plainLeads={plainLeads} />
     </Suspense>
   </TextMessagePartProvider>
-);
-
-/** Text that is still streaming: its newest words fade in. */
-export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming plainLeads />
-    </Suspense>
-  </MessageTime>
-);
-
-/** A line between a turn's steps while it streams: its words fade in as they arrive, unpaced. */
-export const CommentaryMessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming paced={false} plainLeads />
-    </Suspense>
-  </MessageTime>
 );
 
 const UserAttachments: FC = () => {

@@ -490,10 +490,10 @@
   .aui-fade,
   .aui-fade-block {
     opacity: 0;
-    animation: word-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
+    animation: word-fade-in 150ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
   }
   .aui-fade-marker::marker {
-    animation: marker-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
+    animation: marker-fade-in 150ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
   }
   @media (prefers-reduced-motion: reduce) {
     .aui-fade,

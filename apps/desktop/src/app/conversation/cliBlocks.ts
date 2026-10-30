@@ -12,7 +12,6 @@ import {
   type ThreadTree,
 } from "@/app/conversation/blocks";
 import { sessionSent } from "@/app/conversation/sessionSend";
-import { shownText } from "@/app/conversation/streamRelease";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import type {
   BackgroundTask,
@@ -826,9 +825,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
-        // A reply still streaming shows its finished lines only, none until its first (D9 b).
+        // A reply still streaming shows from its first word.
         const streaming = event.type === "messageDelta";
-        const text = shownText(event.text, streaming);
+        const text = event.text;
         // A reply with no words is none: assistant-ui drops a blank part, and the turn's parts
         // then count fewer than its texts (Codex's empty last reply after a send-back, D58).
         if (!text.trim()) return;
@@ -840,6 +839,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           text,
           model: null,
           update: isUpdate(text),
+          ...(streaming && { live: true }),
           ...(phase === "answer" && entry.atMs !== undefined && { answerAtMs: entry.atMs }),
           ...(phase === "commentary" && { commentary: true }),
           ...(entry.atMs !== undefined && { atMs: entry.atMs }),

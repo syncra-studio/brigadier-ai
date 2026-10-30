@@ -73,6 +73,8 @@ export type BlockMeta = {
     answerAtMs?: number;
     /** It streams as a line between the turn's steps. */
     commentary?: boolean;
+    /** It still streams. */
+    live?: boolean;
   }[];
   cards: BlockCard[];
   /** The workers' rows, in the order they started. */
@@ -228,7 +230,7 @@ export const RequestBlock: FC = () => {
     meta.state === "failed" ||
     // A Chat's says it works over its steps, and with none until its reply streams, once something came.
     (live && (meta.session || meta.steers.length > 0 || activity.some((item) => item.type === "group" && item.items.some((each) => each.type === "step")) || (meta.texts.length === 0 && sequence.length > 0)));
-  const streams = (index: number) => meta.texts[index]?.position === Number.POSITIVE_INFINITY;
+  const streams = (index: number) => !!meta.texts[index]?.live;
   const streaming = (entry: Entry) => !quotaWait && !done && entry.kind === "text" && streams(entry.index);
   const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
   const liveThought = quotaWait ? undefined : sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
