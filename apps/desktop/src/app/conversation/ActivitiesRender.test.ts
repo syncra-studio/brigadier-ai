@@ -37,24 +37,12 @@ test("Background lists what still runs, one line each with its state and Stop on
 test("a Background row leaves as soon as its process ends, failed, finished or stopped: no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
     running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
-    historyInHeader: boolean; historyLabel: string; clockIcon: string; headerOnly: boolean; idleTitle: string;
-    foldControls: number; rowCount: number; idleHeight: number; tooltip: string; historyTab: string;
   };
   assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11"]);
   // A crash, a non-zero exit, a clean exit and a Stop all take their row off at once.
   assert.deepEqual(seen.ended, []);
-  assert.equal(seen.section, true, "History remains after all previews end");
+  assert.equal(seen.section, false, "nothing runs any more: no Background section (D24)");
   assert.equal(seen.restartOrDismiss, 0);
-  assert.equal(seen.historyInHeader, true);
-  assert.equal(seen.historyLabel, "Background history");
-  assert.match(seen.clockIcon, /<svg/);
-  assert.equal(seen.tooltip, "Background history");
-  assert.equal(seen.historyTab, "panel:backgroundHistory");
-  assert.equal(seen.headerOnly, true);
-  assert.equal(seen.idleTitle, "Background");
-  assert.equal(seen.foldControls, 0);
-  assert.equal(seen.rowCount, 0);
-  assert.equal(seen.idleHeight, 28);
 });
 
 type Look = { word: string | null; icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
@@ -78,13 +66,14 @@ test("Background rows: a spinner while a process is on its way, a green live dot
   }
 });
 
-test("commands leave Background for live strips while History remains after they finish", { timeout: 90000 }, async (t) => {
+test("commands never make a Background section, nor does their History once they finish (D24)", { timeout: 90000 }, async (t) => {
   for (const scenario of ["tasks", "workerTasks"]) {
     const seen = JSON.parse(await renderFixtureLive(t, `activities.html?${scenario}=1`, "activities-result", 60000)) as { running: string[]; ended: string[]; history: boolean; liveSection: boolean };
     assert.deepEqual(seen.running, []);
     assert.equal(seen.liveSection, false, "live commands alone do not make a Background section");
     assert.deepEqual(seen.ended, []);
-    assert.equal(seen.history, true);
+    // Nothing else runs: no Background section, its history link with it (D24).
+    assert.equal(seen.history, false);
   }
 });
 
@@ -124,14 +113,14 @@ test("only Background names truncate: building stays whole and shimmering, runni
 
 test("raw session/worker apps use Background once and stop only their exact native invocation", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?apps=1", "activities-result", 60000)) as {
-    running: string[]; checks: string[]; workerName: string; output: string; ended: string[]; history: boolean;
+    running: string[]; workerName: string; output: string; ended: string[]; history: boolean;
     stops: { id: string; worker: string | null; started: number }[]; expectedStarts: number[];
   };
   assert.deepEqual(seen.running, ["task:raw-browser", "task:raw-dev", "task:task-2:b7dev"]);
-  assert.deepEqual(seen.checks, ["raw-tests"], "native test command stays Checks despite a misleading dev label");
   assert.equal(seen.workerName, "Demo of the fixes");
   assert.match(seen.output, /^panel:output:task:raw-browser:\d+$/, "terminal output remains invocation-bound");
   assert.deepEqual(seen.ended, [], "completed, failed and stopped apps leave immediately");
+  // The worker's app still runs: the section and its history link stay.
   assert.equal(seen.history, true);
   assert.deepEqual(seen.stops, [
     { id: "raw-dev", worker: null, started: seen.expectedStarts[0] },

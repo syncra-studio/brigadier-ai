@@ -11,7 +11,6 @@ import { Clock, Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
-import { useBackgroundHistoryCount } from "@/state/backgroundHistory";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
@@ -59,15 +58,14 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   // Ended app tasks leave immediately; the native records remain in History.
   const activities = [...rows, ...appTaskRows(cliTasks, entries, clock.now), ...workerAppTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
-  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs, preview.state]), cliTasks.map((task) => [task.id, task.startedAtMs, task.status]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs, task.status])])]);
-  const historyCount = useBackgroundHistoryCount(conversationId, changed);
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
     const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
     return () => clearInterval(timer);
   }, [ticking]);
-  if (activities.length === 0 && !historyCount) return null;
+  // Only what really runs (D24): with nothing running, no section, its history link with it.
+  if (activities.length === 0) return null;
   return (
     <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible={activities.length > 0}
       action={

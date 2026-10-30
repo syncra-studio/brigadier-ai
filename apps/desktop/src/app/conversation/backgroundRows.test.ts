@@ -57,9 +57,8 @@ test("rows sort newest first", () => {
 
 const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
 
-test("proven native apps use Background once, while unknown commands and waits remain Checks", async () => {
+test("proven native apps use Background once; unknown commands and waits are none of it", async () => {
   const { appTaskRows, workerAppTaskRows } = await import("./backgroundRows");
-  const { checkLines } = await import("./activity/sessionTasks");
 
   const app = nativeApp("app", "Show the website"), tests = nativeApp("tests", "pnpm dev"), unknown = nativeApp("unknown", "pnpm dev");
   const entries: FileEntry[] = [
@@ -69,7 +68,6 @@ test("proven native apps use Background once, while unknown commands and waits r
   const source = [app, tests, unknown];
   const before = structuredClone(source);
   assert.deepEqual(appTaskRows(source, entries, 20).map((row) => row.id), ["task:app"]);
-  assert.deepEqual(checkLines(source, entries, 20).lines.map((line) => line.id), ["tests", "unknown"]);
   const worker = { id: "worker", background: [{ task: app, command: "next dev" }, { task: tests, command: "pnpm test" }] } as WorkerRow;
   assert.deepEqual(workerAppTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:app", { id: "worker", name: "Site worker" }]]);
   assert.deepEqual(appTaskRows([{ ...app, status: "completed" }], entries, 20), []);

@@ -19,7 +19,6 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { checkLines } from "@/app/conversation/activity/sessionTasks";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
@@ -308,8 +307,6 @@ async function driveApps(): Promise<Record<string, unknown>> {
   await until(() => ids().length === 3, 5000);
   const running = ids();
   const workerName = row("task:task-2:b7dev")?.querySelector("[data-activity-worker]")?.textContent;
-  const live = useCliThread.getState().views[id]!;
-  const checks = checkLines(live.background ?? [], live.entries, Date.now()).lines.map((line) => line.id);
   row("task:raw-browser")?.click();
   await frame();
   const output = sessionTabs(id).active;
@@ -325,7 +322,7 @@ async function driveApps(): Promise<Record<string, unknown>> {
   await until(() => ids().length === 1, 3000);
   stop("task:raw-dev")?.click();
   await until(() => appStops.length === 3, 3000);
-  return { running, checks, workerName, output, ended, stops: appStops, expectedStarts: [appTask.startedAtMs, workerApp.startedAtMs, now + 10], history: !!document.querySelector('[data-slot="background-history-link"]') };
+  return { running, workerName, output, ended, stops: appStops, expectedStarts: [appTask.startedAtMs, workerApp.startedAtMs, now + 10], history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** Long names use the available room; state words stay whole, directly beside short names. */

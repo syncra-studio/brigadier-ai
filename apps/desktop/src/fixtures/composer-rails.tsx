@@ -2,10 +2,10 @@
 /**
  * A standalone Vite entry, excluded from the production build: the strips above the composer
  * (`ComposerStatusSlot` in a real rail over the composer's card) from synthetic thread views:
- * the session's workers, its own subagents (its CLI's Agent calls, as plain rows) and its own commands, with a wait folded into the
- * test it watches and a command queued behind a build. `?scene=` shows one of them alone
- * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, opens a check's
- * output, presses a Stop and Stop all, and writes what it saw as JSON into
+ * the session's workers and its own subagents (its CLI's Agent calls, as plain rows); its own
+ * commands show no strip (D24: the open work block says them). `?scene=` shows one of them alone
+ * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, presses Stop all,
+ * and writes what it saw as JSON into
  * `#composer-rails-result`; `ComposerRailsRender.test.ts` checks it. IPC stays mocked.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -19,7 +19,6 @@ import { ComposerRail } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import { rowOf, showRows } from "@/fixtures/workerRows";
 import type { BackgroundTask, FileEntry, Request, Task, WorkerRow } from "@/ipc/generated";
-import { sessionTabs } from "@/state/sessionTabs";
 
 const now = Date.now();
 const query = new URLSearchParams(location.search);
@@ -166,13 +165,6 @@ async function read(id: Scene) {
       text: text(row),
       stop: !!row.parentElement?.querySelector('[data-slot="worker-stop"]'),
     })),
-    checks: [...scene(id).querySelectorAll('[data-slot="checks-strip"] [data-slot="check-row"]')].map((row) => ({
-      state: row.getAttribute("data-state"),
-      text: text(row),
-      waitedOn: !!row.querySelector('[data-slot="strip-waited-on"]'),
-      stop: !!row.parentElement?.querySelector('[data-slot="check-stop"]'),
-      opens: row.tagName === "BUTTON",
-    })),
   };
 }
 
@@ -184,16 +176,10 @@ async function drive() {
     subagents: await read("subagents"),
     checks: await read("checks"),
   };
-  // A check's row opens what it printed, as the summary card's Background row does.
-  [...scene("checks").querySelectorAll<HTMLButtonElement>('[data-slot="checks-strip"] button[data-slot="check-row"]')].find((row) => row.textContent?.includes("Build the desktop app"))?.click();
-  await frame();
-  seen.opened = sessionTabs("checks").active;
   // A subagent's row opens its transcript, as a worker's does.
   scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="subagents-strip-row"]')?.click();
   await frame();
   seen.panel = panelOpened;
-  // Per-row Stop owns the producer; its watcher is independent.
-  scene("checks").querySelector<HTMLButtonElement>('[aria-label="Stop Run full core tests"]')?.click();
   scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip-stop-all"]')?.click();
   await frame();
   seen.calls = calls.toSorted();

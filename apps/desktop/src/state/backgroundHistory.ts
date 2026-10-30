@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
-import type { BackgroundHistoryOutput, BackgroundHistoryPage, BackgroundHistoryRecord } from "@/ipc/generated";
+import type { BackgroundHistoryOutput, BackgroundHistoryRecord } from "@/ipc/generated";
 
 export type { BackgroundHistoryRecord, BackgroundHistoryOutput };
 type History = { records: BackgroundHistoryRecord[]; total: number | null; next: string | null; loaded: boolean; busy: boolean; error: string | null };
@@ -46,23 +46,6 @@ export function useBackgroundHistory(id: string): History {
     return () => clearInterval(timer);
   }, [id]);
   return state;
-}
-
-/** Summary count reads only one event; lifecycle changes trigger another durable read. */
-export function useBackgroundHistoryCount(id: string, changed: string): number | null {
-  const total = useBackgroundHistoryStore((s) => s.sessions[id]?.total ?? null);
-  useEffect(() => {
-    let current = true;
-    void changed;
-    request({ method: "getBackgroundHistory", conversationId: id, limit: 1 }).then(
-      ({ history }: { history: BackgroundHistoryPage }) => { if (current) update(id, { total: history.total }); },
-      () => { /* The History tab owns retry/error presentation. */ },
-    );
-    return () => { current = false; };
-  // Lifecycle revision deliberately invalidates the durable count.
-  // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [id, changed]);
-  return total;
 }
 
 export async function readHistoryOutput(id: string, recordId: string): Promise<BackgroundHistoryOutput> {
