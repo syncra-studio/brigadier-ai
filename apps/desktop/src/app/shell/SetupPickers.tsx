@@ -352,7 +352,8 @@ export function ConversationModelPicker({
       <ModelSelector
         groups={shown}
         value={current}
-        defaultChoice={fallback}
+        // Default is Settings' default, else the CLI's own, never the project's last pick.
+        defaultChoice={resolveModel(null, conversation.kind, null, settings, groups)}
         disabled={fixed || action.busy}
         open={open}
         onOpenChange={onOpenChange}

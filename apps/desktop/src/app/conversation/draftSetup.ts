@@ -96,7 +96,7 @@ export type ResolvedDraft = {
   base: string | null;
   permission: PermissionLevel;
   model: ModelChoice;
-  /** What the draft starts with when no model is picked: the picker's Default. */
+  /** The picker's Default: Settings' default, else the CLI's own; not the project's last pick. */
   defaultModel: ModelChoice;
   groups: ModelGroup[];
   target: DraftTarget | null;
@@ -133,7 +133,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   // The same object while nothing it is made from changes: the composer and its send hang on it.
   return useMemo(() => {
     const model = allowedPick(rules, groups, resolveModel(draft.model, kind, project, settings, groups));
-    const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, project, settings, groups));
+    const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, null, settings, groups));
     const permission = resolvePermission(draft.permission, settings);
     const { environment } = draft;
     const current = repo.info?.currentBranch ?? null;
