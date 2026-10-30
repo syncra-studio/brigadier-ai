@@ -20,7 +20,7 @@ import { foldTranscript, type ThreadEntry, threadEntries } from "@/components/co
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRight } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
-import type { ThreadView, WorkerRow } from "@/ipc/generated";
+import type { ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -49,14 +49,26 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
 }
 
 /**
- * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Stopped after 3m 10s"
- * when it was stopped, over a hairline: from its start to its CLI's last word.
+ * How long worker `row` worked: its turns' time by its CLI's timestamps, so the waits between its
+ * messages (and an app restart) don't count; from its start to its CLI's last word without them.
  */
-function WorkHeader({ row }: { row: WorkerRow }) {
+export function workedMs(row: WorkerRow, turns: readonly ThreadTurn[], done: boolean, now: number): number {
+  const end = done ? (row.lastEventAtMs ?? now) : now;
+  const timed = turns.filter((turn) => turn.startedAtMs !== null);
+  if (timed.length === 0) return Math.max(0, end - row.startedAtMs);
+  // A turn with no end is the one at work, or one cut off: up to its CLI's last word.
+  return timed.reduce((sum, turn) => sum + Math.max(0, (turn.endedAtMs ?? end) - (turn.startedAtMs ?? 0)), 0);
+}
+
+/**
+ * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Stopped after 3m 10s"
+ * when it was stopped, over a hairline.
+ */
+function WorkHeader({ row, turns }: { row: WorkerRow; turns: readonly ThreadTurn[] }) {
   const clock = useNow(60_000);
   const done = rowFinished(row, clock);
   const now = useNow(done ? null : 1000);
-  const took = formatDuration(Math.max(0, (done ? (row.lastEventAtMs ?? now) : now) - row.startedAtMs));
+  const took = formatDuration(workedMs(row, turns, done, now));
   const stopped = workerStateOf(row, clock).kind === "stopped";
   return (
     <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
@@ -204,7 +216,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
       <StoppedBy.Provider value={state.kind === "stopped" ? { atMs: row.lastEventAtMs ?? row.startedAtMs } : null}>
       <div className="max-w-thread mx-auto min-w-0 gap-activity flex flex-col pt-5">
         {brief?.kind === "item" && brief.item.kind === "message" && <WorkerBrief text={brief.item.text} />}
-        <WorkHeader row={row} />
+        <WorkHeader row={row} turns={view?.turns ?? []} />
         {previousCount > 0 && <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="text-foreground/50 border-border hover:text-foreground flex min-h-7 w-full items-center gap-1 border-b text-start text-sm">
             {previousCount} previous {previousCount === 1 ? "message" : "messages"}
