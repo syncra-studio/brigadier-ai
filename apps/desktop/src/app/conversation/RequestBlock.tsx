@@ -1,5 +1,5 @@
-import { MessagePrimitive, useAuiState, jumpInThread, useThreadAnswerStarted } from "@/components/conversation";
-import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { MessagePrimitive, useAuiState, jumpInThread, useThreadAnswerStarted, useThreadHoldsOnFold } from "@/components/conversation";
+import { type FC, Fragment, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { ActivityItems, TrailingLine } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
@@ -135,6 +135,7 @@ export const RequestBlock: FC = () => {
   // While Find searches, closed work keeps its rows, hidden, to be found.
   const searched = useFindSearching();
   const body = useRef<HTMLDivElement>(null);
+  const answerSlot = useRef<HTMLDivElement>(null);
   // The calls of its own the user denied, and the header's ask to show them.
   const deniedCount = useBoard((s) => {
     const approvals = Object.values(s.board?.approvals ?? {});
@@ -222,8 +223,9 @@ export const RequestBlock: FC = () => {
     foldable ||
     meta.state === "stopped" ||
     meta.state === "failed" ||
-    // A Chat's says it works over its steps, and with none until its reply streams, once something came.
-    (live && (meta.session || meta.steers.length > 0 || activity.some((item) => item.type === "group" && item.items.some((each) => each.type === "step")) || (meta.texts.length === 0 && sequence.length > 0)));
+    // A Chat's says it works over its steps, and with none until its reply streams, once something came;
+    // done, it stays as "Worked for", so ending moves nothing.
+    ((live || done) && (meta.session || meta.steers.length > 0 || activity.some((item) => item.type === "group" && item.items.some((each) => each.type === "step")) || (meta.texts.length === 0 && sequence.length > 0)));
   const streams = (index: number) => !!meta.texts[index]?.live;
   const streaming = (entry: Entry) => !quotaWait && !done && entry.kind === "text" && streams(entry.index);
   const commentary = (entry: Entry) => entry.kind === "text" && !!meta.texts[entry.index]?.commentary;
@@ -328,6 +330,7 @@ export const RequestBlock: FC = () => {
         ))}
         {answer !== null && (
           <div
+            ref={answerSlot}
             data-slot="aui_assistant-message-content"
             data-answer=""
             data-commentary={(!done && meta.texts[answer]?.commentary) || undefined}
@@ -360,7 +363,7 @@ export const RequestBlock: FC = () => {
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}
-      <AnswerStarted requestIds={meta.requestIds} started={done} />
+      <AnswerStarted requestIds={meta.requestIds} started={done} answer={answerSlot} folded={foldable} />
       {!live && last >= 0 && (
         <AnswerActions
           session={meta.session}
@@ -410,9 +413,18 @@ function useFold(requestId: string | null) {
   return { open: state.open, clicked: state.clicked, set, show };
 }
 
-/** Tells the thread when the turn's final answer starts (see `useThreadAnswerStarted`). */
-const AnswerStarted: FC<{ requestIds: readonly string[]; started: boolean }> = ({ requestIds, started }) => {
+/**
+ * Tells the thread when the turn's final answer starts (see `useThreadAnswerStarted`), and keeps
+ * the answer where it shows while the work folds by itself above it (`folded`).
+ */
+const AnswerStarted: FC<{ requestIds: readonly string[]; started: boolean; answer: RefObject<HTMLDivElement | null>; folded: boolean }> = ({
+  requestIds,
+  started,
+  answer,
+  folded,
+}) => {
   useThreadAnswerStarted(requestIds, started);
+  useThreadHoldsOnFold(answer, folded);
   return null;
 };
 

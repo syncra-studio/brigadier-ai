@@ -134,8 +134,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
 
   // A send: a critically damped spring of about half a second, to 1px above the bottom, puts the
   // turn's end a third of the way down the view (at least 240px), room below it down to the
-  // composer. The answer fills the room without moving the view and runs on under the composer,
-  // the button showing; back at the bottom, it is followed.
+  // composer. The answer fills the room without moving the view, then is followed; scrolled up,
+  // it runs on under the composer, the button showing; back at the bottom, it is followed.
   const { send } = seen;
   // The conversation view has Find: its bar's band (2.75rem + 1.5rem) stays above the first row.
   near(send.topPadding, 68, "the list's top padding");
@@ -155,8 +155,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(send.placed.room > 0, geometry);
   assert.deepEqual(send.filled.tops, [send.filled.top], "the view moved while the answer filled the room");
   assert.equal(send.filled.room, 0);
-  assert.ok(send.filled.distance > 24, `the answer ran on below: ${send.filled.distance}`);
-  assert.equal(send.filled.button.shown, true);
+  assert.ok(send.filled.distance <= 1, `past the room the answer is followed: ${send.filled.distance}`);
+  assert.equal(send.filled.button.shown, false);
   assert.deepEqual(send.unfollowed.tops, [send.unfollowed.top]);
   assert.ok(send.unfollowed.distance > 200, "the answer went on under the composer");
   assert.equal(send.unfollowed.button.shown, true);

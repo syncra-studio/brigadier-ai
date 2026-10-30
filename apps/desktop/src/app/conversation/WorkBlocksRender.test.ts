@@ -102,8 +102,10 @@ test("a turn's denied calls are counted in its header, which opens the work to t
 test("a turn that ends with no reply keeps its work in view, also read again (D44, D50)", { timeout: 120000 }, async (t) => {
   const seen = await drive<Record<"done" | "reloaded", { fold: string; header: string | null; rows: string | null }>>(t, "drive=noanswer");
   for (const state of [seen.done, seen.reloaded]) {
-    // No "Worked for" to open: the work is just there.
-    assert.deepEqual([state.fold, state.header], ["open", null]);
+    // No "Worked for" to open: the work is just there, under the header it had while it worked,
+    // now a plain label, so its end moves nothing.
+    assert.equal(state.fold, "open");
+    assert.match(state.header ?? "", /^Worked for /);
     assert.equal(state.rows, "Read files, ran a command");
   }
 });

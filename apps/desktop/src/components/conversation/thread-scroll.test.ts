@@ -459,7 +459,7 @@ test("a clicked toggle stays in place while its fold opens mid-scroll; at the bo
   assert.equal(following.following, true);
 });
 
-test("a sent turn springs to a pixel above the bottom, its end a third of the way down, with room its answer fills, then runs on below unfollowed", () => {
+test("a sent turn springs to a pixel above the bottom, its end a third of the way down, with room its answer fills, then is followed", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
@@ -505,15 +505,40 @@ test("a sent turn springs to a pixel above the bottom, its end a third of the wa
     assert.equal(fake.scrollTop, top);
     assert.equal(fake.offset(user), offset);
   }
-  // Past it the answer grows below the view: no autoscroll, and the button shows.
+  // Past it the turn is followed: its end stays in view, and no button shows.
   for (let grow = 0; grow < 10; grow++) {
     answer.height += 40;
     scroller.resized();
+    assert.ok(fake.end(answer) <= fake.visible + 1, `its end ${fake.end(answer)} is in view`);
+  }
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.mode, "prework_follow");
+  assert.equal(scroller.contentBelow(), false);
+});
+
+test("a sent message shown again under another id keeps its turn's room: nothing moves and the turn is still followed past it", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  const { user, reply } = send(fake, scroller, id, 40);
+  const room = fake.room;
+  const top = fake.scrollTop;
+  assert.ok(room > 300);
+  // Stored, or heard from its CLI: the same bubble under a new id.
+  user.dataset["messageId"] = "stored";
+  scroller.rowsChanged();
+  assert.equal(fake.room, room);
+  assert.equal(fake.scrollTop, top);
+  while (fake.room > 0) {
+    reply.height += 40;
+    scroller.resized();
     assert.equal(fake.scrollTop, top);
   }
-  assert.equal(scroller.following, false);
-  assert.ok(distance(fake) > FOLLOW_PX);
-  assert.equal(scroller.contentBelow(), true);
+  reply.height += 200;
+  scroller.resized();
+  assert.equal(scroller.mode, "prework_follow");
+  assert.equal(fake.scrollTop, fake.max);
 });
 
 test("the room is max(0, min(avail × 2/3, avail − 240)) of the view above the footer and SCROLL_PAD_PX, as tall as when sent", () => {
@@ -1144,7 +1169,7 @@ test("a conversation attached hidden reopens where it was left once shown", () =
   assert.equal(scroller.following, false);
 });
 
-test("work that starts again (a plan approved) is watched: followed only if it reaches past the view while more than FOLLOW_PX of room is left", () => {
+test("work that starts again (a plan approved) is watched: it uses its room up, then is followed, also when it reaches past the view in one go", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
@@ -1159,16 +1184,20 @@ test("work that starts again (a plan approved) is watched: followed only if it r
   // The plan is approved: the same request works again, with no new message of the user's.
   scroller.setRunning(true);
   assert.equal(scroller.mode, "prework_watch");
-  // Growing a little at a time, it uses the room up and runs on below: not followed.
+  // Growing a little at a time, it uses the room up, nothing moving, then is followed.
   const top = fake.scrollTop;
-  for (let grow = 0; grow < 30; grow++) {
+  while (fake.room > 0) {
+    plan.height += 40;
+    scroller.resized();
+    assert.equal(fake.scrollTop, top);
+  }
+  for (let grow = 0; grow < 10; grow++) {
     plan.height += 40;
     scroller.resized();
   }
-  assert.equal(fake.room, 0);
-  assert.equal(fake.scrollTop, top);
-  assert.equal(scroller.following, false);
-  assert.equal(scroller.contentBelow(), true);
+  assert.equal(scroller.mode, "prework_follow");
+  assert.equal(fake.scrollTop, fake.max);
+  assert.equal(scroller.contentBelow(), false);
 
   // Growing past the view in one go while room is left: the room goes and it is followed.
   const jump = new Fake();
@@ -1528,4 +1557,34 @@ test("a focus moved into the thread from outside it keeps the scroll that brings
   scroller.scrolled();
   assert.equal(fake.scrollTop, 1200);
   assert.equal(scroller.following, false);
+});
+
+test("a turn's answer keeps its place while its work folds by itself above it; following at the bottom, the bottom stays", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const scroller = open(fake);
+  userScroll(fake, scroller, fake.scrollTop - 300);
+  const turn = fake.rows.at(-1)!;
+  // The answer, 300px down its turn, under work that folds away.
+  let at = 300;
+  const answer: RowBox = {
+    dataset: {},
+    isConnected: true,
+    getBoundingClientRect: () => {
+      const top = turn.getBoundingClientRect().top + at;
+      return { top, bottom: top + 40 };
+    },
+  };
+  const shown = answer.getBoundingClientRect().top;
+  assert.equal(scroller.holdStill(answer), true);
+  at -= 200;
+  turn.height -= 200;
+  scroller.resized();
+  assert.equal(answer.getBoundingClientRect().top, shown);
+
+  // Following at the bottom, nothing is held: the bottom stays, and the answer at it.
+  const followed = new Fake();
+  conversation(followed, 6);
+  const bottom = open(followed);
+  assert.equal(bottom.holdStill(followed.rows.at(-1)!), false);
 });

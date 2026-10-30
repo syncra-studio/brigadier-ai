@@ -420,12 +420,14 @@ async function toggleStays(toggle: HTMLElement): Promise<{ before: number; after
  * its own timers, so a reading between frames can see text the thread hasn't laid out yet: this
  * observer, made after the thread's own, reads each frame right after the thread handled it.
  */
-async function stream(messageId: string, requestId: string, words: number): Promise<{ tops: number[]; distances: number[] }> {
+async function stream(messageId: string, requestId: string, words: number): Promise<{ tops: number[]; distances: number[]; rooms: number[] }> {
   const tops: number[] = [];
   const distances: number[] = [];
+  const rooms: number[] = [];
   const laidOut = new ResizeObserver(() => {
     tops.push(Math.round(viewport().scrollTop));
     distances.push(distance());
+    rooms.push(round($('[data-slot="aui_thread-spacer"]')?.getBoundingClientRect().height ?? 0));
   });
   laidOut.observe($('[data-slot="aui_message-group"]')!);
   const streaming = useBoard.getState().board?.streaming;
@@ -440,7 +442,7 @@ async function stream(messageId: string, requestId: string, words: number): Prom
   }
   await settle(0);
   laidOut.disconnect();
-  return { tops, distances };
+  return { tops, distances, rooms };
 }
 
 function stopStreaming(conversationId: string, messageId: string, text: string, requestId: string): void {
@@ -614,7 +616,8 @@ const steps = {
   },
   /**
    * A send from the bottom of a conversation: the spring to its place, its answer filling the
-   * room and then running on below the view, not followed; back at the bottom, it is.
+   * room with the view still, then followed; scrolled up, it runs on below; back at the bottom,
+   * it is followed again.
    */
   async send() {
     await open("other");
@@ -640,10 +643,10 @@ const steps = {
     const requestId = stored["other"]!.at(-1)!.requestId!;
     const top = Math.round(viewport().scrollTop);
     const streamed = await stream("other-streaming", requestId, 260);
-    // It filled the room and ran on below without the view moving.
+    // It filled the room without the view moving, then was followed.
     const filled = {
       top,
-      tops: [...new Set(streamed.tops)],
+      tops: [...new Set(streamed.tops.filter((_, index) => streamed.rooms[index]! > 0))],
       distance: distance(),
       button: buttonState(),
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),

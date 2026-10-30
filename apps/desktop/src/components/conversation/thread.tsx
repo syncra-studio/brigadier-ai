@@ -38,6 +38,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import { useFileDrops } from "@/app/conversation/fileDrops";
@@ -169,6 +170,19 @@ export function useThreadAnswerStarted(requestIds: readonly string[], started: b
   useLayoutEffect(() => {
     if (started && ids) scroller?.answerStarted(ids.split(" "));
   }, [scroller, started, ids]);
+}
+
+/**
+ * Once `folds` turns true (a turn's work folding by itself), `target` keeps its place on screen
+ * while the fold closes above it (see `ThreadScroller.holdStill`).
+ */
+export function useThreadHoldsOnFold(target: RefObject<HTMLElement | null>, folds: boolean): void {
+  const scroller = useContext(ThreadScrollContext);
+  const was = useRef(folds);
+  useLayoutEffect(() => {
+    if (folds && !was.current && target.current) scroller?.holdStill(target.current);
+    was.current = folds;
+  }, [scroller, folds, target]);
 }
 
 export function useThreadKey(): string | null {
