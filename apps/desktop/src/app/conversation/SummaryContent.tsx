@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -78,22 +79,30 @@ function useSessionDiff(
     return `${all.length}:${all.at(-1)?.end ?? ""}`;
   });
   const git = useThreadFact(conversationId, gitCommandsKey);
-  const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     if (!session) return;
     let current = true;
     getSessionDiff(conversationId)
-      .then((next) => current && setStat(next))
-      // The card shows the branch alone when git can't tell.
-      .catch(() => current && setStat(null));
+      .then((next) => {
+        if (next) lastDiffs.set(conversationId, next);
+        else lastDiffs.delete(conversationId);
+        if (current) redraw();
+      })
+      // The last stat read stays while git can't tell; the card shows the branch alone when none was.
+      .catch(() => {});
     return () => {
       current = false;
     };
     // Each turn's end and each git command may move the branch: read it again.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [conversationId, session, turns, git]);
-  return session ? stat : null;
+  // The last stat read of it shows while it is read again, opened anew too: never a blank between.
+  return session ? (lastDiffs.get(conversationId) ?? null) : null;
 }
+
+/** Each session's last diff stat read. */
+const lastDiffs = new Map<string, { stat: DiffStat; commits: number }>();
 
 /** A Chat's sources: links in the user's messages (as soon as they are sent), first seen first. */
 function useSources(conversationId: string): string[] {
