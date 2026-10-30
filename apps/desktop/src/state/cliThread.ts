@@ -221,9 +221,10 @@ async function readThread(conversationId: string, read: { heard: ThreadNews[]; a
   try {
     const { view } = await request({ method: "threadView", conversationId });
     if (!view) throw new Error("the daemon answered with no thread");
-    // What waits for the frame is drawn first, on the view it replaces: none of it is left to
-    // draw again on this one.
-    if (queued.length > 0) flushNews();
+    // What waits for the frame is in the read or added to it below: none of it is left to draw
+    // again on it.
+    pending.delete(conversationId);
+    draining.delete(conversationId);
     // News from a turn's start or end this read wasn't asked after: its lists wait for the next.
     const afterTurn = new Set(owed.get(conversationId));
     let landed = view;
@@ -240,56 +241,170 @@ async function readThread(conversationId: string, read: { heard: ThreadNews[]; a
 }
 
 /**
- * News waiting for the next frame: a streaming turn says a delta at a time, each its own task in
- * the WebView, and several sessions stream at once. A frame draws what came since the last one
- * once, not once per delta. A hidden window draws no frames: there it waits a moment instead.
+ * The frame queue (spec 3.1): what the stream said, drawn at the next frame, once for all
+ * sessions, not once per delta (each its own task in the WebView). Per conversation, in order:
+ * - an answer's words come out at about 24 characters a frame (`round(24 × min(elapsed, 500) /
+ *   16.67)` per item), so a big chunk flows instead of popping in; reasoning comes out whole;
+ * - a command's output gathers and comes out every 50 ms, its last 20,000 characters;
+ * - anything else (an item begun or ended, a turn's start or end, the lists) waits for the words
+ *   before it: with 24 or fewer left they come out at once, else faster, so they are out within
+ *   8 frames, then it is drawn. Words never trail what comes after them.
+ * A hidden window draws no frames: everything comes out at once (so do the unit tests, with no page).
  */
-let queued: ThreadNews[] = [];
+type Words = { kind: "text" | "output"; news: ThreadNews; entry: FileEntry; text: string };
+type Op = Words | { kind: "structure"; news: ThreadNews; entries: FileEntry[]; envelope: boolean };
+
+const pending = new Map<string, Op[]>();
+/** Per conversation, the frames left to bring out the words before what waits on them. */
+const draining = new Map<string, number>();
 let frame = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let lastFrameAt: number | null = null;
+let lastOutputAt = 0;
+const FRAME_MS = 1000 / 60;
+const CHARS_PER_FRAME = 24;
+const DRAIN_FRAMES = 8;
+const OUTPUT_EVERY_MS = 50;
+const OUTPUT_KEPT = 20_000;
 const NEWS_WAIT_MS = 100;
 
+/** Whether the app draws frames: outside a page (the unit tests) everything goes on at once. */
+const inPage = () => typeof document !== "undefined" && typeof requestAnimationFrame === "function";
+
 function scheduleNews(): void {
-  // Outside a page (the unit tests) there are no frames: the news goes on at once.
-  const page = typeof document !== "undefined" && typeof requestAnimationFrame === "function";
-  if (page && !document.hidden) frame = requestAnimationFrame(flushNews);
+  if (frame || timer !== null) return;
+  if (inPage() && !document.hidden) frame = requestAnimationFrame(flushNews);
   // A frame that doesn't come (a window hidden meanwhile) doesn't hold the news back.
-  timer = setTimeout(flushNews, page ? NEWS_WAIT_MS : 0);
+  timer = setTimeout(flushNews, inPage() ? NEWS_WAIT_MS : 0);
 }
 
-function flushNews(): void {
+/** `news`, as the queue holds it: its words, a command's output, and the rest of it. */
+function opsOf(news: ThreadNews): Op[] {
+  const ops: Op[] = news.entries.map((entry) => {
+    const { event } = entry;
+    if (event.type === "messageDelta" || event.type === "reasoningDelta") return { kind: "text", news, entry, text: event.text };
+    if (event.type === "commandOutputDelta") return { kind: "output", news, entry, text: event.text };
+    return { kind: "structure", news, entries: [entry], envelope: false };
+  });
+  if (news.opened || news.ended || Object.keys(listsOf(news)).length > 0) ops.push({ kind: "structure", news, entries: [], envelope: true });
+  return ops;
+}
+
+/** `entry`, its delta's text `text`. */
+function saying(entry: FileEntry, text: string): FileEntry {
+  return { ...entry, event: { ...entry.event, text } as ProviderEvent };
+}
+
+/**
+ * Brings out what conversation `id`'s queue `ops` can this frame, by `draw`: `normal` characters
+ * of each item's words, or all of it (`all`). Gives what is left.
+ */
+function release(id: string, ops: Op[], draw: (news: ThreadNews, entries: FileEntry[], envelope: boolean) => void, normal: number, all: boolean, outputDue: boolean): Op[] {
+  const budget = new Map<string, number>();
+  let at = 0;
+  while (at < ops.length) {
+    const wall = ops.findIndex((op, index) => index >= at && op.kind === "structure");
+    const end = wall === -1 ? ops.length : wall;
+    const run = ops.slice(at, end) as Words[];
+    const paced = (op: Op) => op.kind === "text" && op.entry.event.type === "messageDelta";
+    const left = new Map<string, number>();
+    for (const op of run) if (paced(op)) left.set(itemIdOf(op.entry.event)!, (left.get(itemIdOf(op.entry.event)!) ?? 0) + op.text.length);
+    const total = [...left.values()].reduce((sum, count) => sum + count, 0);
+    const whole = all || (wall !== -1 && total <= CHARS_PER_FRAME);
+    // Something waits on more than a frame's words: they come out within its frames left.
+    const frames = !whole && wall !== -1 ? (draining.get(id) ?? DRAIN_FRAMES) : 0;
+    if (frames) draining.set(id, Math.max(frames - 1, 1));
+    for (const op of run) {
+      if (op.kind !== "text") continue;
+      const key = itemIdOf(op.entry.event)!;
+      let count = op.text.length;
+      if (!whole && paced(op)) {
+        const allowed = budget.get(key) ?? (frames ? Math.max(normal, Math.ceil(left.get(key)! / frames)) : normal);
+        count = Math.min(count, allowed);
+        // Never half a surrogate pair.
+        if (count > 0 && count < op.text.length && /[\uD800-\uDBFF]/.test(op.text[count - 1]!)) count += 1;
+        budget.set(key, Math.max(allowed - count, 0));
+      }
+      if (count > 0) draw(op.news, [saying(op.entry, op.text.slice(0, count))], false);
+      op.text = op.text.slice(count);
+    }
+    const waiting = run.some((op) => op.kind === "text" && op.text.length > 0);
+    if (whole || outputDue || (wall !== -1 && !waiting)) {
+      // Each command's output since the last, as one delta: its last 20,000 characters.
+      const outputs = new Map<string, Words>();
+      for (const op of run) {
+        if (op.kind !== "output") continue;
+        const key = itemIdOf(op.entry.event)!;
+        const held = outputs.get(key);
+        outputs.set(key, held ? { ...op, text: (held.text + op.text).slice(-OUTPUT_KEPT) } : { ...op, text: op.text.slice(-OUTPUT_KEPT) });
+        op.text = "";
+      }
+      for (const op of outputs.values()) draw(op.news, [saying(op.entry, op.text)], false);
+    }
+    if (wall === -1 || waiting) return [...run.filter((op) => op.text.length > 0), ...ops.slice(end)];
+    const structure = ops[wall] as Extract<Op, { kind: "structure" }>;
+    draw(structure.news, structure.entries, structure.envelope);
+    draining.delete(id);
+    at = wall + 1;
+  }
+  return [];
+}
+
+function flushNews(time?: number): void {
   if (frame) cancelAnimationFrame(frame);
   if (timer !== null) clearTimeout(timer);
   frame = 0;
   timer = null;
-  const batch = queued;
-  queued = [];
+  const now = typeof time === "number" ? time : performance.now();
+  const all = !inPage() || document.hidden;
+  const elapsed = lastFrameAt === null ? FRAME_MS : Math.min(Math.max(now - lastFrameAt, 0), 500);
+  lastFrameAt = now;
+  const normal = Math.max(1, Math.round((CHARS_PER_FRAME * elapsed) / FRAME_MS));
+  const outputDue = now - lastOutputAt >= OUTPUT_EVERY_MS;
+  if (outputDue) lastOutputAt = now;
   const { views } = useCliThread.getState();
   const next: Record<string, ThreadView> = {};
   const turned = new Set<string>();
-  for (const news of batch) {
-    const id = news.conversationId;
-    // A turn's start or end reads the thread again, once any read under way lands.
-    if ((news.opened || news.ended) && owed.has(id)) turned.add(id);
+  for (const [id, ops] of pending) {
+    let view: ThreadView | undefined = views[id];
     // A thread not read yet is read whole when it opens.
-    const view = next[id] ?? views[id];
-    if (!view) continue;
-    const drawn = addNews(view, news, !owed.has(id), false);
-    if (drawn !== view) next[id] = drawn;
+    if (!view) {
+      pending.delete(id);
+      draining.delete(id);
+      continue;
+    }
+    const draw = (news: ThreadNews, entries: FileEntry[], envelope: boolean) => {
+      // A turn's start or end reads the thread again, once any read under way lands; its lists
+      // wait for that read.
+      if (envelope && (news.opened || news.ended) && owed.has(id)) turned.add(id);
+      view = addNews(view!, { ...news, entries }, envelope && !owed.has(id), false);
+    };
+    const left = release(id, ops, draw, normal, all, outputDue);
+    if (left.length > 0) pending.set(id, left);
+    else pending.delete(id);
+    if (view !== views[id]) next[id] = view;
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
   for (const id of turned) if (!reads.has(id)) void loadThreadView(id);
+  if (pending.size > 0) scheduleNews();
+  else lastFrameAt = null;
 }
 
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
 export function applyThreadNews(news: ThreadNews): void {
   const id = news.conversationId;
+  const view = useCliThread.getState().views[id];
+  // Already in the thread as read (the read came first).
+  if (view && holds(view, news)) return;
   const read = reads.get(id);
   read?.heard.push(news);
-  if ((news.opened || news.ended) && (read || useCliThread.getState().views[id]) && !owed.has(id)) owed.set(id, []);
+  if ((news.opened || news.ended) && (read || view) && !owed.has(id)) owed.set(id, []);
   owed.get(id)?.push(news);
-  queued.push(news);
-  if (queued.length === 1) scheduleNews();
+  if (!view) return;
+  const ops = opsOf(news);
+  if (ops.length === 0) return;
+  pending.set(id, [...(pending.get(id) ?? []), ...ops]);
+  scheduleNews();
 }
 
 /** When the app started: a conversation's view not read since was never read here. */

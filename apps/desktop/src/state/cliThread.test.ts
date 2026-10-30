@@ -156,6 +156,105 @@ test("in a page, what streamed between two frames is drawn once, at the frame", 
   }
 });
 
+/** The pages' clock: it only goes forward, as a page's does. */
+let clock = 10_000;
+
+/** A page whose frames the test runs, each at its own time; `hidden` hides the window. */
+function fakePage(hidden = false) {
+  const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
+  const frames: ((at: number) => void)[] = [];
+  page.document = { hidden };
+  page.requestAnimationFrame = (draw: (at: number) => void) => frames.push(draw);
+  page.cancelAnimationFrame = () => {};
+  clock += 1000;
+  return {
+    /** Runs the frame waiting, 1/60 s after the last. */
+    frame() {
+      clock += 1000 / 60;
+      frames.splice(0).forEach((draw) => draw(clock));
+    },
+    restore() {
+      delete page.document;
+      delete page.requestAnimationFrame;
+      delete page.cancelAnimationFrame;
+    },
+  };
+}
+
+const words = (conversationId: string, itemId: string) => {
+  const entry = useCliThread.getState().views[conversationId]?.entries.find((each) => "itemId" in each.event && each.event.itemId === itemId);
+  return entry?.event.type === "messageDelta" ? entry.event.text : entry?.event.type === "command" ? (entry.event.output ?? "") : undefined;
+};
+
+test("an answer's words come out 24 a frame, and what follows them waits until they're out, within 8 frames", async () => {
+  const page = fakePage();
+  const user = at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1);
+  useCliThread.setState({ views: { paced: { entries: [user], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "a".repeat(60) }, 2)], seq: 1 });
+    page.frame();
+    assert.equal(words("paced", "m")?.length, 24);
+    page.frame();
+    assert.equal(words("paced", "m")?.length, 48);
+    // 412 words to come out, then a call begins: within 8 frames, the call after the words.
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "b".repeat(400) }, 3)], seq: 2 });
+    applyThreadNews({ conversationId: "paced", entries: [at(command("inProgress"), 4)], seq: 3 });
+    const shown: number[] = [];
+    for (let frame = 0; frame < 8; frame++) {
+      page.frame();
+      shown.push(words("paced", "m")!.length);
+      if (frame < 7) assert.equal(words("paced", "c"), undefined, `the call waits for the words (frame ${frame + 1})`);
+    }
+    assert.equal(shown.at(-1), 460);
+    assert.ok(shown.every((count, index) => index === 0 || count > shown[index - 1]!), `${shown}`);
+    assert.deepEqual(useCliThread.getState().views["paced"]?.entries.map((entry) => "itemId" in entry.event && entry.event.itemId), ["u", "m", "c"]);
+    // A few words before what follows come out at once with it.
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "end" }, 5)], seq: 4 });
+    applyThreadNews({ conversationId: "paced", entries: [], ended: "done", seq: 5 });
+    page.frame();
+    assert.ok(words("paced", "m")!.endsWith("end"));
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a command's output comes out every 50 ms, its last 20,000 characters, and before what follows it", async () => {
+  const page = fakePage();
+  useCliThread.setState({ views: { output: { entries: [at(command("inProgress", ""), 1)], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "x".repeat(15_000) }, 2)], seq: 1 });
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "y".repeat(15_000) }, 3)], seq: 2 });
+    // The first frame is 50 ms after none: out it comes, cut to its last 20,000.
+    page.frame();
+    assert.equal(words("output", "c"), "x".repeat(5_000) + "y".repeat(15_000));
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "z" }, 4)], seq: 3 });
+    page.frame();
+    assert.ok(!words("output", "c")!.endsWith("z"), "not yet 50 ms");
+    // The command's end waits for no timer: its output comes out first.
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "!" }, 5)], seq: 4 });
+    applyThreadNews({ conversationId: "output", entries: [], ended: "done", seq: 5 });
+    page.frame();
+    assert.ok(words("output", "c")!.endsWith("z!"));
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a hidden window draws no frames: what came comes out at once", async () => {
+  const page = fakePage(true);
+  useCliThread.setState({ views: { hidden: { entries: [], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "hidden", entries: [at({ type: "messageDelta", itemId: "m", text: "z".repeat(500) }, 1)], seq: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(words("hidden", "m")?.length, 500);
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
+  }
+});
+
 test("a delta waiting for the frame when a read of its thread lands shows once", async () => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
   const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
