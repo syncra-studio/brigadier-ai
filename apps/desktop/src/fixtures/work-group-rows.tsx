@@ -129,8 +129,11 @@ function DoneSteps() {
   );
 }
 
-/** A read whose path streams in after its call shows, as Claude's does (`late-detail` sets it). */
-function LateDetail() {
+/**
+ * A read whose path streams in after its call shows, as Claude's does (`late-detail` sets it).
+ * `lead`: as a lead's group, with no live line of its own while a call runs.
+ */
+function LateDetail({ lead = false }: { lead?: boolean }) {
   const [detail, setDetail] = useState<string | null>(null);
   useEffect(() => {
     const said = () => setDetail("src/index.js");
@@ -142,8 +145,7 @@ function LateDetail() {
     <ActivityGroup<string>
       items={[{ type: "step", key: "read-1", step: "read-1" }]}
       live
-      working
-      liveLabel={{ text: "Thinking", tone: "busy" }}
+      {...(!lead && { working: true, liveLabel: { text: "Thinking", tone: "busy" } as const })}
       describe={() => ({ words, status: "inProgress", exit: null })}
       renderStep={(_, key) => <StepRow key={key} words={words} status="inProgress" exit={null} />}
     />
@@ -185,6 +187,9 @@ function Page() {
         </section>
         <section data-case="late-detail">
           <LateDetail />
+        </section>
+        <section data-case="late-detail-lead">
+          <LateDetail lead />
         </section>
         <section data-case="worker-lone" className="flex h-96 flex-col">
           <WorkerThread conversationId={CHAT} row={workerRow} />
@@ -303,16 +308,20 @@ async function measure(): Promise<object> {
 
   // A read shown before its path came: the live line stands until the path names it.
   const late: string[] = [];
+  const leadLate: string[] = [];
   const sampleLate = async (ms: number) => {
     for (const end = performance.now() + ms; performance.now() < end; await new Promise(requestAnimationFrame)) {
       const text = one("[data-slot=work-group] > button", at("late-detail"))?.textContent ?? "";
       if (late.at(-1) !== text) late.push(text);
+      const lead = at("late-detail-lead")?.textContent ?? "";
+      if (leadLate.at(-1) !== lead) leadLate.push(lead);
     }
   };
   await sampleLate(300);
   window.dispatchEvent(new Event("late-detail"));
   await sampleLate(600);
   out.lateDetail = late;
+  out.lateDetailLead = leadLate;
   return out;
 }
 

@@ -132,6 +132,8 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, stopped
  * in a turn done, a group of one step is that step's own row, unless it sums up work a follow-up
  * cut short.
  */
+const THINKING: StatusHead = { text: "Thinking", tone: "busy" };
+
 export function ActivityGroup<S>({ items, live, working, describe, renderStep, reveal, liveLabel = null, summary: steeredAfter = false }: {
   items: readonly GroupItem<S>[];
   /** It is the live turn's last group: it says what happens now. */
@@ -179,7 +181,9 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   // A step that hasn't said what it acts on yet leaves the live line be until it does.
   const stepNames = !paused && !summary && live && !current?.words.pending && (current?.status === "inProgress" || fresh);
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
-  const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
+  // A step that hasn't said what it acts on, with no live line given (a lead's call running), thinks.
+  const said = liveLabel ?? (current?.words.pending ? THINKING : null);
+  const line = live && said && (!stepNames || said.tone === "needsYou") ? said : null;
   const oneStep = !summary && (live || described.length === 1);
   // A summary's icon is its first segment's ("Ran commands, read files" → a terminal).
   const head = oneStep ? current?.words : (summaryLead(described.map((step) => step.words)) ?? first?.words);
