@@ -103,20 +103,20 @@ test("T1's unfolded turn: one row per run of work, and no thought rows", () => {
   }
 });
 
-test("the live line says the newest heading, else the last whole line, never half a line", () => {
-  // The last whole line, a lone bold heading by its words.
+test("the live line says the newest whole heading, never the plain reasoning, never half a line", () => {
+  // A lone bold line or a markdown heading, by its words, however much text follows it.
   assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first."), "Checking the tests");
-  assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first.\n"), "I should run them first.");
+  assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first.\n"), "Checking the tests");
+  assert.equal(thinkingLabel("## Reading `blocks.ts`\nThen the fold code.\n"), "Reading blocks.ts");
   const streamed = "**Reading the code**\n\nSome text.\n\n**Planning the fix**\n\nMore.";
   assert.equal(thinkingLabel(streamed), "Planning the fix");
-  assert.equal(thinkingLabel(streamed, true), "More.");
-  // No heading: the last line a newline closed, markdown left out.
-  assert.equal(thinkingLabel("Reading `blocks.ts` and the *fold* code.\nThen the te"), "Reading blocks.ts and the fold code.");
-  // A line still streaming is never shown: "Thinking" says it meanwhile.
-  assert.equal(thinkingLabel("I want to analyze the panel, so I'm th"), "");
+  assert.equal(thinkingLabel(streamed, true), "Planning the fix");
+  // No heading (OpenCode's raw reasoning): no label, the line says "Thinking", as on every CLI.
+  assert.equal(thinkingLabel("Actually, let me reconsider. The grilling section says:\n- brigadier models\n"), "");
+  assert.equal(thinkingLabel("Reading `blocks.ts` and the *fold* code.\nThen the te"), "");
+  // A heading still streaming is never shown: "Thinking" says it meanwhile.
   assert.equal(thinkingLabel("**Checking the te"), "");
-  // Complete, its last line is whole.
-  assert.equal(thinkingLabel("One line only.", true), "One line only.");
+  assert.equal(thinkingLabel("One line only.", true), "");
   assert.equal(thinkingLabel(""), "");
   for (const text of ["", "line one\nline two\nline three", "**A**\n\nbody\n\n**B**\nmore", "x".repeat(500)]) {
     assert.doesNotMatch(thinkingLabel(text) || "Thinking", /\n/);

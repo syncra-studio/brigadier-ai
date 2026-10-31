@@ -44,22 +44,24 @@ export function groupActivity<S, E>(entries: readonly E[], sort: (entry: E) => S
   return out;
 }
 
-/** A heading line a model writes over a part of its thinking: `**Checking the tests**`. */
-const HEADING = /^\s*\*\*(.+?)\*\*\s*$/;
+/** A heading a model writes over a part of its thinking: `**Checking the tests**` or `# Checking the tests`. */
+const HEADING = /^\s*(?:\*\*(.+?)\*\*|#{1,6}\s+(.+?))\s*$/;
 
 /**
- * What the thread thinks about now, for its live line: the last whole line of its thinking (a
- * lone bold heading gives its words), without markdown; "" when no line is whole yet, and the
- * line says "Thinking". A line still streaming is never shown, so the label never reads half a
- * sentence.
+ * What the thread thinks about now, for its live line (spec §1.1): the newest whole heading of
+ * its thinking, a markdown `#` heading or a lone bold line, without markdown; "" when it has
+ * none, and the line says "Thinking". Its plain reasoning is never shown, on any CLI, nor a
+ * heading still streaming.
  */
 export function thinkingLabel(text: string, complete = false): string {
   const lines = text.split("\n");
-  // The last line is whole once a newline follows it, or the thought is complete.
-  const last = (complete ? lines : lines.slice(0, -1)).filter((line) => line.trim()).at(-1) ?? "";
-  const heading = HEADING.exec(last)?.[1]?.trim();
-  if (heading) return heading;
-  return last.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
+  // A line is whole once a newline follows it, or the thought is complete.
+  for (const line of (complete ? lines : lines.slice(0, -1)).toReversed()) {
+    const match = HEADING.exec(line);
+    const heading = (match?.[1] ?? match?.[2])?.replace(/[*_`]+/g, "").trim();
+    if (heading) return heading;
+  }
+  return "";
 }
 
 /** Whether the lead's step is work it did itself (a group's step), rather than news of its team. */
